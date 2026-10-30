@@ -34,6 +34,7 @@
 #include "nj_posix_clock.h"
 #include "nj_posix_dir.h"
 #include "nj2me/nj_vm.h"       /* speed + save-state, applied on the frame */
+#include "nj2me/nj_library.h"  /* nj_lib_probe: is a dropped file a runnable jar? */
 
 #include "nj_sdl2_font.h"
 #ifdef NJ_HAVE_POSIX_NETWORK
@@ -229,6 +230,44 @@ typedef struct sdl_state {
      */
     const char *state_path; /* NJ_SDL2_STATE, or NULL */
     int         save_req;   /* F5 was pressed; served on the next frame */
+
+    /*
+     * A .jar the user dropped on the window.
+     *
+     * The drop is an instruction to switch games, and the port cannot switch:
+     * the VM is in the middle of a frame on its own thread, and only the
+     * caller - which owns the run - may start another one.  So the port does
+     * the part that is its own (decide whether the file is a game at all, and
+     * end this run the way the close button does) and leaves the path here for
+     * nj_port_sdl2_take_dropped() to hand over once nj_run() has returned.
+     */
+    char drop_path[NJ_LIB_PATH_MAX];
+    int  drop_pending;
+
+    /*
+     * The desktop client's display and audio settings, latched when the port
+     * is built: NJ_SDL2_FULLSCREEN=1 starts fullscreen (F11 flips the flag at
+     * run time) and NJ_SDL2_MUTE=1 keeps the audio streams flowing but queues
+     * silence.  Muting does not close the device the MIDlet may already have
+     * opened - it is a preference, not a device failure, and unmuting must not
+     * have to re-open anything.
+     */
+    int  fullscreen;   /* SDL_WINDOW_FULLSCREEN_DESKTOP is on */
+    int  mute;         /* queue no audio; the stream contract stays */
+
+    /*
+     * Remappable game keys: one SDL_Keycode per nj_port_bind slot.
+     *
+     *    0   the slot uses the defaults in sdl2_default_binds
+     *   > 0  the slot uses exactly this key; its defaults are suppressed
+     *   < 0  the slot's key was moved to another slot, so it has none
+     *
+     * The last case is what "one key means one action" costs: binding fire to
+     * the key "up" used takes it from up, and up keeps nothing until the
+     * player calls bind(up, 0) for its defaults again.  A fresh port has an
+     * all-zero table, so it maps exactly what the port has always mapped.
+     */
+    int  key_bind[NJ_PORT_BIND_COUNT];
 } sdl_state;
 
 /* The speeds the badge cycles through, in percent. */
@@ -326,10 +365,36 @@ static int sdl_bytes_per_pixel(int nj_format)
     }
 }
 
+/*
+ * Fullscreen, off and on.
+ *
+ * SDL_WINDOW_FULLSCREEN_DESKTOP, never a real mode change: the game is 176x208
+ * or 240x320, and a mode switch for a window-sized picture blanks the screen
+ * for a second on every toggle.  Desktop fullscreen keeps the panel's mode and
+ * lets the renderer scale into it, which is the same integer-scaled picture on
+ * a bigger canvas.
+ *
+ * The flag is kept here rather than asked of SDL each time because the window
+ * manager can leave fullscreen behind SDL's back on some compositors, and the
+ * next F11 must still do what the player expects: flip what is on screen.
+ */
+static void sdl_toggle_fullscreen(sdl_state *s)
+{
+    if (!s || !s->window) {
+        return;
+    }
+    s->fullscreen = !s->fullscreen;
+    SDL_SetWindowFullscreen(s->window,
+                            s->fullscreen ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0);
+    sdl_log(s, 2, s->fullscreen ? "display: fullscreen on (F11)"
+                                : "display: back to a window (F11)");
+}
+
 static int sdl_display_init(void *ud, int *w, int *h, int *stride, void **px)
 {
     sdl_state *s = SS(ud);
     int bpp = sdl_bytes_per_pixel(NJ_PIXFMT);
+    int linear_filter = 0;
 
     /*
      * Take the size from the caller's nj_port, which is where --size lands.
@@ -389,6 +454,21 @@ static int sdl_display_init(void *ud, int *w, int *h, int *stride, void **px)
         return -1;
     }
     /*
+     * NJ_SDL2_FULLSCREEN=1 starts in desktop fullscreen - the client's
+     * "fullscreen" setting.  Done after the window exists because desktop
+     * fullscreen is a window operation, not a creation flag: passing it to
+     * SDL_CreateWindow makes some drivers adopt the game's own tiny size as
+     * the mode.  F11 flips the same state at run time.
+     */
+    {
+        const char *fs = SDL_getenv("NJ_SDL2_FULLSCREEN");
+
+        if (fs && fs[0] != '\0' && fs[0] != '0') {
+            s->fullscreen = 1;
+            SDL_SetWindowFullscreen(s->window, SDL_WINDOW_FULLSCREEN_DESKTOP);
+        }
+    }
+    /*
      * Prefer the SOFTWARE renderer, and make the accelerated one opt-in.
      *
      * This looks backwards and is not.  Asking SDL for an accelerated renderer
@@ -425,7 +505,20 @@ static int sdl_display_init(void *ud, int *w, int *h, int *stride, void **px)
      * would cover the thing being played.  sdl_layout() does the same
      * arithmetic and leaves the renderer in window coordinates.
      */
-    SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "nearest");
+    /*
+     * Nearest by default: a 176x208 game stretched to a desktop is meant to
+     * look like pixels, not like a blur - that is what the port has always
+     * done.  NJ_SDL2_FILTER=linear is the client's "filter" setting for the
+     * player who prefers the blur.  Set before the texture exists, because the
+     * hint is read when the texture is created (and again by the renderer).
+     */
+    {
+        const char *filter = SDL_getenv("NJ_SDL2_FILTER");
+
+        linear_filter = (filter && strcmp(filter, "linear") == 0) ? 1 : 0;
+        SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY,
+                    linear_filter ? "linear" : "nearest");
+    }
 
     /*
      * The host's text input follows the MIDP editor by default.  NJ_SDL2_TEXT=always
@@ -486,6 +579,8 @@ static int sdl_display_init(void *ud, int *w, int *h, int *stride, void **px)
             "Z/X/C/V=game A/B/C/D  mouse: hold the button and slide onto a key"
             " to press it (a bare move presses nothing)  F12/Tab=keypad"
             "  click the speed badge / F3=game speed  F5=save state"
+            "  F10=end this run  F11=fullscreen  drop a .jar here to switch"
+            "  arrows/fire/soft keys/clear/A-D are remappable (client settings)"
             "  (NJ_SDL_GRAB=1 if the window cannot be focused)");
     if (s->state_path && s->state_path[0]) {
         char msg[256];
@@ -494,6 +589,22 @@ static int sdl_display_init(void *ud, int *w, int *h, int *stride, void **px)
     } else {
         sdl_log(NULL, 2, "state: F5 needs NJ_SDL2_STATE=<file> - the port is "
                          "not told the JAR path, so it cannot pick one");
+    }
+
+    /*
+     * The client's display/audio switches, said out loud once.  A game that
+     * starts fullscreen, looks blurry or is silent is otherwise a bug report;
+     * with these lines it is a settings file the player can see.
+     */
+    if (linear_filter) {
+        sdl_log(NULL, 2, "display: linear scaling (NJ_SDL2_FILTER=linear)");
+    }
+    if (s->fullscreen) {
+        sdl_log(NULL, 2, "display: fullscreen (F11 toggles; "
+                         "NJ_SDL2_FULLSCREEN=1 started it)");
+    }
+    if (s->mute) {
+        sdl_log(NULL, 2, "audio: muted (NJ_SDL2_MUTE=1); streams run silent");
     }
 
     *w = s->width;
@@ -530,6 +641,246 @@ static void sdl_push_key(sdl_state *s, int key, int down)
     e.key = (nj_u1)key;
     s->queue[s->qt] = e;
     s->qt = (s->qt + 1) % (int)(sizeof(s->queue) / sizeof(s->queue[0]));
+}
+
+/* ------------------------------------------------------------------ */
+/* Remappable game keys                                                */
+/* ------------------------------------------------------------------ */
+/*
+ * The keyboard mapping is three different things that all arrive as an SDL
+ * keycode, and they are kept apart on purpose:
+ *
+ *   RESERVED  the port's own controls (F3 speed, F5 save, F10 end the run,
+ *             F11 fullscreen, F12/Tab the on-screen keypad).  bind() refuses
+ *             them: a player who remapped "up" to F10 would otherwise save or
+ *             quit the game by pressing up.
+ *   FIXED     the phone's number pad - 0-9, * and #.  These always mean the
+ *             same MIDP key: a game that says "press 1" must keep working
+ *             after somebody remapped the arrows, so bind() refuses these too.
+ *   SLOTS     the twelve actions the settings page can remap.  A slot with no
+ *             binding accepts every key in sdl2_default_binds for it; a slot
+ *             with a binding accepts exactly that key and none of its old
+ *             ones, because a remapped key that still worked would fight the
+ *             new one.
+ *
+ * sdl2_key_lookup() is the whole mapping and the event path has no switch of
+ * its own any more - KEYDOWN and KEYUP both ask it, which is what keeps a
+ * remapped key from arriving pressed on the way down and stuck on the way up.
+ */
+
+/* The MIDP key a bind slot produces. */
+static int sdl2_slot_key(int bind)
+{
+    switch (bind) {
+    case NJ_PORT_BIND_UP:         return NJ_KEY_UP;
+    case NJ_PORT_BIND_DOWN:       return NJ_KEY_DOWN;
+    case NJ_PORT_BIND_LEFT:       return NJ_KEY_LEFT;
+    case NJ_PORT_BIND_RIGHT:      return NJ_KEY_RIGHT;
+    case NJ_PORT_BIND_FIRE:       return NJ_KEY_FIRE;
+    case NJ_PORT_BIND_SOFT_LEFT:  return NJ_KEY_SOFT_LEFT;
+    case NJ_PORT_BIND_SOFT_RIGHT: return NJ_KEY_SOFT_RIGHT;
+    case NJ_PORT_BIND_CLEAR:      return NJ_KEY_CLEAR;
+    case NJ_PORT_BIND_GAME_A:     return NJ_KEY_GAME_A;
+    case NJ_PORT_BIND_GAME_B:     return NJ_KEY_GAME_B;
+    case NJ_PORT_BIND_GAME_C:     return NJ_KEY_GAME_C;
+    case NJ_PORT_BIND_GAME_D:     return NJ_KEY_GAME_D;
+    default:                      return -1;
+    }
+}
+
+typedef struct sdl2_default_bind {
+    int key;    /* SDL_Keycode */
+    int bind;   /* NJ_PORT_BIND_* */
+} sdl2_default_bind;
+
+/* The mapping the port has always had, and the one a slot falls back to. */
+static const sdl2_default_bind sdl2_default_binds[] = {
+    { SDLK_UP,        NJ_PORT_BIND_UP },
+    { SDLK_DOWN,      NJ_PORT_BIND_DOWN },
+    { SDLK_LEFT,      NJ_PORT_BIND_LEFT },
+    { SDLK_RIGHT,     NJ_PORT_BIND_RIGHT },
+    { SDLK_RETURN,    NJ_PORT_BIND_FIRE },
+    { SDLK_KP_ENTER,  NJ_PORT_BIND_FIRE },
+    { SDLK_SPACE,     NJ_PORT_BIND_FIRE },
+    { SDLK_ESCAPE,    NJ_PORT_BIND_SOFT_RIGHT },
+    { SDLK_F1,        NJ_PORT_BIND_SOFT_LEFT },
+    { SDLK_F2,        NJ_PORT_BIND_SOFT_RIGHT },
+    { SDLK_BACKSPACE, NJ_PORT_BIND_CLEAR },
+    { SDLK_z,         NJ_PORT_BIND_GAME_A },
+    { SDLK_x,         NJ_PORT_BIND_GAME_B },
+    { SDLK_c,         NJ_PORT_BIND_GAME_C },
+    { SDLK_v,         NJ_PORT_BIND_GAME_D }
+};
+
+typedef struct sdl2_fixed_bind {
+    int key;    /* SDL_Keycode */
+    int nj_key; /* NJ_KEY_* */
+} sdl2_fixed_bind;
+
+/* Digits, star and pound: the phone's keypad, not a player preference. */
+static const sdl2_fixed_bind sdl2_fixed_binds[] = {
+    { SDLK_0, NJ_KEY_0 },
+    { SDLK_1, NJ_KEY_1 },
+    { SDLK_2, NJ_KEY_2 },
+    { SDLK_3, NJ_KEY_3 },
+    { SDLK_4, NJ_KEY_4 },
+    { SDLK_5, NJ_KEY_5 },
+    { SDLK_6, NJ_KEY_6 },
+    { SDLK_7, NJ_KEY_7 },
+    { SDLK_8, NJ_KEY_8 },
+    { SDLK_9, NJ_KEY_9 },
+    { SDLK_ASTERISK,    NJ_KEY_STAR },
+    { SDLK_KP_MULTIPLY, NJ_KEY_STAR },
+    { SDLK_HASH,        NJ_KEY_POUND },
+#if SDL_VERSION_ATLEAST(2, 28, 0)
+    { SDLK_KP_HASH,     NJ_KEY_POUND },
+#endif
+};
+
+#define SDL2_NDEFAULT_BINDS \
+    ((int)(sizeof(sdl2_default_binds) / sizeof(sdl2_default_binds[0])))
+#define SDL2_NFIXED_BINDS \
+    ((int)(sizeof(sdl2_fixed_binds) / sizeof(sdl2_fixed_binds[0])))
+
+static const sdl2_fixed_bind *sdl2_fixed_find(int key)
+{
+    int i;
+
+    for (i = 0; i < SDL2_NFIXED_BINDS; i++) {
+        if (sdl2_fixed_binds[i].key == key) {
+            return &sdl2_fixed_binds[i];
+        }
+    }
+    return NULL;
+}
+
+/*
+ * The port's own controls.  Listed in one place because both the event path
+ * and bind() have to agree: a key that is handled above the game-key lookup
+ * must never be accepted as a binding, or the binding would be dead.
+ */
+static int sdl2_reserved_key(int key)
+{
+    switch (key) {
+    case SDLK_F3:   /* game speed   */
+    case SDLK_F5:   /* save state   */
+    case SDLK_F10:  /* end this run */
+    case SDLK_F11:  /* fullscreen   */
+    case SDLK_F12:  /* on-screen keypad */
+    case SDLK_TAB:  /* on-screen keypad */
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+/*
+ * What SDL_Keycode `key` means right now, or -1 for "not a game key".
+ *
+ * A binding is checked before every default: that is what lets a key be
+ * *moved*.  When fire is bound to the key up used, up's row is still in the
+ * default table, but this loop finds fire first and the row below then sees
+ * that the up slot has a binding and declines - so the key really moved
+ * instead of meaning two things at once.
+ */
+static int sdl2_key_lookup(const sdl_state *s, int key)
+{
+    int i;
+
+    if (!s || key <= 0) {
+        return -1;
+    }
+    for (i = 0; i < NJ_PORT_BIND_COUNT; i++) {
+        if (s->key_bind[i] > 0 && s->key_bind[i] == key) {
+            return sdl2_slot_key(i);
+        }
+    }
+    {
+        const sdl2_fixed_bind *fixed = sdl2_fixed_find(key);
+
+        if (fixed) {
+            return fixed->nj_key;
+        }
+    }
+    for (i = 0; i < SDL2_NDEFAULT_BINDS; i++) {
+        if (sdl2_default_binds[i].key == key) {
+            int slot = sdl2_default_binds[i].bind;
+
+            /*
+             * A slot with any binding is reachable only through it - 0 is
+             * "defaults", everything else means this default no longer
+             * applies.  That is what makes remapping do something.
+             */
+            return s->key_bind[slot] == 0 ? sdl2_slot_key(slot) : -1;
+        }
+    }
+    return -1;
+}
+
+/*
+ * End the run now, the way the window's close button does.
+ *
+ * The runtime learns about it from the NJ_EV_QUIT in the queue - that is what
+ * makes it stop the MIDlet cleanly instead of tearing down a VM that believes
+ * it is still running (nj_lib_midlet.c) - and `quit` is what stops this port
+ * from drawing the rest of the frame.  Both the X button, F10 and a dropped
+ * .jar take this one path, so they cannot drift apart.
+ */
+static void sdl_request_quit(sdl_state *s)
+{
+    nj_event e;
+    memset(&e, 0, sizeof(e));
+    e.type = NJ_EV_QUIT;
+    s->queue[s->qt] = e;
+    s->qt = (s->qt + 1) % (int)(sizeof(s->queue) / sizeof(s->queue[0]));
+    s->quit = 1;
+}
+
+/*
+ * A .jar dropped on the window: queue it when it can start, ignore it when it
+ * cannot.
+ *
+ * The port is the wrong place to START a game - the VM is mid-frame on its own
+ * thread, and only the caller owns the run - so it does the two parts that are
+ * its own: decide whether the file is a game at all, and end this run so the
+ * caller can start the new one.  nj_port_sdl2_take_dropped() hands the path
+ * over after nj_run() has returned.
+ *
+ * The decision is deliberately conservative.  The suffix is tested before
+ * anything opens the file, so a directory or a photo never reaches the ZIP
+ * reader, and nj_lib_probe() then asks the file itself - a readable ZIP whose
+ * manifest names a MIDlet - because the name is a claim and the manifest is
+ * the answer.  A drop that is not a game is a slip of the mouse; killing the
+ * game the user is playing over it would be the bug, so the log says what was
+ * ignored and the run continues.
+ */
+static void sdl_drop_queue(sdl_state *s, const char *path)
+{
+    nj_lib_entry info;   /* filled but unread: nj_lib_probe() wants a place for it */
+    char msg[NJ_LIB_PATH_MAX + 96];
+    size_t n;
+
+    if (!path || !path[0]) {
+        return;
+    }
+    if (!nj_lib_is_jar_name(path) || !nj_lib_probe(path, &info)) {
+        SDL_snprintf(msg, sizeof(msg),
+                     "drop: %s is not a runnable .jar, ignored", path);
+        sdl_log(s, 2, msg);
+        return;
+    }
+    n = strlen(path);
+    if (n >= sizeof(s->drop_path)) {
+        SDL_snprintf(msg, sizeof(msg), "drop: %s: path too long, ignored",
+                     path);
+        sdl_log(s, 1, msg);
+        return;
+    }
+    memcpy(s->drop_path, path, n + 1u);
+    s->drop_pending = 1;
+    SDL_snprintf(msg, sizeof(msg), "drop: %s queued, ending this run", path);
+    sdl_log(s, 2, msg);
+    sdl_request_quit(s);
 }
 
 /* Window pixels to device pixels.  The window is the screen at an integer
@@ -1240,10 +1591,20 @@ static void sdl_display_present(void *ud, int x, int y, int w, int h)
         memset(&e, 0, sizeof(e));
         switch (ev.type) {
         case SDL_QUIT:
-            e.type = NJ_EV_QUIT;
-            s->queue[s->qt] = e;
-            s->qt = (s->qt + 1) % (int)(sizeof(s->queue) / sizeof(s->queue[0]));
-            s->quit = 1;
+            sdl_request_quit(s);
+            break;
+        case SDL_DROPFILE:
+            /*
+             * A .jar dropped on the window asks for that game instead of this
+             * one.  The path is SDL's to free, and it is copied (or refused)
+             * before that happens.  SDL delivers this event to the window
+             * under the pointer whether or not it has keyboard focus - a drop
+             * IS the interaction - so there is no focus check to make here.
+             */
+            if (ev.drop.file) {
+                sdl_drop_queue(s, ev.drop.file);
+                SDL_free(ev.drop.file);
+            }
             break;
         case SDL_TEXTEDITING:
             /* Preedit belongs to the OS IME. Never append it to the MIDP value. */
@@ -1356,39 +1717,45 @@ static void sdl_display_present(void *ud, int x, int y, int w, int h)
                 s->save_req = 1;
                 break;
             }
+            /*
+             * F10 ends the run, exactly like the window's close button: the
+             * runtime gets the same NJ_EV_QUIT and stops the MIDlet cleanly.
+             * In the desktop client the caller then returns to the library
+             * instead of exiting; in direct mode there is nothing after the
+             * run, so the process ends, which is what the X button does too.
+             * F10 is not a MIDP key, so it must never fall through to the
+             * game-key lookup below.
+             */
+            if (ev.type == SDL_KEYDOWN && ev.key.repeat == 0 &&
+                ev.key.keysym.sym == SDLK_F10) {
+                sdl_request_quit(s);
+                break;
+            }
+            /*
+             * F11 toggles fullscreen and nothing else.  It sits with the other
+             * port controls above the game-key lookup for the same reason
+             * F10 does: a fullscreen toggle that also queued a MIDP key would
+             * fire whatever the game bound to F11 - and it cannot be bound,
+             * see sdl2_reserved_key().  The KEYUP is ignored, which is why the
+             * press has to be repeat==0 but the release needs no handling:
+             * there is nothing to undo.
+             */
+            if (ev.type == SDL_KEYDOWN && ev.key.repeat == 0 &&
+                ev.key.keysym.sym == SDLK_F11) {
+                sdl_toggle_fullscreen(s);
+                break;
+            }
             /* Preserve autorepeat as a distinct event. MIDP suppresses it for
              * Canvas but keeps built-in List/Form navigation repeatable. Native
-             * text editing above handles its own repeated edit operations. */
-            switch (ev.key.keysym.sym) {
-            case SDLK_UP:     k = NJ_KEY_UP;     break;
-            case SDLK_DOWN:   k = NJ_KEY_DOWN;   break;
-            case SDLK_LEFT:   k = NJ_KEY_LEFT;   break;
-            case SDLK_RIGHT:  k = NJ_KEY_RIGHT;  break;
-            case SDLK_RETURN:
-            case SDLK_KP_ENTER:
-            case SDLK_SPACE:  k = NJ_KEY_FIRE;   break;
-            case SDLK_ESCAPE: k = NJ_KEY_SOFT_RIGHT; break;
-            case SDLK_F1:     k = NJ_KEY_SOFT_LEFT;  break;
-            case SDLK_F2:     k = NJ_KEY_SOFT_RIGHT; break;
-            case SDLK_BACKSPACE: k = NJ_KEY_CLEAR;   break;
-            case SDLK_ASTERISK:  k = NJ_KEY_STAR;    break;
-            case SDLK_HASH:      k = NJ_KEY_POUND;   break;
-            case SDLK_z:      k = NJ_KEY_GAME_A; break;
-            case SDLK_x:      k = NJ_KEY_GAME_B; break;
-            case SDLK_c:      k = NJ_KEY_GAME_C; break;
-            case SDLK_v:      k = NJ_KEY_GAME_D; break;
-            case SDLK_0: k = NJ_KEY_0; break;
-            case SDLK_1: k = NJ_KEY_1; break;
-            case SDLK_2: k = NJ_KEY_2; break;
-            case SDLK_3: k = NJ_KEY_3; break;
-            case SDLK_4: k = NJ_KEY_4; break;
-            case SDLK_5: k = NJ_KEY_5; break;
-            case SDLK_6: k = NJ_KEY_6; break;
-            case SDLK_7: k = NJ_KEY_7; break;
-            case SDLK_8: k = NJ_KEY_8; break;
-            case SDLK_9: k = NJ_KEY_9; break;
-            default: break;
-            }
+             * text editing above handles its own repeated edit operations.
+             *
+             * KEYDOWN and KEYUP both go through the same lookup: the mapping
+             * lives in one place now (sdl2_key_lookup, which is also what
+             * nj_port_sdl2_key_for exposes), so a key the player remapped is
+             * the key that arrives on the way up too - a key-down that is
+             * remapped while a fixed switch handles the key-up is how a stuck
+             * key happens. */
+            k = sdl2_key_lookup(s, (int)sym);
             if (k >= 0) {
                 e.type = (ev.type == SDL_KEYDOWN)
                     ? (ev.key.repeat ? NJ_EV_KEY_REPEAT : NJ_EV_KEY_DOWN)
@@ -1743,6 +2110,18 @@ static int sdl_tone_play(void *ud, const nj_audio_tone *tones, int count)
         return -1;
     }
     /*
+     * Muted: report success and queue nothing.
+     *
+     * A tone is a sound effect, so "not played" would be a lie the game could
+     * act on (a Player told it failed logs an error for a preference the user
+     * chose) - and the effect cannot be heard either way.  Not synthesising it
+     * also means a muted port never opens an audio device, which is the point
+     * of the setting on a machine where the mixer entry is the annoyance.
+     */
+    if (s->mute) {
+        return 0;
+    }
+    /*
      * A tone is a sound effect, not a stream.  When sampled audio already has
      * the device, the beep belongs in the SAME stream, rendered at the
      * device's own format: re-opening the device here is what used to cut the
@@ -1832,7 +2211,24 @@ static int sdl_pcm_open(void *ud, int sample_rate, int channels)
 static int sdl_pcm_write(void *ud, const nj_s2 *samples, int frames)
 {
     sdl_state *s = SS(ud);
-    if (!s || !s->audio || !samples || frames <= 0) {
+    if (!s || !samples || frames <= 0) {
+        return -1;
+    }
+    /*
+     * Muted: the write is accepted and dropped.
+     *
+     * pcm_write's contract is "frames taken", and a Player that gets -1 for
+     * every block treats a user preference as a broken sound device - it logs,
+     * or worse, stops the stream.  Dropping the samples keeps the timing
+     * contract (the caller is throttled by pcm_free() in real time, and a
+     * silent queue only makes it faster) while the queue - and so the device -
+     * stays empty.  Deliberately before the s->audio check: a muted port may
+     * never have opened a device at all.
+     */
+    if (s->mute) {
+        return frames;
+    }
+    if (!s->audio) {
         return -1;
     }
     SDL_QueueAudio(s->audio, samples,
@@ -2060,9 +2456,125 @@ static void sdl_shutdown(void *ud)
 #ifdef NJ_HAVE_POSIX_NETWORK
     nj_posix_network_destroy(&s->network);
 #endif
+    /* The path is inline in this state, so it must not outlive it: a shutdown
+     * port answers "nothing dropped" even if somebody kept the pointer. */
+    s->drop_path[0] = '\0';
+    s->drop_pending = 0;
     free(s->pixels);
     free(s);
     SDL_Quit();
+}
+
+/* ------------------------------------------------------------------ */
+/* Dropped games                                                       */
+/* ------------------------------------------------------------------ */
+
+/*
+ * The .jar the window was told to switch to, if any.  See nj_port.h.
+ *
+ * The port cannot start the new game itself: nj_run() owns the VM, and by the
+ * time the caller can act on this the run has already returned.  So the port
+ * queues the path, ends the run and hands the path back here; the caller then
+ * starts the new jar with the same port.  The pending flag is cleared on
+ * DELIVERY, not on read, so a caller whose buffer is too small gets 0 and can
+ * ask again with room - a truncated path would name a different file.
+ */
+int nj_port_sdl2_take_dropped(nj_port *port, char *out, nj_u4 out_cap)
+{
+    sdl_state *s;
+    size_t n;
+
+    if (!port || !port->ud || !out || out_cap == 0u) {
+        return 0;
+    }
+    s = SS(port->ud);
+    if (!s->drop_pending) {
+        return 0;
+    }
+    n = strlen(s->drop_path);
+    if (n >= (size_t)out_cap) {
+        return 0;
+    }
+    memcpy(out, s->drop_path, n + 1u);
+    s->drop_path[0] = '\0';
+    s->drop_pending = 0;
+    return 1;
+}
+
+/* ------------------------------------------------------------------ */
+/* Remappable keys                                                     */
+/* ------------------------------------------------------------------ */
+/*
+ * The three functions the desktop client's key page (and the test) use.  The
+ * contract lives in nj_port.h; this section is only the state plumbing, since
+ * the mapping itself is sdl2_key_lookup() above - the same function the event
+ * path calls, so what the settings page shows is what the game receives.
+ *
+ * They are safe before display_init() (the client installs the saved bindings
+ * between building the port and starting the MIDlet) and they are no-ops that
+ * answer "nothing" once the port has been shut down, because shutdown NULLs
+ * port->ud.
+ */
+
+int nj_port_sdl2_bind(nj_port *port, int bind, int key)
+{
+    sdl_state *s;
+    int i;
+
+    if (!port || !port->ud || bind < 0 || bind >= NJ_PORT_BIND_COUNT) {
+        return 0;
+    }
+    s = SS(port->ud);
+    if (key == 0) {                 /* back to the slot's defaults */
+        s->key_bind[bind] = 0;
+        return 1;
+    }
+    if (key < 0) {
+        return 0;
+    }
+    /*
+     * The port's own controls and the phone's number pad are not preferences:
+     * a binding to one of them would either shadow a hotkey (F10 quits) or
+     * make "press 1" stop working.  Refused rather than silently stored.
+     */
+    if (sdl2_reserved_key(key) || sdl2_fixed_find(key) != NULL) {
+        return 0;
+    }
+    /*
+     * One key means one action: take the key from any slot that had it.  The
+     * loser keeps no fallback (see key_bind in sdl_state) - a slot whose key
+     * was taken is not "using its defaults" any more, and quietly restoring
+     * them would put two actions back on keys the player never chose again.
+     */
+    for (i = 0; i < NJ_PORT_BIND_COUNT; i++) {
+        if (i != bind && s->key_bind[i] == key) {
+            s->key_bind[i] = -1;
+        }
+    }
+    s->key_bind[bind] = key;
+    return 1;
+}
+
+int nj_port_sdl2_bound(const nj_port *port, int bind)
+{
+    if (!port || !port->ud || bind < 0 || bind >= NJ_PORT_BIND_COUNT) {
+        return 0;
+    }
+    /*
+     * 0 = defaults, a positive SDL_Keycode = that key, -1 = the slot's key was
+     * moved to another slot and it has none.  The last value is the only thing
+     * a caller needs to tell a settings page that the slot is unbound; the
+     * header's "0 when the slot uses its defaults" is still the rule for 0.
+     */
+    return SS(port->ud)->key_bind[bind];
+}
+
+int nj_port_sdl2_key_for(const nj_port *port, int key)
+{
+    if (!port || !port->ud) {
+        return -1;
+    }
+    return sdl2_key_lookup(SS(port->ud), key);
 }
 
 /* ------------------------------------------------------------------ */
@@ -2146,18 +2658,49 @@ nj_status nj_port_sdl2(nj_port *out, const char *title)
         }
     }
 
+    /*
+     * NJ_SDL2_MUTE=1 is the client's "sound" switch.  Latched here, before the
+     * MIDlet exists, because the audio hooks only ever ask this field: muting
+     * must not close a device the game has already opened (unmuting would then
+     * have to re-open it mid-stream) and it must not turn into an audio error
+     * the game reports - see sdl_pcm_write() and sdl_tone_play().
+     * NJ_SDL2_FULLSCREEN and NJ_SDL2_FILTER are read in sdl_display_init(),
+     * where there is a window and a texture to apply them to.
+     */
+    {
+        const char *mv = SDL_getenv("NJ_SDL2_MUTE");
+
+        s->mute = (mv && mv[0] != '\0' && mv[0] != '0') ? 1 : 0;
+    }
+
     memset(out, 0, sizeof(*out));
     s->port = out;
     out->name = "sdl2";
     out->ud = s;
 #ifdef NJ_HAVE_POSIX_NETWORK
-    if (nj_posix_network_init(&s->network) == NJ_OK) {
-        out->http_request = sdl_http_request;
-        out->socket_connect = sdl_socket_connect;
-        out->socket_read = sdl_socket_read;
-        out->socket_write = sdl_socket_write;
-        out->socket_available = sdl_socket_available;
-        out->socket_close = sdl_socket_close;
+    /*
+     * NJ_SDL2_NO_NETWORK=1 leaves every network hook NULL.
+     *
+     * NULL is the port contract for "this handset has no network", so a MIDlet
+     * that opens a connection gets the same failure it would on a phone without
+     * a signal - instead of a game on a desktop quietly reaching the internet
+     * when the user asked it not to.  Only a port compiled with the network
+     * backend has anything to skip, hence the guard.
+     */
+    {
+        const char *nv = SDL_getenv("NJ_SDL2_NO_NETWORK");
+
+        if (nv && nv[0] != '\0' && nv[0] != '0') {
+            sdl_log(NULL, 2, "network: disabled (NJ_SDL2_NO_NETWORK); "
+                             "http/socket hooks left NULL");
+        } else if (nj_posix_network_init(&s->network) == NJ_OK) {
+            out->http_request = sdl_http_request;
+            out->socket_connect = sdl_socket_connect;
+            out->socket_read = sdl_socket_read;
+            out->socket_write = sdl_socket_write;
+            out->socket_available = sdl_socket_available;
+            out->socket_close = sdl_socket_close;
+        }
     }
 #endif
     out->millis = sdl_millis;

@@ -29,6 +29,10 @@ DESKTOP_ONLY = {
     "src/core/nj_detect.c": "handset/device-profile detection, used by the runner",
     "src/gfx/nj_ttf.c": "TrueType rasteriser; the device build uses the bitmap faces (NJ_ENABLE_TTF=0 there)",
     "src/gfx/nj_font_ttf.c": "the TrueType face glue for the same switch",
+    "src/client/nj_library.c": "the desktop client's games library: scans a games directory, probes JARs, decodes icons; a device has no library window",
+    "src/client/nj_client_config.c": "the desktop client's settings file (XDG paths, client.conf); a device has its own settings storage",
+    "src/client/nj_client_ui.c": "the desktop client's launcher/browser/settings UI model; only the SDL2 client window draws it",
+    "src/port/posix/nj_sdl2_client.c": "the SDL2 client's window and game loop; the device image has no desktop window or library",
 }
 
 

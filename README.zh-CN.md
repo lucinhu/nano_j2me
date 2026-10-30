@@ -4,7 +4,7 @@
 
 [![最新发布](https://img.shields.io/github/v/release/lucinhu/nano_j2me?sort=semver&label=release&color=blue)](https://github.com/lucinhu/nano_j2me/releases/latest)
 [![许可](https://img.shields.io/github/license/lucinhu/nano_j2me)](LICENSE)
-[![测试](https://img.shields.io/badge/tests-132%20passing-brightgreen)](docs/VERIFICATION.md)
+[![测试](https://img.shields.io/badge/tests-138%20passing-brightgreen)](docs/VERIFICATION.md)
 [![sanitizer](https://img.shields.io/badge/sanitized-ASan%20%2B%20UBSan%20%2B%20LSan-brightgreen)](tools/run_sanitized_tests.sh)
 [![C99，零依赖](https://img.shields.io/badge/C99-no%20dependencies-informational)](#设计上的硬约束)
 
@@ -42,6 +42,25 @@
 ```
 
 ## 0.5.2 的新内容
+
+**SDL2 构建现在也是一个桌面客户端。** 不带 `.jar` 运行 `build/nj2me` 会打开
+游戏列表窗口：游戏目录里每个可运行的包都有一行，显示 MIDlet 自己声明的图标
+和名字。`O` 选择文件，`S` 打开设置，`R` 重新扫描，`Enter` 或点击运行，
+`Esc`/`Q` 退出；两个方向都支持拖放——把 `.jar` 拖到窗口上直接运行，把目录
+拖上去就换成新的游戏库。关闭游戏窗口或按 `F10` 回到列表，而不是退出。
+启动器由模拟器自己的光栅器和内置点阵字体绘制，不依赖任何界面工具包，中文
+游戏名也能正常显示；`--games`/`NJ2ME_GAMES` 指定游戏目录，
+`--print-library` 显示列表看到了什么，`nj2me game.jar` 仍和以前一样直接
+运行单个游戏。细节见[桌面客户端](#桌面客户端)一节和
+`docs/notes/2026-10-31-desktop-client.md`。
+
+**游戏按键可以自己映射了，设置页也覆盖了整个移植层。** 客户端的「按键映射」
+页把十二个游戏键（方向、开火、软键、清除键、A-D）逐个改成你按下的键，并以
+键名存进 `client.conf`（`map_up = W`）。数字键和 `*`/`#` 仍是手机键盘，移植层
+自己的 `F3`/`F5`/`F10`/`F11`/`F12`/`Tab` 不能占用。同一页还能改缩放滤镜、
+全屏、软件/加速渲染、堆大小、静音和网络开关；游戏中 `F11` 切换全屏，直接
+`nj2me game.jar` 运行也会读取同一份文件里的堆和显示设置。细节见
+`docs/notes/2026-10-31-key-mapping-and-settings.md`。
 
 **桌面 SDL2 与安卓端口默认不再限制帧率。** 标题一画完就上交，是延迟最低的
 做法，实际看到的画面由显示端决定：SDL2 渲染器主动要 vsync，SurfaceView 也
@@ -135,6 +154,21 @@ Java 监视器：有竞争的 `monitorenter` 会停到持有者离开为止，`O
 <img src="docs/images/readme-sdl2-1942.png" width="240" height="320" alt="1942 空战：英吉利海峡上空的空战，带屏幕按键">
 <img src="docs/images/readme-sdl2-xianjian.png" width="240" height="320" alt="仙剑奇侠传：客栈场景与对白框">
 <img src="docs/images/readme-sdl2-aoe.png" width="240" height="320" alt="傲世三国志：群雄争霸的标题菜单">
+</p>
+
+**桌面客户端，0.5.2 新增。** 游戏列表窗口：图标和名字来自 MIDlet 自己，
+坏掉的包留在列表里标成 `bad`，底部的提示同时也是可点的按钮。
+
+<p>
+<img src="docs/images/readme-desktop-client.png" width="480" height="360" alt="Nano J2ME 桌面客户端：游戏列表窗口，每行带图标、中文名和文件名">
+</p>
+
+**设置与按键映射，0.5.2 新增。** 设置页管显示、堆大小和网络；「按键映射」页
+可以把十二个游戏键改成任意键，右下角的提示确认新绑定。
+
+<p>
+<img src="docs/images/readme-client-settings.png" width="360" height="270" alt="客户端设置页：游戏目录、画面缩放、缩放滤镜、全屏、渲染加速等行">
+<img src="docs/images/readme-client-binds.png" width="360" height="270" alt="按键映射页：第一项绑定到 W，提示显示 上：W">
 </p>
 
 **Android。** 启动器显示每个游戏自己的名字和图标；游戏里可以换用不同的悬浮按键布局。
@@ -299,6 +333,38 @@ build/nj2me --port sdl2 --font /usr/share/fonts/liberation/LiberationMono-Regula
 ```
 
 文件读不了或者格式不对都不致命：内置字体会留在原位，只打一条警告。加 `-DNJ_ENABLE_TTF=0` 可以把 TrueType 光栅化器整个编译掉，只留点阵字体。嵌入相关的细节见 `docs/PORTING.md`。
+
+## 桌面客户端
+
+SDL2 构建既是移植层，也是一个客户端。不带 `.jar` 启动就是游戏列表窗口：
+游戏目录里每个包占一行，显示 MIDlet 自己声明的图标和名字、文件名和大小；
+坏掉的包也会留在列表里，标成 `bad` 并写出原因。`Enter` 或点击运行选中的
+游戏，`O` 选择 jar 文件，`R` 重新扫描，`S` 修改游戏目录、缩放、缩放滤镜、
+全屏、渲染方式、屏幕键盘、帧率上限、按键映射、堆大小、静音和网络开关，
+`Esc`/`Q` 退出；`F10`（或关闭游戏窗口）回到列表。
+
+把 `.jar` 拖到列表窗口或正在运行的游戏窗口上就会运行它——正在进行的游戏
+先正常结束；把目录拖到列表窗口上，它就成为游戏库。不可运行的文件会被拒绝
+并弹出提示，绝不会打断正在玩的游戏。扫描是增量的，所以 400 个游戏的目录
+在扫描过程中就能用。
+
+```sh
+build/nj2me                          # 打开列表窗口
+build/nj2me --games /path/to/jars    # 换一个游戏库
+build/nj2me --client game.jar        # 先运行，结束后回到列表
+build/nj2me --print-library          # 看看列表看到了什么
+```
+
+设置存在 `$XDG_CONFIG_HOME/nano_j2me/client.conf`（默认
+`~/.config/nano_j2me/client.conf`）；默认游戏目录是
+`~/.local/share/nano_j2me/games`，不存在时自动创建。按键映射也是这个文件里
+的行——`map_up = W`、`map_fire = J` 之类，值就是 `SDL_GetKeyName()` 打印的
+键名，留空表示默认键。直接 `nj2me game.jar` 运行会读取同一份文件里的堆、
+滤镜、全屏、渲染、静音和网络设置，命令行上的 `--scale`、`--fps`、`--keys`
+和 `--heap` 仍然优先。启动器由运行时自己的光栅器和内置字体绘制，所以不依赖
+任何界面工具包也能显示中文游戏名。细节见
+`docs/notes/2026-10-31-desktop-client.md` 和
+`docs/notes/2026-10-31-key-mapping-and-settings.md`。
 
 ## 告诉游戏它跑在哪台手机上
 

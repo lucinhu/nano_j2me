@@ -28,6 +28,14 @@
 #include "nj_inflate.h"
 #include "nj_zip.h"
 
+/*
+ * Desktop client: the games library behind the SDL2 window, the settings file
+ * it remembers, and the library UI model.  Hosted-only; a board includes nj.h
+ * just as well and ignores these.
+ */
+#include "nj_library.h"
+#include "nj_client.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif

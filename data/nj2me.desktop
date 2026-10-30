@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=nano_j2me
+GenericName=J2ME Emulator
+Comment=Run J2ME (MIDP 2.0) games in a desktop window
+Exec=nj2me
+Icon=nj2me
+Terminal=false
+Categories=Game;Emulator;
+Keywords=j2me;midp;jar;emulator;game;
+StartupNotify=false

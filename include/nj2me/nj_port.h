@@ -908,6 +908,70 @@ nj_status nj_port_headless(nj_port *out);
 /* SDL2 port (desktop).  `title` may be NULL. */
 nj_status nj_port_sdl2(nj_port *out, const char *title);
 
+/*
+ * A .jar the user dropped on the game window and that the run has not picked
+ * up yet.  Returns 1 and copies the path (NUL-terminated) when one is
+ * pending, 0 when there is none.  Call it after nj_run() returns and start
+ * that jar instead of going back to the library - that is what makes "drop a
+ * game on a running game" switch games instead of doing nothing.
+ *
+ * The port only queues a drop it believes can start: a readable ZIP whose
+ * manifest names a MIDlet.  Dropping a text file on a running game is a
+ * mistake the port decides not to punish, so the game keeps running and
+ * nothing is queued.
+ */
+int nj_port_sdl2_take_dropped(nj_port *port, char *out, nj_u4 out_cap);
+
+/*
+ * Remappable game keys on the SDL2 port.
+ *
+ * The defaults are the ones the key map has always had (arrows, Return/Space
+ * to fire, F1/Esc or F2 for the soft keys, ...), and a slot with a binding is
+ * the *only* way that game key is reachable - binding "up" to W makes the up
+ * arrow stop meaning up.  That is deliberate: a player who remaps a key wants
+ * the old one to stop fighting, not to carry both.  Reset a slot with key 0
+ * to get its defaults back.
+ *
+ * `key` is an SDL_Keycode (SDLK_left etc.), not a scancode, because that is
+ * what the game path matches today; the desktop client converts the name the
+ * user pressed with SDL_GetKeyFromName().  F3/F5/F10/F11/F12 and Tab are the
+ * port's own controls (speed, save, end run, fullscreen, keypad) and cannot
+ * be bound: 0 is returned for them.  Binding a key that another slot already
+ * uses moves that key to the new slot, so one key always means one action.
+ *
+ * nj_port_sdl2_key_for() is the lookup the event path itself uses; it is
+ * exposed so a test can assert the mapping without a video driver.
+ */
+enum nj_port_bind {
+    NJ_PORT_BIND_UP = 0,
+    NJ_PORT_BIND_DOWN,
+    NJ_PORT_BIND_LEFT,
+    NJ_PORT_BIND_RIGHT,
+    NJ_PORT_BIND_FIRE,
+    NJ_PORT_BIND_SOFT_LEFT,
+    NJ_PORT_BIND_SOFT_RIGHT,
+    NJ_PORT_BIND_CLEAR,
+    NJ_PORT_BIND_GAME_A,
+    NJ_PORT_BIND_GAME_B,
+    NJ_PORT_BIND_GAME_C,
+    NJ_PORT_BIND_GAME_D,
+    NJ_PORT_BIND_COUNT
+};
+
+/* Bind slot `bind` to SDL_Keycode `key` (0 = back to the defaults).
+ * Returns 1 when the binding was stored, 0 for an unknown slot or a reserved
+ * key.  Safe to call after nj_port_sdl2() and before nj_run(). */
+int nj_port_sdl2_bind(nj_port *port, int bind, int key);
+
+/* The keycode currently bound to `bind`, 0 when the slot uses its defaults,
+ * or -1 when another slot took this slot's key away (a slot can end up with no
+ * key of its own if the settings file assigns one key to two slots). */
+int nj_port_sdl2_bound(const nj_port *port, int bind);
+
+/* The MIDP key (NJ_KEY_*) that SDL_Keycode `key` produces right now, or -1
+ * when this key is not a game key. */
+int nj_port_sdl2_key_for(const nj_port *port, int key);
+
 /* Android NDK port.
  *   nj_port_android_set_window(&port, ANativeWindow *win);
  *   nj_port_android_push_event(&port, const nj_event *ev);

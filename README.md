@@ -4,7 +4,7 @@
 
 [![latest release](https://img.shields.io/github/v/release/lucinhu/nano_j2me?sort=semver&label=release&color=blue)](https://github.com/lucinhu/nano_j2me/releases/latest)
 [![licence](https://img.shields.io/github/license/lucinhu/nano_j2me)](LICENSE)
-[![tests](https://img.shields.io/badge/tests-132%20passing-brightgreen)](docs/VERIFICATION.md)
+[![tests](https://img.shields.io/badge/tests-138%20passing-brightgreen)](docs/VERIFICATION.md)
 [![sanitized](https://img.shields.io/badge/sanitized-ASan%20%2B%20UBSan%20%2B%20LSan-brightgreen)](tools/run_sanitized_tests.sh)
 [![C99, no dependencies](https://img.shields.io/badge/C99-no%20dependencies-informational)](#design-commitments)
 
@@ -44,6 +44,29 @@ an ESP32-S3, or whatever you are holding.
 ```
 
 ## What's new in 0.5.2
+
+**The SDL2 build is now a desktop client.** Run `build/nj2me` with no `.jar`
+and a library window opens: every runnable suite in your games directory gets a
+row with the icon and name the MIDlet itself declares. `O` browses for a jar,
+`S` opens settings, `R` rescans, `Enter`/click runs, `Esc`/`Q` quits, and
+drag-and-drop works both ways - drop a `.jar` on the window to run it, drop a
+folder to make it the library. Closing a game window or pressing `F10` comes
+back to the library instead of exiting. The launcher is drawn by the
+emulator's own rasteriser and built-in bitmap faces, so it needs no toolkit and
+renders Chinese game names; `--games`/`NJ2ME_GAMES` pick the directory,
+`--print-library` shows what it sees, and `nj2me game.jar` still runs one game
+exactly as before. See the [desktop client](#the-desktop-client) section and
+`docs/notes/2026-10-31-desktop-client.md`.
+
+**The game keys are rebindable, and the settings page covers the whole port.** A
+按键映射 page in the client maps all twelve game keys - arrows, fire, soft keys,
+clear, A-D - by pressing the key you want, and stores them by name in
+`client.conf` (`map_up = W`). Digits and `*`/`#` stay the phone keypad, and the
+port's own `F3`/`F5`/`F10`/`F11`/`F12`/`Tab` controls cannot be taken over. The
+same page now also edits the scale filter, fullscreen, software/accelerated
+renderer, heap size, mute and the network switch; `F11` toggles fullscreen in a
+game, and a direct `nj2me game.jar` run reads the same file for its heap and
+display choices. See `docs/notes/2026-10-31-key-mapping-and-settings.md`.
 
 **The frame rate is uncapped by default** on the desktop SDL2 port and on
 Android. Presenting as soon as the title has a frame is the lowest-latency
@@ -203,6 +226,23 @@ D-pad alone runs a platformer and nothing else.
 <img src="docs/images/readme-sdl2-1942.png" width="240" height="320" alt="1942 Air Combat mid-mission over the English coast, with the on-screen keypad">
 <img src="docs/images/readme-sdl2-xianjian.png" width="240" height="320" alt="Chinese Paladin: an isometric inn scene with a dialogue box">
 <img src="docs/images/readme-sdl2-aoe.png" width="240" height="320" alt="Sango: the title screen with a fiery battlefield menu">
+</p>
+
+**Desktop client, new in 0.5.2.** The library window: icons and names come from
+the MIDlet itself, a broken archive stays in the list marked `bad`, and the
+footer hints are clickable buttons.
+
+<p>
+<img src="docs/images/readme-desktop-client.png" width="480" height="360" alt="The nano_j2me desktop client's library window with icon rows, Chinese game names and file names">
+</p>
+
+**Settings and key mapping, new in 0.5.2.** The settings page edits the display,
+the heap and the network; the 按键映射 page binds any of the twelve game keys,
+and the toast confirms the new key.
+
+<p>
+<img src="docs/images/readme-client-settings.png" width="360" height="270" alt="The client's settings page with rows for game directory, scale, filter, fullscreen and renderer">
+<img src="docs/images/readme-client-binds.png" width="360" height="270" alt="The key mapping page with the top action bound to W and a toast saying 上：W">
 </p>
 
 **Android.** A launcher that shows each game's own name and icon, and the game
@@ -425,6 +465,42 @@ build/nj2me --port sdl2 --font /usr/share/fonts/liberation/LiberationMono-Regula
 An unreadable or malformed file is not fatal: the built-in faces stay in place
 and a warning is logged. Compile the rasteriser out with `-DNJ_ENABLE_TTF=0`
 to keep only the bitmaps. See `docs/PORTING.md` for the embedding details.
+
+## The desktop client
+
+The SDL2 build is a client as well as a port. With no `.jar` it opens a library
+of the games in your games directory: each row carries the icon and name the
+MIDlet declares, the file name and its size, and a broken archive stays
+visible, marked `bad` with the reason. `Enter`/click runs the selection, `O`
+browses for a jar, `R` rescans, `S` edits the games directory, scale, scale
+filter, fullscreen, renderer, on-screen keys, fps cap, key bindings, heap size,
+mute and the network switch, and `Esc`/`Q` quits. `F10`, or closing the game
+window, comes back to the library.
+
+Drag a `.jar` onto the launcher or onto a running game and it runs - a game in
+progress ends first; drag a directory onto the launcher and it becomes the
+library. Unreadable drops are refused with a toast and never interrupt a
+running title. The scan is incremental, so a directory of 400 suites is usable
+while it fills in.
+
+```sh
+build/nj2me                          # library window
+build/nj2me --games /path/to/jars    # another library
+build/nj2me --client game.jar        # run, then fall back to the library
+build/nj2me --print-library          # what the library sees
+```
+
+Settings live in `$XDG_CONFIG_HOME/nano_j2me/client.conf` (default
+`~/.config/nano_j2me/client.conf`); the default games directory is
+`~/.local/share/nano_j2me/games`, created on demand. The key bindings are rows
+of that file too - `map_up = W`, `map_fire = J` and so on, with the names
+`SDL_GetKeyName()` prints; an empty value means the default key. A direct
+`nj2me game.jar` run reads the same file for heap, filter, fullscreen,
+renderer, mute and network, while `--scale`, `--fps`, `--keys` and `--heap` on
+the command line still win. The launcher is drawn by the runtime's own
+rasteriser and built-in faces, so Chinese game names render with no toolkit and
+no extra dependency. See `docs/notes/2026-10-31-desktop-client.md` and
+`docs/notes/2026-10-31-key-mapping-and-settings.md`.
 
 ## Telling a title which phone it is on
 

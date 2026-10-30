@@ -228,6 +228,14 @@ set(NJ_SOURCES
   src/zip/nj_zip.c
   # ---- the runner ----
   src/runner/nj_run.c
+  # ---- the desktop client's portable half ----
+  # nj_library and nj_client_ui read a JAR and draw text; neither knows about a
+  # window, so they are built into the library and tested headlessly.  The SDL
+  # window half lives in src/port/posix/nj_sdl2_client.c (below, when SDL2 is
+  # found).
+  src/client/nj_library.c
+  src/client/nj_client_config.c
+  src/client/nj_client_ui.c
 )
 
 add_library(nj2me STATIC ${NJ_SOURCES})
@@ -387,7 +395,9 @@ if(NJ_BUILD_SDL2)
     pkg_check_modules(SDL2 QUIET sdl2)
   endif()
   if(SDL2_FOUND)
-    target_sources(nj2me PRIVATE src/port/posix/nj_port_sdl2.c)
+    target_sources(nj2me PRIVATE
+      src/port/posix/nj_port_sdl2.c
+      src/port/posix/nj_sdl2_client.c)
     target_include_directories(nj2me PRIVATE ${SDL2_INCLUDE_DIRS})
     target_link_libraries(nj2me PUBLIC ${SDL2_LIBRARIES})
     target_compile_definitions(nj2me PUBLIC NJ_HAVE_SDL2=1)
@@ -410,6 +420,12 @@ if(NJ_BUILD_CLI)
   target_link_libraries(nj2me-cli PRIVATE nj2me)
   set_target_properties(nj2me-cli PROPERTIES OUTPUT_NAME nj2me)
   install(TARGETS nj2me-cli RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+  # A desktop entry, so the client can be started from a menu: bare `nj2me`
+  # opens the games library.  The icon is the one Icon= names.
+  install(FILES data/nj2me.desktop
+          DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)
+  install(FILES data/nj2me.png
+          DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/256x256/apps)
 endif()
 
 install(TARGETS nj2me ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
@@ -1011,6 +1027,22 @@ endif()
                          ${NJ_FIXTURES}/fielddemo.jar)
         set_tests_properties(check_sdl2_savestate PROPERTIES TIMEOUT 120)
     endif()
+    # The desktop client is a window, but everything it does before a game
+    # starts is C: open a launcher, scan the games directory, paint a frame and
+    # answer --print-library.  Under SDL's dummy driver that runs without a
+    # display, and --client <jar> --run-frames N walks the launcher -> game ->
+    # exit seam.  Real clicks and drops are covered by test_port_drop.c and
+    # test_client_ui.c and were checked by hand with a display.
+    if(SDL2_FOUND AND EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_sdl2_client.sh)
+        add_test(NAME check_sdl2_client
+                 COMMAND ${CMAKE_COMMAND} -E env
+                         NJ_BIN=$<TARGET_FILE:nj2me-cli>
+                         ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_sdl2_client.sh
+                         ${CMAKE_CURRENT_SOURCE_DIR}/tests/games
+                         ${NJ_FIXTURES}/alphademo.jar)
+        set_tests_properties(check_sdl2_client PROPERTIES TIMEOUT 120
+                             SKIP_RETURN_CODE 77)
+    endif()
     # JVMS 5.5 step 4: a static field with a ConstantValue attribute takes its
     # value before <clinit> runs, and javac leaves such a field out of <clinit>
     # entirely.  20 static fields across 11 collected titles are read by a
@@ -1364,6 +1396,38 @@ nj_add_test(test_clip tests/test_clip.c)
   # mid-run and resumes it in a second VM in the same process.
   if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_save.c)
     nj_add_test(test_save tests/test_save.c)
+  endif()
+
+  # The desktop client, headlessly: a JAR's name and icon, the settings file,
+  # and the library model's keys and hit-testing are all plain C, so they are
+  # tested without a window or a display.
+  if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_client_config.c)
+    nj_add_test(test_client_config tests/test_client_config.c)
+  endif()
+  if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_library.c)
+    nj_add_test(test_library tests/test_library.c)
+  endif()
+  if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_client_ui.c)
+    nj_add_test(test_client_ui tests/test_client_ui.c)
+  endif()
+  # A drop is only accepted when the file is a JAR with a MIDlet in it; the
+  # port validates it so a stray file can never end a running game.
+  if(SDL2_FOUND AND EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_port_drop.c)
+    nj_add_test(test_port_drop tests/test_port_drop.c)
+    # The port is SDL2's window: the drop test pushes an SDL_DROPFILE through
+    # the real event queue, so it needs the same headers and library the port
+    # itself was built against (nj2me's copy is PRIVATE).
+    target_include_directories(test_port_drop PRIVATE ${SDL2_INCLUDE_DIRS})
+    target_link_libraries(test_port_drop PRIVATE ${SDL2_LIBRARIES})
+  endif()
+
+  # Remappable game keys and the display knobs the desktop settings reach: the
+  # lookup is exercised without video events, then once through a real
+  # SDL_KEYDOWN so the event path is not a second, untested mapping.
+  if(SDL2_FOUND AND EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_port_binds.c)
+    nj_add_test(test_port_binds tests/test_port_binds.c)
+    target_include_directories(test_port_binds PRIVATE ${SDL2_INCLUDE_DIRS})
+    target_link_libraries(test_port_binds PRIVATE ${SDL2_LIBRARIES})
   endif()
 
   # Multidimensional arrays through real bytecode: tests/arrays/ArrayDims.java

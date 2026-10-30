@@ -76,6 +76,30 @@ static void usage(const char *argv0)
 "  --dump-every <n>     write every n-th frame (headless, default: 1)\n"
 "  --version            print the version and exit\n"
 "  --help               this text\n"
+"  --client             open the games library instead of a bare game\n"
+"                       (what no jar argument means in an SDL2 build)\n"
+"  --games <dir>        the directory the client uses as its library\n"
+"  --print-library      list the games library and exit\n"
+"\n"
+"the desktop client (sdl2)\n"
+"  With no jar argument the SDL2 build opens a library window listing the\n"
+"  .jar files in its games directory ($XDG_DATA_HOME/nano_j2me/games, or\n"
+"  --games, or NJ2ME_GAMES).  Enter or a click runs one; O picks a jar\n"
+"  anywhere; R rescans; S opens the settings; Q or Esc quits.  Dropping a\n"
+"  .jar on the window runs it - on the library window and on a running game\n"
+"  alike - and dropping a directory makes it the library.  Closing a game\n"
+"  window, or F10 while it runs, returns to the library.\n"
+"  --client <jar> runs the jar first and shows the library when it ends;\n"
+"  --client with --run-frames N runs N frames and exits, which is how the\n"
+"  window path is tested without a user.\n"
+"\n"
+"  The S page edits the settings file: game scale, scale filter, fullscreen,\n"
+"  renderer, on-screen keypad, fps cap, key bindings, heap size, mute and the\n"
+"  network switch.  They live in $XDG_CONFIG_HOME/nano_j2me/client.conf\n"
+"  (default ~/.config/nano_j2me/client.conf), and a direct run reads the same\n"
+"  file, so its heap and display choices apply to `nj2me game.jar` too.\n"
+"  F11 toggles fullscreen in a game.  The key bindings page maps the twelve\n"
+"  game keys and refuses the port's own F3/F5/F10/F11/F12/Tab controls.\n"
 "\n"
 "replay scripts (--keys)\n"
 "  A script is a list of frame-stamped events; whitespace and newlines\n"
@@ -113,6 +137,7 @@ typedef struct cli {
     int         width;
     int         height;
     unsigned    heap_mb;
+    int         heap_given;     /* --heap wins over client.conf's heap_mb */
     int         stats;
     int         network;
     int         where;
@@ -123,6 +148,9 @@ typedef struct cli {
     const char *save_state;
     const char *load_state;
     int         save_frame;
+    int         client;         /* --client: the desktop client, not one run */
+    const char *games_dir;      /* --games: client library directory */
+    int         print_library;  /* --print-library: list and exit */
 } cli;
 
 /*
@@ -159,20 +187,214 @@ static int parse_size(const char *s, int *w, int *h)
     return 0;
 }
 
+/*
+ * The library directory, in the order a user expects: --games wins, then the
+ * environment (handy for a shell alias or a test), then client.conf, then the
+ * XDG default the settings module creates.
+ */
+static int resolve_games_dir(const cli *c, char *out, int cap)
+{
+    const char *env;
+    nj_client_settings s;
+    const char *src = NULL;
+
+    if (c->games_dir != NULL && c->games_dir[0] != '\0') {
+        src = c->games_dir;
+    } else {
+        env = getenv("NJ2ME_GAMES");
+        if (env != NULL && env[0] != '\0') {
+            src = env;
+        }
+    }
+    if (src == NULL) {
+        nj_client_settings_load(&s, NULL);
+        src = s.games_dir;
+    }
+    if (src == NULL || src[0] == '\0') {
+        return 0;
+    }
+    return snprintf(out, (size_t)cap, "%s", src) < cap;
+}
+
+static int print_library(const cli *c)
+{
+    char dir[NJ_CLIENT_PATH_MAX];
+    nj_library *lib;
+    int n;
+    int i;
+
+    if (!resolve_games_dir(c, dir, (int)sizeof(dir))) {
+        fprintf(stderr, "no games directory; name one with --games <dir>\n");
+        return 2;
+    }
+    lib = nj_library_new();
+    if (lib == NULL) {
+        fprintf(stderr, "out of memory\n");
+        return 1;
+    }
+    n = nj_lib_scan(lib, dir);
+    printf("library: %s\n", dir);
+    for (i = 0; i < n; i++) {
+        const nj_lib_entry *e = &lib->entries[i];
+        if (e->valid) {
+            printf("  ok   %-40s %s\n", e->name, e->file);
+        } else {
+            printf("  bad  %-40s %s\n", e->name, e->note);
+        }
+    }
+    printf("%d games, %d runnable\n", n, lib->valid_count);
+    nj_library_free(lib);
+    return 0;
+}
+
+/* Create the port for a direct run and apply the CLI's display settings. */
+static int setup_port(const cli *c, nj_port *port,
+                      const nj_client_settings *settings)
+{
+    nj_status st;
+    int use_sdl2 = 0;
+
+    memset(port, 0, sizeof(*port));
+    if (strcmp(c->port_name, "headless") == 0) {
+        st = nj_port_headless_ex(port, c->width, c->height,
+                                 c->dump_dir ? c->dump_every : 0, c->dump_dir);
+        if (st != NJ_OK) {
+            fprintf(stderr, "cannot create the headless port\n");
+            return 1;
+        }
+    } else if (strcmp(c->port_name, "sdl2") == 0) {
+#if NJ_HAVE_SDL2
+        use_sdl2 = 1;
+        /*
+         * The port reads its renderer/audio/network knobs from the environment
+         * at construction time, so the settings file has to be applied before
+         * the window exists.  This is the same helper the desktop client uses,
+         * so `nj2me game.jar` obeys the same settings.
+         */
+        if (settings != NULL) {
+            (void)nj_client_apply_game_settings(NULL, settings);
+        }
+        st = nj_port_sdl2(port, "nano_j2me");
+        if (st != NJ_OK) {
+            fprintf(stderr, "cannot create the SDL2 port (is DISPLAY set?)\n");
+            return 1;
+        }
+#else
+        fprintf(stderr, "this build has no SDL2 port; use --port headless\n");
+        return 2;
+#endif
+    } else {
+        fprintf(stderr, "unknown port: %s\n", c->port_name);
+        return 2;
+    }
+
+    if (c->network && strcmp(c->port_name, "headless") == 0) {
+        st = nj_port_headless_enable_network(port);
+        if (st != NJ_OK) {
+            fprintf(stderr, "this build has no desktop network backend\n");
+            nj_port_shutdown(port);
+            return 2;
+        }
+    }
+
+    port->width = c->width;
+    port->height = c->height;
+    if (c->fps >= 0) {
+        port->fps_cap = c->fps;
+    } else if (settings != NULL) {
+        port->fps_cap = settings->fps_cap;
+    }
+    port->rms_dir = c->rms_dir;
+    /*
+     * No filesystem unless asked for.  JSR 75 exposes the host's directories to
+     * untrusted code, and a default that hands a MIDlet the working directory
+     * is a default nobody thought about.  --fs-dir names the root a MIDlet is
+     * confined to.
+     */
+    port->fs_dir = c->fs_dir;
+    if (use_sdl2) {
+        if (c->scale > 0) {
+            port->scale = c->scale;
+        } else if (settings != NULL && settings->game_scale > 0) {
+            port->scale = settings->game_scale;
+        }
+#if NJ_HAVE_SDL2
+        if (settings != NULL) {
+            (void)nj_client_apply_game_settings(port, settings);
+        }
+#endif
+    }
+    return 0;
+}
+
+#if NJ_HAVE_SDL2
+static int run_client_mode(const cli *c, const nj_run_opts *opts)
+{
+    nj_client_settings settings;
+    nj_client_run_options co;
+    const char *env;
+    nj_library *lib;
+    nj_status st;
+
+    if (strcmp(c->port_name, "headless") == 0) {
+        fprintf(stderr, "the desktop client needs the SDL2 port; run a jar "
+                        "directly for --port headless\n");
+        return 2;
+    }
+    nj_client_settings_load(&settings, NULL);
+    env = getenv("NJ2ME_GAMES");
+    if (c->games_dir != NULL && c->games_dir[0] != '\0') {
+        if (snprintf(settings.games_dir, sizeof(settings.games_dir), "%s",
+                     c->games_dir) >= (int)sizeof(settings.games_dir)) {
+            fprintf(stderr, "--games path is too long\n");
+            return 2;
+        }
+    } else if (env != NULL && env[0] != '\0') {
+        if (snprintf(settings.games_dir, sizeof(settings.games_dir), "%s",
+                     env) >= (int)sizeof(settings.games_dir)) {
+            fprintf(stderr, "NJ2ME_GAMES path is too long\n");
+            return 2;
+        }
+    }
+    lib = nj_library_new();
+    if (lib == NULL) {
+        fprintf(stderr, "out of memory\n");
+        return 1;
+    }
+    memset(&co, 0, sizeof(co));
+    co.game = opts;
+    co.settings = &settings;
+    co.library = lib;
+    co.first_jar = c->jar;
+    co.width = c->width;
+    co.height = c->height;
+    co.scale = c->scale;
+    co.fps_cap = c->fps;
+    co.keys_visible = -1; /* the port's own default */
+    co.rms_dir = c->rms_dir;
+    co.fs_dir = c->fs_dir;
+    st = nj_client_run(&co);
+    if (c->stats) {
+        fprintf(stderr, "nano_j2me: exit status %d\n", (int)st);
+    }
+    nj_library_free(lib);
+    return st == NJ_OK ? 0 : 1;
+}
+#endif
+
 int main(int argc, char **argv)
 {
     cli c;
     nj_port port;
     nj_run_opts opts;
+    nj_client_settings settings;
     nj_status st;
     int i;
-    int use_sdl2 = 0;
     /* The merged property table nj_run() installs: the device, then overrides. */
     static nj_device_prop props[NJ_CLI_MAX_PROPS];
     static char prop_key[NJ_CLI_MAX_PROPS][NJ_CLI_PROP_LEN];
     static char prop_val[NJ_CLI_MAX_PROPS][NJ_CLI_PROP_LEN];
     int nprops = 0;
-    nj_size klen;
 
     memset(&c, 0, sizeof(c));
     c.dump_every = 1;
@@ -202,6 +424,7 @@ int main(int argc, char **argv)
             c.font = argv[++i];
         } else if (strcmp(a, "--heap") == 0 && i + 1 < argc) {
             c.heap_mb = (unsigned)atoi(argv[++i]);
+            c.heap_given = 1;
         } else if (strcmp(a, "--scale") == 0 && i + 1 < argc) {
             c.scale = atoi(argv[++i]);
         } else if (strcmp(a, "--fps") == 0 && i + 1 < argc) {
@@ -257,6 +480,12 @@ int main(int argc, char **argv)
             nprops++;
         } else if (strcmp(a, "--network") == 0) {
             c.network = 1;
+        } else if (strcmp(a, "--client") == 0) {
+            c.client = 1;
+        } else if (strcmp(a, "--games") == 0 && i + 1 < argc) {
+            c.games_dir = argv[++i];
+        } else if (strcmp(a, "--print-library") == 0) {
+            c.print_library = 1;
         } else if (strcmp(a, "--stats") == 0) {
             c.stats = 1;
         } else if (strcmp(a, "--where") == 0) {
@@ -280,11 +509,6 @@ int main(int argc, char **argv)
         } else {
             c.jar = a;
         }
-    }
-
-    if (!c.jar) {
-        usage(argv[0]);
-        return 2;
     }
 
     /*
@@ -315,59 +539,7 @@ int main(int argc, char **argv)
         nprops += (int)d->count;
     }
 
-    memset(&port, 0, sizeof(port));
     memset(&opts, 0, sizeof(opts));
-
-    if (strcmp(c.port_name, "headless") == 0) {
-        st = nj_port_headless_ex(&port, c.width, c.height,
-                                 c.dump_dir ? c.dump_every : 0, c.dump_dir);
-        if (st != NJ_OK) {
-            fprintf(stderr, "cannot create the headless port\n");
-            return 1;
-        }
-    } else if (strcmp(c.port_name, "sdl2") == 0) {
-#if NJ_HAVE_SDL2
-        use_sdl2 = 1;
-        st = nj_port_sdl2(&port, "nano_j2me");
-        if (st != NJ_OK) {
-            fprintf(stderr, "cannot create the SDL2 port (is DISPLAY set?)\n");
-            return 1;
-        }
-#else
-        fprintf(stderr, "this build has no SDL2 port; use --port headless\n");
-        return 2;
-#endif
-    } else {
-        fprintf(stderr, "unknown port: %s\n", c.port_name);
-        return 2;
-    }
-
-    if (c.network && strcmp(c.port_name, "headless") == 0) {
-        st = nj_port_headless_enable_network(&port);
-        if (st != NJ_OK) {
-            fprintf(stderr, "this build has no desktop network backend\n");
-            nj_port_shutdown(&port);
-            return 2;
-        }
-    }
-
-    port.width = c.width;
-    port.height = c.height;
-    if (c.fps >= 0) {
-        port.fps_cap = c.fps;
-    }
-    port.rms_dir = c.rms_dir;
-    /*
-     * No filesystem unless asked for.  JSR 75 exposes the host's directories to
-     * untrusted code, and a default that hands a MIDlet the working directory
-     * is a default nobody thought about.  --fs-dir names the root a MIDlet is
-     * confined to.
-     */
-    port.fs_dir = c.fs_dir;
-    if (use_sdl2 && c.scale > 0) {
-        port.scale = c.scale;
-    }
-
     opts.jar_path = c.jar;
     opts.midlet_class = c.midlet;
     opts.heap_bytes = (nj_size)c.heap_mb * 1024u * 1024u;
@@ -385,7 +557,71 @@ int main(int argc, char **argv)
     opts.save_state_path = c.save_state;
     opts.save_state_frame = (nj_u4)(c.save_frame > 0 ? c.save_frame : 0);
 
+    /*
+     * The settings file also feeds a direct run: heap size unless --heap was
+     * named, and the port/display knobs setup_port applies.  A headless run
+     * has no use for them, but loading is cheap and keeps one code path.
+     */
+    nj_client_settings_load(&settings, NULL);
+    if (!c.heap_given) {
+        opts.heap_bytes = (nj_size)settings.heap_mb * 1024u * 1024u;
+    }
+
+    if (c.print_library) {
+        return print_library(&c);
+    }
+
+#if NJ_HAVE_SDL2
+    /*
+     * Bare `nj2me` in an SDL2 build is the desktop client; naming a jar runs
+     * that game first.  A headless build with no jar keeps the old usage error
+     * below, because a serial console has nothing to draw a library on.
+     */
+    if (c.client || (c.jar == NULL && strcmp(c.port_name, "headless") != 0)) {
+        return run_client_mode(&c, &opts);
+    }
+#endif
+    if (c.jar == NULL) {
+        usage(argv[0]);
+        return 2;
+    }
+
+    {
+        int prc = setup_port(&c, &port, &settings);
+        if (prc != 0) {
+            return prc;
+        }
+    }
+
+#if NJ_HAVE_SDL2
+    /*
+     * Direct runs honor jar drops too: dropping a game on a running game
+     * starts it instead of doing nothing.  The run ended with the drop, so the
+     * window is rebuilt for the next game the same way a fresh run builds it.
+     */
+    {
+        char chain_jar[NJ_CLIENT_PATH_MAX];
+
+        for (;;) {
+            st = (nj_status)nj_run(&port, &opts);
+            if (strcmp(c.port_name, "sdl2") != 0 ||
+                nj_port_sdl2_take_dropped(&port, chain_jar,
+                                          (nj_u4)sizeof(chain_jar)) != 1) {
+                break;
+            }
+            nj_port_shutdown(&port);
+            {
+                int prc = setup_port(&c, &port, &settings);
+                if (prc != 0) {
+                    return prc;
+                }
+            }
+            opts.jar_path = chain_jar;
+        }
+    }
+#else
     st = (nj_status)nj_run(&port, &opts);
+#endif
 
     /* nj_run() does not own the port, so shutting it down is the caller's job. */
     nj_port_shutdown(&port);
