@@ -3,9 +3,15 @@
 # Build, sign and install a debug APK of the Android port.
 #
 #     tools/build_android_apk.sh [--abi arm64-v8a] [--screen 240x320]
-#                                [--install] [--push FILE.jar] [--no-midi]
+#                                [--opt 0|1|2|3|s|g|z] [--install]
+#                                [--push FILE.jar] [--no-midi]
 #                                [--no-png] [--no-jpeg] [--no-gif]
 #                                [--no-inflate] [--no-wav] [--no-amr]
+#
+# --opt is the native optimisation level, forwarded to tools/build_android.sh.
+# Both scripts default to -Os; see docs/notes/2026-10-30-android-optimisation-
+# level.md for the measurements behind that - the knob is for experiments, not
+# a speed switch.
 #
 # --no-midi drops the built-in MIDI renderer from the .so (~13 KB per ABI; the
 # platform's own synth still plays .mid, and MIDIControl stops working - see
@@ -38,18 +44,20 @@ PUSH=""
 OUT="$ROOT/build/android"
 NO_MIDI=0
 NO_CODECS=""   # --no-<codec> flags, forwarded to tools/build_android.sh
+OPT_FLAG=""    # --opt LEVEL, forwarded to tools/build_android.sh
 
 while [ $# -gt 0 ]; do
     case "$1" in
         --abi) ABIS="$2"; shift 2 ;;
         --screen) SCREEN="$2"; shift 2 ;;
         --out) OUT="$2"; shift 2 ;;
+        --opt) OPT_FLAG="--opt $2"; shift 2 ;;
         --install) INSTALL=1; shift ;;
         --push) PUSH="$2"; shift 2 ;;
         --no-midi) NO_MIDI=1; shift ;;
         --no-png|--no-jpeg|--no-gif|--no-inflate|--no-wav|--no-amr)
             NO_CODECS="$NO_CODECS $1"; shift ;;
-        -h|--help) sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help) sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "unknown option: $1" >&2; exit 2 ;;
     esac
 done
@@ -87,7 +95,7 @@ for abi in $ABIS; do
     echo "== native ($abi)"
     MIDI_FLAG=""
     [ "$NO_MIDI" = "1" ] && MIDI_FLAG="--no-midi"
-    MIDI_FLAG="$MIDI_FLAG $NO_CODECS"
+    MIDI_FLAG="$MIDI_FLAG $NO_CODECS $OPT_FLAG"
     if [ -n "$SCREEN" ]; then
         "$ROOT/tools/build_android.sh" --abi "$abi" --out "$OUT" --screen "$SCREEN" $MIDI_FLAG || exit 1
     else

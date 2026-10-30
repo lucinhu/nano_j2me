@@ -3,8 +3,14 @@
 # Build libnj2me.so with the Android NDK, for every ABI the SDK ships.
 #
 #     tools/build_android.sh [--abi arm64-v8a] [--api 21] [--out DIR] [--no-midi]
-#                              [--no-png] [--no-jpeg] [--no-gif] [--no-inflate]
-#                              [--no-wav] [--no-amr]
+#                              [--opt 0|1|2|3|s|g|z] [--no-png] [--no-jpeg]
+#                              [--no-gif] [--no-inflate] [--no-wav] [--no-amr]
+#
+# --opt selects the native optimisation level; the default is -Os, the level the
+# APK has always shipped with.  -O2 and -O3 were measured for speed and neither
+# bought a reliable speed-up on this workload
+# (docs/notes/2026-10-30-android-optimisation-level.md), so the knob exists for
+# experiments and for size-limited targets rather than to be turned up.
 #
 # This is a REAL cross-build with the real NDK toolchain, not a stub-header
 # compile: nj_port_android.c includes <jni.h>, exports the JNI entry points
@@ -27,6 +33,7 @@ ABIS="arm64-v8a armeabi-v7a x86 x86_64"
 SCREEN=""     # e.g. 176x208; empty leaves the runtime's default (240x320)
 NO_MIDI=0     # 1 drops the built-in MIDI renderer (see --no-midi below)
 NO_CODECS=""  # space-separated codec names to cut (see --no-<codec> below)
+OPT="s"       # -O<n> for the native compile; see --opt below
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -34,13 +41,25 @@ while [ $# -gt 0 ]; do
         --api)  API="$2"; shift 2 ;;
         --out)  OUT="$2"; shift 2 ;;
         --screen) SCREEN="$2"; shift 2 ;;
+        --opt)  OPT="${2#-O}"; shift 2 ;;
         --no-midi) NO_MIDI=1; shift ;;
         --no-png|--no-jpeg|--no-gif|--no-inflate|--no-wav|--no-amr)
             NO_CODECS="$NO_CODECS ${1#--no-}"; shift ;;
-        -h|--help) sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help) sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "unknown option: $1" >&2; exit 2 ;;
     esac
 done
+
+# One direction only: a level the compiler does not take would surface as a
+# confusing compile error halfway through the first ABI.
+case "$OPT" in
+    0|1|2|3|s|z|g) OPT_FLAG="-O$OPT" ;;
+    *)
+        echo "--opt takes 0, 1, 2, 3, s, g or z (the -O level for the native" >&2
+        echo "build); got '$OPT'" >&2
+        exit 2
+        ;;
+esac
 
 # Refused rather than built: the NDK has no compiler for a level below 21, and
 # the failure it produces reads like a broken toolchain instead of a floor.
@@ -72,6 +91,7 @@ SOURCES="$SOURCES src/runner/nj_run.c src/port/android/nj_port_android.c"
 
 echo "NDK  $NDK"
 echo "API  $API"
+echo "OPT  $OPT_FLAG"
 [ -n "$SCREEN" ] && echo "MIDlet screen $SCREEN"
 
 # The MIDlet's logical screen.  A title that gates on the screen size - "Screen
@@ -167,7 +187,7 @@ for abi in $ABIS; do
     built=1
     for f in $SOURCES; do
         o="$dir/$(echo "$f" | tr / _).o"
-        if ! "$cc" -std=c99 -Os -fPIC -ffunction-sections -fdata-sections \
+        if ! "$cc" -std=c99 "$OPT_FLAG" -fPIC -ffunction-sections -fdata-sections \
                 -Wall $SCREEN_DEFS $FEATURE_DEFS -I"$ROOT/include" -I"$ROOT/src/core" -I"$ROOT/src/midp" \
                 -I"$ROOT/src/gfx" -I"$ROOT/src/zip" \
                 -c "$ROOT/$f" -o "$o" 2>"$dir/err"; then

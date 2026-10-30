@@ -3137,3 +3137,27 @@ load average was 3-5: -0.3% at the minimum, -0.8% at the median, both inside the
 64-bit divide is a small share of this renderer, because only a few voices decay
 at once and the rest of the per-voice work dominates; the next MIDI attempt
 should measure first, as rounds 25-27 did.
+
+## The Android optimisation level that was not a lever (2026-10-30)
+
+The Android library had always been built `-Os`, and after 0.4.0 the question
+was whether that gives away frame time on a phone, since the desktop release
+build is `-O3`.  `tools/build_android.sh --opt` now exists so the question can
+be answered with numbers; the answer is no, and the default stays `-Os`.
+
+Clang 23, same sources, CPU-pinned, minimum of N runs:
+
+| workload | `-Os` | `-O2` | `-O3` |
+| --- | --- | --- | --- |
+| `tests/fixtures/bench.jar` (dispatch, min CPU of 8) | 0.235 s / 300.1 M bc/s | 0.234 s / 301.3 M bc/s | 0.230 s / 306.6 M bc/s |
+| Minecraft PE in world, 600 frames (min of 5) | 1.738 s / 345.2 fps | 1.804 s / 332.6 fps | 1.698 s / 353.4 fps |
+
+`-O2` is 3.7% *slower* on the title's frame loop - five runs each, in a 0.2%
+band, so not a fluke - while buying no interpreter speed, for a library 18%
+larger.  `-O3` is 2.3% faster there, inside the 2-3% noise of the benchmark
+above; a release gate that cannot see the difference is not a reason to ship a
+bigger library.  The x86_64 emulator was tried as the phone-facing measurement
+and cannot separate the builds: the same world load spread 40% across seven
+interleaved runs per build, through SwiftShader on a shared host.  The knob
+stays for size-limited targets and for the ARM A/B this host cannot run;
+`docs/notes/2026-10-30-android-optimisation-level.md` has the full method.

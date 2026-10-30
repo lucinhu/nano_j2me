@@ -231,6 +231,11 @@ for what "a port" means here:
 | the APK, by hand: `aapt2` + `javac` + `d8` + `apksigner` | `tools/build_android_apk.sh` |
 | the launcher icon set (PNG mipmaps + adaptive icon, no vector placeholder) | `tools/gen_android_icon.py` |
 
+The shared library is compiled `-Os` per ABI - the smallest artifact that keeps
+the frame loop where `-O2` and `-O3` measured it (`docs/notes/2026-10-30-android-
+optimisation-level.md`). `--opt <level>` on either script re-selects the level
+for a size-limited target or for an experiment; it is not a speed switch.
+
 The floor is **API 21**, the oldest level the NDK still ships a compiler for, and
 the audio is what makes it work: neither `libaaudio.so` nor `libOpenSLES.so` is
 linked. AAudio is `dlopen()`ed on the first sound and used when the phone has it
