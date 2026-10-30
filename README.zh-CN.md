@@ -4,7 +4,7 @@
 
 [![最新发布](https://img.shields.io/github/v/release/lucinhu/nano_j2me?sort=semver&label=release&color=blue)](https://github.com/lucinhu/nano_j2me/releases/latest)
 [![许可](https://img.shields.io/github/license/lucinhu/nano_j2me)](LICENSE)
-[![测试](https://img.shields.io/badge/tests-131%20passing-brightgreen)](docs/VERIFICATION.md)
+[![测试](https://img.shields.io/badge/tests-132%20passing-brightgreen)](docs/VERIFICATION.md)
 [![sanitizer](https://img.shields.io/badge/sanitized-ASan%20%2B%20UBSan%20%2B%20LSan-brightgreen)](tools/run_sanitized_tests.sh)
 [![C99，零依赖](https://img.shields.io/badge/C99-no%20dependencies-informational)](#设计上的硬约束)
 
@@ -40,6 +40,25 @@
                     │  headless · SDL2 · Android · ESP32-S3    │
                     └──────────────────────────────────────────┘
 ```
+
+## 0.5.1 的新内容
+
+**0.5.1 修的是雾。** Minecraft PE 的天空以前是整片雾色：光栅器按顶点算雾
+因子，而游戏天空平面的每一个顶点都在 `fog_far` 之外，于是整片天空都取了雾
+色；参考实现画的是从顶部 `(58,116,202)` 到地平线 `(105,183,228)` 的渐变。
+现在雾是逐片元量，在每个光栅循环里用插值出的 `1/w` 计算，这正是 GL ES 的
+定义；同一存档对 FreeJ2ME-Plus 的逐像素平均绝对差从 41.4 降到 13.8，天空
+每个通道只差个位数。代价是光栅器的 3~5%。加上前几轮修的云和水，Minecraft
+PE 现在画出来的就是参考帧的样子。（准星是故意没有的：游戏检测到 Nokia 多
+点触控时会把准星藏起来、换成触控布局——这是游戏自己的触屏行为，不是渲染
+缺陷。）
+
+**另外默认帧率上限从 30 提到 60**（SDL2 与安卓端口）：手机端的计数器早就
+显示，放开上限时模拟器能把一个已存世界画到 59.4 fps，也就是说 30 上限白白
+藏掉了一半的动态。`--fps` 仍可覆盖，安卓的「帧率上限」设置仍有 30 / 60 /
+不限制三档。ESP32 端口保持 30，那里省下来的确实是实打实的。
+
+完整更新日志：[v0.5.1 发布说明](https://github.com/lucinhu/nano_j2me/releases/tag/v0.5.1)。
 
 ## 0.5.0 的新内容
 

@@ -28,7 +28,7 @@ static void usage(const char *argv0)
 "  --scale <n>          integer upscale for the window (sdl2, default: auto)\n"
 "  --size <WxH>         screen size, e.g. 240x320 (default: %dx%d)\n"
 "  --rms-dir <path>     where RecordStore files are kept\n"
-"  --fps <n>            frame rate cap (default: 30; 0 = uncapped)\n"
+"  --fps <n>            frame rate cap (default: the port's own; 0 = uncapped)\n"
 "  --run-frames <n>     stop after n presented frames (for benchmarks)\n"
 "  --save-state <file>  write a VM snapshot at a frame boundary and keep going\n"
 "  --save-state-frame <n>  which frame boundary to snapshot (default: 1).\n"
@@ -176,7 +176,7 @@ int main(int argc, char **argv)
 
     memset(&c, 0, sizeof(c));
     c.dump_every = 1;
-    c.fps = 30;
+    c.fps = -1;              /* -1: leave the port's own cap alone */
     c.width = NJ_SCREEN_WIDTH;
     c.height = NJ_SCREEN_HEIGHT;
     c.heap_mb = (unsigned)NJ_CLI_HEAP_MB;
@@ -353,7 +353,9 @@ int main(int argc, char **argv)
 
     port.width = c.width;
     port.height = c.height;
-    port.fps_cap = c.fps;
+    if (c.fps >= 0) {
+        port.fps_cap = c.fps;
+    }
     port.rms_dir = c.rms_dir;
     /*
      * No filesystem unless asked for.  JSR 75 exposes the host's directories to

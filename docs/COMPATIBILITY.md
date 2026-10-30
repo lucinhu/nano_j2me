@@ -1497,9 +1497,17 @@ the three things a flat `fillTriangle` cannot express possible:
 - **Fog** from `Appearance.getFog()`: `LINEAR` fades towards `Fog`'s colour
   between its near and far distances, `EXPONENTIAL` by `exp(-density·d)`,
   where d is the depth along the view axis - the fog coordinate GL ES uses by
-  default.  The factor is computed per vertex and interpolated with the rest
-  of the colour, which is what the fixed-function pipeline does; the fixture
-  puts a triangle half way into a 4..6 fog and reads the pixel back.
+  default.  The factor is evaluated **per fragment** from the interpolated
+  1/w, the way GL ES does it: a triangle that spans the fog range has to shade
+  smoothly along its surface, and a large triangle whose vertices all sit past
+  the far distance has to be fogged where it crosses the near one.  Evaluating
+  it per vertex instead made Minecraft PE's sky one flat sheet of fog colour,
+  because every vertex of its sky plane is past the far distance while the
+  pixels near the horizon are not.  The reciprocal is the usual bit-trick
+  estimate plus two Newton steps (a division per fogged pixel is not worth it
+  on an embedded CPU); the fixture puts a triangle half way into a 4..6 fog
+  and reads the pixel back with one unit of tolerance, because the fog factor
+  is a float and half of 255 lands exactly on a rounding boundary.
 
 What is still honest about it: mip levels are generated from the image and
 selected for minified triangles **only when the texture asks for them** -

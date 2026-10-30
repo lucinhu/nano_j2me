@@ -61,7 +61,7 @@ the emulator's own ceiling, not the display's):
 The goal was >200 fps at 240x320. It is 14-23x that, so the headroom is not in
 question on the desktop.
 
-The SDL2 port adds the real presentation cost and a 30 fps cap by default;
+The SDL2 port adds the real presentation cost and a 60 fps cap by default;
 `--fps 0` removes the cap there too.
 
 ## Heap

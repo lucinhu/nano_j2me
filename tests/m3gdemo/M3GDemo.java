@@ -993,8 +993,21 @@ public class M3GDemo extends MIDlet {
                  * so half of the red survives and half the fog shows. */
                 /* Half of the red survives and half the fog's green:
                  * 0x80 red, 0x80 green, and no blue from either. */
+                /*
+                 * One unit of tolerance per channel: the fog factor is a
+                 * float, and half of 255 lands on .5 - a rounding step either
+                 * way is a correctly rounded result, not a regression. The
+                 * per-vertex version this replaced happened to land on the
+                 * same side; per-fragment sampling of the same triangle need
+                 * not.
+                 */
+                int fr = (px[0] >> 16) & 0xFF;
+                int fg2 = (px[0] >> 8) & 0xFF;
+                int fb = px[0] & 0xFF;
                 check("fog at half distance keeps half the colour",
-                      px[0] == 0xFF808000);
+                      (px[0] >>> 24) == 0xFF &&
+                      Math.abs(fr - 0x80) <= 1 && Math.abs(fg2 - 0x80) <= 1 &&
+                      fb == 0);
             }
         });
 

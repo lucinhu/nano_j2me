@@ -10671,6 +10671,10 @@ typedef struct {
     int sprite_l, sprite_t, sprite_r, sprite_b;
     float sprite_fog;
     nj_u4 sprite_fog_colour;
+    int fog;                   /* the Appearance has a Fog: fog per fragment */
+    int fog_mode;              /* 81 LINEAR, 192/193 EXPONENTIAL */
+    nj_u4 fog_colour;
+    float fog_near, fog_far, fog_density;
 } m3g_sw;
 
 #define M3G_SW_BACK  160
@@ -11071,6 +11075,58 @@ static inline const nj_u1 *sw_near_texel(const m3g_sw *sw, float s, float t)
                      (nj_size)sw->tex_bpp;
 }
 
+/*
+ * Fog, per fragment.
+ *
+ * The JSR's fog factor is a function of the fragment's depth along the view
+ * axis, and a fragment's depth is what the perspective division gives: the
+ * rasteriser already carries 1/w per pixel, so the depth is its reciprocal.
+ * Applying fog per vertex instead - the obvious thing, and what this used to
+ * do - is wrong for any triangle that spans a range of depths: Minecraft's
+ * sky is nine quads across the whole view, so per-vertex fog turned its
+ * gradient into one flat fog colour.  The reference implementation computes
+ * the factor per fragment as well.
+ */
+static nj_u4 sw_fog(m3g_sw *sw, float invw, nj_u4 c)
+{
+    float d, f, fr, fg, fb;
+    nj_u4 fc;
+    union { float f; nj_u4 u; } v;
+
+    if (!sw->fog || !(invw > 0.0f)) {
+        return c;
+    }
+    /* The depth is the reciprocal of the interpolated 1/w, once per pixel.
+       A division is the honest way to get it and also the expensive one, so
+       this is the usual bit-trick estimate refined by Newton: the first step
+       leaves ~0.2% error, which is enough to shift an eight-bit channel by one
+       unit at the far end of a linear ramp, and the second step costs two
+       multiplies and takes the error below a millionth. */
+    v.f = invw;
+    v.u = 0x7EF127EAu - v.u;
+    d = v.f * (2.0f - invw * v.f);
+    d = d * (2.0f - invw * d);
+    if (sw->fog_mode == 81) {                /* LINEAR */
+        float span = sw->fog_far - sw->fog_near;
+
+        f = (span > 0.0f) ? ((sw->fog_far - d) / span) : 1.0f;
+    } else {                                 /* EXPONENTIAL */
+        f = expf(-sw->fog_density * d);
+    }
+    if (f < 0.0f) { f = 0.0f; }
+    if (f > 1.0f) { f = 1.0f; }
+    fc = sw->fog_colour;
+    fr = (float)((c >> 16) & 0xFFu);
+    fg = (float)((c >> 8) & 0xFFu);
+    fb = (float)(c & 0xFFu);
+    fr = fr * f + (float)((fc >> 16) & 0xFFu) * (1.0f - f);
+    fg = fg * f + (float)((fc >> 8) & 0xFFu) * (1.0f - f);
+    fb = fb * f + (float)(fc & 0xFFu) * (1.0f - f);
+    return (c & 0xFF000000u) |
+           ((nj_u4)(fr + 0.5f) << 16) | ((nj_u4)(fg + 0.5f) << 8) |
+           (nj_u4)(fb + 0.5f);
+}
+
 static nj_u4 sw_tri(m3g_sw *sw, const float xy[6], const float inv[3],
                     const float st[6], int has_tex, const nj_u4 rgb[3],
                     const nj_u4 rgb2[3], int twosided)
@@ -11301,7 +11357,9 @@ static nj_u4 sw_tri(m3g_sw *sw, const float xy[6], const float inv[3],
 
                     if (key > 0 && (!dtest || key > z[o])) {
                         if (dwrite) { z[o] = key; }
-                        m3g_pixel_write(drow, format, flat);
+                        m3g_pixel_write(drow, format,
+                                        sw->fog ? sw_fog(sw, pg * ia, flat)
+                                                : flat);
                         drawn = 1u;
                     }
                 }
@@ -11335,6 +11393,14 @@ static nj_u4 sw_tri(m3g_sw *sw, const float xy[6], const float inv[3],
                         tr = (tr * fr) / 255u;
                         tg = (tg * fg) / 255u;
                         tb = (tb * fb) / 255u;
+                    }
+                    if (sw->fog) {
+                        nj_u4 fcd = sw_fog(sw, pg * ia,
+                                           (tr << 16) | (tg << 8) | tb);
+
+                        tr = (fcd >> 16) & 0xFFu;
+                        tg = (fcd >> 8) & 0xFFu;
+                        tb = fcd & 0xFFu;
                     }
                     if (dwrite) { z[o] = key; }
                     if (blend_alpha) {
@@ -11381,6 +11447,14 @@ static nj_u4 sw_tri(m3g_sw *sw, const float xy[6], const float inv[3],
                         tr = (tr * fr) / 255u;
                         tg = (tg * fg) / 255u;
                         tb = (tb * fb) / 255u;
+                    }
+                    if (sw->fog) {
+                        nj_u4 fcd = sw_fog(sw, pg * ia,
+                                           (tr << 16) | (tg << 8) | tb);
+
+                        tr = (fcd >> 16) & 0xFFu;
+                        tg = (fcd >> 8) & 0xFFu;
+                        tb = fcd & 0xFFu;
                     }
                     if (dwrite) { z[o] = key; }
                     c = (ta << 24) | (tr << 16) | (tg << 8) | tb;
@@ -11438,6 +11512,9 @@ static nj_u4 sw_tri(m3g_sw *sw, const float xy[6], const float inv[3],
                 }
                 if (has_tex) {
                     c = sw_texel(sw, ph / pg, pk / pg, c);
+                }
+                if (!sw->sprite) {
+                    c = sw_fog(sw, pg * ia, c);
                 }
                 if (sw->sprite) {
                     nj_u4 a = ((c >> 24) * (nj_u4)sw->sprite_alpha + 127u) / 255u;
@@ -11968,36 +12045,6 @@ static void jr_lit(m3g_jr *r, const float pe[3], const float ne[3],
     out[2] = acc[2] < 0.0f ? 0.0f : (acc[2] > 255.0f ? 255.0f : acc[2]);
 }
 
-/* Fog is applied to the colour the vertex already has, per vertex: GL ES 1.x
-   computes the fog factor per vertex and interpolates it, and a title that
-   wants the horizon to fade is served by that.  f == 1 is "no fog". */
-static void jr_fog(m3g_jr *r, const float pe[3], float col[3])
-{
-    float d, f, span;
-    int i;
-
-    if (!r->fog) {
-        return;
-    }
-    /* The depth along the view axis, which is what GL ES's default fog
-       coordinate (FRAGMENT_DEPTH) uses: a vertex 5 units in front of the
-       camera is 5 units into the fog, wherever it is on the screen. */
-    d = fabsf(pe[2]);
-    if (r->fog_mode == 81) {              /* LINEAR */
-        span = r->fog_far - r->fog_near;
-        f = (span > 0.0f) ? ((r->fog_far - d) / span) : 1.0f;
-    } else {                              /* EXPONENTIAL */
-        f = expf(-r->fog_density * d);
-    }
-    if (f < 0.0f) { f = 0.0f; }
-    if (f > 1.0f) { f = 1.0f; }
-    for (i = 0; i < 3; i++) {
-        float fc = (float)((r->fog_colour >> (16 - i * 8)) & 0xFFu);
-
-        col[i] = col[i] * f + fc * (1.0f - f);
-    }
-}
-
 /*
  * One vertex, ready to rasterise: its screen position, its texture
  * coordinates, its camera-space position and normal (what the lighting and
@@ -12040,7 +12087,6 @@ static int jr_fetch(m3g_jr *r, nj_u4 v, jr_vtx *o)
                  (nj_u4)(nj_u1)(s[2] & 0xFF);
         }
         jr_lit(r, o->pe, o->ne, vc, col);
-        jr_fog(r, o->pe, col);
         /*
          * Two-sided lighting: a back-facing polygon is lit by the same lights
          * with its normal reversed (JSR 184, PolygonMode.TWO_SIDED_LIGHTING).
@@ -12054,7 +12100,6 @@ static int jr_fetch(m3g_jr *r, nj_u4 v, jr_vtx *o)
             back[1] = -o->ne[1];
             back[2] = -o->ne[2];
             jr_lit(r, o->pe, back, vc, col2);
-            jr_fog(r, o->pe, col2);
             o->rgb2 = ((nj_u4)(col2[0] + 0.5f) << 16) |
                       ((nj_u4)(col2[1] + 0.5f) << 8) |
                       (nj_u4)(col2[2] + 0.5f);
@@ -12064,7 +12109,6 @@ static int jr_fetch(m3g_jr *r, nj_u4 v, jr_vtx *o)
         col[0] = (float)((argb >> 16) & 0xFFu);
         col[1] = (float)((argb >> 8) & 0xFFu);
         col[2] = (float)(argb & 0xFFu);
-        jr_fog(r, o->pe, col);
     }
     o->rgb = ((nj_u4)(col[0] + 0.5f) << 16) |
              ((nj_u4)(col[1] + 0.5f) << 8) |
@@ -12698,6 +12742,12 @@ static int jr_setup(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref ib, nj_ref app,
                          m3g_fof(vm, NJ_C_FOG, "_nj_far", "F")));
         }
     }
+    r.sw.fog = r.fog;
+    r.sw.fog_mode = r.fog_mode;
+    r.sw.fog_colour = r.fog_colour;
+    r.sw.fog_near = r.fog_near;
+    r.sw.fog_far = r.fog_far;
+    r.sw.fog_density = r.fog_density;
 
     /* Texture unit 0 and the polygon mode: a textured title says so in the
        Appearance, and the PolygonMode is where culling and winding live

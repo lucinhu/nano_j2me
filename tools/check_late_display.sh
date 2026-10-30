@@ -22,7 +22,10 @@ trap 'rm -f "$LOG"' EXIT
 fails=0
 fail() { echo "FAIL: $*" >&2; fails=$((fails+1)); }
 
-timeout 60 "$BIN" --port headless --heap 8 --size 176x208 --run-frames 60 \
+# --fps 30: the fixture installs its Displayable from a thread, so the
+# frame loop has to give that thread wall-clock time; the CLI default is
+# now "the port's own cap" and the headless port is uncapped.
+timeout 60 "$BIN" --port headless --fps 30 --heap 8 --size 176x208 --run-frames 60 \
         --stats "$JAR" >/dev/null 2>"$LOG"
 
 if grep -q "installed no Displayable" "$LOG"; then

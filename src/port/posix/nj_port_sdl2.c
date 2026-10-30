@@ -2186,6 +2186,15 @@ nj_status nj_port_sdl2(nj_port *out, const char *title)
      * touch except from input_poll (the speed badge and the F5 snapshot). */
     out->install_codecs = sdl_install_codecs;
     out->shutdown = sdl_shutdown;
-    out->fps_cap = 30;
+    /*
+     * 60, not 30.  A window on a desktop is redrawn by the compositor at the
+     * panel's rate anyway, and Minecraft PE's world - the title this port is
+     * measured against - sits at ~59 fps when the cap is lifted, so a 30 fps
+     * cap was making the port feel half as smooth as the machine it runs on.
+     * The frame pacer waits in the scheduler rather than by sleeping the whole
+     * VM (see nj_lib_midlet.c), so the title's own threads keep their time
+     * either way; --fps still picks any other cap, and 0 means uncapped.
+     */
+    out->fps_cap = 60;
     return NJ_OK;
 }

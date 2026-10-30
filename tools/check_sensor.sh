@@ -19,7 +19,10 @@ JAR="${2:?usage: check_sensor.sh <nj2me> <sensordemo.jar>}"
 OUT="$(mktemp)"
 trap 'rm -f "$OUT"' EXIT
 
-"$BIN" --port headless --run-frames 200 "$JAR" > "$OUT" 2>&1
+# --fps 30: this fixture starts its own listener thread, so it needs the
+# paced frame loop (the CLI now leaves the port's cap alone by default,
+# and the headless port is uncapped for benchmark runs).
+"$BIN" --port headless --fps 30 --run-frames 200 "$JAR" > "$OUT" 2>&1
 
 fail=0
 want() {

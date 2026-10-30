@@ -17,7 +17,7 @@
 #  built and is what the tests use).
 # =====================================================================
 cmake_minimum_required(VERSION 3.16)
-project(nano_j2me VERSION 0.5.0 LANGUAGES C)
+project(nano_j2me VERSION 0.5.1 LANGUAGES C)
 
 set(CMAKE_C_STANDARD 99)
 set(CMAKE_C_STANDARD_REQUIRED ON)

@@ -590,14 +590,17 @@ static void android_sleep_ms(void *ud, nj_u4 ms)
 /*
  * The frame cap, and the property that overrides it.
  *
- * 30 has been this port's cap since it existed: a phone drawing a 240x320
- * software frame should not burn battery on frames a title did not ask for, and
- * most J2ME titles sleep to their own rate anyway.  A 60/90/120 Hz panel and a
- * title that would use the frames is the case it gets wrong, so the cap is the
- * player's setting now (Settings.frameCap -> nativeSetFrameCap ->
- * nj_vm_set_frame_cap); `setprop debug.nj2me.fps N` (0 = uncapped) is the
- * launch-time override a measurement or a bug report uses, and the player
- * setting is applied on top of it.  See docs/PORTING.md.
+ * The port capped at 30 for a long time: a phone drawing a 240x320 software
+ * frame should not burn battery on frames a title did not ask for, and most
+ * J2ME titles sleep to their own rate anyway.  It kept the default too low for
+ * the one title that matters most here - Minecraft PE's world reaches ~59 fps
+ * on a phone that can present that fast, so a 30 cap made the game feel half
+ * as smooth as the hardware without saving the title any work.  The default is
+ * 60 now, and it is still the player's setting (Settings.frameCap ->
+ * nativeSetFrameCap -> nj_vm_set_frame_cap), with 30 for battery and 0 for
+ * uncapped; `setprop debug.nj2me.fps N` (0 = uncapped) is the launch-time
+ * override a measurement or a bug report uses, and the player setting is
+ * applied on top of it.  See docs/PORTING.md.
  */
 static int android_fps_cap(void)
 {
@@ -607,7 +610,10 @@ static int android_fps_cap(void)
     prop[0] = '\0';
     (void)__system_property_get("debug.nj2me.fps", prop);
     if (prop[0] == '\0') {
-        return 30;
+        /* 60 is the default a player asked for: the port measures ~59 fps in
+         * Minecraft PE's world on a device that can present that fast, and the
+         * player setting still offers 30 (battery) and uncapped. */
+        return 60;
     }
     n = atoi(prop);
     if (n < 0) {

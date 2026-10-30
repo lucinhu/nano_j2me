@@ -4,7 +4,7 @@
 
 [![latest release](https://img.shields.io/github/v/release/lucinhu/nano_j2me?sort=semver&label=release&color=blue)](https://github.com/lucinhu/nano_j2me/releases/latest)
 [![licence](https://img.shields.io/github/license/lucinhu/nano_j2me)](LICENSE)
-[![tests](https://img.shields.io/badge/tests-131%20passing-brightgreen)](docs/VERIFICATION.md)
+[![tests](https://img.shields.io/badge/tests-132%20passing-brightgreen)](docs/VERIFICATION.md)
 [![sanitized](https://img.shields.io/badge/sanitized-ASan%20%2B%20UBSan%20%2B%20LSan-brightgreen)](tools/run_sanitized_tests.sh)
 [![C99, no dependencies](https://img.shields.io/badge/C99-no%20dependencies-informational)](#design-commitments)
 
@@ -42,6 +42,32 @@ an ESP32-S3, or whatever you are holding.
                     │  headless · SDL2 · Android · ESP32-S3    │
                     └──────────────────────────────────────────┘
 ```
+
+## What's new in 0.5.1
+
+**0.5.1 is the fog fix.** Minecraft PE's sky was a single flat sheet of fog
+colour: the rasteriser evaluated the fog factor per vertex, and every vertex of
+the game's sky plane sits past `fog_far`, so the whole sky took the fog colour
+while the reference draws a gradient from `(58,116,202)` at the top to
+`(105,183,228)` at the horizon. Fog is now a per-fragment quantity, computed
+from the interpolated `1/w` in every raster loop, the way GL ES defines it; a
+frame compared against FreeJ2ME-Plus over the same saved world went from a mean
+absolute difference of 41.4 to 13.8, with the sky matching within a few units
+per channel. The cost is 3-5% of the rasteriser. Between the fixed sky and the
+previous rounds' cloud and water fixes, Minecraft PE now renders the sky, the
+clouds and the water the way the reference does - the clouds still read a
+little brighter, which the note writes down rather than hiding. (The crosshair
+is absent on purpose: the game hides it when it
+detects Nokia multipoint touch, which this runtime provides - that is the
+game's touch layout, not a rendering bug.)
+
+**And the default frame cap is now 60**, not 30, on the SDL2 and Android ports:
+the phone counter had shown the emulator drawing a saved world at 59.4 fps with
+the cap lifted, so 30 was hiding half the motion at no real saving. `--fps`
+still overrides it, and the Android 帧率上限 setting still offers 30 / 60 /
+uncapped. The ESP32 port keeps 30, where the saving is real.
+
+Full changelog: [v0.5.1 release notes](https://github.com/lucinhu/nano_j2me/releases/tag/v0.5.1).
 
 ## What's new in 0.5.0
 
