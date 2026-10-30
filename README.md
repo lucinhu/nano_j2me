@@ -99,24 +99,6 @@ UTF-8 arguments, with the POSIX builds byte-identical. First-cut limits are in
 `docs/notes/2026-10-31-windows-build.md`: no libcurl network port, no libretro
 core, x86_64 only, and the binaries are unsigned.
 
-
-**0.5.1 is the fog fix.** Minecraft PE's sky was a single flat sheet of fog
-colour: the rasteriser evaluated the fog factor per vertex, and every vertex of
-the game's sky plane sits past `fog_far`, so the whole sky took the fog colour
-while the reference draws a gradient from `(58,116,202)` at the top to
-`(105,183,228)` at the horizon. Fog is now a per-fragment quantity, computed
-from the interpolated `1/w` in every raster loop, the way GL ES defines it; a
-frame compared against FreeJ2ME-Plus over the same saved world went from a mean
-absolute difference of 41.4 to 13.8, with the sky matching within a few units
-per channel. The cost is 3-5% of the rasteriser. Between the fixed sky and the
-previous rounds' cloud and water fixes, Minecraft PE now renders the sky, the
-clouds and the water the way the reference does - the clouds still read a
-little brighter, which the note writes down rather than hiding. (The crosshair
-is absent on purpose: the game hides it when it
-detects Nokia multipoint touch, which this runtime provides - that is the
-game's touch layout, not a rendering bug.)
-
-
 ## What was new in 0.5.1
 
 **0.5.1 was the fog fix.** Minecraft PE's sky was a single flat sheet of fog
