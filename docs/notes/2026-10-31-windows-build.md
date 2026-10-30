@@ -111,7 +111,7 @@ build -j6` is 138/138, and `tools/check_no_statics.sh` reports no writable
 statics.
 
 The release zip is `build/nj2me-0.5.2-windows-x86_64.zip`: 2,139,213 bytes,
-SHA-256 `6bc55c9df4d08691fc088988b4a321ec2293d745fd186859efa800ebcd57d0f3`,
+SHA-256 `f9d7871d87faac67d9f94fe08ed12d1ce0a52def71daabf4329ec2cb3cc8ca3e`,
 with `nj2me.exe` (3,124,875 bytes stripped), `SDL2.dll`, `README.txt` and
 `samples/{keysdemo,colordemo,textdemo,audiodemo,mididemo}.jar`.
 

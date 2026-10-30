@@ -253,6 +253,14 @@ and the toast confirms the new key.
 <img src="docs/images/readme-client-binds.png" width="360" height="270" alt="The key mapping page with the top action bound to W and a toast saying 上：W">
 </p>
 
+**Windows, new in 0.5.2.** The same client as `nj2me.exe`, captured under wine:
+the UTF-16 path handling makes the wide-path listing and Chinese game names
+work exactly as on Linux.
+
+<p>
+<img src="docs/images/readme-client-windows.png" width="480" height="360" alt="The nano_j2me Windows build's library window: icon rows with Chinese game names and a Windows path in the header">
+</p>
+
 **Android.** A launcher that shows each game's own name and icon, and the game
 running with one of the configurable floating keypads.
 

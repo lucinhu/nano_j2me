@@ -177,6 +177,13 @@ Java 监视器：有竞争的 `monitorenter` 会停到持有者离开为止，`O
 <img src="docs/images/readme-client-binds.png" width="360" height="270" alt="按键映射页：第一项绑定到 W，提示显示 上：W">
 </p>
 
+**Windows，0.5.2 新增。** 同一个客户端编成 `nj2me.exe`，这是在 wine 下截的图：
+UTF-16 路径处理让宽字符目录扫描和中文游戏名与 Linux 上完全一致。
+
+<p>
+<img src="docs/images/readme-client-windows.png" width="480" height="360" alt="nano_j2me 的 Windows 构建：游戏列表窗口，每行带图标和中文名，标题栏是 Windows 路径">
+</p>
+
 **Android。** 启动器显示每个游戏自己的名字和图标；游戏里可以换用不同的悬浮按键布局。
 
 <p>
