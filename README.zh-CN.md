@@ -41,18 +41,18 @@
                     └──────────────────────────────────────────┘
 ```
 
-## 0.3.0 的新内容
+## 0.4.0 的新内容
 
-**0.3.0 让游戏把藏着的画面放出来。** 很多 J2ME 游戏自带 MPEG-4 / H.263 片头动画——开场、过场、演示循环——而 0.2.0 还没有任何视频解码器。这一版从容器一直做到像素，把视频接进了 MIDP：1942 空战、毁灭战士3、H.A.W.X. 的片头影片连同它们自带的 AMR-NB 音轨现在都能在游戏里播放；以前停在第一条命令表上的 Micro3D 标题开始真正出画；JSR-184 的审计缺口也补完了。
+**0.4.0 是能跑 Minecraft PE 的一版，也是让三类「画面不对」无处藏身的一版。** 0.3.0 之后，运行时补上了 UDP 数据报连接、Android 上自动决定 Java 堆大小，以及语料里真正会点名的那几块 JSR-75 / JSR-135。这一版的大部分工作，是一个要求很高的标题暴露出来的问题——以及现在守住这些问题的门禁。
 
-* **视频。** 从零写的 MPEG-4 Part 2（Simple Profile）解码器和 H.263 baseline 解码器走同一个 provider 接口：P 帧帧间预测、4MV、半像素运动补偿、视频包（resync）头、AC prediction，加上一个零分配的 ISO-BMFF 解复用器。输出与 FFmpeg 逐像素一致（三部真实影片、所有平面、最大绝对差 0）。`VideoControl` 把画面直绘在 Canvas 上，播放按影片自己的真实时钟节流，影片自带的 AMR-NB 音轨按 Player 的音量和静音解码播放。
-* **Mascot Capsule Micro3D。** 命令表、Figure、MTRA/MBAC 和动画模型都实现了；鬼泣3D 的任务一战斗和浴火银河的飞行场景在真实标题里出画，而不是停在 `tris=0`。
-* **JSR-184 补齐。** 两面光照、Animation COLOR 轨道、每帧零分配的蒙皮姿态缓存、`duplicate()` 连骨骼一起复制、Texture2D 一般矩阵的画面级证明；975 个 `.m3g`、1,513 个 PolygonMode 的语料审计已无未决缺口。
-* **稳健性。** 畸形 class 文件不再能挂死或弄崩虚拟机（异常表、未验证接收者、循环继承几族；fuzzer 找到、修掉、并用测试钉住）。两个真实标题的挂死/黑屏也修了：街头霸王2 冠军典藏版在加载期间收到软键不再挂死；纽约人生_1339 不再画完一帧就把帧泵饿死。
-* **可选 JIT。** RV32 与 ARM64 基线 JIT（默认关闭，`NJ_ENABLE_JIT=1` 开启），共享一个按 VM 有界的热块缓存；x86_64 仍用解释器。见 [docs/JIT.md](docs/JIT.md)。
-* **数字。** `ctest` 131 项测试（0.2.0 是 92 项），Sanitizer 套件 131/131 全绿；真实游戏语料 399 个里 **397 个正常跑**，2 个失败都是标题自身原因（JAR 被截断、授权过期）。
+* **Minecraft PE 0.6.1。** 能进世界、生成地形、正常出画，局域网联机走新的 UDP `DatagramConnection`。画面本身要修 JSR-184 采样器的三处：纹理坐标按 API 的 texel 中心约定（第 *i* 个 texel 覆盖 `[i/W,(i+1)/W)`），落在图集瓦片边界上的 UV 不会再采到上一条瓦片；`Texture2D.setFiltering()` 的 level filter 真正生效，`FILTER_BASE_LEVEL`（类默认值，也是所有标题要的）取第 0 级，而不是把相邻瓦片平均掉的 mip；JSR 184 的调色板 `Image2D` 构造会把索引表展开，`environment/clouds.png` 才画成云，而不是一片调色板索引。水面干净了，云回来了。
+* **帧率控制不再饿死标题自己的线程。** 限帧时旧的 pacer 用 `sleep` 等，整台虚拟机一起停摆：在自己线程里生成和渲染世界的游戏，30fps 下每帧 33ms 只拿到 8ms。现在等待时间花在调度器上（加载期每呈现一帧，应用自身工作量是原来的 85 倍），而且限帧改成绝对微秒截止时间，`--fps 60` 不会再跑成 62.5，`--fps 30` 就落在 30（Minecraft 27.4 → 29.5fps）。
+* **语料点名的 JSR-75 与厂商类。** `HttpsConnection` / `SecurityInfo` / `SecureConnection` / `Certificate`，并且 `http://` 连接刻意**不是** `HttpsConnection`；PIM 联系人列表能打开、内容是空的（这是一台新手机的回答）；三星 `SM`/`SMS` 抛 `IOException` 而不是假装成功；JSR-135 的 `TempoControl`/`RateControl` 真的能重新给 MIDI 曲定速。
+* **移植。** ESP32-S3 镜像重新能链接了——手写的 IDF 源清单早已过期，`check_port_sources` 现在拿它和桌面清单双向比对——而且格式化数据报地址不再依赖解析器。Android 按标题自动决定 Java 堆大小。
+* **门禁。** 八套裁剪配置在 `-Werror` 下零警告构建（这一遍抓到了真实的 `AffineTrans.setRotation` 缺陷：60° 旋转把模型缩小了一半）；400 标题快速门禁给每个标题独立存档目录，结果 fatal 0 / known 4；异常逃出帧循环时会打印每个线程当时在哪一帧。
+* **数字。** `ctest` 131 项测试，Sanitizer 套件 131/131 全绿；真实游戏语料 399 个里 **397 个正常跑**，2 个失败都是标题自身原因（JAR 被截断、授权过期）。
 
-完整更新日志：[v0.3.0 发布说明](https://github.com/lucinhu/nano_j2me/releases/tag/v0.3.0)。
+完整更新日志：[v0.4.0 发布说明](https://github.com/lucinhu/nano_j2me/releases/tag/v0.4.0)。
 
 ## 截图
 
@@ -81,6 +81,13 @@
 
 <p>
 <img src="docs/images/esp-emu-1942-menu.png" width="180" height="240" alt="1942 空战运行在模拟的 ESP32-S3 上">
+</p>
+
+**Minecraft PE 0.6.1，0.4.0 新增。** 游戏自己生成的世界：云层来自展开后的调色板 `Image2D`，水面干净，标题自己的限帧也跟得上。
+
+<p>
+<img src="docs/images/readme-minecraft.png" width="240" height="320" alt="Minecraft PE 的世界，有云、水和草地">
+<img src="docs/images/readme-android-minecraft.png" width="200" height="400" alt="Minecraft PE 跑在 Android 版本里">
 </p>
 
 **视频，0.3.0 新增。** 1942 空战的 MPEG-4 片头：一帧一帧解码，以 direct-video 叠加画在 Canvas 上；影片自带的 AMR-NB 音轨同步播放。
@@ -171,7 +178,7 @@ libretro core 默认会构建成 `build/libretro/nano_j2me_libretro.so`（`-DNJ_
 
 ## 在 RetroArch 里运行
 
-每次发布都会带上六个 core，打包为 `nano_j2me-0.3.0-libretro-cores.tar.gz`，所以想试不需要交叉编译器。要构建本机的 core：
+每次发布都会带上六个 core，打包为 `nano_j2me-0.4.0-libretro-cores.tar.gz`，所以想试不需要交叉编译器。要构建本机的 core：
 
 ```sh
 cmake -S . -B build -G Ninja

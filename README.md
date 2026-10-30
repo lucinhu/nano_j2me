@@ -43,42 +43,50 @@ an ESP32-S3, or whatever you are holding.
                     └──────────────────────────────────────────┘
 ```
 
-## What's new in 0.3.0
+## What's new in 0.4.0
 
-**0.3.0 makes the runtime show what the games were hiding.** J2ME titles carry
-MPEG-4 and H.263 movies - intros, cutscenes, attract loops - and 0.2.0 had no
-video decoder at all. This release ships one, from the container to the pixels,
-and wires it through MIDP: intro movies and their own AMR-NB sound tracks now
-play inside 1942, Doom 3 and H.A.W.X. Micro3D titles that used to stop at the
-first command list render, and JSR-184's last audit gaps are closed.
+**0.4.0 is the release that runs Minecraft PE, and the one that stops three
+kinds of "the picture is wrong" from hiding in the rasteriser.** Since 0.3.0 the
+runtime gained a UDP datagram connection, automatic heap sizing on Android, and
+the JSR-75 and JSR-135 pieces the corpus actually names. Most of the release is
+what one demanding title exposed - and the gates that keep it exposed.
 
-* **Video.** A from-scratch MPEG-4 Part 2 (Simple Profile) decoder and an H.263
-  baseline decoder behind the same provider seam: P-VOP inter prediction, 4MV,
-  half-pel motion compensation, video packet headers and AC prediction, plus an
-  allocation-free ISO-BMFF demultiplexer. Output is pixel-exact against FFmpeg
-  (three real movies, every plane, max-abs-diff 0). `VideoControl` draws the
-  frame over the Canvas, playback follows the movie's own real-time clock, and
-  the movie's AMR-NB track is decoded and played with the Player's volume/mute.
-* **Mascot Capsule Micro3D.** Command lists, figures, MTRA/MBAC and animated
-  models are in; 鬼泣3D's mission-1 combat and 浴火银河's flight scene render on
-  the real titles instead of stopping at `tris=0`.
-* **JSR-184 completed.** Two-sided lighting, Animation COLOR tracks, a
-  zero-allocation skinning pose cache, `duplicate()` with a copied skeleton, and
-  a pixel-level proof of the Texture2D general transform; the corpus audit of
-  975 `.m3g` files and 1,513 PolygonModes closed with no open gaps.
-* **Robustness.** Malformed class files can no longer hang or crash the VM
-  (exception-table, receiver and class-cycle families; found by the fuzzer,
-  fixed, and pinned by tests). Two real-title hangs are fixed: Street Fighter II
-  no longer deadlocks when a soft key arrives during loading, and 纽约人生_1339
-  no longer paints a single frame and then starves the frame pump.
-* **Optional JIT.** Baseline RV32 and ARM64 JITs (opt-in, `NJ_ENABLE_JIT=1`)
-  share a bounded per-VM hot-block cache; x86_64 stays on the interpreter. See
-  [docs/JIT.md](docs/JIT.md).
-* **Numbers.** 131 tests in `ctest` (92 in 0.2.0), the sanitized suite is
-  131/131 green, and **397 of 399** collected real games run - the two failures
-  are the titles' own (a truncated JAR and a licence check).
+* **Minecraft PE 0.6.1.** It boots, generates a world, draws it, and its LAN mode
+  joins over the new UDP `DatagramConnection`. The picture needed three fixes in
+  the JSR-184 sampler: texture coordinates follow the API's texel-centre
+  convention (texel *i* covers `[i/W,(i+1)/W)`), so a UV on an atlas tile
+  boundary no longer samples the previous tile; the level filter of
+  `Texture2D.setFiltering()` is honoured, so `FILTER_BASE_LEVEL` - the class
+  default, and what every title asks for - samples level 0 instead of a mip that
+  averages neighbouring tiles; and JSR 184's paletted `Image2D` constructor
+  expands its table, so `environment/clouds.png` comes out as clouds instead of
+  a field of palette indices. Water is clean, clouds are back.
+* **Frame pacing that lets a title's own threads run.** With a frame cap the
+  pacer used to sleep, which parked the whole VM: a game that generates and
+  renders on its own thread got 8 ms of every 33 ms at 30 fps. The wait is now
+  spent in the scheduler (85x the application's work per presented frame while
+  loading), and the cap is an absolute microsecond deadline, so `--fps 60` no
+  longer runs at 62.5 and `--fps 30` lands on 30 (Minecraft's 27.4 -> 29.5 fps).
+* **JSR-75 and vendor classes the corpus names.** `HttpsConnection` /
+  `SecurityInfo` / `SecureConnection` / `Certificate`, with an `http://`
+  connection that is deliberately *not* an `HttpsConnection`; the PIM contact
+  list (opens, and is honestly empty - what a fresh phone answers); Samsung's
+  `SM`/`SMS` (an `IOException` instead of a fabricated success); and JSR-135
+  `TempoControl`/`RateControl`, which re-time a MIDI song for real.
+* **Ports.** The ESP32-S3 image links again - its hand-written IDF source list
+  had gone stale, and `check_port_sources` now compares it with the desktop list
+  in both directions - and needs no resolver to format a datagram's address.
+  Android sizes the Java heap to the title by default.
+* **Gates.** Eight trimmed configurations build warning-free under `-Werror`
+  (that build caught a real `AffineTrans.setRotation` bug: a 60-degree rotation
+  shrank the model by half), the 400-title fast gate isolates each title's save
+  directory and reaches fatal 0 / known 4, and an exception that escapes into
+  the frame loop now prints where each thread was.
+* **Numbers.** 131 tests in `ctest`, the sanitized suite 131/131 green, and
+  **397 of 399** collected real games run - the two failures are the titles'
+  own (a truncated JAR and a licence check).
 
-Full changelog: [v0.3.0 release notes](https://github.com/lucinhu/nano_j2me/releases/tag/v0.3.0).
+Full changelog: [v0.4.0 release notes](https://github.com/lucinhu/nano_j2me/releases/tag/v0.4.0).
 
 ## Screenshots
 
@@ -111,6 +119,15 @@ profile, the frame path streamed over UART and decoded to this PNG.
 
 <p>
 <img src="docs/images/esp-emu-1942-menu.png" width="180" height="240" alt="1942 Air Combat running on the emulated ESP32-S3">
+</p>
+
+**Minecraft PE 0.6.1, new in 0.4.0.** A world the game generated itself, with
+the cloud layer textured out of the paletted `Image2D`, clean water, and the
+title's own frame cap keeping up.
+
+<p>
+<img src="docs/images/readme-minecraft.png" width="240" height="320" alt="Minecraft PE world with clouds, water and grass">
+<img src="docs/images/readme-android-minecraft.png" width="200" height="400" alt="Minecraft PE running on the Android build">
 </p>
 
 **Video, new in 0.3.0.** 1942's MPEG-4 intro, decoded frame by frame and drawn
@@ -237,7 +254,7 @@ installable cores for Android (arm64-v8a, armeabi-v7a, x86_64) and ARM Linux
 ## In RetroArch
 
 Every release ships the six cores as
-`nano_j2me-0.3.0-libretro-cores.tar.gz`, so trying it does not need a
+`nano_j2me-0.4.0-libretro-cores.tar.gz`, so trying it does not need a
 cross-compiler.  For the core on this machine:
 
 ```sh
