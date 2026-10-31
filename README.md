@@ -69,6 +69,30 @@ clamps). `test_m3g` is 818 checks / 0 failures, full ctest 140/140, corpus gate
 the cloud band the title animates from the wall clock. See
 `docs/notes/2026-10-31-raster-fast-paths.md`.
 
+**The replicated interpreter is now the default, and the Android APK builds
+it too.**  The computed-goto body was already the faster one on desktop
+(-6% terrain generation, -20% on Minecraft's 22 MB initial save); on the phone
+build, which compiles with clang `-Os`, the portable switch is much worse: a
+fresh Minecraft PE world on the x86_64 API-21 emulator takes 73.7 s of
+generation with the switch and 43.9 s with the replicated body, and the whole
+Start-to-in-world phase drops from about 1 min 50 s to 1 min 08 s (-40%
+generation, -35% save, -39% load-back prepare).  `tools/build_android.sh` now
+passes `-DNJ_THREADED_DISPATCH=1` by default (`NJ_ANDROID_THREADED=0` restores
+the switch for A/B); `tools/check_threaded_dispatch.sh` keeps both bodies
+equivalent under `ctest`.  See
+`docs/notes/2026-11-01-minecraft-android-costs.md`.
+
+**Five M3G bugs fixed, each with a regression check.**  `VertexArray.get` read
+before its backing array on a negative `firstVertex`; `VertexArray.set`
+multiplied `numVertices*numComponents` in 32 bits (zero-size allocation then an
+out-of-bounds store - a real ASan SEGV and UBSan signed overflow);
+`TriangleStripArray` constructors accepted strip lengths past the index array;
+`Image2D(fmt,w,h,byte[])` accepted short or NULL pixel storage; and
+`Group.addChild` accepted self/ancestor edges, making render walks recurse
+until the stack died.  `test_m3g` is now 848 checks / 0 failures under ASan and
+UBSan, and the PPM frame dumps of the same saved world are unchanged outside
+the wall-clock cloud band.
+
 ## What was new in 0.5.3
 
 **Name lookups are memoised, so the 3D renderer stops re-resolving the same

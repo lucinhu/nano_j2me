@@ -62,6 +62,24 @@
 只在云带（标题按墙钟时间做动画）有差异。详见
 `docs/notes/2026-10-31-raster-fast-paths.md`。
 
+**复制的解释器现在是默认，Android APK 也用它构建。** 计算跳转（computed goto）
+的解释器在桌面上本来就更快（地形生成 -6%，Minecraft 22 MB 初始存档 -20%）；
+而手机版用 clang `-Os` 交叉编译，可移植 switch 差得多：在 x86_64 API-21 模拟器
+上新建一个 Minecraft PE 世界，switch 需要 73.7 秒地形生成，复制解释器只要
+43.9 秒，从点 Start 到进入世界从约 1 分 50 秒降到 1 分 08 秒（生成 -40%、
+存档 -35%、回读准备 -39%）。`tools/build_android.sh` 现在默认传
+`-DNJ_THREADED_DISPATCH=1`（`NJ_ANDROID_THREADED=0` 可切回 switch 做对照）；
+`tools/check_threaded_dispatch.sh` 在 ctest 里保证两份实现逐字节码等价。详见
+`docs/notes/2026-11-01-minecraft-android-costs.md`。
+
+**修复五个 M3G 缺陷，每个都有回归检查。** `VertexArray.get` 的
+`firstVertex` 为负时会读到数组之前；`VertexArray.set` 的
+`numVertices*numComponents` 用 32 位相乘（先分配 0 大小再越界写——真实的
+ASan SEGV 与 UBSan 有符号溢出）；`TriangleStripArray` 构造函数接受超出索引
+数组的 strip 长度；`Image2D(fmt,w,h,byte[])` 接受过短甚至空的像素数组；
+`Group.addChild` 接受自环/祖先边，会让渲染遍历递归到栈溢出。`test_m3g` 现在
+ASan 与 UBSan 下 848 项检查 0 失败，同一存档世界的截帧在云带之外没有变化。
+
 ## 0.5.3 的新内容（上一版）
 
 **按名字的字段查找有了缓存，3D 渲染器不再每帧重复解析同样的字段。**

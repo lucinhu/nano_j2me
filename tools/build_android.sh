@@ -115,9 +115,19 @@ fi
 # silently got the computed-goto interpreter while every CMake build got the
 # switch - and the threaded interpreter was broken (a double fetch:
 # docs/notes/OPEN-issue-threaded-dispatch.md).  The block is now independent,
-# the default is an explicit 0, and tools/check_threaded_dispatch.sh compiles
-# both bodies under `ctest`.  This script therefore leaves the switch on, like
-# every other build.
+# the default is an explicit choice, and tools/check_threaded_dispatch.sh
+# compiles both bodies under `ctest`.
+#
+# Since 2026-11-01 this script builds the replicated body by default, because it
+# is measured on Android: a fresh Minecraft PE world on the x86_64 API-21
+# emulator, same APK script, same emulator, alternating runs, gives terrain
+# generation 69051 -> 45204/42556 ms and the initial 22 MB save 15571 ->
+# 11322/10577 ms against the portable switch (about 1.6x on generation, 1.4x on
+# the save; docs/notes/2026-11-01-minecraft-android-costs.md).  The switch is
+# kept for A/B by building with `NJ_ANDROID_THREADED=0`; CMake cross builds
+# (ESP32, Cortex-M) still default to the switch because they were not measured.
+#
+# The define itself is appended below with a comment naming the same note.
 #
 # NJ_ENABLE_FONT_CJK=0 is the other deliberate departure from a desktop build.
 # The built-in wide-glyph table is 7445 GB2312 characters at 12x12 and 16x16 -
@@ -133,6 +143,15 @@ FEATURE_DEFS="-DNJ_PIXFMT=NJ_PIXFMT_RGB565 \
 -DNJ_ENABLE_WAV=1 -DNJ_ENABLE_RMS=1 -DNJ_ENABLE_IO=1 \
 -DNJ_ENABLE_FLOAT=1 -DNJ_ENABLE_M3G=1 -DNJ_ENABLE_MASCOT=1 -DNJ_ENABLE_TTF=1 \
 -DNJ_ENABLE_FONT_CJK=0"
+
+# The replicated interpreter body is this port's default (see the comment
+# above and docs/notes/2026-11-01-minecraft-android-costs.md); setting
+# NJ_ANDROID_THREADED=0 builds the portable switch instead, for A/B only.
+if [ "${NJ_ANDROID_THREADED:-1}" = "0" ]; then
+    FEATURE_DEFS="$FEATURE_DEFS -DNJ_THREADED_DISPATCH=0"
+else
+    FEATURE_DEFS="$FEATURE_DEFS -DNJ_THREADED_DISPATCH=1"
+fi
 
 # --no-png / --no-jpeg / --no-gif / --no-inflate / --no-wav / --no-amr: cut one
 # built-in decoder out of the library.  On Android that is a real choice rather

@@ -3276,3 +3276,43 @@ Minecraft's terrain clamps while its clouds repeat.  Regression: `test_m3g`
 the main tree; corpus gate `fatal 0 / 400, known 4`; frame dumps of the same
 snapshot differ only in the sky/cloud band the title animates from the wall
 clock.
+
+## The Android APK builds the replicated interpreter (2026-11-01)
+
+The replicated computed-goto body became the CMake default for native
+GCC/Clang builds in `197536a`, but `tools/build_android.sh` compiles the
+runtime by hand and was not passing `-DNJ_THREADED_DISPATCH` at all: every APK
+still shipped the portable switch.  It now builds the replicated body by
+default (`NJ_ANDROID_THREADED=0` restores the switch for A/B), because the
+difference is much larger on the phone build than on the desktop one.
+
+Method: x86_64 API-21 Android emulator, `-Os` APK, automatic heap (120 MB),
+fresh world each run, same emulator and same creation script; builds alternate
+sA(switch), tB(threaded), tC(threaded), sD(switch).  The timers are the game's
+own logcat lines.
+
+| run | build | `MCJ: GEN` | initial save | load-back prepare |
+| --- | --- | ---: | ---: | ---: |
+| sA | switch | 69,051 ms | 15,571 ms | 21,034 ms |
+| sD | switch | 78,253 ms | 18,331 ms | 20,261 ms |
+| tB | threaded | 45,204 ms | 11,322 ms | 13,602 ms |
+| tC | threaded | 42,556 ms | 10,577 ms | 11,648 ms |
+
+Means: terrain generation 73.7 s -> 43.9 s (**-40%**), the 22 MB initial save
+17.0 s -> 11.0 s (**-35%**), load-back prepare 20.6 s -> 12.6 s (**-39%**) -
+about **1.65x** for the creation phase as a whole.  On the `-O3` desktop build
+the same switch only cost about 6% in generation, which is the point: clang
+`-Os` on the phone compiles the switch dispatch badly and the computed goto
+does not pay that cost.
+
+The body itself is the same 256-opcode implementation that
+`tools/check_threaded_dispatch.sh` compares against the switch bytecode for
+bytecode under `ctest`; `nm` confirms the pair differs
+(`nj_interp_run.nj_dispatch` label table present, `.so` +28 KB).  On the
+emulator the two APKs are behaviourally identical: `tests/fixtures/bench.jar`
+prints the same `BENCH sum=-136042548 s=5` and same lifecycle log on both, and
+`keysdemo`/`colordemo` produce identical logcat output and 0 differing pixels
+between their screenshots.  See
+`docs/notes/2026-11-01-minecraft-android-costs.md` for the whole investigation,
+including why world creation and digging are interpreter-bound rather than I/O,
+GC or M3G upload costs.

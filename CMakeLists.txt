@@ -115,8 +115,12 @@ set(NJ_PIXFMT       "NJ_PIXFMT_RGB565" CACHE STRING
 # fresh-world Minecraft replay the replicated body is ~6% faster in terrain
 # generation, ~20% on the 22 MB initial save and ~6% from the menu click to
 # the first in-world frame (three adjacent A/B pairs; docs/PERFORMANCE.md).
-# Cross builds - Android, ESP32, Cortex-M - keep the portable switch: they were
-# not measured here and their compilers only might honour label addresses.
+# Cross builds keep the portable switch: ESP32 and Cortex-M were not measured
+# here, and their compilers only might honour label addresses.  The Android
+# APK build is the exception: tools/build_android.sh compiles by hand and now
+# passes -DNJ_THREADED_DISPATCH=1 by default because it was measured on the
+# Android emulator (terrain generation 69051 -> 45204/42556 ms on a fresh
+# Minecraft world; docs/notes/2026-11-01-minecraft-android-costs.md).
 # -DNJ_THREADED_DISPATCH=0/1 still overrides the default for any build.
 if(NOT CMAKE_CROSSCOMPILING AND CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
   set(NJ_THREADED_DISPATCH_DEFAULT 1)
