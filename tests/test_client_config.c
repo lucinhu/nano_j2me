@@ -87,6 +87,9 @@ static void test_defaults(const char *data_home)
     CHECK(s.heap_mb == 0, "the heap defaults to the runtime size");
     CHECK(s.mute == 0, "sound starts on");
     CHECK(s.network == 1, "the network starts on");
+    CHECK(s.gamepad == 1, "game controllers start enabled");
+    CHECK(s.launcher_w == 0 && s.launcher_h == 0,
+          "the library window starts at its default size");
     {
         int i;
         int empty = 1;
@@ -172,6 +175,9 @@ static void test_round_trip(const char *config_home)
     a.heap_mb = 32;
     a.mute = 1;
     a.network = 0;
+    a.gamepad = 0;
+    a.launcher_w = 900;
+    a.launcher_h = 700;
     strcpy(a.binds[NJ_PORT_BIND_UP], "W");
     strcpy(a.binds[NJ_PORT_BIND_CLEAR], "Delete");
     strcpy(a.binds[NJ_PORT_BIND_GAME_A], "J");
@@ -192,6 +198,9 @@ static void test_round_trip(const char *config_home)
     CHECK(b.heap_mb == 32, "the heap size survives");
     CHECK(b.mute == 1, "mute survives");
     CHECK(b.network == 0, "the network switch survives");
+    CHECK(b.gamepad == 0, "a disabled gamepad survives");
+    CHECK(b.launcher_w == 900 && b.launcher_h == 700,
+          "the library window size survives");
     CHECK(strcmp(b.binds[NJ_PORT_BIND_UP], "W") == 0, "a rebind survives");
     CHECK(strcmp(b.binds[NJ_PORT_BIND_CLEAR], "Delete") == 0,
           "a long key name survives");
@@ -218,6 +227,10 @@ static void test_round_trip(const char *config_home)
               "a default slot is not written");
         CHECK(strstr(text, "filter_linear = 1") != NULL,
               "the filter switch is in the file");
+        CHECK(strstr(text, "gamepad = 0") != NULL,
+              "the gamepad switch is in the file");
+        CHECK(strstr(text, "window = 900x700") != NULL,
+              "the library window size is in the file");
     }
 
     /* A missing file is not an error: defaults are the answer. */
@@ -231,6 +244,8 @@ static void test_round_trip(const char *config_home)
         CHECK(c.filter_linear == 0 && c.fullscreen == 0 && c.network == 1 &&
               c.binds[NJ_PORT_BIND_UP][0] == '\0',
               "missing file keeps the new defaults too");
+        CHECK(c.gamepad == 1 && c.launcher_w == 0 && c.launcher_h == 0,
+              "missing file keeps the gamepad and window defaults");
     }
 }
 
@@ -252,6 +267,8 @@ static void test_bad_files(const char *config_home)
                "unknown_key = whatever\n"
                "last_dir = /tmp\n"
                "filter_linear = 7\n"
+               "gamepad = 7\n"
+               "window = 100x100\n"
                "heap_mb = 999\n"
                "mute = -2\n"
                "map_up = W\n"
@@ -268,6 +285,9 @@ static void test_bad_files(const char *config_home)
     CHECK(s.filter_linear == 0, "a switch value other than 0/1 is ignored");
     CHECK(s.heap_mb == 64, "an oversized heap request clamps to 64 MB");
     CHECK(s.mute == 0, "a negative switch is ignored");
+    CHECK(s.gamepad == 1, "a switch value other than 0/1 leaves it on");
+    CHECK(s.launcher_w == 0 && s.launcher_h == 0,
+          "a too-small window size is ignored");
     CHECK(strcmp(s.binds[NJ_PORT_BIND_UP], "W") == 0,
           "a bind line is read");
     CHECK(s.binds[NJ_PORT_BIND_FIRE][0] == '\0',
@@ -278,10 +298,14 @@ static void test_bad_files(const char *config_home)
     /* A directory that DOES exist is kept. */
     n = snprintf(path, sizeof(path), "%s/nano_j2me/client.conf", config_home);
     CHECK(n > 0, "the temp path still fits");
-    write_file(path, "games_dir = /tmp\nlast_dir = /tmp\n");
+    write_file(path, "games_dir = /tmp\nlast_dir = /tmp\n"
+                      "window = 1920x1080\ngamepad = 0\n");
     memset(&s, 0, sizeof(s));
     CHECK(nj_client_settings_load(&s, path) == 1, "the second file is read");
     CHECK(strcmp(s.games_dir, "/tmp") == 0, "an existing games dir is kept");
+    CHECK(s.launcher_w == 1920 && s.launcher_h == 1080,
+          "a window size that parses is kept");
+    CHECK(s.gamepad == 0, "gamepad = 0 is read");
 }
 
 int main(void)

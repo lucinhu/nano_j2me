@@ -215,6 +215,7 @@ static int client_key_for_sym(SDL_Keycode sym)
     case SDLK_KP_ENTER:  return NJ_CLIENT_KEY_ENTER;
     case SDLK_ESCAPE:    return NJ_CLIENT_KEY_ESCAPE;
     case SDLK_BACKSPACE: return NJ_CLIENT_KEY_BACKSPACE;
+    case SDLK_F1:        return NJ_CLIENT_KEY_HELP;
     default:             return 0;
     }
 }
@@ -234,6 +235,7 @@ static void client_key_char(nj_client_ui *ui, SDL_Keycode sym)
  * (a click, Enter, or a dropped jar).
  */
 static int client_launcher_events(nj_sdl_client *c, nj_client_ui *ui,
+                                  nj_client_settings *settings,
                                   char *run_jar, int run_cap)
 {
     SDL_Event ev;
@@ -253,6 +255,10 @@ static int client_launcher_events(nj_sdl_client *c, nj_client_ui *ui,
                 SDL_GetWindowSize(c->window, &w, &h);
                 if (w > 0 && h > 0 && client_resize(c, w, h)) {
                     nj_client_ui_resize(ui, w, h);
+                    /* Saved by nj_client_run() when the client exits, so the
+                     * next start opens where this one was left. */
+                    settings->launcher_w = w;
+                    settings->launcher_h = h;
                 }
             }
             break;
@@ -356,7 +362,7 @@ static int client_launcher_run(nj_sdl_client *c, nj_client_ui *ui,
         unsigned start = SDL_GetTicks();
         int closed;
 
-        closed = client_launcher_events(c, ui, run_jar, run_cap);
+        closed = client_launcher_events(c, ui, settings, run_jar, run_cap);
         if (closed) {
             if (run_jar[0] != '\0') {
                 take_game = 1;
@@ -439,6 +445,7 @@ nj_size nj_client_apply_game_settings(nj_port *port,
     SDL_setenv("NJ_SDL2_FULLSCREEN", settings->fullscreen ? "1" : "0", 1);
     SDL_setenv("NJ_SDL2_MUTE", settings->mute ? "1" : "0", 1);
     SDL_setenv("NJ_SDL2_NO_NETWORK", settings->network ? "0" : "1", 1);
+    SDL_setenv("NJ_SDL2_GAMEPAD", settings->gamepad ? "1" : "0", 1);
 
     if (port != NULL) {
         for (i = 0; i < NJ_PORT_BIND_COUNT; i++) {
@@ -575,16 +582,13 @@ nj_status nj_client_run(const nj_client_run_options *options)
         nj_library_free(local_library);
         return NJ_ERR;
     }
-    nj_client_ui_resize(ui, options->launcher_width > 0
-                                ? options->launcher_width
-                                : NJ_CLIENT_LAUNCHER_W,
-                        options->launcher_height > 0
-                                ? options->launcher_height
-                                : NJ_CLIENT_LAUNCHER_H);
     launcher_w = options->launcher_width > 0 ? options->launcher_width
-                                             : NJ_CLIENT_LAUNCHER_W;
+                : settings->launcher_w > 0 ? settings->launcher_w
+                                           : NJ_CLIENT_LAUNCHER_W;
     launcher_h = options->launcher_height > 0 ? options->launcher_height
-                                              : NJ_CLIENT_LAUNCHER_H;
+                : settings->launcher_h > 0 ? settings->launcher_h
+                                           : NJ_CLIENT_LAUNCHER_H;
+    nj_client_ui_resize(ui, launcher_w, launcher_h);
 
     jar[0] = '\0';
     if (options->first_jar != NULL && options->first_jar[0] != '\0') {

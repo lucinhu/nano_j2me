@@ -4,7 +4,7 @@
 
 [![latest release](https://img.shields.io/github/v/release/lucinhu/nano_j2me?sort=semver&label=release&color=blue)](https://github.com/lucinhu/nano_j2me/releases/latest)
 [![licence](https://img.shields.io/github/license/lucinhu/nano_j2me)](LICENSE)
-[![tests](https://img.shields.io/badge/tests-138%20passing-brightgreen)](docs/VERIFICATION.md)
+[![tests](https://img.shields.io/badge/tests-140%20passing-brightgreen)](docs/VERIFICATION.md)
 [![sanitized](https://img.shields.io/badge/sanitized-ASan%20%2B%20UBSan%20%2B%20LSan-brightgreen)](tools/run_sanitized_tests.sh)
 [![C99, no dependencies](https://img.shields.io/badge/C99-no%20dependencies-informational)](#design-commitments)
 
@@ -62,7 +62,7 @@ request against an instance field, and a name-only (`desc == NULL`) lookup.
 The tables cost 9,232 B per VM at the defaults (`nj_vm_sizeof()` 7,040 ->
 16,272 B in this tree's Release build with JIT off; 4,624 B on a 32-bit build),
 and `-DNJ_FIELD_CACHE_SLOTS` / `-DNJ_CLASS_CACHE_SLOTS` trade the RAM back for
-targets where it matters.  Full ctest 139/139, corpus gate
+targets where it matters.  Full ctest 140/140, corpus gate
 `fatal 0 / 400, known 4`.  See `docs/notes/2026-10-31-lookup-memo.md`.
 
 ## What was new in 0.5.2
@@ -257,6 +257,15 @@ and the toast confirms the new key.
 <img src="docs/images/readme-client-binds.png" width="360" height="270" alt="The key mapping page with the top action bound to W and a toast saying 上：W">
 </p>
 
+**Search and the shortcut sheet.** Typing filters the library by name, file or
+MIDlet class; `F1` lists every key the client accepts and where the settings
+file lives.
+
+<p>
+<img src="docs/images/readme-client-search.png" width="360" height="270" alt="The library window with a 1942 search filter and one matching game">
+<img src="docs/images/readme-client-help.png" width="360" height="270" alt="The F1 shortcut sheet listing library, game-window and settings keys">
+</p>
+
 **Windows, new in 0.5.2.** The same client as `nj2me.exe`, captured under wine:
 the UTF-16 path handling makes the wide-path listing and Chinese game names
 work exactly as on Linux.
@@ -368,8 +377,8 @@ usually skip, and they are exactly the parts old games use.
 | Ports: Android (NDK + JNI) | **done** — one APK for Android 5.0 (API 21) and up, 4 ABIs, a launcher that shows each game's own name and icon and opens `.jar` files from a file manager, three configurable floating keypad layouts, sound through AAudio or OpenSL ES with MIDI handed to the phone's own synth, multi-touch, and auto-detected screen size; 2.79 MiB for all four ABIs (858 KiB for arm64 alone), runs on an API 21 emulator and an API 36 emulator |
 | Ports: ESP32-S3 (ESP-IDF, Xtensa) | **done** — real IDF build; boots the ROM, the full class library and a MIDlet on a 16 MB flash / 8 MB PSRAM board under Espressif's `esp-emu` (`tools/run_esp_emulator.sh`: `BENCH sum=-136042548`, 105,717,067 bytecodes — the desktop total), and runs the internal-RAM profile under QEMU. `tools/run_esp_emulator_ui.sh` also demonstrates the display, input and storage paths in the same emulator (240x320 frames decoded to PNG, keys injected over UART, JAR read from a mounted card). See [docs/PERFORMANCE.md](docs/PERFORMANCE.md#esp32-s3-measured-on-the-real-architecture) and [docs/FOOTPRINT.md](docs/FOOTPRINT.md#what-esp-emu-does-and-does-not-model-the-ui-demo) |
 | Ports: ESP32-C3 (ESP-IDF, RISC-V) | builds, links and boots; needs PSRAM for the VM |
-| Test suite | **138 tests** (`ctest`) |
-| Sanitized suite | **138/138 passing** under ASan + UBSan + LSan (`tools/run_sanitized_tests.sh`) |
+| Test suite | **140 tests** (`ctest`) |
+| Sanitized suite | **140/140 passing** under ASan + UBSan + LSan (`tools/run_sanitized_tests.sh`) |
 
 Verified end to end: **Tumbleweed** (`net.frog_parrot.jump.Jump`, Apress 2004)
 plays on the headless port at 176x208 — scrolling ground, an animated sprite, a
@@ -519,15 +528,23 @@ of the games in your games directory: each row carries the icon and name the
 MIDlet declares, the file name and its size, and a broken archive stays
 visible, marked `bad` with the reason. `Enter`/click runs the selection, `O`
 browses for a jar, `R` rescans, `S` edits the games directory, scale, scale
-filter, fullscreen, renderer, on-screen keys, fps cap, key bindings, heap size,
-mute and the network switch, and `Esc`/`Q` quits. `F10`, or closing the game
-window, comes back to the library.
+filter, fullscreen, renderer, gamepad, on-screen keys, fps cap, key bindings,
+heap size, mute and the network switch, and `Esc`/`Q` quits. Typing filters the
+list by name, file name or MIDlet class, and `F1` shows every key the client
+and a game window accept. `F10`, or closing the game window, comes back to the
+library.
 
 Drag a `.jar` onto the launcher or onto a running game and it runs - a game in
 progress ends first; drag a directory onto the launcher and it becomes the
 library. Unreadable drops are refused with a toast and never interrupt a
 running title. The scan is incremental, so a directory of 400 suites is usable
 while it fills in.
+
+A controller is a first-class way to play: `A` fires, `B`/`X`/`Y` are the game
+keys, `LB`/`RB` the soft keys, `Back`/`Start` clear and game D, and the d-pad or
+left stick walks. It attaches and detaches while the client runs, holds produce
+one key press rather than a repeat storm, and the 手柄 row (`gamepad = 0`) or
+`NJ_SDL2_GAMEPAD=0` turns the whole thing off.
 
 ```sh
 build/nj2me                          # library window
@@ -545,8 +562,12 @@ of that file too - `map_up = W`, `map_fire = J` and so on, with the names
 renderer, mute and network, while `--scale`, `--fps`, `--keys` and `--heap` on
 the command line still win. The launcher is drawn by the runtime's own
 rasteriser and built-in faces, so Chinese game names render with no toolkit and
-no extra dependency. See `docs/notes/2026-10-31-desktop-client.md` and
-`docs/notes/2026-10-31-key-mapping-and-settings.md`.
+no extra dependency. The window remembers the size it was left at
+(`window = 900x700`), and `F1` is where to look when a key is forgotten - it
+lists the library, game-window and settings keys and the settings file's path.
+See `docs/notes/2026-10-31-desktop-client.md`,
+`docs/notes/2026-10-31-key-mapping-and-settings.md` and
+`docs/notes/2026-10-31-client-polish.md`.
 
 ## Telling a title which phone it is on
 

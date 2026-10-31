@@ -4,7 +4,7 @@
 
 [![最新发布](https://img.shields.io/github/v/release/lucinhu/nano_j2me?sort=semver&label=release&color=blue)](https://github.com/lucinhu/nano_j2me/releases/latest)
 [![许可](https://img.shields.io/github/license/lucinhu/nano_j2me)](LICENSE)
-[![测试](https://img.shields.io/badge/tests-138%20passing-brightgreen)](docs/VERIFICATION.md)
+[![测试](https://img.shields.io/badge/tests-140%20passing-brightgreen)](docs/VERIFICATION.md)
 [![sanitizer](https://img.shields.io/badge/sanitized-ASan%20%2B%20UBSan%20%2B%20LSan-brightgreen)](tools/run_sanitized_tests.sh)
 [![C99，零依赖](https://img.shields.io/badge/C99-no%20dependencies-informational)](#设计上的硬约束)
 
@@ -57,7 +57,7 @@ headless 运行，用户 CPU 从 2.705/2.713/2.725 秒降到 2.433/2.447/2.474 �
 （`desc == NULL`）都有检查。两份表在 64 位构建的默认值下每个 VM 多 9,232 字节
 （本仓库 Release 构建 JIT 关闭时 `nj_vm_sizeof()` 从 7,040 涨到 16,272；32 位
 构建约 4,624 字节），内存紧张的目标可以用 `-DNJ_FIELD_CACHE_SLOTS` /
-`-DNJ_CLASS_CACHE_SLOTS` 把 RAM 换回去。完整 ctest 139/139，语料门禁
+`-DNJ_CLASS_CACHE_SLOTS` 把 RAM 换回去。完整 ctest 140/140，语料门禁
 `fatal 0 / 400, known 4`。详见 `docs/notes/2026-10-31-lookup-memo.md`。
 
 ## 0.5.2 的新内容（上一版）
@@ -185,6 +185,14 @@ Java 监视器：有竞争的 `monitorenter` 会停到持有者离开为止，`O
 <img src="docs/images/readme-client-binds.png" width="360" height="270" alt="按键映射页：第一项绑定到 W，提示显示 上：W">
 </p>
 
+**搜索与快捷键表。** 直接输入即可按名字、文件名或 MIDlet 类名过滤列表；
+按 `F1` 会列出客户端接受的全部按键以及设置文件的位置。
+
+<p>
+<img src="docs/images/readme-client-search.png" width="360" height="270" alt="游戏列表窗口，搜索框里是 1942，只剩一个匹配的游戏">
+<img src="docs/images/readme-client-help.png" width="360" height="270" alt="F1 快捷键表，列出列表、游戏窗口和设置页的按键">
+</p>
+
 **Windows，0.5.2 新增。** 同一个客户端编成 `nj2me.exe`，这是在 wine 下截的图：
 UTF-16 路径处理让宽字符目录扫描和中文游戏名与 Linux 上完全一致。
 
@@ -273,8 +281,8 @@ UTF-16 路径处理让宽字符目录扫描和中文游戏名与 Linux 上完全
 | 移植：Android（NDK + JNI） | **完成** —— 一个 APK 支持 Android 5.0（API 21）及以上、四种 ABI；启动器会显示每个游戏自己的名字和图标，也能从文件管理器直接打开 `.jar`；三套可配置的悬浮按键布局；AAudio 或 OpenSL ES 出声，MIDI 交给手机自带的合成器；多点触控；自动识别游戏分辨率。四种 ABI 合计 2.79 MiB（仅 arm64 的包 858 KiB），在 API 21 模拟器和 API 36 模拟器上都跑过 |
 | 移植：ESP32-S3（ESP-IDF，Xtensa） | **完成** —— 真实的 IDF 构建；在 16 MB flash / 8 MB PSRAM 的板级配置下，通过 Espressif 的 `esp-emu` 跑起 ROM、完整类库和一个 MIDlet（`tools/run_esp_emulator.sh`：`BENCH sum=-136042548`，105,717,067 条字节码——桌面版的总数），内置 RAM 配置在 QEMU 下也能跑。`tools/run_esp_emulator_ui.sh` 还在同一个模拟器里演示了显示、输入和存储路径（240x320 帧解码成 PNG，按键经 UART 注入，JAR 从挂载的存储卡读取）。见 [docs/PERFORMANCE.md](docs/PERFORMANCE.md#esp32-s3-measured-on-the-real-architecture) 和 [docs/FOOTPRINT.md](docs/FOOTPRINT.md#what-esp-emu-does-and-does-not-model-the-ui-demo) |
 | 移植：ESP32-C3（ESP-IDF，RISC-V） | 能编译、链接、启动；跑虚拟机需要 PSRAM |
-| 测试套件 | **138 项测试**（`ctest`） |
-| Sanitizer 套件 | **138/138 通过**（ASan + UBSan + LSan，`tools/run_sanitized_tests.sh`） |
+| 测试套件 | **140 项测试**（`ctest`） |
+| Sanitizer 套件 | **140/140 通过**（ASan + UBSan + LSan，`tools/run_sanitized_tests.sh`） |
 
 端到端验证过的：**Tumbleweed**（`net.frog_parrot.jump.Jump`，Apress 2004）在 headless 移植上以 176x208 跑起来——滚动的地面、会动的精灵、实时分数和倒计时。详见 [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)。收集到的真实游戏语料共 400 个，其中 **398 个正常跑**，2 个失败都是标题自身原因（JAR 被截断、授权过期）；见 [docs/CORPUS.md](docs/CORPUS.md)。
 
@@ -385,13 +393,19 @@ SDL2 构建既是移植层，也是一个客户端。不带 `.jar` 启动就是�
 游戏目录里每个包占一行，显示 MIDlet 自己声明的图标和名字、文件名和大小；
 坏掉的包也会留在列表里，标成 `bad` 并写出原因。`Enter` 或点击运行选中的
 游戏，`O` 选择 jar 文件，`R` 重新扫描，`S` 修改游戏目录、缩放、缩放滤镜、
-全屏、渲染方式、屏幕键盘、帧率上限、按键映射、堆大小、静音和网络开关，
-`Esc`/`Q` 退出；`F10`（或关闭游戏窗口）回到列表。
+全屏、渲染方式、手柄、屏幕键盘、帧率上限、按键映射、堆大小、静音和网络
+开关，`Esc`/`Q` 退出。直接输入可以按名字、文件名或 MIDlet 类名过滤列表，
+`F1` 显示客户端和游戏窗口全部按键的说明。`F10`（或关闭游戏窗口）回到列表。
 
 把 `.jar` 拖到列表窗口或正在运行的游戏窗口上就会运行它——正在进行的游戏
 先正常结束；把目录拖到列表窗口上，它就成为游戏库。不可运行的文件会被拒绝
 并弹出提示，绝不会打断正在玩的游戏。扫描是增量的，所以 400 个游戏的目录
 在扫描过程中就能用。
+
+手柄和键盘一样可以直接玩：`A` 开火，`B`/`X`/`Y` 是游戏键，`LB`/`RB` 是软键，
+`Back`/`Start` 是清除键和游戏键 D，方向键或左摇杆移动。运行中插拔手柄都能
+识别，按住只产生一次按键而不是连发；设置页的“手柄”一行（`gamepad = 0`）或
+`NJ_SDL2_GAMEPAD=0` 可以整体关闭。
 
 ```sh
 build/nj2me                          # 打开列表窗口
@@ -407,9 +421,12 @@ build/nj2me --print-library          # 看看列表看到了什么
 键名，留空表示默认键。直接 `nj2me game.jar` 运行会读取同一份文件里的堆、
 滤镜、全屏、渲染、静音和网络设置，命令行上的 `--scale`、`--fps`、`--keys`
 和 `--heap` 仍然优先。启动器由运行时自己的光栅器和内置字体绘制，所以不依赖
-任何界面工具包也能显示中文游戏名。细节见
-`docs/notes/2026-10-31-desktop-client.md` 和
-`docs/notes/2026-10-31-key-mapping-and-settings.md`。
+任何界面工具包也能显示中文游戏名。窗口会记住上次拖动到的尺寸
+（`window = 900x700`）；忘了按键时按 `F1`，里面列出了列表、游戏窗口和设置页
+的全部按键以及设置文件的路径。细节见
+`docs/notes/2026-10-31-desktop-client.md`、
+`docs/notes/2026-10-31-key-mapping-and-settings.md` 和
+`docs/notes/2026-10-31-client-polish.md`。
 
 ## 告诉游戏它跑在哪台手机上
 

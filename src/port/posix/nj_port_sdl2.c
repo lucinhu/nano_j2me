@@ -268,6 +268,30 @@ typedef struct sdl_state {
      * all-zero table, so it maps exactly what the port has always mapped.
      */
     int  key_bind[NJ_PORT_BIND_COUNT];
+
+    /*
+     * Game controller.
+     *
+     * One pad, one fixed mapping.  MIDP has a single player and the client has
+     * no controller settings page, so "the first controller SDL reports" is
+     * the right one, and hotplugging only changes WHICH pad is used - never how
+     * it maps.  The mapping is deliberately not the remappable keyboard map:
+     * a player expects A to fire no matter what the keyboard page says, and a
+     * pad has no Shift-like ambiguity that would need a second layout.
+     *
+     * `pad_dpad` and `pad_stick` are direction masks rather than booleans so
+     * the d-pad and the left stick can both hold "up" without the release of
+     * one ending the other; `pad_held` is the record of what has actually been
+     * queued, which is how a held button produces one KEY_DOWN and one KEY_UP
+     * instead of a stream of presses.
+     */
+    int  gamepad;          /* NJ_SDL2_GAMEPAD is on (default); 0 disables */
+    SDL_GameController *controller;
+    int  pad_stick_x;      /* left stick, raw SDL axis value (-32768..32767) */
+    int  pad_stick_y;
+    unsigned int pad_dpad;   /* directions held on the d-pad */
+    unsigned int pad_stick;  /* directions held by the left stick */
+    unsigned char pad_held[NJ_KEY_COUNT]; /* MIDP keys the pad is holding down */
 } sdl_state;
 
 /* The speeds the badge cycles through, in percent. */
@@ -815,6 +839,281 @@ static int sdl2_key_lookup(const sdl_state *s, int key)
         }
     }
     return -1;
+}
+
+/* ------------------------------------------------------------------ */
+/* Game controller                                                     */
+/* ------------------------------------------------------------------ */
+/*
+ * The pad's mapping is FIXED and independent of nj_port_sdl2_bind(): the
+ * buttons are physical, the client has no controller settings page, and the
+ * point of the whole feature is that the game is playable without touching the
+ * keyboard map.  It is the layout players already know from every 2D game on a
+ * pad:
+ *
+ *   A fire          B/X/Y game A/B/C       LB/RB soft-left/right
+ *   Back clear      Start game D           d-pad + left stick directions
+ *
+ * The d-pad and the left stick are merged into one set of directions, because
+ * both mean "up" to the player: a game must not see two ups, and releasing the
+ * d-pad must not end the up the stick is still holding.
+ */
+
+#define SDL2_PAD_UP    (1u << 0)
+#define SDL2_PAD_DOWN  (1u << 1)
+#define SDL2_PAD_LEFT  (1u << 2)
+#define SDL2_PAD_RIGHT (1u << 3)
+
+/*
+ * The stick's dead zone, in SDL's raw axis range.  A real stick never rests at
+ * exactly 0, and "half deflection" is what pushing it to move feels like while
+ * still ignoring the drift of a worn stick.  The test treats 8000 as the
+ * jitter case for exactly that reason.
+ */
+#define SDL2_PAD_DEADZONE 16000
+
+static const int sdl2_pad_dir_keys[4] = {
+    NJ_KEY_UP, NJ_KEY_DOWN, NJ_KEY_LEFT, NJ_KEY_RIGHT
+};
+
+typedef struct sdl2_pad_bind {
+    int button; /* SDL_CONTROLLER_BUTTON_* */
+    int key;    /* NJ_KEY_* */
+} sdl2_pad_bind;
+
+static const sdl2_pad_bind sdl2_pad_buttons[] = {
+    { SDL_CONTROLLER_BUTTON_A,             NJ_KEY_FIRE },
+    { SDL_CONTROLLER_BUTTON_B,             NJ_KEY_GAME_A },
+    { SDL_CONTROLLER_BUTTON_X,             NJ_KEY_GAME_B },
+    { SDL_CONTROLLER_BUTTON_Y,             NJ_KEY_GAME_C },
+    { SDL_CONTROLLER_BUTTON_LEFTSHOULDER,  NJ_KEY_SOFT_LEFT },
+    { SDL_CONTROLLER_BUTTON_RIGHTSHOULDER, NJ_KEY_SOFT_RIGHT },
+    { SDL_CONTROLLER_BUTTON_BACK,          NJ_KEY_CLEAR },
+    { SDL_CONTROLLER_BUTTON_START,         NJ_KEY_GAME_D }
+};
+#define SDL2_NPAD_BUTTONS \
+    ((int)(sizeof(sdl2_pad_buttons) / sizeof(sdl2_pad_buttons[0])))
+
+/* The direction bit a controller button feeds, or -1 for a non-directional
+ * button (the d-pad is the only button source of directions; the stick is an
+ * axis source and arrives through sdl2_pad_stick_mask instead). */
+static int sdl2_pad_dir_bit(int button)
+{
+    switch (button) {
+    case SDL_CONTROLLER_BUTTON_DPAD_UP:    return 0;
+    case SDL_CONTROLLER_BUTTON_DPAD_DOWN:  return 1;
+    case SDL_CONTROLLER_BUTTON_DPAD_LEFT:  return 2;
+    case SDL_CONTROLLER_BUTTON_DPAD_RIGHT: return 3;
+    default:                               return -1;
+    }
+}
+
+/* Turn the merged direction masks into events: one press per direction while
+ * anything holds it, one release when nothing does. */
+static void sdl2_pad_flush_dirs(sdl_state *s)
+{
+    unsigned int now = s->pad_dpad | s->pad_stick;
+    int i;
+
+    for (i = 0; i < 4; i++) {
+        unsigned int bit = 1u << i;
+        int key = sdl2_pad_dir_keys[i];
+
+        if ((now & bit) && !s->pad_held[key]) {
+            sdl_push_key(s, key, 1);
+            s->pad_held[key] = 1;
+        } else if (!(now & bit) && s->pad_held[key]) {
+            sdl_push_key(s, key, 0);
+            s->pad_held[key] = 0;
+        }
+    }
+}
+
+static void sdl2_pad_button(sdl_state *s, int button, int down)
+{
+    int bit = sdl2_pad_dir_bit(button);
+    int i;
+
+    if (bit >= 0) {
+        if (down) {
+            s->pad_dpad |= 1u << bit;
+        } else {
+            s->pad_dpad &= ~(1u << bit);
+        }
+        sdl2_pad_flush_dirs(s);
+        return;
+    }
+    for (i = 0; i < SDL2_NPAD_BUTTONS; i++) {
+        int key = sdl2_pad_buttons[i].key;
+
+        if (sdl2_pad_buttons[i].button != button) {
+            continue;
+        }
+        /* The held record is what makes this one event, not a stream: SDL may
+         * deliver a duplicate state, and a release for a key that is not down
+         * would be a stuck-key bug in the other direction. */
+        if (down && !s->pad_held[key]) {
+            sdl_push_key(s, key, 1);
+            s->pad_held[key] = 1;
+        } else if (!down && s->pad_held[key]) {
+            sdl_push_key(s, key, 0);
+            s->pad_held[key] = 0;
+        }
+        return;
+    }
+}
+
+/* The directions the left stick is asking for right now. */
+static unsigned int sdl2_pad_stick_mask(int x, int y)
+{
+    unsigned int mask = 0;
+
+    if (y <= -SDL2_PAD_DEADZONE) {
+        mask |= SDL2_PAD_UP;
+    }
+    if (y >= SDL2_PAD_DEADZONE) {
+        mask |= SDL2_PAD_DOWN;
+    }
+    if (x <= -SDL2_PAD_DEADZONE) {
+        mask |= SDL2_PAD_LEFT;
+    }
+    if (x >= SDL2_PAD_DEADZONE) {
+        mask |= SDL2_PAD_RIGHT;
+    }
+    return mask;
+}
+
+static void sdl2_pad_axis(sdl_state *s, int axis, int value)
+{
+    if (axis == SDL_CONTROLLER_AXIS_LEFTX) {
+        s->pad_stick_x = value;
+    } else if (axis == SDL_CONTROLLER_AXIS_LEFTY) {
+        s->pad_stick_y = value;
+    } else {
+        return;                 /* right stick and triggers are not mapped */
+    }
+    s->pad_stick = sdl2_pad_stick_mask(s->pad_stick_x, s->pad_stick_y);
+    sdl2_pad_flush_dirs(s);
+}
+
+/*
+ * Let go of everything the pad holds.
+ *
+ * Used when the controller goes away mid-press: without it the MIDlet would
+ * believe the player is still holding fire, and the release would never come
+ * because the device that owed it is gone.
+ */
+static void sdl2_pad_release_all(sdl_state *s)
+{
+    int key;
+
+    for (key = NJ_KEY_NONE + 1; key < NJ_KEY_COUNT; key++) {
+        if (s->pad_held[key]) {
+            sdl_push_key(s, key, 0);
+            s->pad_held[key] = 0;
+        }
+    }
+    s->pad_dpad = 0;
+    s->pad_stick = 0;
+    s->pad_stick_x = 0;
+    s->pad_stick_y = 0;
+}
+
+/* Open the controller at joystick device index `index`.  Returns 1 when a
+ * controller is open afterwards - including the case where one already was. */
+static int sdl2_pad_open(sdl_state *s, int index)
+{
+    SDL_GameController *c;
+
+    if (!s->gamepad || index < 0) {
+        return 0;
+    }
+    if (s->controller) {
+        return 1;
+    }
+    /* A plain joystick (a wheel, a flight stick, an untyped virtual device) is
+     * not a game controller and must not produce MIDP keys. */
+    if (!SDL_IsGameController(index)) {
+        return 0;
+    }
+    c = SDL_GameControllerOpen(index);
+    if (!c) {
+        return 0;
+    }
+    s->controller = c;
+    s->pad_dpad = 0;
+    s->pad_stick = 0;
+    s->pad_stick_x = 0;
+    s->pad_stick_y = 0;
+    memset(s->pad_held, 0, sizeof(s->pad_held));
+    return 1;
+}
+
+static void sdl2_pad_close(sdl_state *s)
+{
+    if (s->controller) {
+        SDL_GameControllerClose(s->controller);
+        s->controller = NULL;
+    }
+    s->pad_dpad = 0;
+    s->pad_stick = 0;
+    s->pad_stick_x = 0;
+    s->pad_stick_y = 0;
+}
+
+/* Say which pad was just attached.  The name is the only way a player can tell
+ * whether the pad being read is the one in their hands. */
+static void sdl2_pad_log_attached(sdl_state *s)
+{
+    char msg[256];
+    const char *name = s->controller ? SDL_GameControllerName(s->controller) : NULL;
+
+    SDL_snprintf(msg, sizeof(msg),
+                 "gamepad: %s attached (A fire, B/X/Y game A/B/C, LB/RB soft "
+                 "keys, Back clear, Start game D, dpad + left stick)",
+                 (name && name[0]) ? name : "controller");
+    sdl_log(NULL, 2, msg);
+}
+
+/*
+ * Read NJ_SDL2_GAMEPAD and bring the pad up at construction time.
+ *
+ * Enabled by default: the cost when no pad is attached is one subsystem init
+ * and one SDL_NumJoysticks() call, and a desktop client that is only playable
+ * with a keyboard is the thing this feature exists to fix.  NJ_SDL2_GAMEPAD=0
+ * skips even the subsystem init, for the machines where the joypad stack is
+ * itself the problem (containers, broken udev) and the player wants nothing to
+ * do with it.
+ */
+static void sdl2_pad_init(sdl_state *s)
+{
+    const char *gv = SDL_getenv("NJ_SDL2_GAMEPAD");
+    int i, n;
+
+    s->gamepad = !(gv && gv[0] == '0');
+    if (!s->gamepad) {
+        sdl_log(NULL, 2, "gamepad: disabled (NJ_SDL2_GAMEPAD=0)");
+        return;
+    }
+    if (SDL_InitSubSystem(SDL_INIT_GAMECONTROLLER) != 0) {
+        /* Not an error: the port keeps working on the keyboard, and the pad
+         * may still appear later through the hotplug path. */
+        sdl_log(NULL, 2, "gamepad: enabled, controller support unavailable");
+        return;
+    }
+    n = SDL_NumJoysticks();
+    for (i = 0; i < n; i++) {
+        if (sdl2_pad_open(s, i)) {
+            break;
+        }
+    }
+    if (s->controller) {
+        sdl_log(NULL, 1, "gamepad: enabled (A fire, B/X/Y game A/B/C, "
+                         "LB/RB soft keys, Back clear, Start game D, "
+                         "dpad + left stick)");
+    } else {
+        sdl_log(NULL, 1, "gamepad: enabled, no controller yet");
+    }
 }
 
 /*
@@ -1604,6 +1903,56 @@ static void sdl_display_present(void *ud, int x, int y, int w, int h)
             if (ev.drop.file) {
                 sdl_drop_queue(s, ev.drop.file);
                 SDL_free(ev.drop.file);
+            }
+            break;
+        /*
+         * Game controller events.
+         *
+         * No focus check, unlike the keyboard: a controller is inherently
+         * directed at this application, and SDL only reports buttons for the
+         * controller this port opened.  Directions from the d-pad and the left
+         * stick go through one merge (see sdl2_pad_flush_dirs), so a held
+         * direction is one KEY_DOWN and one KEY_UP no matter how many SDL
+         * events arrive - SDL resends axis values freely.
+         */
+        case SDL_CONTROLLERBUTTONDOWN:
+            if (s->gamepad) {
+                sdl2_pad_button(s, ev.cbutton.button, 1);
+            }
+            break;
+        case SDL_CONTROLLERBUTTONUP:
+            if (s->gamepad) {
+                sdl2_pad_button(s, ev.cbutton.button, 0);
+            }
+            break;
+        case SDL_CONTROLLERAXISMOTION:
+            if (s->gamepad) {
+                sdl2_pad_axis(s, ev.caxis.axis, (int)ev.caxis.value);
+            }
+            break;
+        case SDL_CONTROLLERDEVICEADDED:
+            /*
+             * Hotplug: the first controller that arrives after the port was
+             * built becomes the one in use.  `which` is a DEVICE INDEX for
+             * ADDED and an INSTANCE ID for REMOVED - that asymmetry is SDL's,
+             * not ours.
+             */
+            if (s->gamepad && !s->controller &&
+                sdl2_pad_open(s, ev.cdevice.which)) {
+                sdl2_pad_log_attached(s);
+            }
+            break;
+        case SDL_CONTROLLERDEVICEREMOVED:
+            if (s->controller) {
+                SDL_Joystick *js = SDL_GameControllerGetJoystick(s->controller);
+
+                if (js && SDL_JoystickInstanceID(js) == ev.cdevice.which) {
+                    /* Release before closing: the MIDlet must not be left
+                     * holding a key whose device just vanished. */
+                    sdl2_pad_release_all(s);
+                    sdl2_pad_close(s);
+                    sdl_log(NULL, 2, "gamepad: controller removed");
+                }
             }
             break;
         case SDL_TEXTEDITING:
@@ -2443,6 +2792,10 @@ static void sdl_shutdown(void *ud)
     if (!s) {
         return;
     }
+    /* The pad is closed before SDL_Quit, while the subsystem it belongs to is
+     * still up; SDL_GameControllerClose after SDL_Quit would be a use of a
+     * torn-down joypad stack. */
+    sdl2_pad_close(s);
     SDL_StopTextInput();
     if (s->texture) {
         SDL_DestroyTexture(s->texture);
@@ -2672,6 +3025,14 @@ nj_status nj_port_sdl2(nj_port *out, const char *title)
 
         s->mute = (mv && mv[0] != '\0' && mv[0] != '0') ? 1 : 0;
     }
+
+    /*
+     * NJ_SDL2_GAMEPAD=0 turns controller support off, including the subsystem
+     * init.  Enabled by default and read here with the other client switches;
+     * sdl2_pad_init() owns the rest (subsystem, first controller, the log line
+     * that says which pad the port found - or that there is none yet).
+     */
+    sdl2_pad_init(s);
 
     memset(out, 0, sizeof(*out));
     s->port = out;

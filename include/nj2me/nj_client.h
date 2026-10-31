@@ -42,7 +42,8 @@ extern "C" {
  * Saved as `key = value` lines in <XDG_CONFIG_HOME or ~/.config>/
  * nano_j2me/client.conf.  Paths are UTF-8; unknown keys are ignored so an
  * older client tolerates a newer file, and the file is rewritten on every
- * change (it is a few hundred bytes, not a database).
+ * change (it is a few hundred bytes, not a database).  `window = 900x700`
+ * holds the library window's size so it comes back where it was left.
  */
 #define NJ_CLIENT_BIND_NAME_MAX 24
 
@@ -58,6 +59,10 @@ typedef struct nj_client_settings {
     int  heap_mb;                       /* 0 = runtime default, else MB      */
     int  mute;                          /* host audio output muted, 0/1      */
     int  network;                       /* games may use the network, 0/1    */
+    int  gamepad;                       /* SDL game controllers drive the
+                                           game keys, 0/1                     */
+    int  launcher_w;                    /* library window, 0 = 720 x 540     */
+    int  launcher_h;
     /*
      * Per-slot key bindings: SDL key names ("W", "Space", "Left Shift", the
      * same spelling SDL_GetKeyName() prints) indexed by nj_port_bind.  Empty
@@ -117,7 +122,8 @@ typedef enum nj_client_key {
     NJ_CLIENT_KEY_END,
     NJ_CLIENT_KEY_ENTER,
     NJ_CLIENT_KEY_ESCAPE,
-    NJ_CLIENT_KEY_BACKSPACE
+    NJ_CLIENT_KEY_BACKSPACE,
+    NJ_CLIENT_KEY_HELP    /* F1: the shortcut sheet over the library */
 } nj_client_key;
 
 /* What the client loop should do after a frame. */
@@ -196,6 +202,14 @@ int nj_client_ui_mode(const nj_client_ui *ui);
 int nj_client_ui_browser_selected(const nj_client_ui *ui);
 /* Selected slot on the key-mapping page, or -1 when that page is not open. */
 int nj_client_ui_selected_bind(const nj_client_ui *ui);
+/*
+ * The library's search text: typing in the library filters the rows by name,
+ * file name and MIDlet class (case-insensitively), Backspace edits, Escape
+ * clears before it quits.  Empty when the library is not being searched.
+ */
+const char *nj_client_ui_filter(const nj_client_ui *ui);
+/* True while the F1 shortcut sheet covers the library. */
+int nj_client_ui_help_visible(const nj_client_ui *ui);
 
 /* ------------------------------------------------------------------ */
 /* Key capture                                                         */
@@ -226,7 +240,8 @@ void nj_client_ui_capture_cancel(nj_client_ui *ui);
  *
  * Trailing fields may be zero: width/height default to the runtime's screen,
  * scale 0 is auto, fps_cap -1 leaves the port default, keys_visible -1 leaves
- * the port default, launcher sizes 0 default to 720x540.
+ * the port default, launcher sizes 0 default to the settings' saved size and
+ * then to 720x540.
  *
  * `first_jar` runs before the library window is shown, so `nj2me game.jar`
  * with --client starts the game directly and falls back to the library when

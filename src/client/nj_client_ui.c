@@ -59,6 +59,11 @@
 #define UI_ROW_H      48
 #define UI_BROW_ROW_H 40
 #define UI_ICON       32
+#define UI_SEARCH_H   32      /* search bar under the library header */
+#define UI_FILTER_MAX 120     /* bytes of UTF-8 search text, no split chars */
+#define UI_HELP_W     620     /* F1 shortcut sheet, clamped to the window */
+#define UI_HELP_H     400
+#define UI_HELP_MARGIN 24
 
 #define UI_BTN_W      76
 #define UI_BTN_H      26
@@ -109,6 +114,13 @@ struct nj_client_ui {
 
     int library_sel;
     int library_top;
+
+    /* LIBRARY search: filter holds the typed UTF-8 bytes and filter_len the
+     * exact byte count (the buffer is NUL terminated as well).  help_active
+     * is the F1 shortcut sheet; both only mean anything in the library. */
+    char filter[UI_FILTER_MAX + 1];
+    int filter_len;
+    int help_active;
 
     /* Last applied layout; recomputed by layout_apply() so a resize is free. */
     int header_h;
@@ -477,11 +489,11 @@ static void ui_layout_apply(nj_client_ui *ui, int width, int height)
         footer = 30;
     }
     /* On very short windows the chrome must not eat the whole list. */
-    if (header + footer > height - 24) {
+    if (header + footer + UI_SEARCH_H > height - 24) {
         header = ui_max(24, height / 8);
         footer = ui_max(20, height / 10);
     }
-    list_h = height - header - footer;
+    list_h = height - header - footer - UI_SEARCH_H;
     if (list_h < 0) list_h = 0;
 
     ui->width = width;
@@ -489,7 +501,7 @@ static void ui_layout_apply(nj_client_ui *ui, int width, int height)
     ui->header_h = header;
     ui->footer_h = footer;
     ui->footer_y = height - footer;
-    ui->list_y = header;
+    ui->list_y = header + UI_SEARCH_H;
     ui->list_h = list_h;
     ui->row_h = UI_ROW_H;
     ui->visible_rows = list_h > 0 ? list_h / UI_ROW_H : 0;
@@ -514,6 +526,138 @@ static int ui_scan_busy(const nj_client_ui *ui)
     return nj_lib_scan_busy(ui->lib) ? 1 : 0;
 }
 
+/* ---- LIBRARY search -------------------------------------------------
+ * The filter is a UTF-8 byte string.  Matching folds ASCII case and compares
+ * every other byte exactly, which is correct UTF-8 substring matching without
+ * a decoder: a needle never starts mid-character, so a byte match is a
+ * character match.  Only the library list is filtered; browser, settings and
+ * binds rows never look at this state. */
+static int ui_filter_active(const nj_client_ui *ui)
+{
+    return (ui && ui->filter_len > 0) ? 1 : 0;
+}
+
+static int ui_filter_byte_eq(unsigned char a, unsigned char b)
+{
+    if (a >= (unsigned char)'A' && a <= (unsigned char)'Z') {
+        a = (unsigned char)(a - (unsigned char)'A' + (unsigned char)'a');
+    }
+    if (b >= (unsigned char)'A' && b <= (unsigned char)'Z') {
+        b = (unsigned char)(b - (unsigned char)'A' + (unsigned char)'a');
+    }
+    return a == b ? 1 : 0;
+}
+
+static int ui_filter_contains(const char *hay, const char *needle, int nlen)
+{
+    int hlen, i, j;
+
+    if (!hay || !needle || nlen <= 0) return 0;
+    hlen = (int)strlen(hay);
+    if (nlen > hlen) return 0;
+    for (i = 0; i + nlen <= hlen; i++) {
+        for (j = 0; j < nlen; j++) {
+            if (!ui_filter_byte_eq((unsigned char)hay[i + j],
+                                   (unsigned char)needle[j])) {
+                break;
+            }
+        }
+        if (j == nlen) return 1;
+    }
+    return 0;
+}
+
+static int ui_entry_matches(const nj_client_ui *ui, int index)
+{
+    const nj_lib_entry *e;
+
+    if (!ui || !ui->lib || !ui->lib->entries) return 0;
+    if (index < 0 || index >= ui_lib_count(ui)) return 0;
+    if (!ui_filter_active(ui)) return 1;
+    e = &ui->lib->entries[index];
+    return ui_filter_contains(e->name, ui->filter, ui->filter_len) ||
+           ui_filter_contains(e->file, ui->filter, ui->filter_len) ||
+           ui_filter_contains(e->midlet, ui->filter, ui->filter_len);
+}
+
+static int ui_filter_count(const nj_client_ui *ui)
+{
+    int i, n, count = 0;
+
+    n = ui_lib_count(ui);
+    for (i = 0; i < n; i++) {
+        if (ui_entry_matches(ui, i)) count++;
+    }
+    return count;
+}
+
+/* First matching entry index, or -1 when nothing matches. */
+static int ui_filter_first(const nj_client_ui *ui)
+{
+    int i, n = ui_lib_count(ui);
+
+    for (i = 0; i < n; i++) {
+        if (ui_entry_matches(ui, i)) return i;
+    }
+    return -1;
+}
+
+/* Position of an entry in the filtered view (-1 when it is filtered out). */
+static int ui_filter_pos_of(const nj_client_ui *ui, int index)
+{
+    int i, n, pos = 0;
+
+    if (!ui_filter_active(ui)) return index;
+    n = ui_lib_count(ui);
+    for (i = 0; i < n; i++) {
+        if (!ui_entry_matches(ui, i)) continue;
+        if (i == index) return pos;
+        pos++;
+    }
+    return -1;
+}
+
+/* Entry at a filtered position, or -1. */
+static int ui_filter_entry_at(const nj_client_ui *ui, int pos)
+{
+    int i, n, p = 0;
+
+    if (!ui_filter_active(ui)) {
+        return (pos >= 0 && pos < ui_lib_count(ui)) ? pos : -1;
+    }
+    if (pos < 0) return -1;
+    n = ui_lib_count(ui);
+    for (i = 0; i < n; i++) {
+        if (!ui_entry_matches(ui, i)) continue;
+        if (p == pos) return i;
+        p++;
+    }
+    return -1;
+}
+
+/* Rows the list currently shows, and the view position of library_top. */
+static int ui_lib_view_count(const nj_client_ui *ui)
+{
+    return ui_filter_active(ui) ? ui_filter_count(ui) : ui_lib_count(ui);
+}
+
+static int ui_lib_view_top(const nj_client_ui *ui)
+{
+    int i, n, pos = 0;
+
+    if (!ui || !ui_filter_active(ui)) return ui ? ui->library_top : 0;
+    n = ui_lib_count(ui);
+    for (i = 0; i < n && i < ui->library_top; i++) {
+        if (ui_entry_matches(ui, i)) pos++;
+    }
+    return pos;
+}
+
+static int ui_lib_view_pos(const nj_client_ui *ui, int index)
+{
+    return ui_filter_active(ui) ? ui_filter_pos_of(ui, index) : index;
+}
+
 static void ui_lib_clamp(nj_client_ui *ui)
 {
     int n, vis, max_top;
@@ -524,6 +668,29 @@ static void ui_lib_clamp(nj_client_ui *ui)
     if (n <= 0) {
         ui->library_sel = -1;
         ui->library_top = 0;
+        return;
+    }
+    if (ui_filter_active(ui)) {
+        int count = ui_filter_count(ui);
+        int selpos, top;
+        if (count <= 0) {
+            ui->library_sel = -1;
+            ui->library_top = 0;
+            return;
+        }
+        if (ui->library_sel < 0 || ui->library_sel >= n ||
+            !ui_entry_matches(ui, ui->library_sel)) {
+            ui->library_sel = ui_filter_first(ui);
+        }
+        selpos = ui_filter_pos_of(ui, ui->library_sel);
+        if (selpos < 0) selpos = 0;
+        max_top = count > vis ? count - vis : 0;
+        top = ui_clamp_int(ui_lib_view_top(ui), 0, max_top);
+        if (selpos < top) top = selpos;
+        if (selpos >= top + vis) top = selpos - vis + 1;
+        if (top < 0) top = 0;
+        ui->library_top = ui_filter_entry_at(ui, top);
+        if (ui->library_top < 0) ui->library_top = 0;
         return;
     }
     ui->library_sel = ui_clamp_int(ui->library_sel, 0, n - 1);
@@ -548,14 +715,89 @@ static void ui_lib_move(nj_client_ui *ui, int delta)
 {
     int n, sel;
     if (!ui || delta == 0) return;
+    delta = ui_clamp_int(delta, -1000, 1000);
+    if (ui_filter_active(ui)) {
+        int count = ui_filter_count(ui);
+        int pos;
+        if (count <= 0) {
+            ui->library_sel = -1;
+            return;
+        }
+        pos = ui_filter_pos_of(ui, ui->library_sel);
+        if (pos < 0) pos = 0;
+        pos = ui_clamp_int(pos + delta, 0, count - 1);
+        ui->library_sel = ui_filter_entry_at(ui, pos);
+        ui_lib_clamp(ui);
+        return;
+    }
     n = ui_lib_count(ui);
     if (n <= 0) return;
     sel = ui->library_sel < 0 ? 0 : ui->library_sel;
-    delta = ui_clamp_int(delta, -1000, 1000);
     sel = ui_clamp_int(sel + delta, 0, n - 1);
     ui->library_sel = sel;
     ui_lib_clamp(ui);
 }
+
+/* After a filter edit: the first match is the new selection (or -1) and the
+ * view starts at the top of the result list. */
+static void ui_filter_sync(nj_client_ui *ui)
+{
+    if (!ui) return;
+    ui->library_sel = ui_filter_first(ui);
+    ui->library_top = 0;
+    ui_lib_clamp(ui);
+}
+
+/* Append one Unicode code point as UTF-8.  A code point that would not fit
+ * whole is dropped rather than half-written. */
+static void ui_filter_append(nj_client_ui *ui, nj_u2 ch)
+{
+    unsigned char enc[3];
+    int n, i;
+
+    if (!ui || ch < 0x20u || ch == 0x7Fu) return;
+    if (ch < 0x80u) {
+        enc[0] = (unsigned char)ch;
+        n = 1;
+    } else if (ch < 0x800u) {
+        enc[0] = (unsigned char)(0xC0u | (nj_u2)(ch >> 6));
+        enc[1] = (unsigned char)(0x80u | (nj_u2)(ch & 0x3Fu));
+        n = 2;
+    } else {
+        enc[0] = (unsigned char)(0xE0u | (nj_u2)(ch >> 12));
+        enc[1] = (unsigned char)(0x80u | (nj_u2)((ch >> 6) & 0x3Fu));
+        enc[2] = (unsigned char)(0x80u | (nj_u2)(ch & 0x3Fu));
+        n = 3;
+    }
+    if (ui->filter_len + n > UI_FILTER_MAX) return;
+    for (i = 0; i < n; i++) ui->filter[ui->filter_len + i] = (char)enc[i];
+    ui->filter_len += n;
+    ui->filter[ui->filter_len] = '\0';
+    ui_filter_sync(ui);
+}
+
+/* Remove the last code point; returns 1 when something was removed. */
+static int ui_filter_backspace(nj_client_ui *ui)
+{
+    int i;
+
+    if (!ui || ui->filter_len <= 0) return 0;
+    i = ui->filter_len - 1;
+    while (i > 0 && ((unsigned char)ui->filter[i] & 0xC0u) == 0x80u) i--;
+    ui->filter_len = i;
+    ui->filter[ui->filter_len] = '\0';
+    ui_filter_sync(ui);
+    return 1;
+}
+
+static void ui_filter_clear(nj_client_ui *ui)
+{
+    if (!ui) return;
+    ui->filter_len = 0;
+    ui->filter[0] = '\0';
+    ui_lib_clamp(ui);
+}
+
 
 /* ------------------------------------------------------------------ */
 /* Toast, action and mode helpers                                      */
@@ -928,6 +1170,7 @@ enum {
     UI_SET_ROW_FILTER,
     UI_SET_ROW_FULLSCREEN,
     UI_SET_ROW_ACCEL,
+    UI_SET_ROW_GAMEPAD,
     UI_SET_ROW_KEYS,
     UI_SET_ROW_FPS,
     UI_SET_ROW_BINDS,
@@ -945,6 +1188,7 @@ static const char *ui_setting_label(int row)
     case UI_SET_ROW_FILTER: return "缩放滤镜";
     case UI_SET_ROW_FULLSCREEN: return "全屏";
     case UI_SET_ROW_ACCEL: return "渲染加速";
+    case UI_SET_ROW_GAMEPAD: return "手柄";
     case UI_SET_ROW_KEYS: return "屏幕键盘";
     case UI_SET_ROW_FPS: return "帧率上限";
     case UI_SET_ROW_BINDS: return "按键映射";
@@ -997,6 +1241,9 @@ static void ui_settings_value(const nj_client_ui *ui, int row, char *out,
         break;
     case UI_SET_ROW_ACCEL:
         snprintf(out, (size_t)cap, "%s", s->accel ? "加速" : "软件");
+        break;
+    case UI_SET_ROW_GAMEPAD:
+        snprintf(out, (size_t)cap, "%s", s->gamepad ? "开" : "关");
         break;
     case UI_SET_ROW_KEYS:
         snprintf(out, (size_t)cap, "%s", s->keys_visible ? "开" : "关");
@@ -1077,6 +1324,9 @@ static void ui_settings_cycle(nj_client_ui *ui, int dir)
         break;
     case UI_SET_ROW_ACCEL:
         s->accel = s->accel ? 0 : 1;
+        break;
+    case UI_SET_ROW_GAMEPAD:
+        s->gamepad = s->gamepad ? 0 : 1;
         break;
     case UI_SET_ROW_KEYS:
         s->keys_visible = s->keys_visible ? 0 : 1;
@@ -1362,6 +1612,88 @@ static void ui_draw_scrollbar(nj_gfx *g, int x, int y, int h, int total,
     nj_gfx_fill_rect(g, x, thumb_y, 4, thumb_h);
 }
 
+/* Read one ARGB8888 source pixel; the caller checked the format. */
+static nj_u4 ui_icon_pixel(const nj_image *img, int sx, int sy)
+{
+    const nj_u4 *pixels = (const nj_u4 *)img->pixels;
+    return pixels[(size_t)sy * (size_t)img->width + (size_t)sx];
+}
+
+/* Area-average the source rectangle [x0,x1) x [y0,y1) into one pixel.
+ * Colours are alpha weighted so transparent edges do not darken the result. */
+static nj_u4 ui_icon_area(const nj_image *img, int x0, int y0, int x1, int y1)
+{
+    unsigned long count = 0, sum_a = 0, sum_r = 0, sum_g = 0, sum_b = 0;
+    unsigned long a, r, g, b, n;
+    int x, y;
+
+    if (x1 <= x0) x1 = x0 + 1;
+    if (y1 <= y0) y1 = y0 + 1;
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
+    if (x1 > img->width) x1 = img->width;
+    if (y1 > img->height) y1 = img->height;
+    for (y = y0; y < y1; y++) {
+        for (x = x0; x < x1; x++) {
+            nj_u4 p = ui_icon_pixel(img, x, y);
+            a = (p >> 24) & 0xFFu;
+            sum_a += a;
+            sum_r += ((p >> 16) & 0xFFu) * a;
+            sum_g += ((p >> 8) & 0xFFu) * a;
+            sum_b += (p & 0xFFu) * a;
+            count++;
+        }
+    }
+    if (count == 0ul || sum_a == 0ul) return 0u;
+    n = (sum_a + count / 2ul) / count;             /* rounded mean alpha */
+    if (n > 255ul) n = 255ul;
+    r = (sum_r + sum_a / 2ul) / sum_a;
+    g = (sum_g + sum_a / 2ul) / sum_a;
+    b = (sum_b + sum_a / 2ul) / sum_a;
+    if (r > 255ul) r = 255ul;
+    if (g > 255ul) g = 255ul;
+    if (b > 255ul) b = 255ul;
+    return ((nj_u4)n << 24) | ((nj_u4)r << 16) | ((nj_u4)g << 8) | (nj_u4)b;
+}
+
+/* Scale one icon into the 32x32 row slot.  Smaller sources are expanded with
+ * nearest-neighbour; sources at least as large as the slot are box filtered
+ * (area sampling) so an 80x59 PNG does not alias.  The result is composited
+ * through a 32x32 ARGB8888 image and nj_gfx clips it to that rectangle, so
+ * pixels outside the slot are never touched. */
+static void ui_draw_icon_scaled(nj_gfx *g, const nj_image *img, int x, int y)
+{
+    nj_u4 out[UI_ICON * UI_ICON];
+    nj_image scaled;
+    int dx, dy;
+
+    if (img->width <= UI_ICON && img->height <= UI_ICON) {
+        for (dy = 0; dy < UI_ICON; dy++) {
+            int sy = dy * img->height / UI_ICON;
+            for (dx = 0; dx < UI_ICON; dx++) {
+                int sx = dx * img->width / UI_ICON;
+                out[dy * UI_ICON + dx] = ui_icon_pixel(img, sx, sy);
+            }
+        }
+    } else {
+        for (dy = 0; dy < UI_ICON; dy++) {
+            int y0 = dy * img->height / UI_ICON;
+            int y1 = (dy + 1) * img->height / UI_ICON;
+            for (dx = 0; dx < UI_ICON; dx++) {
+                int x0 = dx * img->width / UI_ICON;
+                int x1 = (dx + 1) * img->width / UI_ICON;
+                out[dy * UI_ICON + dx] = ui_icon_area(img, x0, y0, x1, y1);
+            }
+        }
+    }
+    scaled.width = UI_ICON;
+    scaled.height = UI_ICON;
+    scaled.format = NJ_PIXFMT_ARGB8888;
+    scaled.pixels = out;
+    scaled.has_alpha = 1;
+    nj_gfx_draw_image(g, &scaled, x, y, 0, 0, UI_ICON, UI_ICON);
+}
+
 /* Generic 32x32 icon slot used by the library rows. */
 static void ui_draw_row_icon(nj_client_ui *ui, nj_gfx *g, int index, int x,
                              int y)
@@ -1375,19 +1707,11 @@ static void ui_draw_row_icon(nj_client_ui *ui, nj_gfx *g, int index, int x,
     entry = &ui->lib->entries[index];
     if (!entry->valid) return;
     img = nj_lib_icon(ui->lib, index);
-    if (!img || img->width <= 0 || img->height <= 0) return;
-    if (img->width <= UI_ICON && img->height <= UI_ICON) {
-        nj_gfx_draw_image(g, img, x + (UI_ICON - img->width) / 2,
-                          y + (UI_ICON - img->height) / 2, 0, 0, img->width,
-                          img->height);
-    } else {
-        int sw = img->width < UI_ICON ? img->width : UI_ICON;
-        int sh = img->height < UI_ICON ? img->height : UI_ICON;
-        int sx = (img->width - sw) / 2;
-        int sy = (img->height - sh) / 2;
-        nj_gfx_draw_image(g, img, x + (UI_ICON - sw) / 2,
-                          y + (UI_ICON - sh) / 2, sx, sy, sw, sh);
-    }
+    if (!img || img->width <= 0 || img->height <= 0 || !img->pixels) return;
+    /* nj_lib_icon() only returns decoded ARGB8888 images; guard anyway so a
+     * future decoder cannot make this code read the wrong pixel layout. */
+    if (img->format != NJ_PIXFMT_ARGB8888) return;
+    ui_draw_icon_scaled(g, img, x, y);
 }
 
 static void ui_draw_library_row(nj_client_ui *ui, nj_gfx *g, int index,
@@ -1397,7 +1721,7 @@ static void ui_draw_library_row(nj_client_ui *ui, nj_gfx *g, int index,
     const nj_font *large = ui_font_large();
     const nj_font *medium = ui_font_medium();
     int row_y, x, w, title_avail, sub_avail;
-    int selected, badge_x, badge_w;
+    int selected, badge_x, badge_w, pos;
     char sub[256];
     const char *title;
     const char *sub_name;
@@ -1405,7 +1729,9 @@ static void ui_draw_library_row(nj_client_ui *ui, nj_gfx *g, int index,
 
     if (!ui->lib || !ui->lib->entries) return;
     e = &ui->lib->entries[index];
-    row_y = ui->list_y + (index - ui->library_top) * ui->row_h;
+    pos = ui_lib_view_pos(ui, index);
+    if (pos < 0) return;                 /* filtered out, should not be drawn */
+    row_y = ui->list_y + (pos - ui_lib_view_top(ui)) * ui->row_h;
     x = 8;
     w = ui->width - 16;
     selected = index == ui->library_sel;
@@ -1465,6 +1791,23 @@ static void ui_draw_empty(nj_client_ui *ui, nj_gfx *g)
                      w - 32, 0);
         return;
     }
+    if (ui_filter_active(ui) && ui_lib_count(ui) > 0) {
+        /* A non-empty library with no matching row is not "empty": say the
+         * search failed and how to get back to the full list. */
+        total = large->height + 12 + medium->height + 6 + small->height;
+        y = y0 + (h - total) / 2;
+        if (y < y0 + 8) y = y0 + 8;
+        ui_draw_text(g, "没有匹配的游戏", large, UI_COL_ROW_TITLE, cx, y,
+                     NJ_ANCHOR_HCENTER | NJ_ANCHOR_TOP, w - 32, 0);
+        y += large->height + 12;
+        ui_draw_text(g, "按 Backspace 修改，或按 Esc 清除搜索", medium,
+                     UI_COL_ROW_SUB, cx, y, NJ_ANCHOR_HCENTER | NJ_ANCHOR_TOP,
+                     w - 32, 0);
+        y += medium->height + 6;
+        ui_draw_text(g, ui->filter, small, UI_COL_MUTED, cx, y,
+                     NJ_ANCHOR_HCENTER | NJ_ANCHOR_TOP, w - 48, 1);
+        return;
+    }
     total = large->height + 12 + medium->height + 6 + medium->height + 16 +
             small->height;
     y = y0 + (h - total) / 2;
@@ -1493,11 +1836,11 @@ static int ui_lib_row_at(const nj_client_ui *ui, int px, int py)
     if (px < 8 || px >= ui->width - 8) return -1;
     if (py < ui->list_y || py >= ui->list_y + ui->list_h) return -1;
     if (ui->row_h <= 0) return -1;
-    n = ui_lib_count(ui);
+    n = ui_lib_view_count(ui);
     if (n <= 0) return -1;
-    row = (py - ui->list_y) / ui->row_h + ui->library_top;
+    row = (py - ui->list_y) / ui->row_h + ui_lib_view_top(ui);
     if (row < 0 || row >= n) return -1;
-    return row;
+    return ui_filter_entry_at(ui, row);
 }
 
 static int ui_row_hover(const nj_client_ui *ui)
@@ -1509,10 +1852,11 @@ static int ui_row_hover(const nj_client_ui *ui)
 
 static void ui_draw_library_list(nj_client_ui *ui, nj_gfx *g)
 {
-    int n, i, hover;
+    int n, top, pos, hover;
 
     ui_lib_clamp(ui);
-    n = ui_lib_count(ui);
+    n = ui_lib_view_count(ui);
+    top = ui_lib_view_top(ui);
     nj_gfx_set_clip(g, 0, ui->list_y, ui->width, ui->list_h);
     if (n <= 0) {
         ui_draw_empty(ui, g);
@@ -1520,12 +1864,13 @@ static void ui_draw_library_list(nj_client_ui *ui, nj_gfx *g)
         return;
     }
     hover = ui_row_hover(ui);
-    for (i = ui->library_top;
-         i < ui->library_top + ui->visible_rows && i < n; i++) {
-        ui_draw_library_row(ui, g, i, i == hover);
+    for (pos = top; pos < top + ui->visible_rows && pos < n; pos++) {
+        int index = ui_filter_entry_at(ui, pos);
+        if (index < 0) continue;
+        ui_draw_library_row(ui, g, index, index == hover);
     }
-    ui_draw_scrollbar(g, ui->width - 6, ui->list_y, ui->list_h, n,
-                      ui->library_top, ui->visible_rows);
+    ui_draw_scrollbar(g, ui->width - 6, ui->list_y, ui->list_h, n, top,
+                      ui->visible_rows);
     ui_clip_full(ui, g);
 }
 
@@ -1649,19 +1994,158 @@ static void ui_draw_footer(nj_client_ui *ui, nj_gfx *g, int browser)
         ui_draw_button(ui, g, ui->button_rect[0][0], by, UI_BTN_W, "打开…");
         ui_draw_button(ui, g, ui->button_rect[1][0], by, UI_BTN_W, "设置");
         ui_draw_button(ui, g, ui->button_rect[2][0], by, UI_BTN_W, "退出");
-        ui_draw_footer_hint(ui, g,
-                            "↑↓ 选择 · Enter 运行 · O 打开 · R 刷新 · "
-                            "S 设置 · Esc 退出",
-                            bx - 8);
+        /* The library has more shortcuts than one medium line fits next to
+         * the three buttons, and search must stay discoverable: two small
+         * lines list everything including "输入 搜索". */
+        if (bx - 8 - 24 >= 180) {
+            nj_gfx_set_clip(g, 0, y, bx - 8, h);
+            ui_draw_text(g, "↑↓ 选择 · Enter 运行 · O 打开 · R 刷新",
+                         ui_font_small(), UI_COL_ROW_SUB, 16,
+                         y + h / 2 - 8,
+                         NJ_ANCHOR_LEFT | NJ_ANCHOR_VCENTER, bx - 8 - 24, 0);
+            ui_draw_text(g, "S 设置 · 输入 搜索 · Esc 退出",
+                         ui_font_small(), UI_COL_ROW_SUB, 16,
+                         y + h / 2 + 8,
+                         NJ_ANCHOR_LEFT | NJ_ANCHOR_VCENTER, bx - 8 - 24, 0);
+            ui_clip_full(ui, g);
+        }
     }
     ui_clip_full(ui, g);
+}
+
+/* LIBRARY search bar: 32 px directly under the header.  The left side shows
+ * the typed filter (or a hint while it is empty), the right side the matched
+ * and total row counts. */
+static void ui_draw_search_bar(nj_client_ui *ui, nj_gfx *g)
+{
+    const nj_font *medium = ui_font_medium();
+    int y = ui->header_h;
+    int cy = y + UI_SEARCH_H / 2;
+    int x = 16;
+    int right, avail, matched, total, tw;
+    char count[64];
+
+    nj_gfx_set_color(g, UI_COL_PATH_BAR);
+    nj_gfx_fill_rect(g, 0, y, ui->width, UI_SEARCH_H);
+    nj_gfx_set_color(g, UI_COL_LINE);
+    if (UI_SEARCH_H > 1) {
+        nj_gfx_fill_rect(g, 0, y + UI_SEARCH_H - 1, ui->width, 1);
+    }
+    nj_gfx_set_clip(g, 0, y, ui->width, UI_SEARCH_H);
+
+    matched = ui_lib_view_count(ui);
+    total = ui_lib_count(ui);
+    snprintf(count, sizeof(count), "%d / %d 项", matched, total);
+    right = ui->width - 16 - ui_text_width(medium, count);
+    if (right < x + 40) right = x + 40;
+
+    ui_draw_text(g, "搜索：", medium, UI_COL_DIM_TEXT, x, cy,
+                 NJ_ANCHOR_LEFT | NJ_ANCHOR_VCENTER, 0, 0);
+    x += ui_text_width(medium, "搜索：") + 4;
+    avail = right - 8 - x;
+    if (avail < 0) avail = 0;
+    if (ui->filter_len > 0) {
+        tw = ui_text_width(medium, ui->filter);
+        ui_draw_text(g, ui->filter, medium, UI_COL_TITLE, x, cy,
+                     NJ_ANCHOR_LEFT | NJ_ANCHOR_VCENTER, avail, 1);
+        if (tw > 0 && tw < avail) {
+            ui_draw_text(g, "|", medium, UI_COL_TITLE, x + tw, cy,
+                         NJ_ANCHOR_LEFT | NJ_ANCHOR_VCENTER, 0, 0);
+        }
+    } else {
+        ui_draw_text(g, "输入名称或文件名搜索", medium, UI_COL_MUTED, x, cy,
+                     NJ_ANCHOR_LEFT | NJ_ANCHOR_VCENTER, avail, 0);
+    }
+    ui_draw_text(g, count, medium, UI_COL_ROW_SUB, ui->width - 16, cy,
+                 NJ_ANCHOR_RIGHT | NJ_ANCHOR_VCENTER, 0, 0);
+    ui_clip_full(ui, g);
+}
+
+/* F1 shortcut sheet: a dimmed, centred card listing every client key.  The
+ * sheet is modal in the model (see ui_key_library/nj_client_ui_key), so this
+ * only has to paint over the library frame. */
+typedef struct ui_help_entry {
+    const char *heading;
+    const char *text;
+} ui_help_entry;
+
+static const ui_help_entry ui_help_entries[] = {
+    { "游戏库：", NULL },
+    { NULL, "↑↓ 选择 · Enter 运行 · O 打开 · R 刷新 · S 设置" },
+    { NULL, "输入 搜索 · F1 帮助 · Esc 退出" },
+    { "游戏窗口：", NULL },
+    { NULL, "方向键 移动 · Enter/空格 开火 · F1 左软键 · F2 右软键" },
+    { NULL, "Backspace 清除 · 数字键 · F3 速度 · F5 存档" },
+    { NULL, "F10 回到库 · F11 全屏 · 拖放 .jar 切换" },
+    { "设置：", NULL },
+    { NULL, "↑↓ 选择 · ←→ 修改 · Enter 确认 · Esc 返回" },
+    { NULL, "" },
+    { NULL, "$XDG_CONFIG_HOME/nano_j2me/client.conf" },
+    { NULL, "窗口大小会自动记住" }
+};
+
+static void ui_draw_help(nj_client_ui *ui, nj_gfx *g)
+{
+    const nj_font *large = ui_font_large();
+    const nj_font *medium = ui_font_medium();
+    const nj_font *small = ui_font_small();
+    int w = ui->width, h = ui->height;
+    int pw = ui_min(UI_HELP_W, w - UI_HELP_MARGIN);
+    int ph = ui_min(UI_HELP_H, h - UI_HELP_MARGIN);
+    int px, py, y, i;
+    size_t n;
+
+    nj_gfx_set_blend(g, NJ_BLEND_SRC_OVER);
+    nj_gfx_set_color(g, UI_COL_DIM);
+    nj_gfx_fill_rect(g, 0, 0, w, h);
+    nj_gfx_set_blend(g, NJ_BLEND_NONE);
+    if (pw < 200 || ph < 140) {
+        /* Too small for a readable card: dimming alone still signals the
+         * modal state, and no text is clipped into nonsense. */
+        nj_gfx_set_blend(g, NJ_BLEND_SRC_OVER);
+        return;
+    }
+    px = (w - pw) / 2;
+    py = (h - ph) / 2;
+    nj_gfx_set_clip(g, px, py, pw, ph);
+    ui_fill_round(g, px, py, pw, ph, 10, UI_COL_PANEL);
+    nj_gfx_set_color(g, UI_COL_PANEL_EDGE);
+    nj_gfx_round_rect(g, px, py, pw - 1, ph - 1, 10, 10);
+    ui_draw_text(g, "快捷键", large, UI_COL_TITLE, px + 24, py + 14,
+                 NJ_ANCHOR_LEFT | NJ_ANCHOR_TOP, pw - 48, 0);
+
+    y = py + 14 + large->height + 8;
+    n = sizeof(ui_help_entries) / sizeof(ui_help_entries[0]);
+    for (i = 0; i < (int)n; i++) {
+        const ui_help_entry *e = &ui_help_entries[i];
+        if (e->heading) {
+            ui_draw_text(g, e->heading, medium, UI_COL_ROW_TITLE, px + 24, y,
+                         NJ_ANCHOR_LEFT | NJ_ANCHOR_TOP, pw - 48, 0);
+            y += medium->height + 2;
+        } else if (e->text && e->text[0]) {
+            int muted = (i >= (int)n - 2);
+            ui_draw_text(g, e->text, small,
+                         muted ? UI_COL_MUTED : UI_COL_ROW_SUB, px + 32, y,
+                         NJ_ANCHOR_LEFT | NJ_ANCHOR_TOP, pw - 56, 1);
+            y += small->height + 4;
+        } else {
+            y += 8;
+        }
+    }
+    ui_draw_text(g, "F1 或 Esc 关闭", medium, UI_COL_DIM_TEXT, px + pw / 2,
+                 py + ph - 20, NJ_ANCHOR_HCENTER | NJ_ANCHOR_VCENTER, pw - 48,
+                 0);
+    ui_clip_full(ui, g);
+    nj_gfx_set_blend(g, NJ_BLEND_SRC_OVER);
 }
 
 static void ui_draw_library(nj_client_ui *ui, nj_gfx *g)
 {
     ui_draw_header(ui, g, 0);
+    ui_draw_search_bar(ui, g);
     ui_draw_library_list(ui, g);
     ui_draw_footer(ui, g, 0);
+    if (ui->help_active) ui_draw_help(ui, g);
 }
 
 /* ------------------------------------------------------------------ */
@@ -2030,6 +2514,15 @@ static void ui_draw_toast(nj_client_ui *ui, nj_gfx *g)
 static void ui_key_library(nj_client_ui *ui, int key)
 {
     int vis = ui->visible_rows > 0 ? ui->visible_rows : 1;
+
+    if (ui->help_active) {
+        /* The F1 sheet is modal: only its three closing keys do anything. */
+        if (key == NJ_CLIENT_KEY_HELP || key == NJ_CLIENT_KEY_ESCAPE ||
+            key == NJ_CLIENT_KEY_ENTER) {
+            ui->help_active = 0;
+        }
+        return;
+    }
     switch (key) {
     case NJ_CLIENT_KEY_UP:
         ui_lib_move(ui, -1);
@@ -2047,13 +2540,29 @@ static void ui_key_library(nj_client_ui *ui, int key)
         ui_lib_set(ui, 0);
         break;
     case NJ_CLIENT_KEY_END:
-        ui_lib_set(ui, ui_lib_count(ui) - 1);
+        if (ui_filter_active(ui)) {
+            int count = ui_filter_count(ui);
+            ui_lib_set(ui,
+                       count > 0 ? ui_filter_entry_at(ui, count - 1) : -1);
+        } else {
+            ui_lib_set(ui, ui_lib_count(ui) - 1);
+        }
         break;
     case NJ_CLIENT_KEY_ENTER:
         ui_lib_activate(ui);
         break;
+    case NJ_CLIENT_KEY_BACKSPACE:
+        (void)ui_filter_backspace(ui);
+        break;
     case NJ_CLIENT_KEY_ESCAPE:
-        ui_request_quit(ui);
+        if (ui_filter_active(ui)) {
+            ui_filter_clear(ui);      /* first Escape clears, second quits */
+        } else {
+            ui_request_quit(ui);
+        }
+        break;
+    case NJ_CLIENT_KEY_HELP:
+        ui->help_active = 1;
         break;
     default:
         break;
@@ -2403,6 +2912,14 @@ void nj_client_ui_char(nj_client_ui *ui, nj_u2 ch)
     if (!ui) return;
     switch (ui->mode) {
     case NJ_CLIENT_MODE_LIBRARY:
+        if (ui->help_active) break;       /* the sheet swallows typing too */
+        if (ui_filter_active(ui)) {
+            /* While searching, letters and digits are search text.  R stays
+             * the rescan key and keeps the filter, as the footer promises. */
+            if (ch == 'r' || ch == 'R') ui_rescan(ui);
+            else ui_filter_append(ui, ch);
+            break;
+        }
         if (ch == 'o' || ch == 'O') {
             ui_browser_open(ui, 0, NJ_CLIENT_MODE_LIBRARY);
         } else if (ch == 'r' || ch == 'R') {
@@ -2411,6 +2928,8 @@ void nj_client_ui_char(nj_client_ui *ui, nj_u2 ch)
             ui_open_settings(ui);
         } else if (ch == 'q' || ch == 'Q') {
             ui_request_quit(ui);
+        } else {
+            ui_filter_append(ui, ch);
         }
         break;
     case NJ_CLIENT_MODE_BROWSER:
@@ -2435,6 +2954,7 @@ void nj_client_ui_pointer(nj_client_ui *ui, int x, int y, int down)
     ui->pointer_x = x;
     ui->pointer_y = y;
     if (!down) return;
+    if (ui->help_active) return;          /* the sheet is modal for clicks */
     switch (ui->mode) {
     case NJ_CLIENT_MODE_BROWSER:
         ui_pointer_browser(ui, x, y);
@@ -2461,6 +2981,7 @@ void nj_client_ui_pointer_move(nj_client_ui *ui, int x, int y)
 void nj_client_ui_wheel(nj_client_ui *ui, int dy)
 {
     if (!ui || dy == 0) return;
+    if (ui->help_active) return;          /* the sheet is modal for the wheel */
     dy = ui_clamp_int(dy, -1000, 1000);
     switch (ui->mode) {
     case NJ_CLIENT_MODE_BROWSER:
@@ -2483,6 +3004,7 @@ void nj_client_ui_drop(nj_client_ui *ui, const char *path)
     char msg[UI_TOAST_MAX];
 
     if (!ui || !path || !path[0]) return;
+    if (ui->help_active) return;          /* the sheet is modal for drops */
     if (ui_is_dir(path)) {
         if (!ui->settings) {
             ui_note_set(ui, "没有可用的设置，无法保存游戏目录");
@@ -2576,12 +3098,14 @@ int nj_client_ui_quit(const nj_client_ui *ui)
 int nj_client_ui_row_rect(const nj_client_ui *ui, int index, int *x, int *y,
                           int *w, int *h)
 {
-    int n, offset;
+    int n, pos, offset;
     if (!ui || ui->mode != NJ_CLIENT_MODE_LIBRARY) return 0;
     n = ui_lib_count(ui);
     if (index < 0 || index >= n) return 0;
     if (ui->visible_rows <= 0 || ui->row_h <= 0 || ui->width < 16) return 0;
-    offset = index - ui->library_top;
+    pos = ui_lib_view_pos(ui, index);
+    if (pos < 0) return 0;
+    offset = pos - ui_lib_view_top(ui);
     if (offset < 0 || offset >= ui->visible_rows) return 0;
     if (x) *x = 8;
     if (y) *y = ui->list_y + offset * ui->row_h;
@@ -2598,6 +3122,16 @@ int nj_client_ui_selected(const nj_client_ui *ui)
 int nj_client_ui_mode(const nj_client_ui *ui)
 {
     return ui ? ui->mode : NJ_CLIENT_MODE_LIBRARY;
+}
+
+const char *nj_client_ui_filter(const nj_client_ui *ui)
+{
+    return ui ? ui->filter : "";
+}
+
+int nj_client_ui_help_visible(const nj_client_ui *ui)
+{
+    return (ui && ui->help_active) ? 1 : 0;
 }
 
 int nj_client_ui_browser_selected(const nj_client_ui *ui)

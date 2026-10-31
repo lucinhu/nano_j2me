@@ -212,6 +212,10 @@ void nj_client_settings_default(nj_client_settings *s)
     s->heap_mb = 0;       /* runtime default */
     s->mute = 0;          /* sound on */
     s->network = 1;       /* network on, as before this setting existed */
+    s->gamepad = 1;       /* pads work without being asked, like the keys */
+    s->launcher_w = 0;    /* the library window remembers its size once it has
+                             been resized; 0 means "default 720 x 540"       */
+    s->launcher_h = 0;
 }
 
 /* The bind table, in NJ_PORT_BIND_* order.  The labels are what the key page
@@ -316,6 +320,20 @@ static int cfg_ok_key_name(const char *s)
     return 1;
 }
 
+/*
+ * "900x700" -> the library window's size.  A missing or silly value keeps the
+ * defaults (0 = 720x540) rather than opening a 4-pixel window.
+ */
+static void cfg_window(const char *val, int *w, int *h)
+{
+    int a = 0;
+    int b = 0;
+    if (!val || sscanf(val, "%dx%d", &a, &b) != 2) return;
+    if (a < 320 || a > 7680 || b < 240 || b > 4320) return;
+    *w = a;
+    *h = b;
+}
+
 int nj_client_settings_load(nj_client_settings *s, const char *path)
 {
     char file[NJ_CLIENT_PATH_MAX];
@@ -369,6 +387,10 @@ int nj_client_settings_load(nj_client_settings *s, const char *path)
             s->mute = cfg_bool(val, s->mute);
         } else if (strcmp(key, "network") == 0) {
             s->network = cfg_bool(val, s->network);
+        } else if (strcmp(key, "gamepad") == 0) {
+            s->gamepad = cfg_bool(val, s->gamepad);
+        } else if (strcmp(key, "window") == 0) {
+            cfg_window(val, &s->launcher_w, &s->launcher_h);
         } else if (strcmp(key, "heap_mb") == 0) {
             int v = cfg_int(val, s->heap_mb);
             if (v < 0) v = 0;
@@ -449,6 +471,11 @@ int nj_client_settings_save(const nj_client_settings *s, const char *path)
     fprintf(f, "heap_mb = %d\n", s->heap_mb);
     fprintf(f, "mute = %d\n", s->mute ? 1 : 0);
     fprintf(f, "network = %d\n", s->network ? 1 : 0);
+    fprintf(f, "gamepad = %d\n", s->gamepad ? 1 : 0);
+    /* Only a window the user actually resized carries a size. */
+    if (s->launcher_w > 0 && s->launcher_h > 0) {
+        fprintf(f, "window = %dx%d\n", s->launcher_w, s->launcher_h);
+    }
     {
         int i;
         /*

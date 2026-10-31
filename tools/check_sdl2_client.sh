@@ -14,7 +14,8 @@
 #   * --client <jar> starts the game, and --run-frames ends the whole client
 #     afterwards (the same seam a test needs to reach the window path at all),
 #   * a client.conf written with display/heap/mute/network and map_ lines is
-#     read by a direct run too, and the run still exits cleanly.
+#     read by a direct run too, and the run still exits cleanly,
+#   * a saved window = WxH opens the launcher at that size and survives exit.
 #
 # The states a headless run cannot reach - a real drag-and-drop, a real click,
 # a real window resize - are covered by tests/test_port_drop.c (drop policy)
@@ -84,6 +85,40 @@ PY
         say "skipped pixel checks (no python3)"
     fi
 fi
+
+say "the library window remembers a saved size:"
+mkdir -p "$WORK/config/nano_j2me"
+cat >"$WORK/config/nano_j2me/client.conf" <<CONF
+games_dir = $GAMES
+window = 880x660
+CONF
+if NJ2ME_CLIENT_FRAMES=6 NJ2ME_CLIENT_SCREENSHOT="$WORK/sized.ppm" \
+        "$BIN" --client >"$WORK/sized.log" 2>&1; then
+    ok "a saved window size starts the client"
+else
+    bad "a saved window size broke the client; log follows"
+    sed 's/^/    /' "$WORK/sized.log"
+fi
+if command -v python3 >/dev/null 2>&1; then
+    if info=$(python3 - "$WORK/sized.ppm" <<'PY'
+import sys
+data = open(sys.argv[1], 'rb').read()
+parts = data.split(b'\n', 3)
+w, h = (int(v) for v in parts[1].split())
+assert w == 880 and h == 660, (w, h)
+print('%dx%d' % (w, h))
+PY
+    ); then
+        ok "the frame is the saved $info"
+    else
+        bad "the launcher did not open at the saved size"
+    fi
+else
+    say "skipped the size check (no python3)"
+fi
+grep -q "^window = 880x660$" "$WORK/config/nano_j2me/client.conf" \
+    && ok "the size is still in client.conf after exit" \
+    || bad "the saved window size disappeared"
 
 say "print-library:"
 if "$BIN" --print-library --games "$GAMES" >"$WORK/library.log" 2>&1; then

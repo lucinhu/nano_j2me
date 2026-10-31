@@ -53,6 +53,7 @@ static int failures;
 #define COL_CHROME  0xFF232733u
 #define COL_PATHBAR 0xFF20242Du
 #define COL_SEL     0xFF2E6EA6u
+#define COL_PANEL   0xFF252B36u
 
 #define TEST_W 720
 #define TEST_H 540
@@ -138,6 +139,25 @@ static int diff_pixels(const nj_surface *a, const nj_surface *b)
         const nj_u4 *rb = (const nj_u4 *)((const unsigned char *)b->pixels +
                                           (size_t)y * (size_t)b->stride);
         for (x = 0; x < a->width; x++) {
+            if (ra[x] != rb[x]) n++;
+        }
+    }
+    return n;
+}
+
+/* Pixels that differ outside the rectangle [x0,x1) x [y0,y1). */
+static int diff_outside(const nj_surface *a, const nj_surface *b, int x0,
+                        int y0, int x1, int y1)
+{
+    int x, y, n = 0;
+    if (!a || !b || a->width != b->width || a->height != b->height) return -1;
+    for (y = 0; y < a->height; y++) {
+        const nj_u4 *ra = (const nj_u4 *)((const unsigned char *)a->pixels +
+                                          (size_t)y * (size_t)a->stride);
+        const nj_u4 *rb = (const nj_u4 *)((const unsigned char *)b->pixels +
+                                          (size_t)y * (size_t)b->stride);
+        for (x = 0; x < a->width; x++) {
+            if (x >= x0 && x < x1 && y >= y0 && y < y1) continue;
             if (ra[x] != rb[x]) n++;
         }
     }
@@ -454,6 +474,7 @@ int main(void)
     CHECK(settings.last_dir[0] != '\0', "settings default last dir set");
     CHECK(settings.game_scale == 0, "settings default scale is auto");
     CHECK(settings.keys_visible == 1, "settings default keys visible");
+    CHECK(settings.gamepad == 1, "settings default gamepad on");
     CHECK(settings.fps_cap == 0, "settings default fps uncapped");
 
     /* Point the library at our tree rather than the XDG default. */
@@ -572,6 +593,336 @@ int main(void)
     } else {
         printf("  skip: CJK fixture (tests/games/1942空战_10403.jar) missing\n");
     }
+
+    /* -------------------------------------------------------------- */
+    /* Library search filter                                           */
+    /* -------------------------------------------------------------- */
+    printf("  -- library search --\n");
+    {
+        int alpha = find_entry_file(lib, "alphademo.jar");
+        int cjk = env.have_cjk ? find_entry_file(lib, "1942空战_10403.jar")
+                               : -1;
+        int i;
+
+        CHECK(alpha >= 0, "search: alphademo row present");
+        CHECK(cjk >= 0, "search: CJK row present");
+        CHECK(strcmp(nj_client_ui_filter(ui), "") == 0,
+              "search: filter starts empty");
+        nj_client_ui_draw(ui, s);
+        CHECK(px(s, 5, 56 + 8) == COL_PATHBAR,
+              "search bar drawn under the header");
+        CHECK(count_region_not(s, 16, 56, 400, 56 + 32, COL_PATHBAR) > 50,
+              "search hint text visible in the bar");
+        CHECK(count_region_not(s, TEST_W - 140, 56, TEST_W - 16, 56 + 32,
+                               COL_PATHBAR) > 20,
+              "search count label visible in the bar");
+
+        /* ASCII name, one key at a time. */
+        nj_client_ui_char(ui, 'a');
+        nj_client_ui_char(ui, 'l');
+        nj_client_ui_char(ui, 'p');
+        nj_client_ui_char(ui, 'h');
+        nj_client_ui_char(ui, 'a');
+        CHECK(strcmp(nj_client_ui_filter(ui), "alpha") == 0,
+              "filter getter returns the typed text");
+        CHECK(nj_client_ui_selected(ui) == alpha,
+              "filter selected the matching game");
+        CHECK(nj_client_ui_row_rect(ui, alpha, &rx, &ry, &rw, &rh) == 1,
+              "filtered match keeps its row rect");
+        CHECK(nj_client_ui_row_rect(ui, cjk, &rx, &ry, &rw, &rh) == 0,
+              "filtered-out row has no row rect");
+        nj_client_ui_draw(ui, s);
+        CHECK(count_region_not(s, 16, 56, 300, 56 + 32, COL_PATHBAR) > 50,
+              "filter text drawn in the bar");
+        dump_ppm(env.out, "03b_search.ppm", s);
+
+        /* ESC clears the filter instead of quitting. */
+        key(ui, NJ_CLIENT_KEY_ESCAPE);
+        CHECK(strcmp(nj_client_ui_filter(ui), "") == 0,
+              "ESCAPE clears the filter");
+        CHECK(nj_client_ui_quit(ui) == 0, "clearing the filter does not quit");
+        CHECK(nj_client_ui_mode(ui) == NJ_CLIENT_MODE_LIBRARY,
+              "clearing keeps the library mode");
+
+        /* ASCII case folding. */
+        nj_client_ui_char(ui, 'A');
+        nj_client_ui_char(ui, 'L');
+        nj_client_ui_char(ui, 'P');
+        nj_client_ui_char(ui, 'H');
+        nj_client_ui_char(ui, 'A');
+        CHECK(strcmp(nj_client_ui_filter(ui), "ALPHA") == 0,
+              "upper-case filter stored as typed");
+        CHECK(nj_client_ui_selected(ui) == alpha,
+              "upper-case filter matches case-insensitively");
+        key(ui, NJ_CLIENT_KEY_ESCAPE);
+
+        /* File name matching: the CJK jar's file name holds "10403". */
+        nj_client_ui_char(ui, '1');
+        nj_client_ui_char(ui, '0');
+        nj_client_ui_char(ui, '4');
+        nj_client_ui_char(ui, '0');
+        nj_client_ui_char(ui, '3');
+        CHECK(strcmp(nj_client_ui_filter(ui), "10403") == 0,
+              "digit filter stored");
+        CHECK(nj_client_ui_selected(ui) == cjk,
+              "file name digits match the CJK jar");
+        key(ui, NJ_CLIENT_KEY_ESCAPE);
+
+        /* Chinese substring of the file name, and UTF-8 backspace. */
+        nj_client_ui_char(ui, (nj_u2)0x7A7Au);          /* 空 */
+        nj_client_ui_char(ui, (nj_u2)0x6218u);          /* 战 */
+        CHECK(strcmp(nj_client_ui_filter(ui), "空战") == 0,
+              "Chinese filter stored as UTF-8");
+        CHECK(strlen(nj_client_ui_filter(ui)) == 6,
+              "two CJK code points take six bytes");
+        CHECK(nj_client_ui_selected(ui) == cjk,
+              "Chinese substring matches the file name");
+        key(ui, NJ_CLIENT_KEY_BACKSPACE);
+        CHECK(strcmp(nj_client_ui_filter(ui), "空") == 0,
+              "backspace removed one whole code point");
+        key(ui, NJ_CLIENT_KEY_BACKSPACE);
+        CHECK(strcmp(nj_client_ui_filter(ui), "") == 0,
+              "backspace emptied the filter");
+        CHECK(nj_client_ui_selected(ui) >= 0,
+              "selection survives clearing the filter");
+
+        /* MIDlet class matching (case-insensitive). */
+        for (i = 0; "gamemidlet"[i] != '\0'; i++) {
+            nj_client_ui_char(
+                ui, (nj_u2)(unsigned char)"gamemidlet"[i]);
+        }
+        CHECK(strcmp(nj_client_ui_filter(ui), "gamemidlet") == 0,
+              "class filter typed");
+        CHECK(nj_client_ui_selected(ui) == cjk,
+              "MIDlet class matches case-insensitively");
+        key(ui, NJ_CLIENT_KEY_ESCAPE);
+
+        /* Editing the filter resets the selection to the first match. */
+        nj_client_ui_char(ui, 'a');
+        CHECK(nj_client_ui_selected(ui) == cjk,
+              "single letter selects the first matching row");
+        key(ui, NJ_CLIENT_KEY_DOWN);
+        CHECK(nj_client_ui_selected(ui) == alpha,
+              "DOWN walks the filtered rows");
+        nj_client_ui_char(ui, 'i');       /* "ai" only matches 1942AirCombat */
+        CHECK(strcmp(nj_client_ui_filter(ui), "ai") == 0,
+              "filter extended while a row was selected");
+        CHECK(nj_client_ui_selected(ui) == cjk,
+              "editing the filter resets the selection to the first match");
+        key(ui, NJ_CLIENT_KEY_ESCAPE);
+
+        /* Navigation inside the filtered list.  "m" matches exactly the
+         * CJK entry (class GameMIDlet / com...) and AlphaDemo. */
+        nj_client_ui_char(ui, 'm');
+        key(ui, NJ_CLIENT_KEY_HOME);
+        CHECK(nj_client_ui_selected(ui) == cjk, "HOME goes to the first match");
+        key(ui, NJ_CLIENT_KEY_DOWN);
+        CHECK(nj_client_ui_selected(ui) == alpha,
+              "DOWN goes to the second match");
+        key(ui, NJ_CLIENT_KEY_DOWN);
+        CHECK(nj_client_ui_selected(ui) == alpha,
+              "DOWN clamps at the last match");
+        key(ui, NJ_CLIENT_KEY_END);
+        CHECK(nj_client_ui_selected(ui) == alpha, "END goes to the last match");
+        key(ui, NJ_CLIENT_KEY_UP);
+        CHECK(nj_client_ui_selected(ui) == cjk, "UP goes back one match");
+        key(ui, NJ_CLIENT_KEY_PAGE_DOWN);
+        CHECK(nj_client_ui_selected(ui) == alpha,
+              "PAGE_DOWN clamps to the last match");
+        key(ui, NJ_CLIENT_KEY_PAGE_UP);
+        CHECK(nj_client_ui_selected(ui) == cjk,
+              "PAGE_UP returns to the first match");
+        key(ui, NJ_CLIENT_KEY_ESCAPE);
+
+        /* O/S/digit shortcuts become search text while filtering. */
+        nj_client_ui_char(ui, 'a');
+        nj_client_ui_char(ui, 's');
+        CHECK(nj_client_ui_mode(ui) == NJ_CLIENT_MODE_LIBRARY,
+              "'s' types into the filter instead of opening settings");
+        CHECK(strcmp(nj_client_ui_filter(ui), "as") == 0,
+              "'s' appended to the filter");
+        nj_client_ui_char(ui, 'o');
+        CHECK(nj_client_ui_mode(ui) == NJ_CLIENT_MODE_LIBRARY,
+              "'o' types into the filter instead of opening files");
+        nj_client_ui_char(ui, '7');
+        CHECK(strcmp(nj_client_ui_filter(ui), "aso7") == 0,
+              "digits append to the filter too");
+        key(ui, NJ_CLIENT_KEY_ESCAPE);
+
+        /* R rescans without dropping the filter. */
+        nj_client_ui_char(ui, 'a');
+        nj_client_ui_char(ui, 'r');
+        CHECK(scan_started(lib), "R rescans while filtering");
+        CHECK(strcmp(nj_client_ui_filter(ui), "a") == 0,
+              "R keeps the filter text");
+        finish_scan(lib);
+        CHECK(lib->count == env.expect_count, "R rescan found the fixtures");
+        nj_client_ui_draw(ui, s);
+        CHECK(nj_client_ui_selected(ui) == cjk,
+              "rescan keeps the filtered selection");
+
+        /* ENTER runs the filtered row. */
+        key(ui, NJ_CLIENT_KEY_ESCAPE);
+        for (i = 0; "alphademo"[i] != '\0'; i++) {
+            nj_client_ui_char(ui, (nj_u2)(unsigned char)"alphademo"[i]);
+        }
+        CHECK(nj_client_ui_selected(ui) == alpha,
+              "alphademo filter selected the valid row");
+        key(ui, NJ_CLIENT_KEY_ENTER);
+        CHECK(take_action(ui, &action, jar, (int)sizeof(jar)) == 1,
+              "ENTER on a filtered row emits an action");
+        CHECK(action == NJ_CLIENT_ACTION_RUN, "filtered action is RUN");
+        CHECK(strcmp(jar, lib->entries[alpha].path) == 0,
+              "filtered RUN carries the jar path");
+        key(ui, NJ_CLIENT_KEY_ESCAPE);
+
+        /* Pointer clicks use the filtered mapping. */
+        nj_client_ui_char(ui, 'a');
+        nj_client_ui_draw(ui, s);
+        CHECK(nj_client_ui_row_rect(ui, alpha, &rx, &ry, &rw, &rh) == 1,
+              "filtered second row visible");
+        nj_client_ui_pointer(ui, rx + 30, ry + 20, 1);
+        CHECK(nj_client_ui_selected(ui) == alpha,
+              "pointer click maps through the filter");
+        CHECK(take_action(ui, &action, jar, (int)sizeof(jar)) == 0,
+              "filtered selection click emits nothing");
+        key(ui, NJ_CLIENT_KEY_ESCAPE);
+
+        /* A non-matching filter is the no-match state. */
+        nj_client_ui_char(ui, 'z');
+        nj_client_ui_char(ui, 'z');
+        nj_client_ui_char(ui, 'z');
+        CHECK(strcmp(nj_client_ui_filter(ui), "zzz") == 0,
+              "no-match filter stored");
+        CHECK(nj_client_ui_selected(ui) == -1,
+              "no-match state has no selection");
+        CHECK(nj_client_ui_row_rect(ui, 0, &rx, &ry, &rw, &rh) == 0,
+              "no-match state has no row rects");
+        key(ui, NJ_CLIENT_KEY_ENTER);
+        CHECK(take_action(ui, &action, jar, (int)sizeof(jar)) == 0,
+              "ENTER in the no-match state does nothing");
+        nj_client_ui_draw(ui, s);
+        CHECK(count_not(s, COL_BG) > 2000, "no-match state still draws");
+        key(ui, NJ_CLIENT_KEY_BACKSPACE);
+        CHECK(strcmp(nj_client_ui_filter(ui), "zz") == 0,
+              "backspace edits the no-match filter");
+        key(ui, NJ_CLIENT_KEY_ESCAPE);
+        CHECK(strcmp(nj_client_ui_filter(ui), "") == 0,
+              "ESCAPE cleared the no-match filter");
+        CHECK(nj_client_ui_selected(ui) >= 0,
+              "clearing the search restores a selection");
+
+        /* The byte cap never splits a UTF-8 sequence. */
+        for (i = 0; i < 40; i++) nj_client_ui_char(ui, (nj_u2)0x7A7Au);
+        nj_client_ui_char(ui, 'x');       /* dropped: the buffer is full */
+        CHECK(strlen(nj_client_ui_filter(ui)) == 120,
+              "filter stops at the 120 byte cap");
+        CHECK((unsigned char)nj_client_ui_filter(ui)[119] >= 0x80u,
+              "filter cap did not split the last code point");
+        key(ui, NJ_CLIENT_KEY_ESCAPE);
+
+        /* The filter belongs to the library; other pages ignore it. */
+        nj_client_ui_char(ui, 'a');
+        nj_client_ui_draw(ui, s);
+        nj_client_ui_pointer(ui, TEST_W - 16 - 76 - 8 - 38, TEST_H - 20, 1);
+        CHECK(nj_client_ui_mode(ui) == NJ_CLIENT_MODE_SETTINGS,
+              "settings button still opens the settings page");
+        CHECK(strcmp(nj_client_ui_filter(ui), "a") == 0,
+              "the filter survives a mode switch");
+        nj_client_ui_char(ui, 'z');
+        CHECK(strcmp(nj_client_ui_filter(ui), "a") == 0,
+              "typing in settings does not touch the filter");
+        nj_client_ui_draw(ui, s);
+        CHECK(count_not(s, COL_BG) > 5000, "settings draws with a filter set");
+        key(ui, NJ_CLIENT_KEY_ESCAPE);
+        CHECK(nj_client_ui_mode(ui) == NJ_CLIENT_MODE_LIBRARY,
+              "back in the library with the filter still set");
+        key(ui, NJ_CLIENT_KEY_ESCAPE);
+        CHECK(strcmp(nj_client_ui_filter(ui), "") == 0,
+              "library search cleared for the next section");
+    }
+
+    /* -------------------------------------------------------------- */
+    /* F1 shortcut sheet                                               */
+    /* -------------------------------------------------------------- */
+    printf("  -- help sheet --\n");
+    CHECK(nj_client_ui_help_visible(ui) == 0, "help sheet starts closed");
+    key(ui, NJ_CLIENT_KEY_HELP);
+    CHECK(nj_client_ui_help_visible(ui) == 1, "F1 opens the help sheet");
+    CHECK(nj_client_ui_mode(ui) == NJ_CLIENT_MODE_LIBRARY,
+          "the help sheet keeps the library mode");
+    {
+        int sel = nj_client_ui_selected(ui);
+        int count = lib->count;
+        char before[160];
+
+        snprintf(before, sizeof(before), "%s", nj_client_ui_filter(ui));
+        nj_client_ui_draw(ui, s);
+        memcpy(snap_b->pixels, s->pixels,
+               (size_t)TEST_W * (size_t)TEST_H * 4u);
+        CHECK(px(s, 80, TEST_H / 2 + 160) == COL_PANEL,
+              "help panel background drawn");
+        CHECK(px(s, 2, 2) != COL_CHROME,
+              "the help sheet dims the header behind it");
+        CHECK(count_region_not(s, TEST_W / 2 - 200, TEST_H / 2 - 120,
+                               TEST_W / 2 + 200, TEST_H / 2 + 120,
+                               COL_PANEL) > 200,
+              "help text is drawn inside the panel");
+        dump_ppm(env.out, "03c_help_sheet.ppm", s);
+
+        key(ui, NJ_CLIENT_KEY_DOWN);
+        key(ui, NJ_CLIENT_KEY_UP);
+        nj_client_ui_char(ui, 'z');
+        nj_client_ui_wheel(ui, -2);
+        nj_client_ui_pointer(ui, 40, 200, 1);
+        nj_client_ui_drop(ui, env.jar_drop);
+        CHECK(nj_client_ui_selected(ui) == sel,
+              "navigation is ignored while the sheet is open");
+        CHECK(strcmp(nj_client_ui_filter(ui), before) == 0,
+              "typing is ignored while the sheet is open");
+        CHECK(lib->count == count,
+              "drops are ignored while the sheet is open");
+        CHECK(take_action(ui, &action, jar, (int)sizeof(jar)) == 0,
+              "ignored drops emit nothing");
+        CHECK(nj_client_ui_help_visible(ui) == 1,
+              "the help sheet is still open");
+
+        key(ui, NJ_CLIENT_KEY_ESCAPE);
+        CHECK(nj_client_ui_help_visible(ui) == 0, "ESCAPE closes the sheet");
+        CHECK(nj_client_ui_quit(ui) == 0, "closing the sheet does not quit");
+        CHECK(nj_client_ui_mode(ui) == NJ_CLIENT_MODE_LIBRARY,
+              "closing the sheet stays in the library");
+        nj_client_ui_draw(ui, s);
+        CHECK(diff_pixels(snap_b, s) > 1000,
+              "closing the sheet repaints the library");
+    }
+
+    key(ui, NJ_CLIENT_KEY_HELP);
+    CHECK(nj_client_ui_help_visible(ui) == 1, "F1 reopens the sheet");
+    key(ui, NJ_CLIENT_KEY_HELP);
+    CHECK(nj_client_ui_help_visible(ui) == 0, "F1 toggles the sheet closed");
+    key(ui, NJ_CLIENT_KEY_HELP);
+    key(ui, NJ_CLIENT_KEY_ENTER);
+    CHECK(nj_client_ui_help_visible(ui) == 0, "ENTER closes the sheet");
+
+    /* F1 is a library-only shortcut. */
+    nj_client_ui_char(ui, 's');
+    CHECK(nj_client_ui_mode(ui) == NJ_CLIENT_MODE_SETTINGS,
+          "settings opened before the F1-ignored checks");
+    key(ui, NJ_CLIENT_KEY_HELP);
+    CHECK(nj_client_ui_help_visible(ui) == 0, "F1 is ignored in settings");
+    CHECK(nj_client_ui_mode(ui) == NJ_CLIENT_MODE_SETTINGS,
+          "F1 does not leave the settings page");
+    key(ui, NJ_CLIENT_KEY_ESCAPE);
+    nj_client_ui_char(ui, 'o');
+    CHECK(nj_client_ui_mode(ui) == NJ_CLIENT_MODE_BROWSER,
+          "browser opened for the F1-ignored checks");
+    key(ui, NJ_CLIENT_KEY_HELP);
+    CHECK(nj_client_ui_help_visible(ui) == 0,
+          "F1 is ignored in the browser");
+    key(ui, NJ_CLIENT_KEY_ESCAPE);
+    CHECK(nj_client_ui_mode(ui) == NJ_CLIENT_MODE_LIBRARY,
+          "back in the library after the help sheet checks");
 
     /* -------------------------------------------------------------- */
     /* Keyboard navigation                                             */
@@ -846,6 +1197,24 @@ int main(void)
     key(ui, NJ_CLIENT_KEY_RIGHT);
     CHECK(settings.accel == 0, "accel row toggles off");
 
+    /* 手柄: defaults on, LEFT/RIGHT toggles it and saves immediately. */
+    key(ui, NJ_CLIENT_KEY_DOWN);
+    CHECK(settings.gamepad == 1, "gamepad row starts on");
+    draw_dump(ui, s, env.out, "05a_settings_gamepad.ppm");
+    CHECK(settings.keys_visible == 1,
+          "gamepad row did not land on the on-screen keypad row");
+    key(ui, NJ_CLIENT_KEY_LEFT);
+    CHECK(settings.gamepad == 0, "gamepad row turns off");
+    {
+        nj_client_settings saved;
+        memset(&saved, 0, sizeof(saved));
+        CHECK(nj_client_settings_load(&saved, NULL) == 1,
+              "gamepad setting loads back");
+        CHECK(saved.gamepad == 0, "gamepad save round-trips off");
+    }
+    key(ui, NJ_CLIENT_KEY_RIGHT);
+    CHECK(settings.gamepad == 1, "gamepad row turns back on");
+
     /* 屏幕键盘 */
     key(ui, NJ_CLIENT_KEY_DOWN);
     key(ui, NJ_CLIENT_KEY_RIGHT);
@@ -870,7 +1239,7 @@ int main(void)
     /* -------------------------------------------------------------- */
     /* Key bindings page                                               */
     /* -------------------------------------------------------------- */
-    key(ui, NJ_CLIENT_KEY_DOWN);          /* row 7: 按键映射 */
+    key(ui, NJ_CLIENT_KEY_DOWN);          /* row 8: 按键映射 */
     key(ui, NJ_CLIENT_KEY_ENTER);
     CHECK(nj_client_ui_mode(ui) == NJ_CLIENT_MODE_BINDS,
           "ENTER on 按键映射 opens the bind page");
@@ -1053,6 +1422,7 @@ int main(void)
         CHECK(loaded.heap_mb == settings.heap_mb, "load kept heap size");
         CHECK(loaded.mute == settings.mute, "load kept mute");
         CHECK(loaded.network == settings.network, "load kept network");
+        CHECK(loaded.gamepad == settings.gamepad, "load kept gamepad");
         CHECK(strcmp(loaded.games_dir, settings.games_dir) == 0,
               "load kept the games dir");
         CHECK(nj_client_settings_path(path, (int)sizeof(path)) == 1,
@@ -1096,7 +1466,7 @@ int main(void)
     key(ui, NJ_CLIENT_KEY_HOME);
     {
         int i;
-        for (i = 0; i < 7; i++) key(ui, NJ_CLIENT_KEY_DOWN);
+        for (i = 0; i < 8; i++) key(ui, NJ_CLIENT_KEY_DOWN);
     }
     key(ui, NJ_CLIENT_KEY_ENTER);
     CHECK(nj_client_ui_mode(ui) == NJ_CLIENT_MODE_BINDS,
@@ -1111,6 +1481,7 @@ int main(void)
     key(ui, NJ_CLIENT_KEY_ENTER);
     CHECK(settings.game_scale == 0, "reset restores auto scale");
     CHECK(settings.keys_visible == 1, "reset restores on-screen keys");
+    CHECK(settings.gamepad == 1, "reset restores the gamepad default");
     CHECK(settings.fps_cap == 0, "reset restores uncapped fps");
     CHECK(settings.filter_linear == 0 && settings.fullscreen == 0 &&
               settings.accel == 0 && settings.heap_mb == 0 &&
@@ -1272,7 +1643,7 @@ int main(void)
                 nj_client_ui_draw(ui, tiny);
                 CHECK(count_not(tiny, COL_BG) > 1000,
                       "320x200 settings page draws");
-                for (i = 0; i < 7; i++) key(ui, NJ_CLIENT_KEY_DOWN);
+                for (i = 0; i < 8; i++) key(ui, NJ_CLIENT_KEY_DOWN);
                 key(ui, NJ_CLIENT_KEY_ENTER);
                 CHECK(nj_client_ui_mode(ui) == NJ_CLIENT_MODE_BINDS,
                       "320x240: bind page opens");
@@ -1300,6 +1671,113 @@ int main(void)
         surface_free(small);
         nj_client_ui_resize(ui, TEST_W, TEST_H);
         nj_client_ui_draw(ui, s);
+    }
+
+    /* -------------------------------------------------------------- */
+    /* Scaled library icons                                            */
+    /* -------------------------------------------------------------- */
+    printf("  -- scaled icons --\n");
+    {
+        static nj_u4 big_pixels[80 * 59];
+        static nj_u4 tiny_pixels[3 * 3 + 96];
+        nj_lib_entry entries[1];
+        nj_lib_icon_entry icons[1];
+        nj_library fake_lib;
+        nj_image img;
+        nj_client_ui *icon_ui;
+        nj_surface *a = surface_new(TEST_W, TEST_H);
+        nj_surface *b = surface_new(TEST_W, TEST_H);
+        int icon_x = 24, icon_y = 0, i;
+
+        CHECK(a != NULL && b != NULL, "icon test surfaces allocate");
+        memset(&fake_lib, 0, sizeof(fake_lib));
+        memset(entries, 0, sizeof(entries));
+        memset(icons, 0, sizeof(icons));
+        memset(&img, 0, sizeof(img));
+        snprintf(entries[0].name, sizeof(entries[0].name), "IconTest");
+        snprintf(entries[0].file, sizeof(entries[0].file), "icontest.jar");
+        snprintf(entries[0].path, sizeof(entries[0].path), "/tmp/icontest.jar");
+        entries[0].valid = 1;
+        entries[0].size = 4096;
+        fake_lib.entries = entries;
+        fake_lib.icons = icons;
+        fake_lib.count = 1;
+        fake_lib.cap = 1;
+        fake_lib.valid_count = 1;
+        icons[0].attempted = 1;
+        icons[0].image = &img;
+
+        icon_ui = nj_client_ui_new(&settings, &fake_lib);
+        CHECK(icon_ui != NULL, "icon model allocates");
+        if (icon_ui && a && b) {
+            nj_client_ui_resize(icon_ui, TEST_W, TEST_H);
+            CHECK(nj_client_ui_row_rect(icon_ui, 0, NULL, &icon_y, NULL, NULL) ==
+                      1,
+                  "icon row rect answers");
+            icon_y += 8;                 /* the icon sits 8 px into the row */
+
+            for (i = 0; i < 80 * 59; i++) big_pixels[i] = 0xFFFF0000u;
+            for (i = 0; i < 3 * 3; i++) tiny_pixels[i] = 0xFF00FF00u;
+            for (i = 3 * 3; i < 3 * 3 + 96; i++) {
+                tiny_pixels[i] = 0xFFFF0000u;   /* tail must never be read */
+            }
+
+            /* 80x59 source: area sampling fills the whole 32x32 slot. */
+            img.width = 80;
+            img.height = 59;
+            img.format = NJ_PIXFMT_ARGB8888;
+            img.pixels = big_pixels;
+            img.has_alpha = 1;
+            nj_client_ui_draw(icon_ui, b);
+            CHECK(count_region_not(b, icon_x, icon_y, icon_x + 32,
+                                   icon_y + 32, 0xFFFF0000u) == 0,
+                  "large icon is box filtered across the whole slot");
+            CHECK(px(b, icon_x - 1, icon_y + 16) != 0xFFFF0000u,
+                  "icon leaves the pixel left of the slot alone");
+            CHECK(px(b, icon_x + 32, icon_y + 16) != 0xFFFF0000u,
+                  "icon leaves the pixel right of the slot alone");
+            CHECK(px(b, icon_x - 1, icon_y + 16) == COL_SEL,
+                  "outside pixel keeps the selected row background");
+
+            /* A tiny 3x3 source: nearest upscale, never reads its red tail. */
+            img.width = 3;
+            img.height = 3;
+            img.pixels = tiny_pixels;
+            nj_client_ui_draw(icon_ui, b);
+            CHECK(count_region_not(b, icon_x, icon_y, icon_x + 32,
+                                   icon_y + 32, 0xFF00FF00u) == 0,
+                  "tiny icon upscales without reading past its pixels");
+
+            /* A non-ARGB image is skipped instead of being misread. */
+            img.width = 80;
+            img.height = 59;
+            img.pixels = big_pixels;
+            img.format = NJ_PIXFMT_RGB565;
+            nj_client_ui_draw(icon_ui, b);
+            CHECK(px(b, icon_x + 16, icon_y + 16) != 0xFFFF0000u,
+                  "non-ARGB icon is skipped");
+            CHECK(count_region_not(b, icon_x, icon_y, icon_x + 32,
+                                   icon_y + 32, 0xFFFF0000u) == 32 * 32,
+                  "skipped icon leaves the whole slot to the background");
+
+            /* The same frame with and without the icon: only the slot
+             * changes, which proves the scaled blit stays in bounds. */
+            img.format = NJ_PIXFMT_ARGB8888;
+            nj_client_ui_draw(icon_ui, a);
+            nj_client_ui_draw(icon_ui, b);
+            CHECK(diff_pixels(a, b) == 0, "two identical draws agree");
+            img.format = NJ_PIXFMT_RGB888;    /* skipped next frame */
+            nj_client_ui_draw(icon_ui, b);
+            CHECK(diff_outside(a, b, icon_x, icon_y, icon_x + 32,
+                               icon_y + 32) == 0,
+                  "skipping the icon changes nothing outside the 32x32 slot");
+            CHECK(diff_pixels(a, b) > 0,
+                  "skipping the icon changes pixels inside the slot");
+
+            nj_client_ui_free(icon_ui);
+        }
+        surface_free(a);
+        surface_free(b);
     }
 
     /* -------------------------------------------------------------- */

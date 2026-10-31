@@ -1472,6 +1472,12 @@ nj_add_test(test_clip tests/test_clip.c)
     target_link_libraries(test_port_binds PRIVATE ${SDL2_LIBRARIES})
   endif()
 
+  if(SDL2_FOUND AND EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_port_gamepad.c)
+    nj_add_test(test_port_gamepad tests/test_port_gamepad.c)
+    target_include_directories(test_port_gamepad PRIVATE ${SDL2_INCLUDE_DIRS})
+    target_link_libraries(test_port_gamepad PRIVATE ${SDL2_LIBRARIES})
+  endif()
+
   # Multidimensional arrays through real bytecode: tests/arrays/ArrayDims.java
   # builds int[3][7], int[2][4][5] and a ragged table, and the C side only reads
   # the static method's result.  The class bytes are checked in, so no Java
