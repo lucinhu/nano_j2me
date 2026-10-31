@@ -11177,6 +11177,37 @@ static inline nj_u4 sw_fog_d(m3g_sw *sw, float d, nj_u4 c)
            (nj_u4)(fb + 0.5f);
 }
 
+/*
+ * floor() and ceil() of a float as an int, without a libm dependency.
+ *
+ * The baseline x86-64 target has no SSE4.1 round-to-integer instruction, so a
+ * floorf()/ceilf() the compiler does not inline becomes a PLT call into libm.
+ * GCC does inline the six uses in sw_tri() today, as a truncation plus one
+ * compare - which is what these helpers spell out.  Doing it explicitly is
+ * worth it because the argument is clamped by the caller into the range an int
+ * holds: a projection coordinate left enormous by the near-plane clip must not
+ * be handed to a conversion whose result the compiler cannot reason about.
+ *
+ * The arithmetic is exact: truncation differs from floor()/ceil() only when
+ * the sign of the fractional part disagrees with the truncation, and
+ * (float)i == f holds for every integer a float can represent.
+ */
+static inline int sw_floor_i(float f)
+{
+    int i = (int)f;
+
+    if ((float)i > f) { i--; }
+    return i;
+}
+
+static inline int sw_ceil_i(float f)
+{
+    int i = (int)f;
+
+    if ((float)i < f) { i++; }
+    return i;
+}
+
 static nj_u4 sw_tri(m3g_sw *sw, const float xy[6], const float inv[3],
                     const float st[6], int has_tex, const nj_u4 rgb[3],
                     const nj_u4 rgb2[3], int twosided)
@@ -11286,10 +11317,35 @@ static nj_u4 sw_tri(m3g_sw *sw, const float xy[6], const float inv[3],
        sample exactly on a tile boundary can pick the other tile, so repeat
        wrapping keeps the divisions. */
     st_outer = has_tex && (sw->wrap_s != 240 || sw->wrap_t != 240);
-    minx = (int)floorf(x0 < x1 ? (x0 < x2 ? x0 : x2) : (x1 < x2 ? x1 : x2));
-    maxx = (int)ceilf(x0 > x1 ? (x0 > x2 ? x0 : x2) : (x1 > x2 ? x1 : x2));
-    miny = (int)floorf(y0 < y1 ? (y0 < y2 ? y0 : y2) : (y1 < y2 ? y1 : y2));
-    maxy = (int)ceilf(y0 > y1 ? (y0 > y2 ? y0 : y2) : (y1 > y2 ? y1 : y2));
+    /*
+     * The bounds are the triangle's extents rounded out to whole pixels.  The
+     * extents are clamped to just outside the viewport before the integer
+     * conversion: the two clamps below do the same to the resulting integers,
+     * so this cannot change a drawn pixel, and it keeps every conversion in
+     * the range an int holds - which is what makes the libm-free
+     * sw_floor_i()/sw_ceil_i() below safe.  A coordinate outside the viewport
+     * is clamped to a value whose floor/ceil is still outside it, so the
+     * integer clamps then land on exactly the same edges.
+     */
+    {
+        const float cxl = (float)sw->vx - 1.0f;
+        const float cxa = (float)(sw->vx + sw->vw);
+        const float cyl = (float)sw->vy - 1.0f;
+        const float cya = (float)(sw->vy + sw->vh);
+        float lx = x0 < x1 ? (x0 < x2 ? x0 : x2) : (x1 < x2 ? x1 : x2);
+        float hx = x0 > x1 ? (x0 > x2 ? x0 : x2) : (x1 > x2 ? x1 : x2);
+        float ly = y0 < y1 ? (y0 < y2 ? y0 : y2) : (y1 < y2 ? y1 : y2);
+        float hy = y0 > y1 ? (y0 > y2 ? y0 : y2) : (y1 > y2 ? y1 : y2);
+
+        if (lx < cxl) { lx = cxl; } else if (lx > cxa) { lx = cxa; }
+        if (hx < cxl) { hx = cxl; } else if (hx > cxa) { hx = cxa; }
+        if (ly < cyl) { ly = cyl; } else if (ly > cya) { ly = cya; }
+        if (hy < cyl) { hy = cyl; } else if (hy > cya) { hy = cya; }
+        minx = sw_floor_i(lx);
+        maxx = sw_ceil_i(hx);
+        miny = sw_floor_i(ly);
+        maxy = sw_ceil_i(hy);
+    }
     if (minx < sw->vx) { minx = sw->vx; }
     if (miny < sw->vy) { miny = sw->vy; }
     if (maxx > sw->vx + sw->vw - 1) { maxx = sw->vx + sw->vw - 1; }
@@ -11414,9 +11470,11 @@ static nj_u4 sw_tri(m3g_sw *sw, const float xy[6], const float inv[3],
              * (negative texture u can repeat into the opposite texture border).
              * Left edges are inclusive and right edges exclusive. Together with
              * the horizontal-edge test above this is the top-left ownership rule,
-             * so shared edges blend once even with depth writes disabled. */
-            xl = (int)ceilf(lo);
-            xr = (int)ceilf(hi) - 1;
+             * so shared edges blend once even with depth writes disabled.
+             * lo and hi start at fminx/fmaxx and only move inward, so both are
+             * inside the viewport's pixel range; the round-to-int is safe. */
+            xl = sw_ceil_i(lo);
+            xr = sw_ceil_i(hi) - 1;
             if (xl < minx) { xl = minx; }
             if (xr > maxx) { xr = maxx; }
             if (xl > xr) { empty = 1; }
@@ -11840,12 +11898,14 @@ static int jr_vertex(m3g_jr *r, nj_u4 v, float xy[2], float *inv, float st[2],
     nj_u4 k;
     const nj_s2 *s;
 
-    inv[0] = 0.0f;
-    st[0] = st[1] = 0.0f;
+    /* jr_fetch(), the only caller, zeroes every output field before the call
+       - it has to, because a vertex it cannot fetch must come back as zeros.
+       Repeating those stores here cost eight float stores per vertex across
+       the whole scene.  Only p starts as zero here: it is local, and a
+       position with fewer than three components is padded with zero before
+       the projection. */
     p[0] = p[1] = p[2] = 0.0f;
     p[3] = 1.0f;
-    pe[0] = pe[1] = pe[2] = 0.0f;
-    ne[0] = ne[1] = ne[2] = 0.0f;
     if (!r->pos || v >= (nj_u4)r->pcount) {
         xy[0] = xy[1] = 0.0f;
         return 0;
@@ -11955,34 +12015,35 @@ static int jr_vertex(m3g_jr *r, nj_u4 v, float xy[2], float *inv, float st[2],
     return 1;
 }
 
-static nj_u4 jr_colour(m3g_jr *r, nj_u4 a, nj_u4 b, nj_u4 c)
+/*
+ * The colour of one unlit vertex.
+ *
+ * This replaces a three-way average of the vertex with itself: jr_fetch()
+ * used to call jr_colour(r, v, v, v), which summed the same three components
+ * three times and divided every sum by three - exactly the component it
+ * started from, but at the cost of three integer divisions per vertex (77
+ * million of them over a 1200-frame in-world run).  The identity is exact:
+ * the summed values are 3*x with
+ * 0 <= x <= 255 after the mask, and 3*x/3 == x in integer arithmetic, so the
+ * RGB this returns is bit-identical.  Only the RGB is needed - jr_fetch()
+ * keeps no alpha for an unlit vertex - so the alpha term of the old average
+ * is not computed either.
+ */
+static nj_u4 jr_colour1(m3g_jr *r, nj_u4 v)
 {
-    nj_u4 i;
+    const nj_s2 *s;
 
     if (r->dif != 0xFFFFFFFFu) {
         return r->dif | 0xFF000000u;   /* a material colour is opaque */
     }
-    if (!r->col || r->ccomp < 3) {
+    if (!r->col || r->ccomp < 3 || v >= (nj_u4)r->ccount) {
         return r->default_colour;
     }
-    /* VertexArray colours are RGB or RGBA, with opaque alpha for RGB. */
-    {
-        nj_u4 sum[4] = { 0u, 0u, 0u, 0u };
-        nj_u4 v[3];
-        v[0] = a; v[1] = b; v[2] = c;
-        for (i = 0u; i < 3u; i++) {
-            const nj_s2 *s = r->col +
-                ((nj_size)r->cfirst + (nj_size)v[i]) * (nj_size)r->ccomp;
-            nj_u4 k;
-            if (v[i] >= (nj_u4)r->ccount) { return r->default_colour; }
-            for (k = 0u; k < (nj_u4)r->ccomp && k < 4u; k++) {
-                sum[k] += (nj_u4)(nj_u1)(s[k] & 0xFF);
-            }
-            if (r->ccomp == 3) { sum[3] += 255u; }
-        }
-        return ((sum[3] / 3u) << 24) | ((sum[0] / 3u) << 16) |
-               ((sum[1] / 3u) << 8) | (sum[2] / 3u);
-    }
+    /* VertexArray colours are RGB or RGBA; both start with the RGB. */
+    s = r->col + ((nj_size)r->cfirst + (nj_size)v) * (nj_size)r->ccomp;
+    return ((nj_u4)(nj_u1)(s[0] & 0xFF) << 16) |
+           ((nj_u4)(nj_u1)(s[1] & 0xFF) << 8) |
+           (nj_u4)(nj_u1)(s[2] & 0xFF);
 }
 
 /*
@@ -12249,7 +12310,7 @@ static int jr_fetch(m3g_jr *r, nj_u4 v, jr_vtx *o)
                       (nj_u4)(col2[2] + 0.5f);
         }
     } else {
-        argb = jr_colour(r, v, v, v);
+        argb = jr_colour1(r, v);
         col[0] = (float)((argb >> 16) & 0xFFu);
         col[1] = (float)((argb >> 8) & 0xFFu);
         col[2] = (float)(argb & 0xFFu);
