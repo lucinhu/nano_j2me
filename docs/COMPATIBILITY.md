@@ -1509,6 +1509,17 @@ the three things a flat `fillTriangle` cannot express possible:
   and reads the pixel back with one unit of tolerance, because the fog factor
   is a float and half of 255 lands exactly on a rounding boundary.
 
+The per-fragment arithmetic is then cut down where that cannot change the
+picture: a textured triangle whose texture uses `WRAP_CLAMP` divides once per
+fragment and multiplies, since both roundings clamp to the same texel edge
+(`WRAP_REPEAT` keeps its divisions - there one ulp on a tile boundary picks the
+other tile), and a triangle entirely inside the fog's near plane or entirely
+past its far plane skips the fog arithmetic altogether.  One case is genuinely
+approximate: fragments whose source alpha is 1/255 - 80% of the texels of the
+cloud texture - are not blended, because blending them moves the destination by
+at most one unit; their depth is still written so later geometry tests against
+it.  See `docs/notes/2026-10-31-raster-fast-paths.md`.
+
 What is still honest about it: mip levels are generated from the image and
 selected for minified triangles **only when the texture asks for them** -
 `Texture2D.setFiltering()`'s level filter is read (`FILTER_BASE_LEVEL`, the

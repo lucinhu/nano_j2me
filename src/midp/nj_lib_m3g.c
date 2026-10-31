@@ -11141,6 +11141,42 @@ static nj_u4 sw_fog(m3g_sw *sw, float invw, nj_u4 c)
            (nj_u4)(fb + 0.5f);
 }
 
+
+/* The same ramp, but from the depth the pixel loop already has: the loop
+ * computes 1/pg once for the texture coordinates, and area/pg is the depth,
+ * so asking the fog for a reciprocal of an already available value would be
+ * the second division of the pixel. */
+static inline nj_u4 sw_fog_d(m3g_sw *sw, float d, nj_u4 c)
+{
+    float f, fr, fg, fb, nf;
+    nj_u4 fc;
+
+    if (!sw->fog || !(d > 0.0f)) {
+        return c;
+    }
+    if (sw->fog_mode == 81) {                /* LINEAR */
+        if (d <= sw->fog_near) {
+            return c;
+        }
+        if (d >= sw->fog_far) {
+            return (c & 0xFF000000u) | sw->fog_colour;
+        }
+        f = (sw->fog_far - d) * sw->fog_inv_span;
+    } else {                                 /* EXPONENTIAL */
+        f = expf(-sw->fog_density * d);
+    }
+    if (f < 0.0f) { f = 0.0f; }
+    if (f > 1.0f) { f = 1.0f; }
+    fc = sw->fog_colour;
+    nf = 1.0f - f;
+    fr = (float)((c >> 16) & 0xFFu) * f + (float)((fc >> 16) & 0xFFu) * nf;
+    fg = (float)((c >> 8) & 0xFFu) * f + (float)((fc >> 8) & 0xFFu) * nf;
+    fb = (float)(c & 0xFFu) * f + (float)(fc & 0xFFu) * nf;
+    return (c & 0xFF000000u) |
+           ((nj_u4)(fr + 0.5f) << 16) | ((nj_u4)(fg + 0.5f) << 8) |
+           (nj_u4)(fb + 0.5f);
+}
+
 static nj_u4 sw_tri(m3g_sw *sw, const float xy[6], const float inv[3],
                     const float st[6], int has_tex, const nj_u4 rgb[3],
                     const nj_u4 rgb2[3], int twosided)
@@ -11169,8 +11205,11 @@ static nj_u4 sw_tri(m3g_sw *sw, const float xy[6], const float inv[3],
     float r2f = 0.0f, g2f = 0.0f, b2f = 0.0f;
 #if NJ_M3G_FAST_PATHS
     int flat_opaque;
-    int flat_tex, flat_tex565, flat_texargb;
+    int flat_tex, flat_tex565, flat_texargb, tex_near;
 #endif
+    int fog_state = 0;   /* 0 per pixel, 1 no fog, 2 fully fogged */
+    int st_outer;        /* a texture coordinate range that a reciprocal
+                          * cannot be trusted with: see the sampler note */
 
     if (!sw->surf || !sw->z || !sw->surf->pixels) {
         return 0u;
@@ -11214,8 +11253,39 @@ static nj_u4 sw_tri(m3g_sw *sw, const float xy[6], const float inv[3],
                sw->filt_image != 209 && sw->filt_image != 129;
     flat_tex565 = flat_tex && format == NJ_PIXFMT_RGB565;
     flat_texargb = flat_tex && format == NJ_PIXFMT_ARGB8888;
+    /* The nearest-filtered texture case, without the sprite and the
+       filter dispatch sw_texel() carries: the Gouraud loop below runs
+       it per pixel for most of a 3D title's fill. */
+#ifdef NJ_AB_NOTEXNEAR
+    tex_near = 0;
+#else
+    tex_near = has_tex && sw->tex != NULL && sw->tex_bpp >= 3 &&
+               sw->tex_w > 0 && sw->tex_h > 0 && !sw->sprite &&
+               sw->filt_image != 209 && sw->filt_image != 129;
+#endif
 #endif
     ia = 1.0f / area;
+    /* The linear ramp's two saturated halves can be decided per triangle:
+       the depths are the reciprocals of the vertices' 1/w, so the same
+       comparisons sw_fog() makes per pixel are made once here.  "none" means
+       every pixel is nearer than near (the fog leaves the colour alone) and
+       "full" means every pixel is past far (the fog replaces its RGB). */
+    if (sw->fog && sw->fog_mode == 81 && sw->fog_inv_near > 0.0f &&
+        sw->fog_inv_far > 0.0f) {
+        if (inv[0] >= sw->fog_inv_near && inv[1] >= sw->fog_inv_near &&
+            inv[2] >= sw->fog_inv_near) {
+            fog_state = 1;
+        } else if (inv[0] <= sw->fog_inv_far && inv[1] <= sw->fog_inv_far &&
+                   inv[2] <= sw->fog_inv_far) {
+            fog_state = 2;
+        }
+    }
+    /* Interpolating s/w and 1/w and dividing once per pixel is not bit-exact
+       with dividing each coordinate.  That is harmless under WRAP_CLAMP -
+       the clamp lands both roundings on the same texel edge - but a repeat
+       sample exactly on a tile boundary can pick the other tile, so repeat
+       wrapping keeps the divisions. */
+    st_outer = has_tex && (sw->wrap_s != 240 || sw->wrap_t != 240);
     minx = (int)floorf(x0 < x1 ? (x0 < x2 ? x0 : x2) : (x1 < x2 ? x1 : x2));
     maxx = (int)ceilf(x0 > x1 ? (x0 > x2 ? x0 : x2) : (x1 > x2 ? x1 : x2));
     miny = (int)floorf(y0 < y1 ? (y0 < y2 ? y0 : y2) : (y1 < y2 ? y1 : y2));
@@ -11366,14 +11436,18 @@ static nj_u4 sw_tri(m3g_sw *sw, const float xy[6], const float inv[3],
              * expression and stepping order identical to the general loop:
              * reassociating the depth arithmetic can change a tie. */
             if (flat_opaque) {
+                const int fog_here = fog_state;
+                const nj_u4 fog_const = (flat & 0xFF000000u) | sw->fog_colour;
+
                 for (px = xl; px <= xr; px++, o++, drow += bpp, pg += dxg) {
                     nj_s4 key = (nj_s4)(pg * iz);
 
                     if (key > 0 && (!dtest || key > z[o])) {
                         if (dwrite) { z[o] = key; }
                         m3g_pixel_write(drow, format,
-                                        sw->fog ? sw_fog(sw, pg * ia, flat)
-                                                : flat);
+                                        fog_here == 2 ? fog_const :
+                                        (fog_here == 0 && sw->fog
+                                             ? sw_fog(sw, pg * ia, flat) : flat));
                         drawn = 1u;
                     }
                 }
@@ -11390,17 +11464,28 @@ static nj_u4 sw_tri(m3g_sw *sw, const float xy[6], const float inv[3],
                                  (flat & 0x00FFFFFFu) != 0x00FFFFFFu;
                 const int bpp4 = sw->tex_bpp == 4;
                 const int awrite = sw->awrite;
+                const int fog_here = fog_state;
 
                 for (px = xl; px <= xr; px++, o++, drow += bpp, pg += dxg,
                          ph += dxh, pk += dxk) {
                     nj_s4 key = (nj_s4)(pg * iz);
                     const nj_u1 *tp;
                     nj_u4 tr, tg, tb, ta, c;
+                    float cp;
 
                     if (key <= 0) { continue; }
                     if (dtest && key <= z[o]) { continue; }
-                    tp = sw_near_texel(sw, ph / pg, pk / pg);
+                    cp = 1.0f / pg;
+                    tp = sw_near_texel(sw, st_outer ? ph / pg : ph * cp,
+                                       st_outer ? pk / pg : pk * cp);
                     ta = bpp4 ? (nj_u4)tp[3] : 255u;
+                    if (blend_alpha && ta <= 1u) {
+                        /* A 1/255 source alpha moves the destination by at
+                         * most one unit, but the depth write still has to
+                         * happen: later geometry tests against it. */
+                        if (dwrite) { z[o] = key; }
+                        continue;
+                    }
                     if (sw->athresh > 0 && (nj_s4)ta < sw->athresh) { continue; }
                     tr = tp[0]; tg = tp[1]; tb = tp[2];
                     if (tint) {
@@ -11408,9 +11493,13 @@ static nj_u4 sw_tri(m3g_sw *sw, const float xy[6], const float inv[3],
                         tg = (tg * fg) / 255u;
                         tb = (tb * fb) / 255u;
                     }
-                    if (sw->fog) {
-                        nj_u4 fcd = sw_fog(sw, pg * ia,
-                                           (tr << 16) | (tg << 8) | tb);
+                    if (fog_here == 2) {
+                        tr = (sw->fog_colour >> 16) & 0xFFu;
+                        tg = (sw->fog_colour >> 8) & 0xFFu;
+                        tb = sw->fog_colour & 0xFFu;
+                    } else if (fog_here == 0 && sw->fog) {
+                        nj_u4 fcd = sw_fog_d(sw, cp * area,
+                                             (tr << 16) | (tg << 8) | tb);
 
                         tr = (fcd >> 16) & 0xFFu;
                         tg = (fcd >> 8) & 0xFFu;
@@ -11444,17 +11533,28 @@ static nj_u4 sw_tri(m3g_sw *sw, const float xy[6], const float inv[3],
                                  (flat & 0x00FFFFFFu) != 0x00FFFFFFu;
                 const int bpp4 = sw->tex_bpp == 4;
                 const int awrite = sw->awrite;
+                const int fog_here = fog_state;
 
                 for (px = xl; px <= xr; px++, o++, drow += bpp, pg += dxg,
                          ph += dxh, pk += dxk) {
                     nj_s4 key = (nj_s4)(pg * iz);
                     const nj_u1 *tp;
                     nj_u4 tr, tg, tb, ta, c;
+                    float cp;
 
                     if (key <= 0) { continue; }
                     if (dtest && key <= z[o]) { continue; }
-                    tp = sw_near_texel(sw, ph / pg, pk / pg);
+                    cp = 1.0f / pg;
+                    tp = sw_near_texel(sw, st_outer ? ph / pg : ph * cp,
+                                       st_outer ? pk / pg : pk * cp);
                     ta = bpp4 ? (nj_u4)tp[3] : 255u;
+                    if (blend_alpha && ta <= 1u) {
+                        /* A 1/255 source alpha moves the destination by at
+                         * most one unit, but the depth write still has to
+                         * happen: later geometry tests against it. */
+                        if (dwrite) { z[o] = key; }
+                        continue;
+                    }
                     if (sw->athresh > 0 && (nj_s4)ta < sw->athresh) { continue; }
                     tr = tp[0]; tg = tp[1]; tb = tp[2];
                     if (tint) {
@@ -11462,9 +11562,13 @@ static nj_u4 sw_tri(m3g_sw *sw, const float xy[6], const float inv[3],
                         tg = (tg * fg) / 255u;
                         tb = (tb * fb) / 255u;
                     }
-                    if (sw->fog) {
-                        nj_u4 fcd = sw_fog(sw, pg * ia,
-                                           (tr << 16) | (tg << 8) | tb);
+                    if (fog_here == 2) {
+                        tr = (sw->fog_colour >> 16) & 0xFFu;
+                        tg = (sw->fog_colour >> 8) & 0xFFu;
+                        tb = sw->fog_colour & 0xFFu;
+                    } else if (fog_here == 0 && sw->fog) {
+                        nj_u4 fcd = sw_fog_d(sw, cp * area,
+                                             (tr << 16) | (tg << 8) | tb);
 
                         tr = (fcd >> 16) & 0xFFu;
                         tg = (fcd >> 8) & 0xFFu;
@@ -11525,9 +11629,35 @@ static nj_u4 sw_tri(m3g_sw *sw, const float xy[6], const float inv[3],
                     c = flat;
                 }
                 if (has_tex) {
-                    c = sw_texel(sw, ph / pg, pk / pg, c);
-                }
-                if (!sw->sprite) {
+                    float rcp = 1.0f / pg;
+
+                    if (tex_near) {
+                        /* The nearest sample without sw_texel()'s filter and
+                           format dispatch.  Same texfunc rule: DECAL and
+                           MODULATE hand the texture through, the rest tint it
+                           with the Gouraud colour, per sw_texel(). */
+                        const nj_u1 *tp = sw_near_texel(sw,
+                            st_outer ? ph / pg : ph * rcp,
+                            st_outer ? pk / pg : pk * rcp);
+                        nj_u4 tr = tp[0], tg = tp[1], tb = tp[2];
+                        nj_u4 ta = (sw->tex_bpp == 4) ? (nj_u4)tp[3] : 255u;
+
+                        if (sw->texfunc == 228 || sw->texfunc == 226) {
+                            c = (ta << 24) | (tr << 16) | (tg << 8) | tb;
+                        } else {
+                            c = (ta << 24) |
+                                (((tr * ((c >> 16) & 0xFFu)) / 255u) << 16) |
+                                (((tg * ((c >> 8) & 0xFFu)) / 255u) << 8) |
+                                ((tb * (c & 0xFFu)) / 255u);
+                        }
+                    } else {
+                        c = sw_texel(sw, st_outer ? ph / pg : ph * rcp,
+                                     st_outer ? pk / pg : pk * rcp, c);
+                    }
+                    if (!sw->sprite) {
+                        c = sw_fog_d(sw, rcp * area, c);
+                    }
+                } else if (!sw->sprite) {
                     c = sw_fog(sw, pg * ia, c);
                 }
                 if (sw->sprite) {

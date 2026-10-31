@@ -3206,3 +3206,42 @@ why the default stays at 1024: the misses are not the cost, the walk they
 replace is.  Regression: `tests/test_lookup_cache.c` (15 checks); full ctest
 139/139, corpus gate `fatal 0 / 400, known 4`.  See
 `docs/notes/2026-10-31-lookup-memo.md`.
+
+## Rasteriser fast paths (2026-10-31)
+
+Profiling Minecraft PE in-world (see `docs/notes/2026-10-31-raster-fast-paths.md`)
+put 40% of a frame in the flat textured path, and three changes there removed
+about 18% of the CPU time without changing the picture:
+
+- **One division per fragment.**  A textured flat triangle used to divide twice
+  for the texture coordinates and once more for the fog.  The loop now divides
+  `1/pg` once and multiplies, and `sw_fog_d()` takes the depth directly instead
+  of the reciprocal of a reciprocal.
+- **Fog decided per triangle when it is saturated.**  A triangle whose three
+  vertices are all nearer than `fog_near` has no fog, and one whose vertices
+  are all past `fog_far` is entirely the fog colour; both cases skip the
+  per-fragment fog.
+- **Fragments with 1/255 source alpha are skipped.**  They can move the
+  destination by at most one unit (the depth write is kept).  This is the only
+  non-bit-exact part.
+
+Measured on the same saved world, 1200 headless 240x320 frames pinned with
+`taskset -c 5`, user CPU from bash `time`, alternating against the previous
+release:
+
+| run | before | after | delta |
+| --- | --- | --- | --- |
+| 1 | 2.996 s | 2.297 s | -23.3% |
+| 2 | 2.760 s | 2.261 s | -18.1% |
+| 3 | 2.766 s | 2.274 s | -17.8% |
+| 4 | 2.773 s | 2.252 s | -18.8% |
+
+Ablation attribution: the fused reciprocal about -13%, the per-triangle fog
+saturation about -4%, the faint-alpha skip about -6% (the three overlap).  The
+fused reciprocal is only used for `WRAP_CLAMP` textures - `WRAP_REPEAT` keeps
+the two divisions because one ulp on a tile boundary picks the other tile, and
+Minecraft's terrain clamps while its clouds repeat.  Regression: `test_m3g`
+818 checks, `M3GDemo` 148; full ctest 134/134 in the scratch tree and 140/140 in
+the main tree; corpus gate `fatal 0 / 400, known 4`; frame dumps of the same
+snapshot differ only in the sky/cloud band the title animates from the wall
+clock.

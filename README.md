@@ -43,7 +43,33 @@ Android, an ESP32-S3, or whatever you are holding.
                     └──────────────────────────────────────────┘
 ```
 
-## What's new in 0.5.3
+## What's new in 0.5.4
+
+**The software rasteriser does less per fragment, and the picture does not
+change.** A phase profile of Minecraft PE in a saved world put 40% of a frame in
+the flat textured path, and three changes there removed about **18%** of the
+user CPU for 1200 in-world frames - 2.760/2.766/2.773 s down to
+2.261/2.274/2.252 s, roughly 81 to 99 frames a second of CPU time:
+
+- a textured triangle divides `1/w` once per fragment instead of three times
+  (two texture coordinates plus the fog), and the fog is evaluated from the
+  depth directly;
+- a triangle whose vertices are all nearer than the fog's near plane has no fog,
+  and one whose vertices are all past its far plane is exactly the fog colour,
+  so both skip the per-fragment fog;
+- fragments whose source alpha is 1/255 - 80% of the cloud texture - are skipped
+  after the depth write, because blending them moves the destination by at most
+  one unit.
+
+The fused reciprocal is not bit-identical, and `tests/test_m3g.c`'s wrap test
+proved it matters: on a `WRAP_REPEAT` tile boundary one ulp picks the other tile,
+so repeat textures keep their divisions (Minecraft's clouds repeat, its terrain
+clamps). `test_m3g` is 818 checks / 0 failures, full ctest 140/140, corpus gate
+`fatal 0 / 400, known 4`, and frame dumps of the same snapshot differ only in
+the cloud band the title animates from the wall clock. See
+`docs/notes/2026-10-31-raster-fast-paths.md`.
+
+## What was new in 0.5.3
 
 **Name lookups are memoised, so the 3D renderer stops re-resolving the same
 fields.** Minecraft PE's scene walk asks for the same M3G fields once per node
