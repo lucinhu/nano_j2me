@@ -61,6 +61,8 @@
 #define UI_ICON       32
 #define UI_SEARCH_H   32      /* search bar under the library header */
 #define UI_FILTER_MAX 120     /* bytes of UTF-8 search text, no split chars */
+#define UI_SECTION_H  28      /* "最近玩过" / "全部游戏" header rows */
+#define UI_STAR_W     18      /* favourite star column before the name */
 #define UI_HELP_W     620     /* F1 shortcut sheet, clamped to the window */
 #define UI_HELP_H     400
 #define UI_HELP_MARGIN 24
@@ -98,6 +100,7 @@
 #define UI_COL_PANEL_EDGE 0xFF3C4555u
 #define UI_COL_MUTED      0xFF6F7A8Au
 #define UI_COL_DIM        0xB0000000u
+#define UI_COL_STAR       0xFFFFD166u /* the favourite star's accent */
 
 /* ------------------------------------------------------------------ */
 /* Model state                                                         */
@@ -113,7 +116,8 @@ struct nj_client_ui {
     int mode;
 
     int library_sel;
-    int library_top;
+    int library_sel_recent;          /* selection sits in the recent section */
+    int library_top;                 /* first visible row, headers excluded  */
 
     /* LIBRARY search: filter holds the typed UTF-8 bytes and filter_len the
      * exact byte count (the buffer is NUL terminated as well).  help_active
@@ -635,107 +639,232 @@ static int ui_filter_entry_at(const nj_client_ui *ui, int pos)
     return -1;
 }
 
-/* Rows the list currently shows, and the view position of library_top. */
-static int ui_lib_view_count(const nj_client_ui *ui)
-{
-    return ui_filter_active(ui) ? ui_filter_count(ui) : ui_lib_count(ui);
-}
+/* ---- LIBRARY sections: 最近玩过 --------------------------------------
+ * With an empty search and at least one recent jar that still resolves
+ * through the library, the list shows two non-selectable headers: the
+ * resolved recent entries (newest first, each path once) and then every
+ * entry.  Headers take UI_SECTION_H pixels of list space and scroll with the
+ * content.  library_top and the selection are indices over SELECTABLE rows
+ * (headers never count), so row_rect(), clicks and keys stay one row per
+ * game. */
+static void ui_lib_clamp(nj_client_ui *ui);
 
-static int ui_lib_view_top(const nj_client_ui *ui)
+/* Resolve settings->recent through the library, newest first, deduplicated;
+ * writes entry indices and returns how many resolve. */
+static int ui_recent_resolved(const nj_client_ui *ui,
+                              int out[NJ_CLIENT_RECENT_MAX])
 {
-    int i, n, pos = 0;
+    int i, n = 0, j;
 
-    if (!ui || !ui_filter_active(ui)) return ui ? ui->library_top : 0;
-    n = ui_lib_count(ui);
-    for (i = 0; i < n && i < ui->library_top; i++) {
-        if (ui_entry_matches(ui, i)) pos++;
+    if (!ui || !ui->lib || !ui->lib->entries || !ui->settings) return 0;
+    for (i = 0; i < ui->settings->recent_count && i < NJ_CLIENT_RECENT_MAX;
+         i++) {
+        const nj_lib_entry *e;
+        int index;
+        if (!ui->settings->recent[i][0]) continue;
+        e = nj_library_find_path(ui->lib, ui->settings->recent[i]);
+        if (!e) continue;
+        index = (int)(e - ui->lib->entries);
+        if (index < 0 || index >= ui_lib_count(ui)) continue;
+        for (j = 0; j < n; j++) {
+            if (out[j] == index) break;
+        }
+        if (j < n) continue;          /* the same jar listed twice */
+        out[n++] = index;
     }
-    return pos;
+    return n;
 }
 
-static int ui_lib_view_pos(const nj_client_ui *ui, int index)
+/* Recent rows while the section is up; 0 while searching, with an empty
+ * library, or when no recent path resolves any more. */
+static int ui_recent_row_count(const nj_client_ui *ui)
 {
-    return ui_filter_active(ui) ? ui_filter_pos_of(ui, index) : index;
+    int tmp[NJ_CLIENT_RECENT_MAX];
+
+    if (!ui || ui_filter_active(ui) || ui_lib_count(ui) <= 0) return 0;
+    return ui_recent_resolved(ui, tmp);
+}
+
+/* Selectable rows: the flat/filtered list, or recent rows + every entry. */
+static int ui_view_rows(const nj_client_ui *ui)
+{
+    if (!ui) return 0;
+    if (ui_filter_active(ui)) return ui_filter_count(ui);
+    return ui_recent_row_count(ui) + ui_lib_count(ui);
+}
+
+/* Entry index for a selectable row, or -1. */
+static int ui_view_entry_at(const nj_client_ui *ui, int row)
+{
+    int n;
+
+    if (!ui || row < 0) return -1;
+    if (ui_filter_active(ui)) return ui_filter_entry_at(ui, row);
+    n = ui_recent_row_count(ui);
+    if (n > 0) {
+        if (row < n) {
+            int tmp[NJ_CLIENT_RECENT_MAX];
+            ui_recent_resolved(ui, tmp);
+            return tmp[row];
+        }
+        row -= n;
+    }
+    return row < ui_lib_count(ui) ? row : -1;
+}
+
+/* Row y offset from list_y, section headers included (they scroll). */
+static int ui_view_y(const nj_client_ui *ui, int row)
+{
+    int n = ui_recent_row_count(ui);
+
+    if (!ui || n <= 0) return row * UI_ROW_H;
+    if (row < n) return UI_SECTION_H + row * ui->row_h;
+    return UI_SECTION_H + n * ui->row_h + UI_SECTION_H +
+           (row - n) * ui->row_h;
+}
+
+/* Content offset for a scroll position: the 最近玩过 header shows only at the
+ * very top of the list; scrolling past it moves the headers away with the
+ * rows (they are not sticky). */
+static int ui_view_base(const nj_client_ui *ui, int top)
+{
+    if (!ui) return 0;
+    if (top <= 0 && ui_recent_row_count(ui) > 0) return 0;
+    return ui_view_y(ui, top);
+}
+
+/* Whole selectable rows visible when `top` is the first one. */
+static int ui_view_visible_rows(const nj_client_ui *ui, int top)
+{
+    int rows, r, base, count = 0;
+
+    if (!ui) return 0;
+    rows = ui_view_rows(ui);
+    if (rows <= 0) return 0;
+    base = ui_view_base(ui, top);
+    for (r = top; r < rows && count <= ui->visible_rows + 2; r++) {
+        if (ui_view_y(ui, r) - base + ui->row_h > ui->list_h) break;
+        count++;
+    }
+    return count > 0 ? count : 1;
+}
+
+/* Largest top that still keeps the last row inside the viewport. */
+static int ui_view_max_top(const nj_client_ui *ui)
+{
+    int rows, top, last_y;
+
+    if (!ui) return 0;
+    rows = ui_view_rows(ui);
+    if (rows <= 0 || ui->row_h <= 0 || ui->list_h <= 0) return 0;
+    last_y = ui_view_y(ui, rows - 1);
+    top = rows - 1;
+    while (top > 0 && last_y - ui_view_base(ui, top) + ui->row_h > ui->list_h) {
+        top--;
+    }
+    return top;
+}
+
+/* Row of the current selection, or -1 when it is filtered out/gone. */
+static int ui_view_row_of_sel(const nj_client_ui *ui)
+{
+    int n;
+
+    if (!ui || ui->library_sel < 0 || ui->library_sel >= ui_lib_count(ui)) {
+        return -1;
+    }
+    if (ui_filter_active(ui)) return ui_filter_pos_of(ui, ui->library_sel);
+    n = ui_recent_row_count(ui);
+    if (n > 0) {
+        if (ui->library_sel_recent) {
+            int tmp[NJ_CLIENT_RECENT_MAX], i, found = -1;
+            ui_recent_resolved(ui, tmp);
+            for (i = 0; i < n; i++) {
+                if (tmp[i] == ui->library_sel) {
+                    found = i;
+                    break;
+                }
+            }
+            if (found >= 0) return found;
+            /* The recent entry drifted out of the section: the same jar's
+             * full-list row keeps the selection. */
+        }
+        return ui->library_sel + n;
+    }
+    return ui->library_sel;
+}
+
+/* Put the selection on a selectable row (headers are skipped by definition). */
+static void ui_lib_select_row(nj_client_ui *ui, int row)
+{
+    int rows, entry, n;
+
+    if (!ui) return;
+    rows = ui_view_rows(ui);
+    if (rows <= 0) {
+        ui->library_sel = -1;
+        ui->library_sel_recent = 0;
+        ui_lib_clamp(ui);
+        return;
+    }
+    row = ui_clamp_int(row, 0, rows - 1);
+    entry = ui_view_entry_at(ui, row);
+    if (entry < 0) return;
+    n = ui_recent_row_count(ui);
+    ui->library_sel = entry;
+    ui->library_sel_recent = (n > 0 && row < n) ? 1 : 0;
+    ui_lib_clamp(ui);
 }
 
 static void ui_lib_clamp(nj_client_ui *ui)
 {
-    int n, vis, max_top;
+    int rows, selrow, top, max_top;
 
     if (!ui) return;
-    n = ui_lib_count(ui);
-    vis = ui->visible_rows > 0 ? ui->visible_rows : 1;
-    if (n <= 0) {
+    rows = ui_view_rows(ui);
+    if (rows <= 0) {
         ui->library_sel = -1;
+        ui->library_sel_recent = 0;
         ui->library_top = 0;
         return;
     }
-    if (ui_filter_active(ui)) {
-        int count = ui_filter_count(ui);
-        int selpos, top;
-        if (count <= 0) {
-            ui->library_sel = -1;
-            ui->library_top = 0;
-            return;
+    selrow = ui_view_row_of_sel(ui);
+    if (selrow < 0) {
+        int n = ui_recent_row_count(ui);
+        selrow = 0;
+        ui->library_sel = ui_view_entry_at(ui, 0);
+        ui->library_sel_recent = n > 0 ? 1 : 0;
+        if (ui->library_sel < 0) {
+            ui->library_sel = 0;
+            ui->library_sel_recent = 0;
         }
-        if (ui->library_sel < 0 || ui->library_sel >= n ||
-            !ui_entry_matches(ui, ui->library_sel)) {
-            ui->library_sel = ui_filter_first(ui);
-        }
-        selpos = ui_filter_pos_of(ui, ui->library_sel);
-        if (selpos < 0) selpos = 0;
-        max_top = count > vis ? count - vis : 0;
-        top = ui_clamp_int(ui_lib_view_top(ui), 0, max_top);
-        if (selpos < top) top = selpos;
-        if (selpos >= top + vis) top = selpos - vis + 1;
-        if (top < 0) top = 0;
-        ui->library_top = ui_filter_entry_at(ui, top);
-        if (ui->library_top < 0) ui->library_top = 0;
-        return;
     }
-    ui->library_sel = ui_clamp_int(ui->library_sel, 0, n - 1);
-    if (ui->library_top < 0) ui->library_top = 0;
-    max_top = n > vis ? n - vis : 0;
-    ui->library_top = ui_clamp_int(ui->library_top, 0, max_top);
-    if (ui->library_sel < ui->library_top) ui->library_top = ui->library_sel;
-    if (ui->library_sel >= ui->library_top + vis) {
-        ui->library_top = ui->library_sel - vis + 1;
+    max_top = ui_view_max_top(ui);
+    top = ui_clamp_int(ui->library_top, 0, max_top);
+    if (selrow < top) top = selrow;
+    while (top < selrow &&
+           ui_view_y(ui, selrow) - ui_view_base(ui, top) + ui->row_h >
+               ui->list_h) {
+        top++;
     }
-    if (ui->library_top < 0) ui->library_top = 0;
-}
-
-static void ui_lib_set(nj_client_ui *ui, int index)
-{
-    if (!ui || ui_lib_count(ui) <= 0) return;
-    ui->library_sel = index;
-    ui_lib_clamp(ui);
+    ui->library_top = top;
 }
 
 static void ui_lib_move(nj_client_ui *ui, int delta)
 {
-    int n, sel;
+    int rows, row;
+
     if (!ui || delta == 0) return;
-    delta = ui_clamp_int(delta, -1000, 1000);
-    if (ui_filter_active(ui)) {
-        int count = ui_filter_count(ui);
-        int pos;
-        if (count <= 0) {
-            ui->library_sel = -1;
-            return;
-        }
-        pos = ui_filter_pos_of(ui, ui->library_sel);
-        if (pos < 0) pos = 0;
-        pos = ui_clamp_int(pos + delta, 0, count - 1);
-        ui->library_sel = ui_filter_entry_at(ui, pos);
-        ui_lib_clamp(ui);
+    rows = ui_view_rows(ui);
+    if (rows <= 0) {
+        ui->library_sel = -1;
+        ui->library_sel_recent = 0;
         return;
     }
-    n = ui_lib_count(ui);
-    if (n <= 0) return;
-    sel = ui->library_sel < 0 ? 0 : ui->library_sel;
-    sel = ui_clamp_int(sel + delta, 0, n - 1);
-    ui->library_sel = sel;
-    ui_lib_clamp(ui);
+    row = ui_view_row_of_sel(ui);
+    if (row < 0) row = 0;
+    row = ui_clamp_int(row + ui_clamp_int(delta, -1000, 1000), 0, rows - 1);
+    ui_lib_select_row(ui, row);
 }
 
 /* After a filter edit: the first match is the new selection (or -1) and the
@@ -744,6 +873,7 @@ static void ui_filter_sync(nj_client_ui *ui)
 {
     if (!ui) return;
     ui->library_sel = ui_filter_first(ui);
+    ui->library_sel_recent = 0;
     ui->library_top = 0;
     ui_lib_clamp(ui);
 }
@@ -1361,9 +1491,30 @@ static void ui_settings_cycle(nj_client_ui *ui, int dir)
 
 static void ui_settings_reset(nj_client_ui *ui)
 {
+    /* Recent/favourite jars are user state, not preferences: the reset must
+     * put the settings back to defaults without forgetting what was played
+     * or starred. */
+    char recent[NJ_CLIENT_RECENT_MAX][NJ_CLIENT_PATH_MAX];
+    char favorites[NJ_CLIENT_FAVORITE_MAX][NJ_CLIENT_PATH_MAX];
     char msg[UI_TOAST_MAX];
+    int recent_count, favorite_count;
+
     if (!ui || !ui->settings) return;
+    recent_count = ui->settings->recent_count;
+    if (recent_count < 0) recent_count = 0;
+    if (recent_count > NJ_CLIENT_RECENT_MAX) recent_count = NJ_CLIENT_RECENT_MAX;
+    favorite_count = ui->settings->favorite_count;
+    if (favorite_count < 0) favorite_count = 0;
+    if (favorite_count > NJ_CLIENT_FAVORITE_MAX) {
+        favorite_count = NJ_CLIENT_FAVORITE_MAX;
+    }
+    memcpy(recent, ui->settings->recent, sizeof(recent));
+    memcpy(favorites, ui->settings->favorites, sizeof(favorites));
     nj_client_settings_default(ui->settings);
+    memcpy(ui->settings->recent, recent, sizeof(recent));
+    ui->settings->recent_count = recent_count;
+    memcpy(ui->settings->favorites, favorites, sizeof(favorites));
+    ui->settings->favorite_count = favorite_count;
     ui_save_settings(ui);
     if (ui->lib && ui->settings->games_dir[0]) {
         (void)nj_lib_scan_begin(ui->lib, ui->settings->games_dir);
@@ -1714,29 +1865,53 @@ static void ui_draw_row_icon(nj_client_ui *ui, nj_gfx *g, int index, int x,
     ui_draw_icon_scaled(g, img, x, y);
 }
 
-static void ui_draw_library_row(nj_client_ui *ui, nj_gfx *g, int index,
+/* ---- Favourite stars -------------------------------------------------- */
+static int ui_path_is_favorite(const nj_client_ui *ui, const char *path)
+{
+    int i, n;
+
+    if (!ui || !ui->settings || !path || !path[0]) return 0;
+    n = ui->settings->favorite_count;
+    if (n < 0) n = 0;
+    if (n > NJ_CLIENT_FAVORITE_MAX) n = NJ_CLIENT_FAVORITE_MAX;
+    for (i = 0; i < n; i++) {
+        if (strcmp(ui->settings->favorites[i], path) == 0) return 1;
+    }
+    return 0;
+}
+
+/* A section header band; it scrolls with the rows and is never selectable. */
+static void ui_draw_section_header(nj_client_ui *ui, nj_gfx *g, int y,
+                                   const char *text)
+{
+    ui_draw_text(g, text, ui_font_small(), UI_COL_MUTED, 24,
+                 y + UI_SECTION_H / 2, NJ_ANCHOR_LEFT | NJ_ANCHOR_VCENTER,
+                 ui->width - 48, 0);
+}
+
+static void ui_draw_library_row(nj_client_ui *ui, nj_gfx *g, int row,
                                 int hovered)
 {
     const nj_lib_entry *e;
     const nj_font *large = ui_font_large();
     const nj_font *medium = ui_font_medium();
-    int row_y, x, w, title_avail, sub_avail;
-    int selected, badge_x, badge_w, pos;
+    int index, row_y, x, w, title_avail, sub_avail;
+    int selected, badge_x, badge_w, title_x;
     char sub[256];
     const char *title;
     const char *sub_name;
     nj_u4 title_color;
 
     if (!ui->lib || !ui->lib->entries) return;
+    index = ui_view_entry_at(ui, row);
+    if (index < 0) return;
     e = &ui->lib->entries[index];
-    pos = ui_lib_view_pos(ui, index);
-    if (pos < 0) return;                 /* filtered out, should not be drawn */
-    row_y = ui->list_y + (pos - ui_lib_view_top(ui)) * ui->row_h;
+    row_y = ui->list_y + ui_view_y(ui, row) - ui_view_base(ui, ui->library_top);
     x = 8;
     w = ui->width - 16;
-    selected = index == ui->library_sel;
+    selected = row == ui_view_row_of_sel(ui);
 
-    nj_gfx_set_color(g, (index & 1) ? UI_COL_ZEBRA_B : UI_COL_ZEBRA_A);
+    nj_gfx_set_color(g, (row & 1) ? UI_COL_ZEBRA_B : UI_COL_ZEBRA_A);
     nj_gfx_fill_rect(g, x, row_y, w, ui->row_h);
     if (selected || hovered) {
         ui_fill_round(g, x, row_y + 2, w, ui->row_h - 4, 6,
@@ -1753,7 +1928,9 @@ static void ui_draw_library_row(nj_client_ui *ui, nj_gfx *g, int index,
         ui_draw_text(g, "无法运行", medium, UI_COL_BADGE, badge_x,
                      row_y + 8, NJ_ANCHOR_RIGHT | NJ_ANCHOR_TOP, 0, 0);
     }
-    title_avail = badge_x - badge_w - (e->valid ? 0 : 12) - 68;
+    /* The star column is reserved on every row so the names line up. */
+    title_x = 68 + UI_STAR_W;
+    title_avail = badge_x - badge_w - (e->valid ? 0 : 12) - title_x;
     if (title_avail < 8) title_avail = 8;
 
     sub_name = e->file[0] ? e->file : title;
@@ -1761,13 +1938,17 @@ static void ui_draw_library_row(nj_client_ui *ui, nj_gfx *g, int index,
                  (unsigned long)(e->size / 1024u)) <= 0) {
         sub[0] = '\0';
     }
-    sub_avail = w - 12 - 68;
+    sub_avail = w - 12 - title_x;
     if (sub_avail < 8) sub_avail = 8;
 
-    ui_draw_text(g, title, large, title_color, 68, row_y + 6,
+    if (ui_path_is_favorite(ui, e->path)) {
+        ui_draw_text(g, "★", large, UI_COL_STAR, 68, row_y + 6,
+                     NJ_ANCHOR_LEFT | NJ_ANCHOR_TOP, UI_STAR_W, 0);
+    }
+    ui_draw_text(g, title, large, title_color, title_x, row_y + 6,
                  NJ_ANCHOR_LEFT | NJ_ANCHOR_TOP, title_avail, 0);
     if (sub[0]) {
-        ui_draw_text(g, sub, medium, UI_COL_ROW_SUB, 68, row_y + 26,
+        ui_draw_text(g, sub, medium, UI_COL_ROW_SUB, title_x, row_y + 26,
                      NJ_ANCHOR_LEFT | NJ_ANCHOR_TOP, sub_avail, 0);
     }
 }
@@ -1829,18 +2010,25 @@ static void ui_draw_empty(nj_client_ui *ui, nj_gfx *g)
     }
 }
 
+/* Selectable row under the pointer, or -1 (outside, or a header band). */
 static int ui_lib_row_at(const nj_client_ui *ui, int px, int py)
 {
-    int n, row;
+    int rows, base, row;
+
     if (!ui || ui->mode != NJ_CLIENT_MODE_LIBRARY) return -1;
     if (px < 8 || px >= ui->width - 8) return -1;
     if (py < ui->list_y || py >= ui->list_y + ui->list_h) return -1;
     if (ui->row_h <= 0) return -1;
-    n = ui_lib_view_count(ui);
-    if (n <= 0) return -1;
-    row = (py - ui->list_y) / ui->row_h + ui_lib_view_top(ui);
-    if (row < 0 || row >= n) return -1;
-    return ui_filter_entry_at(ui, row);
+    rows = ui_view_rows(ui);
+    if (rows <= 0) return -1;
+    base = ui_view_base(ui, ui->library_top);
+    for (row = ui->library_top; row < rows; row++) {
+        int y = ui->list_y + ui_view_y(ui, row) - base;
+        if (y >= ui->list_y + ui->list_h) break;
+        if (py < y) break;               /* a header band: dead space */
+        if (py < y + ui->row_h) return row;
+    }
+    return -1;
 }
 
 static int ui_row_hover(const nj_client_ui *ui)
@@ -1852,25 +2040,41 @@ static int ui_row_hover(const nj_client_ui *ui)
 
 static void ui_draw_library_list(nj_client_ui *ui, nj_gfx *g)
 {
-    int n, top, pos, hover;
+    int rows, recent, top, base, row, hover, total, first;
 
     ui_lib_clamp(ui);
-    n = ui_lib_view_count(ui);
-    top = ui_lib_view_top(ui);
+    rows = ui_view_rows(ui);
+    recent = ui_recent_row_count(ui);
+    top = ui->library_top;
+    base = ui_view_base(ui, top);
     nj_gfx_set_clip(g, 0, ui->list_y, ui->width, ui->list_h);
-    if (n <= 0) {
+    if (rows <= 0) {
         ui_draw_empty(ui, g);
         ui_clip_full(ui, g);
         return;
     }
     hover = ui_row_hover(ui);
-    for (pos = top; pos < top + ui->visible_rows && pos < n; pos++) {
-        int index = ui_filter_entry_at(ui, pos);
-        if (index < 0) continue;
-        ui_draw_library_row(ui, g, index, index == hover);
+    if (recent > 0) {
+        int hy = ui->list_y - base;
+        if (hy + UI_SECTION_H > ui->list_y &&
+            hy < ui->list_y + ui->list_h) {
+            ui_draw_section_header(ui, g, hy, "最近玩过");
+        }
+        hy = ui->list_y + UI_SECTION_H + recent * ui->row_h - base;
+        if (hy + UI_SECTION_H > ui->list_y &&
+            hy < ui->list_y + ui->list_h) {
+            ui_draw_section_header(ui, g, hy, "全部游戏");
+        }
     }
-    ui_draw_scrollbar(g, ui->width - 6, ui->list_y, ui->list_h, n, top,
-                      ui->visible_rows);
+    for (row = top; row < rows; row++) {
+        int y = ui->list_y + ui_view_y(ui, row) - base;
+        if (y >= ui->list_y + ui->list_h) break;
+        ui_draw_library_row(ui, g, row, row == hover);
+    }
+    total = rows + (recent > 0 ? 2 : 0);
+    first = top + (recent > 0 ? (top < recent ? 1 : 2) : 0);
+    ui_draw_scrollbar(g, ui->width - 6, ui->list_y, ui->list_h, total, first,
+                      ui_view_visible_rows(ui, top));
     ui_clip_full(ui, g);
 }
 
@@ -1999,7 +2203,7 @@ static void ui_draw_footer(nj_client_ui *ui, nj_gfx *g, int browser)
          * lines list everything including "输入 搜索". */
         if (bx - 8 - 24 >= 180) {
             nj_gfx_set_clip(g, 0, y, bx - 8, h);
-            ui_draw_text(g, "↑↓ 选择 · Enter 运行 · O 打开 · R 刷新",
+            ui_draw_text(g, "↑↓ 选择 · Enter 运行 · O 打开 · R 刷新 · F2 收藏",
                          ui_font_small(), UI_COL_ROW_SUB, 16,
                          y + h / 2 - 8,
                          NJ_ANCHOR_LEFT | NJ_ANCHOR_VCENTER, bx - 8 - 24, 0);
@@ -2033,7 +2237,7 @@ static void ui_draw_search_bar(nj_client_ui *ui, nj_gfx *g)
     }
     nj_gfx_set_clip(g, 0, y, ui->width, UI_SEARCH_H);
 
-    matched = ui_lib_view_count(ui);
+    matched = ui_filter_active(ui) ? ui_filter_count(ui) : ui_lib_count(ui);
     total = ui_lib_count(ui);
     snprintf(count, sizeof(count), "%d / %d 项", matched, total);
     right = ui->width - 16 - ui_text_width(medium, count);
@@ -2073,6 +2277,7 @@ static const ui_help_entry ui_help_entries[] = {
     { "游戏库：", NULL },
     { NULL, "↑↓ 选择 · Enter 运行 · O 打开 · R 刷新 · S 设置" },
     { NULL, "输入 搜索 · F1 帮助 · Esc 退出" },
+    { NULL, "F2 收藏/取消收藏 · 最近玩过 显示最近运行的游戏" },
     { "游戏窗口：", NULL },
     { NULL, "方向键 移动 · Enter/空格 开火 · F1 左软键 · F2 右软键" },
     { NULL, "Backspace 清除 · 数字键 · F3 速度 · F5 存档" },
@@ -2511,6 +2716,61 @@ static void ui_draw_toast(nj_client_ui *ui, nj_gfx *g)
 /* ------------------------------------------------------------------ */
 /* Input: keyboard                                                     */
 /* ------------------------------------------------------------------ */
+/* F2 stars or unstars the selected row.  Favourites are user state: they
+ * live in the settings, are saved like a settings edit, and survive the
+ * 恢复默认 reset. */
+static void ui_favorite_toggle(nj_client_ui *ui)
+{
+    nj_client_settings *s;
+    const nj_lib_entry *e;
+    char path[NJ_CLIENT_PATH_MAX];
+    char msg[UI_TOAST_MAX];
+    const char *name;
+    int i, n, j;
+
+    if (!ui || !ui->settings || !ui->lib || !ui->lib->entries) return;
+    if (ui->library_sel < 0 || ui->library_sel >= ui_lib_count(ui)) return;
+    e = &ui->lib->entries[ui->library_sel];
+    if (!e->path[0]) return;
+    if (!ui_copy(path, (int)sizeof(path), e->path)) return;
+    s = ui->settings;
+    n = s->favorite_count;
+    if (n < 0) n = 0;
+    if (n > NJ_CLIENT_FAVORITE_MAX) n = NJ_CLIENT_FAVORITE_MAX;
+    for (i = 0; i < n; i++) {
+        if (strcmp(s->favorites[i], path) == 0) break;
+    }
+    name = e->name[0] ? e->name : (e->file[0] ? e->file : path);
+    if (i < n) {
+        for (j = i; j + 1 < n; j++) {
+            memcpy(s->favorites[j], s->favorites[j + 1],
+                   (size_t)NJ_CLIENT_PATH_MAX);
+        }
+        s->favorites[n - 1][0] = '\0';
+        s->favorite_count = n - 1;
+        if (snprintf(msg, sizeof(msg), "已取消收藏「%s」", name) <= 0) {
+            msg[0] = '\0';
+        }
+    } else {
+        if (n >= NJ_CLIENT_FAVORITE_MAX) {
+            /* Full: the oldest star makes room, like the recent list. */
+            memmove(s->favorites[0], s->favorites[1],
+                    (size_t)(NJ_CLIENT_FAVORITE_MAX - 1) *
+                        (size_t)NJ_CLIENT_PATH_MAX);
+            n = NJ_CLIENT_FAVORITE_MAX - 1;
+        }
+        if (!ui_copy(s->favorites[n], (int)sizeof(s->favorites[n]), path)) {
+            return;
+        }
+        s->favorite_count = n + 1;
+        if (snprintf(msg, sizeof(msg), "已收藏「%s」", name) <= 0) {
+            msg[0] = '\0';
+        }
+    }
+    ui_save_settings(ui);
+    if (msg[0]) ui_note_set(ui, msg);
+}
+
 static void ui_key_library(nj_client_ui *ui, int key)
 {
     int vis = ui->visible_rows > 0 ? ui->visible_rows : 1;
@@ -2537,16 +2797,13 @@ static void ui_key_library(nj_client_ui *ui, int key)
         ui_lib_move(ui, vis);
         break;
     case NJ_CLIENT_KEY_HOME:
-        ui_lib_set(ui, 0);
+        ui_lib_select_row(ui, 0);
         break;
     case NJ_CLIENT_KEY_END:
-        if (ui_filter_active(ui)) {
-            int count = ui_filter_count(ui);
-            ui_lib_set(ui,
-                       count > 0 ? ui_filter_entry_at(ui, count - 1) : -1);
-        } else {
-            ui_lib_set(ui, ui_lib_count(ui) - 1);
-        }
+        ui_lib_select_row(ui, ui_view_rows(ui) - 1);
+        break;
+    case NJ_CLIENT_KEY_FAVORITE:
+        ui_favorite_toggle(ui);
         break;
     case NJ_CLIENT_KEY_ENTER:
         ui_lib_activate(ui);
@@ -2729,12 +2986,11 @@ static void ui_pointer_library(nj_client_ui *ui, int x, int y)
         }
     }
     index = ui_lib_row_at(ui, x, y);
-    if (index < 0) return;
-    if (index == ui->library_sel) {
+    if (index < 0) return;        /* outside, or a non-selectable header */
+    if (index == ui_view_row_of_sel(ui)) {
         ui_lib_activate(ui);      /* click on the selection = double click */
     } else {
-        ui->library_sel = index;
-        ui_lib_clamp(ui);
+        ui_lib_select_row(ui, index);
     }
 }
 
@@ -3073,6 +3329,34 @@ void nj_client_ui_note_game_exit(nj_client_ui *ui, const char *jar, int status)
     ui_note_set(ui, msg);
 }
 
+void nj_client_ui_record_run(nj_client_ui *ui, const char *path)
+{
+    nj_client_settings *s;
+    char copy[NJ_CLIENT_PATH_MAX];
+    int i, n, j;
+
+    if (!ui || !path || !path[0]) return;
+    s = ui->settings;
+    if (!s) return;
+    if (!ui_copy(copy, (int)sizeof(copy), path)) return;
+    n = s->recent_count;
+    if (n < 0) n = 0;
+    if (n > NJ_CLIENT_RECENT_MAX) n = NJ_CLIENT_RECENT_MAX;
+    for (i = 0; i < n; i++) {
+        if (strcmp(s->recent[i], copy) == 0) break;
+    }
+    if (i >= n) {
+        if (n < NJ_CLIENT_RECENT_MAX) n++;
+        i = n - 1;              /* the slot the oldest entry falls off */
+    }
+    for (j = i; j > 0; j--) {
+        memcpy(s->recent[j], s->recent[j - 1], (size_t)NJ_CLIENT_PATH_MAX);
+    }
+    memcpy(s->recent[0], copy, strlen(copy) + 1u);
+    s->recent_count = n;
+    ui_save_settings(ui);
+}
+
 int nj_client_ui_take(nj_client_ui *ui, nj_client_action *action, char *jar,
                       int jar_cap)
 {
@@ -3085,6 +3369,7 @@ int nj_client_ui_take(nj_client_ui *ui, nj_client_action *action, char *jar,
         if (jar && jar_cap > 0) {
             snprintf(jar, (size_t)jar_cap, "%s", ui->action_jar);
         }
+        nj_client_ui_record_run(ui, ui->action_jar);
         ui->action_jar[0] = '\0';
     }
     return 1;
@@ -3098,17 +3383,26 @@ int nj_client_ui_quit(const nj_client_ui *ui)
 int nj_client_ui_row_rect(const nj_client_ui *ui, int index, int *x, int *y,
                           int *w, int *h)
 {
-    int n, pos, offset;
+    int rows, top, row, row_y;
     if (!ui || ui->mode != NJ_CLIENT_MODE_LIBRARY) return 0;
-    n = ui_lib_count(ui);
-    if (index < 0 || index >= n) return 0;
+    rows = ui_view_rows(ui);
+    /* A filter flattens the list: callers keep passing the ENTRY index (the
+     * historical contract), so translate it to the filtered position.  With
+     * no filter the index is the selectable row, which equals the entry index
+     * when the recent section is absent. */
+    row = index;
+    if (ui_filter_active(ui)) {
+        row = ui_filter_pos_of(ui, index);
+    }
+    if (row < 0 || row >= rows) return 0;
     if (ui->visible_rows <= 0 || ui->row_h <= 0 || ui->width < 16) return 0;
-    pos = ui_lib_view_pos(ui, index);
-    if (pos < 0) return 0;
-    offset = pos - ui_lib_view_top(ui);
-    if (offset < 0 || offset >= ui->visible_rows) return 0;
+    top = ui->library_top;
+    row_y = ui->list_y + ui_view_y(ui, row) - ui_view_base(ui, top);
+    if (row_y < ui->list_y || row_y + ui->row_h > ui->list_y + ui->list_h) {
+        return 0;
+    }
     if (x) *x = 8;
-    if (y) *y = ui->list_y + offset * ui->row_h;
+    if (y) *y = row_y;
     if (w) *w = ui->width - 16;
     if (h) *h = ui->row_h;
     return 1;
@@ -3117,6 +3411,13 @@ int nj_client_ui_row_rect(const nj_client_ui *ui, int index, int *x, int *y,
 int nj_client_ui_selected(const nj_client_ui *ui)
 {
     return ui ? ui->library_sel : -1;
+}
+
+int nj_client_ui_selected_favorite(const nj_client_ui *ui)
+{
+    if (!ui || !ui->lib || !ui->lib->entries) return 0;
+    if (ui->library_sel < 0 || ui->library_sel >= ui_lib_count(ui)) return 0;
+    return ui_path_is_favorite(ui, ui->lib->entries[ui->library_sel].path);
 }
 
 int nj_client_ui_mode(const nj_client_ui *ui)

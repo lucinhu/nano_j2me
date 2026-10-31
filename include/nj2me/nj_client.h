@@ -43,9 +43,13 @@ extern "C" {
  * nano_j2me/client.conf.  Paths are UTF-8; unknown keys are ignored so an
  * older client tolerates a newer file, and the file is rewritten on every
  * change (it is a few hundred bytes, not a database).  `window = 900x700`
- * holds the library window's size so it comes back where it was left.
+ * holds the library window's size so it comes back where it was left,
+ * `recent = <path>` lines list the last jars that ran (newest first) and
+ * `favorite = <path>` lines carry the starred ones.
  */
 #define NJ_CLIENT_BIND_NAME_MAX 24
+#define NJ_CLIENT_RECENT_MAX 10
+#define NJ_CLIENT_FAVORITE_MAX 32
 
 typedef struct nj_client_settings {
     char games_dir[NJ_CLIENT_PATH_MAX]; /* the library directory              */
@@ -63,6 +67,17 @@ typedef struct nj_client_settings {
                                            game keys, 0/1                     */
     int  launcher_w;                    /* library window, 0 = 720 x 540     */
     int  launcher_h;
+    /*
+     * The library remembers what ran and what was starred.  Recent entries
+     * are newest first; the UI shows them in a "最近玩过" section above the
+     * full list and resolves them through the library, so a jar that moved
+     * away simply drops out of sight.  Favorites are keept in the order they
+     * were starred and get a star on their row.
+     */
+    char recent[NJ_CLIENT_RECENT_MAX][NJ_CLIENT_PATH_MAX];
+    int  recent_count;
+    char favorites[NJ_CLIENT_FAVORITE_MAX][NJ_CLIENT_PATH_MAX];
+    int  favorite_count;
     /*
      * Per-slot key bindings: SDL key names ("W", "Space", "Left Shift", the
      * same spelling SDL_GetKeyName() prints) indexed by nj_port_bind.  Empty
@@ -123,7 +138,8 @@ typedef enum nj_client_key {
     NJ_CLIENT_KEY_ENTER,
     NJ_CLIENT_KEY_ESCAPE,
     NJ_CLIENT_KEY_BACKSPACE,
-    NJ_CLIENT_KEY_HELP    /* F1: the shortcut sheet over the library */
+    NJ_CLIENT_KEY_HELP,      /* F1: the shortcut sheet over the library */
+    NJ_CLIENT_KEY_FAVORITE   /* F2: star or unstar the selected jar      */
 } nj_client_key;
 
 /* What the client loop should do after a frame. */
@@ -179,8 +195,12 @@ void nj_client_ui_drop(nj_client_ui *ui, const char *path);
 void nj_client_ui_note(nj_client_ui *ui, const char *message);
 void nj_client_ui_note_game_exit(nj_client_ui *ui, const char *jar, int status);
 
-/* Poll for a pending action.  Returns 1 and fills `action` (and `jar`, for
- * RUN) when there is one; 0 when there is nothing to do. */
+/*
+ * Poll for a pending action.  Returns 1 and fills `action` (and `jar`, for
+ * RUN) when there is one; 0 when there is nothing to do.  A RUN also records
+ * the jar as the most recent one and saves the settings, so the "最近玩过"
+ * section is right the next time the window opens.
+ */
 int nj_client_ui_take(nj_client_ui *ui, nj_client_action *action,
                       char *jar, int jar_cap);
 
@@ -210,6 +230,17 @@ int nj_client_ui_selected_bind(const nj_client_ui *ui);
 const char *nj_client_ui_filter(const nj_client_ui *ui);
 /* True while the F1 shortcut sheet covers the library. */
 int nj_client_ui_help_visible(const nj_client_ui *ui);
+/* True when the selected row carries a star (0 when nothing is selected). */
+int nj_client_ui_selected_favorite(const nj_client_ui *ui);
+
+/*
+ * Record `path` as the most recently played jar (moved to the front, capped,
+ * deduplicated) and save the settings.  take() does this for a RUN; the SDL
+ * client loop also does it for a jar it starts itself (--client <jar>, and
+ * the jar dropped on a running game that becomes the next run), so every
+ * launch shows up under 最近玩过.
+ */
+void nj_client_ui_record_run(nj_client_ui *ui, const char *path);
 
 /* ------------------------------------------------------------------ */
 /* Key capture                                                         */

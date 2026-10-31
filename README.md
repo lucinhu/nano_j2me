@@ -266,6 +266,15 @@ file lives.
 <img src="docs/images/readme-client-help.png" width="360" height="270" alt="The F1 shortcut sheet listing library, game-window and settings keys">
 </p>
 
+**Recently played and starred.** The top section lists the last ten jars that
+ran; `F2` stars a row worth finding again, and the star survives a restart while
+the settings reset leaves it alone.
+
+<p>
+<img src="docs/images/readme-client-recent.png" width="360" height="270" alt="The library window with a 最近玩过 section above the full game list">
+<img src="docs/images/readme-client-favorite.png" width="360" height="270" alt="A favourite row with a star and the 已收藏 toast">
+</p>
+
 **Windows, new in 0.5.2.** The same client as `nj2me.exe`, captured under wine:
 the UTF-16 path handling makes the wide-path listing and Chinese game names
 work exactly as on Linux.
@@ -530,9 +539,11 @@ visible, marked `bad` with the reason. `Enter`/click runs the selection, `O`
 browses for a jar, `R` rescans, `S` edits the games directory, scale, scale
 filter, fullscreen, renderer, gamepad, on-screen keys, fps cap, key bindings,
 heap size, mute and the network switch, and `Esc`/`Q` quits. Typing filters the
-list by name, file name or MIDlet class, and `F1` shows every key the client
-and a game window accept. `F10`, or closing the game window, comes back to the
-library.
+list by name, file name or MIDlet class, `F1` shows every key the client and a
+game window accept, and `F2` stars the selected game. Whatever ran before is
+listed under `最近玩过` above the directory, newest first, so the game you keep
+coming back to is one row away. `F10`, or closing the game window, comes back
+to the library.
 
 Drag a `.jar` onto the launcher or onto a running game and it runs - a game in
 progress ends first; drag a directory onto the launcher and it becomes the
@@ -563,11 +574,15 @@ renderer, mute and network, while `--scale`, `--fps`, `--keys` and `--heap` on
 the command line still win. The launcher is drawn by the runtime's own
 rasteriser and built-in faces, so Chinese game names render with no toolkit and
 no extra dependency. The window remembers the size it was left at
-(`window = 900x700`), and `F1` is where to look when a key is forgotten - it
-lists the library, game-window and settings keys and the settings file's path.
-See `docs/notes/2026-10-31-desktop-client.md`,
-`docs/notes/2026-10-31-key-mapping-and-settings.md` and
-`docs/notes/2026-10-31-client-polish.md`.
+(`window = 900x700`), a running game's window carries its display name, and
+`recent =`/`favorite =` lines in the same file hold the game you last played and
+the rows you starred - and the settings page's reset leaves both lists
+alone while the switches go back to their defaults. `F1` is where to look when a key
+is forgotten: it lists the library, game-window and settings keys and the
+settings file's path. See `docs/notes/2026-10-31-desktop-client.md`,
+`docs/notes/2026-10-31-key-mapping-and-settings.md`,
+`docs/notes/2026-10-31-client-polish.md` and
+`docs/notes/2026-10-31-recent-and-favorites.md`.
 
 ## Telling a title which phone it is on
 

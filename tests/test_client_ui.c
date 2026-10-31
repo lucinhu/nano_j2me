@@ -129,6 +129,26 @@ static int count_region_not(const nj_surface *s, int x0, int y0, int x1,
     return n;
 }
 
+/* Pixels in the rectangle that match argb exactly. */
+static int count_region_is(const nj_surface *s, int x0, int y0, int x1,
+                           int y1, nj_u4 argb)
+{
+    int x, y, n = 0;
+    if (!s || !s->pixels) return 0;
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
+    if (x1 > s->width) x1 = s->width;
+    if (y1 > s->height) y1 = s->height;
+    for (y = y0; y < y1; y++) {
+        const nj_u4 *row = (const nj_u4 *)((const unsigned char *)s->pixels +
+                                           (size_t)y * (size_t)s->stride);
+        for (x = x0; x < x1; x++) {
+            if (row[x] == argb) n++;
+        }
+    }
+    return n;
+}
+
 static int diff_pixels(const nj_surface *a, const nj_surface *b)
 {
     int x, y, n = 0;
@@ -414,6 +434,16 @@ static int take_action(nj_client_ui *ui, nj_client_action *action, char *jar,
     *action = NJ_CLIENT_ACTION_NONE;
     if (jar && cap > 0) jar[0] = '\0';
     return nj_client_ui_take(ui, action, jar, cap);
+}
+
+/* The older sections were written against a flat library list.  Consumer
+ * reports now feed the 最近玩过 section, so after a RUN the old assumptions
+ * (row order == entry order) no longer hold.  Those sections forget the
+ * recorded runs again; the recent/favourites section below exercises the
+ * section explicitly. */
+static void forget_recent(nj_client_settings *settings)
+{
+    if (settings) settings->recent_count = 0;
 }
 
 /* ------------------------------------------------------------------ */
@@ -774,6 +804,7 @@ int main(void)
         CHECK(action == NJ_CLIENT_ACTION_RUN, "filtered action is RUN");
         CHECK(strcmp(jar, lib->entries[alpha].path) == 0,
               "filtered RUN carries the jar path");
+        forget_recent(&settings);
         key(ui, NJ_CLIENT_KEY_ESCAPE);
 
         /* Pointer clicks use the filtered mapping. */
@@ -975,6 +1006,7 @@ int main(void)
                   "still in the library after RUN");
             CHECK(take_action(ui, &action, jar, (int)sizeof(jar)) == 0,
                   "the pending action is consumed once");
+            forget_recent(&settings);
         }
     }
 
@@ -1020,6 +1052,7 @@ int main(void)
                 CHECK(action == NJ_CLIENT_ACTION_RUN, "click RUN action");
                 CHECK(strcmp(jar, lib->entries[good].path) == 0,
                       "click RUN carries the jar path");
+                forget_recent(&settings);
             }
         }
         /* down == 0 is a release and is ignored */
@@ -1542,6 +1575,7 @@ int main(void)
     CHECK(take_action(ui, &action, jar, (int)sizeof(jar)) == 1,
           "second drop still runs the jar");
     CHECK(lib->count == 1, "duplicate drop does not add a second entry");
+    forget_recent(&settings);
 
     /* Dropping a directory adopts it as the games dir and rescans. */
     nj_client_ui_drop(ui, env.games);
@@ -1778,6 +1812,532 @@ int main(void)
         }
         surface_free(a);
         surface_free(b);
+    }
+
+    /* -------------------------------------------------------------- */
+    /* Recently played section + favourites                            */
+    /* -------------------------------------------------------------- */
+    printf("  -- recent / favourites --\n");
+    {
+        const nj_u4 star_col = 0xFFFFD166u;
+        int alpha2 = find_entry_file(lib, "alphademo.jar");
+        int cjk2 = env.have_cjk ? find_entry_file(lib, "1942空战_10403.jar")
+                                : find_entry(lib, 1, alpha2);
+        int rx0 = 0, ry0 = 0, rw0 = 0, rh0 = 0;
+        char alpha_path[NJ_CLIENT_PATH_MAX];
+        char cjk_path[NJ_CLIENT_PATH_MAX];
+        nj_client_settings loaded;
+
+        CHECK(alpha2 >= 0, "recent tests: alphademo entry present");
+        CHECK(cjk2 >= 0, "recent tests: a second valid entry present");
+        alpha_path[0] = '\0';
+        cjk_path[0] = '\0';
+        if (alpha2 >= 0 && cjk2 >= 0) {
+            snprintf(alpha_path, sizeof(alpha_path), "%s",
+                     lib->entries[alpha2].path);
+            snprintf(cjk_path, sizeof(cjk_path), "%s", lib->entries[cjk2].path);
+            /* ---- no recents: today's flat list is unchanged ---- */
+            settings.recent_count = 0;
+            settings.favorite_count = 0;
+            key(ui, NJ_CLIENT_KEY_HOME);
+            nj_client_ui_draw(ui, s);
+            CHECK(nj_client_ui_row_rect(ui, 0, &rx0, &ry0, &rw0, &rh0) == 1,
+                  "flat list: the first row is visible");
+            CHECK(ry0 == 88, "the flat list starts under the search bar");
+            CHECK(nj_client_ui_row_rect(ui, 1, &rx0, &ry0, &rw0, &rh0) == 1 &&
+                      ry0 == 136,
+                  "flat rows keep their 48 px pitch");
+
+            /* ---- two resolvable recents bring both headers up ---- */
+            snprintf(settings.recent[0], sizeof(settings.recent[0]), "%s",
+                     lib->entries[cjk2].path);
+            snprintf(settings.recent[1], sizeof(settings.recent[1]), "%s",
+                     lib->entries[alpha2].path);
+            settings.recent_count = 2;
+            key(ui, NJ_CLIENT_KEY_HOME);
+            nj_client_ui_draw(ui, s);
+            dump_ppm(env.out, "10_recent.ppm", s);
+            CHECK(nj_client_ui_selected(ui) == cjk2,
+                  "HOME selects the newest recent entry");
+            CHECK(nj_client_ui_row_rect(ui, 0, &rx0, &ry0, &rw0, &rh0) == 1,
+                  "the first recent row is visible");
+            CHECK(ry0 == 116,
+                  "the 最近玩过 header pushes the recent rows down");
+            CHECK(count_region_not(s, 16, 88, 240, 116, COL_BG) > 30,
+                  "the 最近玩过 header text is drawn");
+            CHECK(nj_client_ui_row_rect(ui, 1, &rx0, &ry0, &rw0, &rh0) == 1 &&
+                      ry0 == 164,
+                  "the second recent row follows the first");
+            key(ui, NJ_CLIENT_KEY_DOWN);
+            CHECK(nj_client_ui_selected(ui) == alpha2,
+                  "DOWN walks into the older recent entry");
+            key(ui, NJ_CLIENT_KEY_DOWN);
+            CHECK(nj_client_ui_selected(ui) == 0,
+                  "DOWN leaves the recent section for the full list");
+            CHECK(nj_client_ui_row_rect(ui, 2, &rx0, &ry0, &rw0, &rh0) == 1 &&
+                      ry0 == 240,
+                  "the 全部游戏 header sits 28 px above the full list");
+            key(ui, NJ_CLIENT_KEY_HOME);
+            CHECK(nj_client_ui_selected(ui) == cjk2,
+                  "HOME returns to the first selectable row");
+            key(ui, NJ_CLIENT_KEY_PAGE_UP);
+            CHECK(nj_client_ui_selected(ui) == cjk2,
+                  "PAGE_UP clamps on the first selectable row");
+            key(ui, NJ_CLIENT_KEY_END);
+            CHECK(nj_client_ui_selected(ui) == lib->count - 1,
+                  "END lands on the last selectable row");
+            key(ui, NJ_CLIENT_KEY_PAGE_DOWN);
+            CHECK(nj_client_ui_selected(ui) == lib->count - 1,
+                  "PAGE_DOWN clamps on the last selectable row");
+
+            /* the same jar appears twice: its two copies have distinct rows */
+            {
+                int y_full = 0;
+                CHECK(nj_client_ui_row_rect(ui, 0, &rx0, &ry0, &rw0, &rh0) ==
+                          1,
+                      "the recent copy has a row rect");
+                CHECK(nj_client_ui_row_rect(ui, 2 + cjk2, &rx0, &y_full, &rw0,
+                                            &rh0) == 1,
+                      "the full-list copy has a row rect");
+                CHECK(y_full != ry0,
+                      "the two copies of one jar use different rows");
+            }
+
+            /* header bands are clicks into nothing */
+            {
+                int before = nj_client_ui_selected(ui);
+                nj_client_ui_pointer(ui, 120, 98, 1);
+                CHECK(nj_client_ui_selected(ui) == before,
+                      "clicking the 最近玩过 header selects nothing");
+                nj_client_ui_pointer(ui, 120, 222, 1);
+                CHECK(nj_client_ui_selected(ui) == before,
+                      "clicking the 全部游戏 header selects nothing");
+                CHECK(take_action(ui, &action, jar, (int)sizeof(jar)) == 0,
+                      "a header click emits no action");
+            }
+
+            /* a recent row selects on the first click and runs on the second */
+            {
+                int y = 0;
+                CHECK(nj_client_ui_row_rect(ui, 1, &rx0, &y, &rw0, &rh0) == 1,
+                      "the second recent row is visible for a click");
+                nj_client_ui_pointer(ui, rx0 + 30, y + 20, 1);
+                CHECK(nj_client_ui_selected(ui) == alpha2,
+                      "clicking a recent row selects it");
+                CHECK(take_action(ui, &action, jar, (int)sizeof(jar)) == 0,
+                      "the first click on a recent row only selects");
+                nj_client_ui_pointer(ui, rx0 + 30, y + 20, 1);
+                CHECK(take_action(ui, &action, jar, (int)sizeof(jar)) == 1,
+                      "the second click on a recent row runs it");
+                CHECK(action == NJ_CLIENT_ACTION_RUN,
+                      "the recent row action is RUN");
+                CHECK(strcmp(jar, lib->entries[alpha2].path) == 0,
+                      "the recent row RUN carries its jar path");
+                CHECK(settings.recent_count == 2 &&
+                          strcmp(settings.recent[0],
+                                 lib->entries[alpha2].path) == 0,
+                      "running a recent row moves it to the front");
+            }
+
+            /* the full-list copy of the same jar runs the same path */
+            lib_select(ui, 2 + alpha2);
+            CHECK(nj_client_ui_selected(ui) == alpha2,
+                  "the full-list copy selects the same jar");
+            key(ui, NJ_CLIENT_KEY_ENTER);
+            CHECK(take_action(ui, &action, jar, (int)sizeof(jar)) == 1,
+                  "the full-list copy runs the jar");
+            CHECK(strcmp(jar, lib->entries[alpha2].path) == 0,
+                  "both copies carry the same path");
+            CHECK(settings.recent_count == 2,
+                  "running the duplicate copy keeps one recent entry");
+
+            /* recents that no longer resolve are skipped */
+            snprintf(settings.recent[0], sizeof(settings.recent[0]), "%s",
+                     "/tmp/nj-ui-stale-one.jar");
+            snprintf(settings.recent[1], sizeof(settings.recent[1]), "%s",
+                     "/tmp/nj-ui-stale-two.jar");
+            settings.recent_count = 2;
+            key(ui, NJ_CLIENT_KEY_HOME);
+            nj_client_ui_draw(ui, s);
+            CHECK(nj_client_ui_row_rect(ui, 0, &rx0, &ry0, &rw0, &rh0) == 1 &&
+                      ry0 == 88,
+                  "stale recents leave the flat list unchanged");
+            CHECK(nj_client_ui_selected(ui) == 0,
+                  "flat HOME selects the first entry again");
+
+            /* a mix of stale and live recents keeps only the live row */
+            snprintf(settings.recent[0], sizeof(settings.recent[0]), "%s",
+                     "/tmp/nj-ui-stale-one.jar");
+            snprintf(settings.recent[1], sizeof(settings.recent[1]), "%s",
+                     lib->entries[cjk2].path);
+            settings.recent_count = 2;
+            key(ui, NJ_CLIENT_KEY_HOME);
+            nj_client_ui_draw(ui, s);
+            CHECK(nj_client_ui_row_rect(ui, 0, &rx0, &ry0, &rw0, &rh0) == 1 &&
+                      ry0 == 116,
+                  "one live recent still gets the header");
+            CHECK(nj_client_ui_selected(ui) == cjk2,
+                  "the live recent is the first row");
+            CHECK(nj_client_ui_row_rect(ui, 1, &rx0, &ry0, &rw0, &rh0) == 1 &&
+                      ry0 == 192,
+                  "the full list starts after the single recent row");
+
+            /* a duplicated recent path collapses to one row */
+            snprintf(settings.recent[0], sizeof(settings.recent[0]), "%s",
+                     lib->entries[alpha2].path);
+            snprintf(settings.recent[1], sizeof(settings.recent[1]), "%s",
+                     lib->entries[alpha2].path);
+            settings.recent_count = 2;
+            key(ui, NJ_CLIENT_KEY_HOME);
+            nj_client_ui_draw(ui, s);
+            CHECK(nj_client_ui_row_rect(ui, 0, &rx0, &ry0, &rw0, &rh0) == 1 &&
+                      ry0 == 116,
+                  "a duplicated recent path is listed once");
+            CHECK(nj_client_ui_row_rect(ui, 1, &rx0, &ry0, &rw0, &rh0) == 1 &&
+                      ry0 == 192,
+                  "the duplicate does not consume a second row");
+
+            /* ---- favourites: the star, F2, saving and reset ---- */
+            settings.recent_count = 0;
+            settings.favorite_count = 0;
+            key(ui, NJ_CLIENT_KEY_HOME);
+            lib_select(ui, alpha2);
+            CHECK(nj_client_ui_selected(ui) == alpha2,
+                  "the favourite target is selected");
+            CHECK(nj_client_ui_selected_favorite(ui) == 0,
+                  "a fresh row is not starred");
+            nj_client_ui_draw(ui, s);
+            CHECK(count_region_is(s, 60, 88 + alpha2 * 48, 96,
+                                  88 + alpha2 * 48 + 28, star_col) == 0,
+                  "a plain row has no star pixel");
+            key(ui, NJ_CLIENT_KEY_FAVORITE);
+            CHECK(settings.favorite_count == 1,
+                  "F2 adds the selected row to the favourites");
+            CHECK(strcmp(settings.favorites[0], lib->entries[alpha2].path) == 0,
+                  "the favourite stores the selected jar path");
+            CHECK(nj_client_ui_selected_favorite(ui) == 1,
+                  "the starred row reports itself");
+            nj_client_ui_draw(ui, s);
+            dump_ppm(env.out, "10b_favourite.ppm", s);
+            CHECK(count_region_is(s, 60, 88 + alpha2 * 48, 96,
+                                  88 + alpha2 * 48 + 28, star_col) > 0,
+                  "the star is drawn in the reserved column");
+            CHECK(nj_client_ui_row_rect(ui, alpha2, &rx0, &ry0, &rw0, &rh0) ==
+                      1,
+                  "the starred row has a row rect");
+            CHECK(count_region_is(s, 60, ry0, 96, ry0 + 28, star_col) > 0,
+                  "the star sits inside the selected row");
+            CHECK(nj_client_settings_load(&loaded, NULL) == 1 &&
+                      loaded.favorite_count == 1 &&
+                      strcmp(loaded.favorites[0], lib->entries[alpha2].path) ==
+                          0,
+                  "the favourite is saved like a settings edit");
+            key(ui, NJ_CLIENT_KEY_FAVORITE);
+            CHECK(settings.favorite_count == 0,
+                  "F2 again removes the favourite");
+            CHECK(nj_client_ui_selected_favorite(ui) == 0,
+                  "the unstarred row reports 0");
+            nj_client_ui_draw(ui, s);
+            CHECK(count_region_is(s, 60, 88 + alpha2 * 48, 96,
+                                  88 + alpha2 * 48 + 28, star_col) == 0,
+                  "the star pixel is gone after unstarring");
+            key(ui, NJ_CLIENT_KEY_FAVORITE);
+            lib_select(ui, cjk2);
+            nj_client_ui_draw(ui, s);
+            CHECK(nj_client_ui_selected_favorite(ui) == 0,
+                  "another row is not starred");
+            CHECK(count_region_is(s, 60, 88 + alpha2 * 48, 96,
+                                  88 + alpha2 * 48 + 28, star_col) > 0,
+                  "the star stays on its own row");
+            CHECK(count_region_is(s, 60, 88 + cjk2 * 48, 96,
+                                  88 + cjk2 * 48 + 28, star_col) == 0,
+                  "the selected non-favourite row has no star");
+
+            /* F2 with no selection and while the F1 sheet is open */
+            {
+                nj_library empty;
+                nj_client_ui *empty_ui;
+                int before = settings.favorite_count;
+                memset(&empty, 0, sizeof(empty));
+                empty_ui = nj_client_ui_new(&settings, &empty);
+                CHECK(empty_ui != NULL, "an empty model allocates for F2");
+                if (empty_ui) {
+                    key(empty_ui, NJ_CLIENT_KEY_FAVORITE);
+                    CHECK(settings.favorite_count == before,
+                          "F2 without a selection changes nothing");
+                    nj_client_ui_free(empty_ui);
+                }
+            }
+            key(ui, NJ_CLIENT_KEY_HELP);
+            key(ui, NJ_CLIENT_KEY_FAVORITE);
+            CHECK(settings.favorite_count == 1,
+                  "the F1 sheet swallows F2");
+            key(ui, NJ_CLIENT_KEY_HELP);
+
+            /* ---- take()/record_run: the recent recording rules ---- */
+            settings.recent_count = 0;
+            settings.favorite_count = 0;
+            lib_select(ui, alpha2);
+            key(ui, NJ_CLIENT_KEY_ENTER);
+            CHECK(take_action(ui, &action, jar, (int)sizeof(jar)) == 1 &&
+                      action == NJ_CLIENT_ACTION_RUN,
+                  "a plain ENTER still emits RUN");
+            CHECK(settings.recent_count == 1 &&
+                      strcmp(settings.recent[0],
+                             lib->entries[alpha2].path) == 0,
+                  "take() records the run jar as the newest recent");
+            nj_client_ui_draw(ui, s);
+            CHECK(nj_client_ui_row_rect(ui, 0, &rx0, &ry0, &rw0, &rh0) == 1 &&
+                      ry0 == 116,
+                  "a run immediately feeds the recent section");
+            key(ui, NJ_CLIENT_KEY_ENTER);
+            CHECK(take_action(ui, &action, jar, (int)sizeof(jar)) == 1 &&
+                      action == NJ_CLIENT_ACTION_RUN,
+                  "running the same jar again emits RUN");
+            CHECK(settings.recent_count == 1,
+                  "running the same jar does not duplicate its recent entry");
+            lib_select(ui, 1 + cjk2);
+            CHECK(nj_client_ui_selected(ui) == cjk2,
+                  "the second game is selected through the section");
+            key(ui, NJ_CLIENT_KEY_ENTER);
+            CHECK(take_action(ui, &action, jar, (int)sizeof(jar)) == 1 &&
+                      action == NJ_CLIENT_ACTION_RUN,
+                  "the second game emits RUN");
+            CHECK(settings.recent_count == 2 &&
+                      strcmp(settings.recent[0], lib->entries[cjk2].path) ==
+                          0 &&
+                      strcmp(settings.recent[1], lib->entries[alpha2].path) ==
+                          0,
+                  "a second run is prepended to the recent list");
+            lib_select(ui, 1);
+            CHECK(nj_client_ui_selected(ui) == alpha2,
+                  "the older recent row can be selected again");
+            key(ui, NJ_CLIENT_KEY_ENTER);
+            (void)take_action(ui, &action, jar, (int)sizeof(jar));
+            CHECK(settings.recent_count == 2 &&
+                      strcmp(settings.recent[0], lib->entries[alpha2].path) ==
+                          0,
+                  "re-running a recent moves it back to the front");
+            nj_client_ui_record_run(ui, "/tmp/nj-ui-outside.jar");
+            CHECK(settings.recent_count == 3 &&
+                      strcmp(settings.recent[0], "/tmp/nj-ui-outside.jar") ==
+                          0,
+                  "record_run accepts a path outside the library");
+            nj_client_ui_record_run(ui, "/tmp/nj-ui-outside.jar");
+            CHECK(settings.recent_count == 3,
+                  "record_run does not duplicate a path");
+            nj_client_ui_record_run(ui, "");
+            CHECK(settings.recent_count == 3,
+                  "record_run ignores an empty path");
+            {
+                int i;
+                char p[64];
+                settings.recent_count = 0;
+                for (i = 0; i < 12; i++) {
+                    snprintf(p, sizeof(p), "/tmp/nj-ui-recent-%d.jar", i);
+                    nj_client_ui_record_run(ui, p);
+                }
+                CHECK(settings.recent_count == NJ_CLIENT_RECENT_MAX,
+                      "the recent list is capped at ten entries");
+                CHECK(strcmp(settings.recent[0],
+                             "/tmp/nj-ui-recent-11.jar") == 0,
+                      "the newest recording leads the capped list");
+                CHECK(strcmp(settings.recent[9],
+                             "/tmp/nj-ui-recent-2.jar") == 0,
+                      "the oldest recordings fall off the end");
+                nj_client_ui_record_run(ui, "/tmp/nj-ui-recent-5.jar");
+                CHECK(settings.recent_count == NJ_CLIENT_RECENT_MAX &&
+                          strcmp(settings.recent[0],
+                                 "/tmp/nj-ui-recent-5.jar") == 0,
+                      "recording an old path moves it to the front");
+                CHECK(strcmp(settings.recent[1],
+                             "/tmp/nj-ui-recent-11.jar") == 0,
+                      "the previous front slides down one slot");
+                CHECK(nj_client_settings_load(&loaded, NULL) == 1 &&
+                          loaded.recent_count == NJ_CLIENT_RECENT_MAX &&
+                          strcmp(loaded.recent[0],
+                                 "/tmp/nj-ui-recent-5.jar") == 0,
+                      "record_run saves the recent list to disk");
+            }
+
+            /* ---- 恢复默认 keeps user state, not the settings ---- */
+            settings.recent_count = 2;
+            snprintf(settings.recent[0], sizeof(settings.recent[0]), "%s",
+                     cjk_path);
+            snprintf(settings.recent[1], sizeof(settings.recent[1]), "%s",
+                     alpha_path);
+            settings.favorite_count = 1;
+            snprintf(settings.favorites[0], sizeof(settings.favorites[0]), "%s",
+                     alpha_path);
+            nj_client_ui_char(ui, 's');
+            CHECK(nj_client_ui_mode(ui) == NJ_CLIENT_MODE_SETTINGS,
+                  "settings open for the reset check");
+            key(ui, NJ_CLIENT_KEY_END);
+            key(ui, NJ_CLIENT_KEY_ENTER);
+            CHECK(settings.favorite_count == 1 &&
+                      strcmp(settings.favorites[0], alpha_path) == 0,
+                  "恢复默认 keeps the favourites");
+            CHECK(settings.recent_count == 2 &&
+                      strcmp(settings.recent[0], cjk_path) == 0,
+                  "恢复默认 keeps the recent list");
+            key(ui, NJ_CLIENT_KEY_ESCAPE);
+            CHECK(nj_client_ui_mode(ui) == NJ_CLIENT_MODE_LIBRARY,
+                  "the reset returns to the library");
+            finish_scan(lib);           /* the reset rescanned the defaults */
+            snprintf(settings.games_dir, sizeof(settings.games_dir), "%s",
+                     env.games);
+            nj_lib_scan_begin(lib, env.games);
+            finish_scan(lib);
+            CHECK(lib->count == env.expect_count,
+                  "the fixture library is restored after the reset");
+            settings.favorite_count = 0;
+            settings.recent_count = 0;
+
+            /* ---- search hides the sections but keeps the stars ---- */
+            settings.recent_count = 2;
+            snprintf(settings.recent[0], sizeof(settings.recent[0]), "%s",
+                     lib->entries[cjk2].path);
+            snprintf(settings.recent[1], sizeof(settings.recent[1]), "%s",
+                     lib->entries[alpha2].path);
+            settings.favorite_count = 1;
+            snprintf(settings.favorites[0], sizeof(settings.favorites[0]), "%s",
+                     lib->entries[alpha2].path);
+            nj_client_ui_char(ui, 'a');
+            nj_client_ui_draw(ui, s);
+            CHECK(strcmp(nj_client_ui_filter(ui), "a") == 0,
+                  "a search text filters the library");
+            CHECK(nj_client_ui_row_rect(ui, 0, &rx0, &ry0, &rw0, &rh0) == 1 &&
+                      ry0 == 88,
+                  "the search hides the recent headers");
+            lib_select(ui, alpha2);
+            CHECK(nj_client_ui_selected(ui) == alpha2,
+                  "the starred row is selected while filtering");
+            nj_client_ui_draw(ui, s);
+            CHECK(count_region_is(s, 60, 88 + alpha2 * 48, 96,
+                                  88 + alpha2 * 48 + 28, star_col) > 0,
+                  "stars still draw in the filtered list");
+            CHECK(nj_client_ui_selected_favorite(ui) == 1,
+                  "the star getter still answers while filtering");
+            key(ui, NJ_CLIENT_KEY_ESCAPE);
+            CHECK(strcmp(nj_client_ui_filter(ui), "") == 0,
+                  "ESCAPE clears the search again");
+            nj_client_ui_draw(ui, s);
+            CHECK(nj_client_ui_row_rect(ui, 0, &rx0, &ry0, &rw0, &rh0) == 1 &&
+                      ry0 == 116,
+                  "the recent sections return after clearing the search");
+            settings.recent_count = 0;
+            settings.favorite_count = 0;
+            nj_client_ui_draw(ui, s);
+        }
+
+        /* ---- a long list with a recent section scrolls cleanly ---- */
+        {
+            static nj_lib_entry fentries[30];
+            static nj_lib_icon_entry ficons[30];
+            nj_library flib;
+            nj_client_settings fset;
+            nj_client_ui *fui;
+            int i;
+
+            memset(&flib, 0, sizeof(flib));
+            memset(fentries, 0, sizeof(fentries));
+            memset(ficons, 0, sizeof(ficons));
+            nj_client_settings_default(&fset);
+            for (i = 0; i < 30; i++) {
+                snprintf(fentries[i].path, sizeof(fentries[i].path),
+                         "/tmp/game%02d.jar", i);
+                snprintf(fentries[i].file, sizeof(fentries[i].file),
+                         "game%02d.jar", i);
+                snprintf(fentries[i].name, sizeof(fentries[i].name),
+                         "Game %02d", i);
+                fentries[i].valid = 1;
+                fentries[i].size = 1024u;
+                ficons[i].attempted = 1;
+            }
+            flib.entries = fentries;
+            flib.icons = ficons;
+            flib.count = 30;
+            flib.cap = 30;
+            flib.valid_count = 30;
+            snprintf(fset.recent[0], sizeof(fset.recent[0]),
+                     "/tmp/game05.jar");
+            snprintf(fset.recent[1], sizeof(fset.recent[1]),
+                     "/tmp/game12.jar");
+            snprintf(fset.recent[2], sizeof(fset.recent[2]),
+                     "/tmp/game29.jar");
+            fset.recent_count = 3;
+            fui = nj_client_ui_new(&fset, &flib);
+            CHECK(fui != NULL, "the 30-entry model allocates");
+            if (fui) {
+                nj_client_ui_resize(fui, TEST_W, TEST_H);
+                key(fui, NJ_CLIENT_KEY_HOME);
+                nj_client_ui_draw(fui, s);
+                dump_ppm(env.out, "10c_long_recent.ppm", s);
+                CHECK(nj_client_ui_row_rect(fui, 0, &rx0, &ry0, &rw0, &rh0) ==
+                          1 && ry0 == 116,
+                      "long list: the recent header is up");
+                CHECK(nj_client_ui_row_rect(fui, 1, &rx0, &ry0, &rw0, &rh0) ==
+                          1 && ry0 == 164,
+                      "long list: recent rows follow");
+                CHECK(nj_client_ui_row_rect(fui, 3, &rx0, &ry0, &rw0, &rh0) ==
+                          1,
+                      "long list: the full list starts after both headers");
+                CHECK(ry0 == 88 + 28 + 3 * 48 + 28,
+                      "long list: headers and recent rows add up");
+                key(fui, NJ_CLIENT_KEY_END);
+                nj_client_ui_draw(fui, s);
+                CHECK(nj_client_ui_selected(fui) == 29,
+                      "END selects the last game in the long list");
+                CHECK(nj_client_ui_row_rect(fui, 3 + 30 - 1, &rx0, &ry0,
+                                            &rw0, &rh0) == 1,
+                      "END keeps the last row fully visible");
+                {
+                    int r, prev = -1, sane = 1;
+                    for (r = 0; r < 33; r++) {
+                        int y = 0;
+                        if (!nj_client_ui_row_rect(fui, r, &rx0, &y, &rw0,
+                                                  &rh0)) {
+                            continue;
+                        }
+                        if (y < 88 || y + rh0 > 88 + 412) sane = 0;
+                        if (prev >= 0 && y < prev + 48) sane = 0;
+                        prev = y;
+                    }
+                    CHECK(sane, "visible rows stay inside the viewport");
+                }
+                key(fui, NJ_CLIENT_KEY_HOME);
+                CHECK(nj_client_ui_selected(fui) == 5,
+                      "HOME returns to the newest recent game");
+                CHECK(nj_client_ui_row_rect(fui, 0, &rx0, &ry0, &rw0, &rh0) ==
+                          1 && ry0 == 116,
+                      "HOME scrolls back to the top");
+                nj_client_ui_wheel(fui, -1000);
+                CHECK(nj_client_ui_selected(fui) == 29,
+                      "the wheel rushes to the bottom");
+                CHECK(nj_client_ui_row_rect(fui, 32, &rx0, &ry0, &rw0, &rh0) ==
+                          1,
+                      "the bottom row is visible after the wheel");
+                CHECK(nj_client_ui_row_rect(fui, 0, &rx0, &ry0, &rw0, &rh0) ==
+                          0,
+                      "the top row scrolled out");
+                nj_client_ui_wheel(fui, 1000);
+                CHECK(nj_client_ui_selected(fui) == 5,
+                      "the wheel returns to the recent section");
+                for (i = 0; i < 40; i++) key(fui, NJ_CLIENT_KEY_DOWN);
+                CHECK(nj_client_ui_selected(fui) == 29,
+                      "DOWN eventually reaches the last game");
+                CHECK(nj_client_ui_row_rect(fui, 32, &rx0, &ry0, &rw0,
+                                            &rh0) == 1,
+                      "the last game is reachable and visible");
+                fset.recent_count = 0;
+                key(fui, NJ_CLIENT_KEY_HOME);
+                nj_client_ui_draw(fui, s);
+                CHECK(nj_client_ui_row_rect(fui, 0, &rx0, &ry0, &rw0, &rh0) ==
+                          1 && ry0 == 88,
+                      "without recents the 30-row list starts flat");
+                nj_client_ui_free(fui);
+            }
+        }
     }
 
     /* -------------------------------------------------------------- */

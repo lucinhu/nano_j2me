@@ -1159,6 +1159,28 @@ int nj_lib_rescan(nj_library *lib)
     return nj_lib_scan(lib, dir);
 }
 
+/*
+ * Resolve a saved path string (client.conf remembers recent/starred jars) to
+ * the library row it names.  The comparison is a plain strcmp, matching what
+ * nj_lib_add uses to reject duplicates: a path from a settings file is the
+ * absolute path the scan stored, and a jar that moved or was deleted simply
+ * does not match anything.
+ */
+const nj_lib_entry *nj_library_find_path(const nj_library *lib, const char *path)
+{
+    int i;
+
+    if (lib == NULL || lib->entries == NULL || path == NULL || path[0] == '\0') {
+        return NULL;
+    }
+    for (i = 0; i < lib->count; i++) {
+        if (strcmp(lib->entries[i].path, path) == 0) {
+            return &lib->entries[i];
+        }
+    }
+    return NULL;
+}
+
 /* ------------------------------------------------------------------ */
 /* public: jars and icons                                             */
 /* ------------------------------------------------------------------ */

@@ -15,7 +15,9 @@
 #     afterwards (the same seam a test needs to reach the window path at all),
 #   * a client.conf written with display/heap/mute/network and map_ lines is
 #     read by a direct run too, and the run still exits cleanly,
-#   * a saved window = WxH opens the launcher at that size and survives exit.
+#   * a saved window = WxH opens the launcher at that size and survives exit,
+#   * --client <jar> records the jar as recently played in client.conf, once,
+#     which is what feeds the 最近玩过 section next time.
 #
 # The states a headless run cannot reach - a real drag-and-drop, a real click,
 # a real window resize - are covered by tests/test_port_drop.c (drop policy)
@@ -187,6 +189,27 @@ else
 fi
 grep -q "nano_j2me: exit status 0" "$WORK/game.log" \
     && ok "the game itself ended cleanly" || bad "the game's exit status was not 0"
+
+# A launch through the client is a recent game, remembered for the next window;
+# running the same jar again must move it to the front, not append it twice.
+say "the last game played:"
+RECENT_CONF="$WORK/config/nano_j2me/client.conf"
+if grep -q "^recent = $JAR$" "$RECENT_CONF"; then
+    ok "the client recorded the jar it ran"
+else
+    bad "the client did not record the jar it ran"
+fi
+"$BIN" --client "$JAR" --run-frames 4 >"$WORK/game2.log" 2>&1
+if grep -q "^recent = $JAR$" "$RECENT_CONF"; then
+    ok "the recent list survives another launch"
+else
+    bad "the recent list lost the jar on a second launch"
+fi
+if [ "$(grep -c "^recent = $JAR$" "$RECENT_CONF")" -eq 1 ]; then
+    ok "the same jar is listed once"
+else
+    bad "the same jar is listed more than once"
+fi
 
 if [ "$FAILS" -ne 0 ]; then
     printf '\n%d check(s) failed\n' "$FAILS"

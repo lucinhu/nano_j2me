@@ -334,6 +334,53 @@ static void cfg_window(const char *val, int *w, int *h)
     *h = b;
 }
 
+
+/*
+ * A path the library list may remember: absolute, and short enough for the
+ * fixed row.  A relative path would be resolved against whatever directory
+ * the client happened to start in, which is not something a settings file
+ * should encode.
+ */
+static int cfg_ok_path(const char *s)
+{
+    size_t n;
+    if (!s) return 0;
+    n = strlen(s);
+    if (n == 0 || n >= NJ_CLIENT_PATH_MAX) return 0;
+    if (s[0] == '/') return 1;
+#if defined(_WIN32)
+    if (((s[0] >= 'A' && s[0] <= 'Z') || (s[0] >= 'a' && s[0] <= 'z')) &&
+        s[1] == ':') {
+        return 1;
+    }
+#endif
+    return 0;
+}
+
+/* Already in the list?  Recent/favorite lines repeat, so a file written twice
+ * by hand must not grow duplicates. */
+static int cfg_list_has(char list[][NJ_CLIENT_PATH_MAX], int count,
+                        const char *path)
+{
+    int i;
+    for (i = 0; i < count; i++) {
+        if (strcmp(list[i], path) == 0) return 1;
+    }
+    return 0;
+}
+
+/* Append a path to a bounded list, keeping the first occurrence. */
+static int cfg_list_add(char list[][NJ_CLIENT_PATH_MAX], int *count, int max,
+                        const char *path)
+{
+    if (!cfg_ok_path(path)) return 0;
+    if (*count >= max) return 0;
+    if (cfg_list_has(list, *count, path)) return 0;
+    memcpy(list[*count], path, strlen(path) + 1);
+    (*count)++;
+    return 1;
+}
+
 int nj_client_settings_load(nj_client_settings *s, const char *path)
 {
     char file[NJ_CLIENT_PATH_MAX];
@@ -391,6 +438,12 @@ int nj_client_settings_load(nj_client_settings *s, const char *path)
             s->gamepad = cfg_bool(val, s->gamepad);
         } else if (strcmp(key, "window") == 0) {
             cfg_window(val, &s->launcher_w, &s->launcher_h);
+        } else if (strcmp(key, "recent") == 0) {
+            (void)cfg_list_add(s->recent, &s->recent_count,
+                               NJ_CLIENT_RECENT_MAX, val);
+        } else if (strcmp(key, "favorite") == 0) {
+            (void)cfg_list_add(s->favorites, &s->favorite_count,
+                               NJ_CLIENT_FAVORITE_MAX, val);
         } else if (strcmp(key, "heap_mb") == 0) {
             int v = cfg_int(val, s->heap_mb);
             if (v < 0) v = 0;
@@ -475,6 +528,25 @@ int nj_client_settings_save(const nj_client_settings *s, const char *path)
     /* Only a window the user actually resized carries a size. */
     if (s->launcher_w > 0 && s->launcher_h > 0) {
         fprintf(f, "window = %dx%d\n", s->launcher_w, s->launcher_h);
+    }
+    {
+        int i;
+        int recent = s->recent_count;
+        int favorites = s->favorite_count;
+        if (recent < 0) recent = 0;
+        if (recent > NJ_CLIENT_RECENT_MAX) recent = NJ_CLIENT_RECENT_MAX;
+        if (favorites < 0) favorites = 0;
+        if (favorites > NJ_CLIENT_FAVORITE_MAX) favorites = NJ_CLIENT_FAVORITE_MAX;
+        for (i = 0; i < recent; i++) {
+            if (s->recent[i][0] != '\0') {
+                fprintf(f, "recent = %s\n", s->recent[i]);
+            }
+        }
+        for (i = 0; i < favorites; i++) {
+            if (s->favorites[i][0] != '\0') {
+                fprintf(f, "favorite = %s\n", s->favorites[i]);
+            }
+        }
     }
     {
         int i;

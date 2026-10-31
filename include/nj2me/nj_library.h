@@ -138,6 +138,11 @@ int nj_lib_rescan(nj_library *lib);
  */
 const nj_image *nj_lib_icon(nj_library *lib, int index);
 
+/* The entry with this jar path, or NULL.  Paths are compared as strings,
+ * which is what a settings file can reproduce; the library's own entries are
+ * the absolute paths the scan produced. */
+const nj_lib_entry *nj_library_find_path(const nj_library *lib, const char *path);
+
 /* Case-insensitive "*.jar" basename test (a path works too). */
 int nj_lib_is_jar_name(const char *name);
 

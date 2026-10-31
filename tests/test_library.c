@@ -903,6 +903,120 @@ static void test_progressive_scan(void)
 #endif
 
 /* ------------------------------------------------------------------ */
+/* resolving saved paths (client.conf remembers recent/starred jars)   */
+/* ------------------------------------------------------------------ */
+
+#if !defined(_WIN32)
+static void test_find_path(void)
+{
+    nj_library *lib;
+    char *alpha;
+    char *fixtures;
+
+    area_begin("nj_library_find_path");
+
+    alpha = absolute_path(JAR_ALPHA);
+    fixtures = absolute_path("tests/fixtures");
+    if (alpha == NULL || fixtures == NULL) {
+        skip("cannot resolve the fixture paths");
+        free(alpha);
+        free(fixtures);
+        area_end("nj_library_find_path");
+        return;
+    }
+
+    lib = nj_library_new();
+    CHECK(lib != NULL, "a library object is available");
+    if (lib == NULL) {
+        free(alpha);
+        free(fixtures);
+        area_end("nj_library_find_path");
+        return;
+    }
+
+    /* An empty library, NULL arguments and the empty string all miss. */
+    CHECK(nj_library_find_path(lib, alpha) == NULL,
+          "an empty library finds no path");
+    CHECK(nj_library_find_path(NULL, alpha) == NULL,
+          "a NULL library finds no path");
+    CHECK(nj_library_find_path(lib, NULL) == NULL, "a NULL path is not found");
+    CHECK(nj_library_find_path(lib, "") == NULL, "an empty path is not found");
+
+    /* A single added jar resolves by the absolute path the probe stored. */
+    if (file_readable(JAR_ALPHA)) {
+        int index = nj_lib_add(lib, JAR_ALPHA);
+
+        CHECK(index == 0, "the fixture is added");
+        if (index >= 0) {
+            CHECK(nj_library_find_path(lib, alpha) == &lib->entries[index],
+                  "the absolute path finds the added entry");
+            CHECK(nj_library_find_path(lib, JAR_ALPHA) == NULL,
+                  "the relative spelling is a different string");
+            CHECK(nj_library_find_path(lib, "tests/fixtures/other.jar") == NULL,
+                  "an unknown path is not found");
+        }
+    } else {
+        skip(JAR_ALPHA " missing: cannot test a hit");
+    }
+
+    /* A progressive scan publishes rows one step at a time: each row is
+     * findable as soon as it appears, and the fixture resolves at the end. */
+    nj_library_clear(lib);
+    if (file_readable(JAR_ALPHA) && nj_lib_scan_begin(lib, fixtures) == 1) {
+        CHECK(lib->count == 0, "the scan starts empty");
+        while (nj_lib_scan_busy(lib)) {
+            int before = lib->count;
+            int added = nj_lib_scan_step(lib, 1);
+
+            if (lib->count > before) {
+                int last = lib->count - 1;
+
+                CHECK(added == 1, "a one-entry step appends one entry");
+                CHECK(nj_library_find_path(lib, lib->entries[last].path) ==
+                          &lib->entries[last],
+                      "an entry is findable as soon as it appears");
+            }
+        }
+        CHECK(lib->count > 0, "the fixture folder produced entries");
+        CHECK(nj_library_find_path(lib, alpha) != NULL,
+              "the fixture resolves after a scan");
+    } else {
+        skip("cannot scan tests/fixtures progressively");
+    }
+
+    /* clear() drops every row, so a remembered path no longer resolves. */
+    nj_library_clear(lib);
+    CHECK(lib->count == 0, "clear leaves no entries");
+    CHECK(nj_library_find_path(lib, alpha) == NULL,
+          "a cleared library finds nothing");
+
+    /* rescan() remembers the last directory and rebuilds the rows. */
+    if (nj_lib_rescan(lib) > 0) {
+        const nj_lib_entry *hit = nj_library_find_path(lib, alpha);
+
+        CHECK(hit != NULL, "the fixture resolves again after a rescan");
+        CHECK(hit != NULL && strcmp(hit->path, alpha) == 0,
+              "the hit is the absolute fixture path");
+    } else {
+        skip("cannot rescan tests/fixtures");
+    }
+
+    nj_library_free(lib);
+    free(alpha);
+    free(fixtures);
+
+    area_end("nj_library_find_path");
+}
+#else
+static void test_find_path(void)
+{
+    area_begin("nj_library_find_path");
+    skip("temporary directories are POSIX-only");
+    area_end("nj_library_find_path");
+}
+#endif
+
+/* ------------------------------------------------------------------ */
 /* directory listing                                                  */
 /* ------------------------------------------------------------------ */
 
@@ -1076,6 +1190,7 @@ int main(void)
     test_name_cleaning();
     test_add_and_icons();
     test_progressive_scan();
+    test_find_path();
     test_directory_listing();
     test_null_arguments();
     printf("  %d checks, %d failures\n", checks, failures);

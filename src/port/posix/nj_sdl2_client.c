@@ -216,6 +216,7 @@ static int client_key_for_sym(SDL_Keycode sym)
     case SDLK_ESCAPE:    return NJ_CLIENT_KEY_ESCAPE;
     case SDLK_BACKSPACE: return NJ_CLIENT_KEY_BACKSPACE;
     case SDLK_F1:        return NJ_CLIENT_KEY_HELP;
+    case SDLK_F2:        return NJ_CLIENT_KEY_FAVORITE;
     default:             return 0;
     }
 }
@@ -460,6 +461,40 @@ nj_size nj_client_apply_game_settings(nj_port *port,
     return (nj_size)settings->heap_mb * 1024u * 1024u;
 }
 
+
+/*
+ * The game window's title.  A task bar full of "nano_j2me" windows is not a
+ * task bar, so the title carries the jar's own display name when the manifest
+ * gives one, and the file name when it does not.  Both are UTF-8 already.
+ */
+static void client_window_title(const char *jar, char *out, int cap)
+{
+    nj_lib_entry entry;
+    const char *base;
+    const char *name = NULL;
+
+    if (out == NULL || cap <= 0) return;
+    if (jar != NULL && nj_lib_probe(jar, &entry) && entry.valid &&
+        entry.name[0] != '\0') {
+        name = entry.name;
+    } else if (jar != NULL) {
+        base = jar;
+        {
+            const char *p = jar;
+            while (*p != '\0') {
+                if (*p == '/' || *p == '\\') base = p + 1;
+                p++;
+            }
+        }
+        if (*base != '\0') name = base;
+    }
+    if (name != NULL) {
+        int n = snprintf(out, (size_t)cap, "nano_j2me - %s", name);
+        if (n > 0 && n < cap) return;
+    }
+    snprintf(out, (size_t)cap, "nano_j2me");
+}
+
 /* ---------------------------------------------------------------- */
 /* One game                                                          */
 /* ---------------------------------------------------------------- */
@@ -476,6 +511,7 @@ static nj_status client_run_game(const nj_client_run_options *options,
     nj_size heap;
     int width;
     int height;
+    char title[256];
 
     if (settings == NULL) {
         nj_client_settings_default(&fallback);
@@ -500,7 +536,8 @@ static nj_status client_run_game(const nj_client_run_options *options,
     if (options->keys_visible >= 0) {
         SDL_setenv("NJ_SDL2_KEYS", options->keys_visible ? "1" : "0", 1);
     }
-    st = nj_port_sdl2(&port, "nano_j2me");
+    client_window_title(jar, title, (int)sizeof(title));
+    st = nj_port_sdl2(&port, title);
     if (st != NJ_OK) {
         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
                      "client: cannot create the game window: %s",
@@ -603,7 +640,10 @@ nj_status nj_client_run(const nj_client_run_options *options)
 
         if (jar[0] != '\0') {
             char next[NJ_CLIENT_PATH_MAX];
-            nj_status st = client_run_game(options, jar, next, (int)sizeof(next));
+            nj_status st;
+
+            nj_client_ui_record_run(ui, jar);
+            st = client_run_game(options, jar, next, (int)sizeof(next));
 
             nj_client_ui_note_game_exit(ui, jar, (int)st);
             jar[0] = '\0';

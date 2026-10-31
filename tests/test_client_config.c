@@ -308,6 +308,106 @@ static void test_bad_files(const char *config_home)
     CHECK(s.gamepad == 0, "gamepad = 0 is read");
 }
 
+
+static int read_file(const char *path, char *out, int cap)
+{
+    FILE *f = fopen(path, "rb");
+    int n;
+    if (!f) return 0;
+    n = (int)fread(out, 1, (size_t)(cap - 1), f);
+    fclose(f);
+    if (n < 0) return 0;
+    out[n] = '\0';
+    return 1;
+}
+
+/* The library remembers what ran and what was starred; the file is the only
+ * copy, so duplicates, relative paths and over-long lists must not survive a
+ * round trip. */
+static void test_recent_and_favorites(const char *config_home)
+{
+    char path[1024];
+    char text[8192];
+    char buf[8192];
+    nj_client_settings s;
+    int n;
+
+    n = snprintf(path, sizeof(path), "%s/nano_j2me/client.conf", config_home);
+    CHECK(n > 0 && (size_t)n < sizeof(path), "the recent/favorite path fits");
+
+    /* Newest first, one duplicate, one relative path that must be dropped. */
+    write_file(path,
+               "games_dir = /tmp\n"
+               "recent = /games/c.jar\n"
+               "recent = /games/b.jar\n"
+               "recent = /games/c.jar\n"
+               "recent = relative/x.jar\n"
+               "favorite = /games/a.jar\n"
+               "favorite = /games/a.jar\n"
+               "favorite = /games/space name.jar\n");
+    memset(&s, 0, sizeof(s));
+    CHECK(nj_client_settings_load(&s, path) == 1, "the recent file is read");
+    CHECK(s.recent_count == 2, "a repeated recent path is kept once");
+    CHECK(strcmp(s.recent[0], "/games/c.jar") == 0,
+          "the first recent line is the newest");
+    CHECK(strcmp(s.recent[1], "/games/b.jar") == 0,
+          "the second recent line follows");
+    CHECK(s.favorite_count == 2, "a repeated favorite is kept once");
+    CHECK(strcmp(s.favorites[0], "/games/a.jar") == 0, "the first favorite is read");
+    CHECK(strcmp(s.favorites[1], "/games/space name.jar") == 0,
+          "a favorite with a space keeps its name");
+
+    /* More recent lines than the list holds: the newest ten are kept. */
+    {
+        int i;
+        size_t used = 0;
+        n = snprintf(text, sizeof(text), "games_dir = /tmp\n");
+        CHECK(n > 0 && (size_t)n < sizeof(text), "the cap fixture starts");
+        used = (size_t)n;
+        for (i = 0; i < NJ_CLIENT_RECENT_MAX + 2; i++) {
+            n = snprintf(text + used, sizeof(text) - used, "recent = /r%d.jar\n", i);
+            CHECK(n > 0 && used + (size_t)n < sizeof(text), "the cap fixture fits");
+            used += (size_t)n;
+        }
+    }
+    write_file(path, text);
+    memset(&s, 0, sizeof(s));
+    CHECK(nj_client_settings_load(&s, path) == 1, "the capped file is read");
+    CHECK(s.recent_count == NJ_CLIENT_RECENT_MAX,
+          "recent lines stop at the list size");
+    CHECK(strcmp(s.recent[0], "/r0.jar") == 0, "the first kept recent entry is r0");
+    CHECK(strcmp(s.recent[NJ_CLIENT_RECENT_MAX - 1], "/r9.jar") == 0,
+          "the last kept recent entry is r9");
+
+    /* Save and reload: order survives, and only non-empty lines are written. */
+    nj_client_settings_default(&s);
+    memcpy(s.recent[0], "/games/one.jar", 14);
+    memcpy(s.recent[1], "/games/two.jar", 14);
+    s.recent_count = 2;
+    memcpy(s.favorites[0], "/games/star.jar", 15);
+    s.favorite_count = 1;
+    CHECK(nj_client_settings_save(&s, path) == 1, "the settings with recent saved");
+    CHECK(read_file(path, buf, sizeof(buf)) == 1, "the saved file can be read");
+    CHECK(strstr(buf, "recent = /games/one.jar") != NULL,
+          "a recent line is written");
+    CHECK(strstr(buf, "favorite = /games/star.jar") != NULL,
+          "a favorite line is written");
+    memset(&s, 0, sizeof(s));
+    CHECK(nj_client_settings_load(&s, path) == 1, "the saved file is read back");
+    CHECK(s.recent_count == 2, "the recent list round-trips");
+    CHECK(strcmp(s.recent[0], "/games/one.jar") == 0, "recent order round-trips");
+    CHECK(s.favorite_count == 1, "the favorite list round-trips");
+    CHECK(strcmp(s.favorites[0], "/games/star.jar") == 0,
+          "the favorite entry round-trips");
+
+    /* A fresh profile writes neither line: they are state, not settings. */
+    nj_client_settings_default(&s);
+    CHECK(nj_client_settings_save(&s, path) == 1, "the defaults are saved");
+    CHECK(read_file(path, buf, sizeof(buf)) == 1, "the default file can be read");
+    CHECK(strstr(buf, "recent =") == NULL, "an empty recent list is not written");
+    CHECK(strstr(buf, "favorite =") == NULL, "an empty favorite list is not written");
+}
+
 int main(void)
 {
     char root[] = "/tmp/njclient-cfg-XXXXXX";
@@ -338,6 +438,7 @@ int main(void)
     test_paths(config_home, home);
     test_round_trip(config_home);
     test_bad_files(config_home);
+    test_recent_and_favorites(config_home);
 
     printf("  %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
