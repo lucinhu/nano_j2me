@@ -317,7 +317,8 @@ frame and are flushed in `SAVE()`.  `tools/check_no_statics.sh` passes.
 
     NJ_ENABLE_SUPERINSTR      1   fused pairs; code size only
     NJ_ENABLE_JUMP_THREADING  1   goto-chain following; code size only
-    NJ_THREADED_DISPATCH      0   replicated interpreter body; no RAM
+    NJ_THREADED_DISPATCH      1   replicated interpreter body on native GCC/
+                                  Clang builds; 0 on cross builds; no RAM
     NJ_ENABLE_ENGINE          0   pluggable engine/JIT hook; one pointer in nj_vm
 
 Verification on the frozen tree: 90/90 ctest (89 before the digest test landed),
@@ -1169,15 +1170,45 @@ conversion is one opcode at a time and after EVERY one the benchmark must still
 report exactly 112,117,067 bytecodes - a mistake shows up as a wrong count, not
 as a subtle wrong answer.
 
-`NJ_THREADED_DISPATCH` is 0 in every build since 2026-10-21; it used to be
-selected automatically on GCC/Clang, but the block that did so was nested inside
-`#ifndef NJ_PIXFMT`, so `ctest`, the corpus runner and every number in this file
-were measured on the switch while a hand build quietly ran an interpreter with a
-double-fetch bug (`docs/notes/OPEN-issue-threaded-dispatch.md`).  It is now
-explicitly opt-in, and `tools/check_threaded_dispatch.sh` compiles both bodies
-under `ctest`.  `DISPATCH()` is then just `continue`; ESP32 (xtensa and riscv),
-Cortex-M and three Android ABIs built by this project lose speed, not
-correctness.
+`NJ_THREADED_DISPATCH` stayed 0 in every CMake build from 2026-10-21 for the
+reason above; it used to be selected automatically on GCC/Clang, but the block
+that did so was nested inside `#ifndef NJ_PIXFMT`, so `ctest`, the corpus runner
+and every number in this file were measured on the switch while a hand build
+quietly ran an interpreter with a double-fetch bug
+(`docs/notes/OPEN-issue-threaded-dispatch.md`).  `tools/check_threaded_dispatch.sh`
+compiles both bodies under `ctest`.  `DISPATCH()` is then just `continue`.
+
+Since 2026-10-31 the CMake default is 1 on a native build of a compiler with
+label addresses (GCC, Clang) and 0 for a cross build or any other compiler: a
+hand build still defaults to the portable switch in `nj_config.h`, and
+`-DNJ_THREADED_DISPATCH=0` restores the old behaviour for any build.  ESP32
+(xtensa and riscv), Cortex-M and three Android ABIs built by this project keep
+the switch, losing speed, not correctness.
+
+### The default flip, measured on Minecraft world creation
+
+Three adjacent A/B pairs of the same headless replay (fresh `--rms-dir` and
+`--fs-dir`, 240x320, `--fps 30`, 1100 frames, menu clicks at frames 60/150/240,
+pinned CPU), alternating the build order on 2026-10-31:
+
+    pair   switch GEN / save / first HUD    threaded GEN / save / first HUD
+    1      13721 / 3127 / 28.67 s           12957 / 2455 / 27.35 s
+    2      13217 / 3142 / 28.11 s           12481 / 2525 / 26.40 s
+    3      13513 / 3010 / 27.94 s           12360 / 2437 / 26.15 s
+
+`GEN` and `save` are the game's own timers around terrain generation and the
+22 MB `chunks.dat` write; first HUD is the wall clock of its `HUD3D` line.
+Threaded dispatch wins generation by 6.6% (mean), the initial save by 19.8% and
+Start click to first in-world frame by 5.7% (20.1 s to 18.5 s after the click).
+The save gains more than generation because a save is one small
+interpreter-bound serialisation loop with almost no native or graphics work.
+
+The attribution behind that: with temporary per-opcode and per-native counters
+in generation and save windows, generation is 4.97 G interpreter dispatches in
+~10.7 s with only 1.26 M native calls costing 25 ms, and the save is another
+2.58 G dispatches; GC (7 collections, 121 ms) and file I/O (the same 2.4-2.5 s
+save on btrfs and on a tmpfs `/dev/shm` store) are not the cost.  This title is
+interpreter-bound end to end, so dispatch throughput is the lever.
 
 ## The measurement was still wrong in one way, and it produced a false positive
 

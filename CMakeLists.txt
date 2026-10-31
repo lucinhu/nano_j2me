@@ -109,7 +109,21 @@ set(NJ_PIXFMT       "NJ_PIXFMT_RGB565" CACHE STRING
 # switch selects the replicated (computed-goto) interpreter body, which is the
 # same 256 opcodes implemented a second time and must match the switch
 # interpreter bytecode for bytecode (tools/check_threaded_dispatch.sh).
-set(NJ_THREADED_DISPATCH 0 CACHE STRING "Use the computed-goto interpreter body (0 = portable switch)")
+#
+# DEFAULT: the replicated body on a native build of a compiler that has label
+# addresses (GCC, Clang), the portable switch everywhere else.  On the
+# fresh-world Minecraft replay the replicated body is ~6% faster in terrain
+# generation, ~20% on the 22 MB initial save and ~6% from the menu click to
+# the first in-world frame (three adjacent A/B pairs; docs/PERFORMANCE.md).
+# Cross builds - Android, ESP32, Cortex-M - keep the portable switch: they were
+# not measured here and their compilers only might honour label addresses.
+# -DNJ_THREADED_DISPATCH=0/1 still overrides the default for any build.
+if(NOT CMAKE_CROSSCOMPILING AND CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+  set(NJ_THREADED_DISPATCH_DEFAULT 1)
+else()
+  set(NJ_THREADED_DISPATCH_DEFAULT 0)
+endif()
+set(NJ_THREADED_DISPATCH ${NJ_THREADED_DISPATCH_DEFAULT} CACHE STRING "Use the computed-goto interpreter body (0 = portable switch)")
 set(NJ_ENABLE_SUPERINSTR 1 CACHE STRING "Run fused bytecode pairs in one dispatch (no RAM cost)")
 set(NJ_ENABLE_JUMP_THREADING 1 CACHE STRING "Follow goto chains without re-dispatching")
 set(NJ_ENABLE_ENGINE 0 CACHE STRING "Pluggable execution engine interface")

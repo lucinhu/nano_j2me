@@ -480,11 +480,14 @@
  * the portable switch and loses speed, not correctness - see the note in
  * nj_interp.c.
  *
- * DEFAULT OFF, and explicitly so.  Every number in docs/PERFORMANCE.md and
- * every ctest run has been measured on the switch interpreter; the threaded
- * body is a second implementation of the same 256 opcodes and needs to prove
- * itself against that baseline before it becomes the default (see
- * tools/check_threaded_dispatch.sh, which exercises it on every `ctest`).
+ * DEFAULT OFF in this header, and explicitly so: a hand build that includes
+ * nj_config.h directly (tools/check_threaded_dispatch.sh pins that) must stay
+ * on the switch interpreter.  CMake overrides the macro to 1 for a native
+ * build of a compiler with label addresses (GCC, Clang) and keeps 0 for cross
+ * builds; the fresh-world Minecraft measurements behind that default are in
+ * docs/PERFORMANCE.md.  The threaded body is a second implementation of the
+ * same 256 opcodes, and tools/check_threaded_dispatch.sh exercises it against
+ * the switch on every `ctest`.
  *
  * This block used to sit INSIDE the `#ifndef NJ_PIXFMT` guard above, so any
  * build that did not happen to define a pixel format (a hand-compile, an
