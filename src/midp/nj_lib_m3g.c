@@ -3406,6 +3406,27 @@ NJFN(m3g_addChild)
     if (!child) {
         NJ_THROW(vm, "java/lang/NullPointerException", "addChild(null)");
     }
+    /*
+     * Refuse a cycle.  Checking only "does the child already have a parent"
+     * lets addChild(this) and addChild(<ancestor>) through, because both
+     * nodes are still parentless when the call is made (this has no parent
+     * yet; the top of an ancestor chain has none either).  A cycle makes
+     * every later walk - render(World), find(), duplicate(), the light
+     * collection - recurse until the stack is gone, taking the VM with it.
+     * The specification asks for IllegalArgumentException here.
+     */
+    {
+        nj_ref p = self;
+        int depth = 0;
+
+        while (p && depth++ < 4096) {
+            if (p == child) {
+                NJ_THROW(vm, "java/lang/IllegalArgumentException",
+                         "a node cannot be its own ancestor");
+            }
+            p = nj_rget(vm, p, pf);
+        }
+    }
     if (nj_rget(vm, child, pf)) {
         NJ_THROW(vm, "java/lang/IllegalStateException",
                  "the node already has a parent");
@@ -5114,12 +5135,24 @@ static nj_status m3g_varr_set_values(nj_vm *vm, nj_ref self, nj_ref src,
     }
     if (comp < 1 || comp > 4 || first < 0 || count < 0 ||
         first > vertices || count > vertices - first ||
-        (nj_u8)count * (nj_u8)comp > src->length) {
+        (nj_u8)count * (nj_u8)comp > (nj_u8)nj_array_length(src)) {
         NJ_THROW(vm, "java/lang/IllegalArgumentException", "invalid vertex range");
+    }
+    /*
+     * The backing store holds numVertices * numComponents shorts.  Both are
+     * ints from Java, so a 32-bit product wraps: VertexArray(0x40000000, 4, 2)
+     * would ask for a zero-length array and then write past it.  Bound the
+     * element count in 64 bits first, and refuse a store this runtime cannot
+     * allocate instead of corrupting the heap.
+     */
+    if (vertices < 0 ||
+        (nj_u8)(nj_u4)vertices * (nj_u8)(nj_u4)comp > (nj_u8)0x7FFFFFFFu) {
+        return nj_throw_oom(vm);
     }
     dst = nj_rget(vm, self, field);
     if (!dst) {
-        dst = nj_short_array_new(vm, (nj_u4)vertices * (nj_u4)comp);
+        dst = nj_short_array_new(vm, (nj_u4)((nj_u8)(nj_u4)vertices *
+                                             (nj_u8)(nj_u4)comp));
         if (!dst) { return nj_throw_oom(vm); }
         nj_rput(vm, self, field, dst);
     }
@@ -7739,11 +7772,73 @@ static const nj_builtin_field tsa_fields[] = {
     { "_nj_first",   "I",  0 }
 };
 
+/*
+ * Validate a strip table before it can reach the rasteriser.  jr_strip()
+ * trusts idx[first + i] and walks exactly the length the table names, so a
+ * length that runs past the index array is a heap read overrun; a length
+ * below three is an invalid strip, and a NULL table is a NullPointerException.
+ * The specification makes all of these constructor-time exceptions, which also
+ * means the renderer can keep its fast path free of per-triangle checks.
+ *
+ * explicit_indices distinguishes the two constructors:
+ *   TriangleStripArray(int[] indices, int[] stripLengths) - the lengths must
+ *   add up to at most indices.length;
+ *   TriangleStripArray(int firstIndex, int[] stripLengths) - the indices are
+ *   implicit (firstIndex, firstIndex + 1, ...), so only the addressable int
+ *   range has to be respected; jr_vertex() already rejects vertex indices
+ *   past the vertex buffer.
+ */
+static nj_status m3g_tsa_check_lengths(nj_vm *vm, nj_ref lens, nj_s4 limit,
+                                       int explicit_indices)
+{
+    nj_s4 i, n;
+    nj_u8 total = 0;
+    const nj_s4 *p;
+
+    if (!lens) {
+        return nj_throw(vm, "java/lang/NullPointerException",
+                        "strip lengths array cannot be null.");
+    }
+    n = (nj_s4)nj_array_length(lens);
+    p = n > 0 ? (const nj_s4 *)nj_array_data(lens) : NULL;
+    for (i = 0; i < n; i++) {
+        if (!p) {
+            return nj_throw(vm, "java/lang/IllegalArgumentException",
+                            "strip lengths have no storage");
+        }
+        if (p[i] < 3) {
+            return nj_throw(vm, "java/lang/IllegalArgumentException",
+                            "a triangle strip has at least three vertices");
+        }
+        total += (nj_u8)p[i];
+    }
+    if (explicit_indices) {
+        if (total > (nj_u8)limit) {
+            return nj_throw(vm, "java/lang/IllegalArgumentException",
+                            "strip lengths run past the index array");
+        }
+    } else if ((nj_u8)limit + total > (nj_u8)0x7FFFFFFFu) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException",
+                        "the strip array's index range overflows an int");
+    }
+    return NJ_OK;
+}
+
 NJFN(m3g_tsa_init_lengths)
 {
     nj_ref self = NJ_THIS(args);
     nj_ref idx = NJ_ARG_REF(args, 0);
     nj_ref lens = NJ_ARG_REF(args, 1);
+    nj_status st;
+
+    if (!idx) {
+        return nj_throw(vm, "java/lang/NullPointerException",
+                        "index array cannot be null.");
+    }
+    st = m3g_tsa_check_lengths(vm, lens, (nj_s4)nj_array_length(idx), 1);
+    if (st != NJ_OK) {
+        return st;
+    }
 
     /*
      * TriangleStripArray(int[] indices, int[] stripLengths): the first array
@@ -7754,7 +7849,7 @@ NJFN(m3g_tsa_init_lengths)
     nj_rput(vm, self, nj_field_lookup(vm, NJ_C_IBUF, "_nj_ib_data", "[I", 0),
             idx);
     nj_iput(vm, self, nj_field_lookup(vm, NJ_C_IBUF, "_nj_ib_count", "I", 0),
-            (nj_s4)(idx ? idx->length : 0));
+            (nj_s4)idx->length);
     nj_rput(vm, self, nj_field_lookup(vm, NJ_C_TSA, "_nj_lengths", "[I", 0),
             lens);
     nj_iput(vm, self, nj_field_lookup(vm, NJ_C_TSA, "_nj_strips", "I", 0),
@@ -7766,14 +7861,24 @@ NJFN(m3g_tsa_init_lengths)
 NJFN(m3g_tsa_init_first)
 {
     nj_ref self = NJ_THIS(args);
+    nj_s4 first = NJ_ARG_INT(args, 0);
     nj_ref lens = NJ_ARG_REF(args, 1);
+    nj_status st;
 
+    if (first < 0) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException",
+                        "firstIndex cannot be negative");
+    }
+    st = m3g_tsa_check_lengths(vm, lens, first, 0);
+    if (st != NJ_OK) {
+        return st;
+    }
     nj_rput(vm, self, nj_field_lookup(vm, NJ_C_TSA, "_nj_lengths", "[I", 0),
             lens);
     nj_iput(vm, self, nj_field_lookup(vm, NJ_C_TSA, "_nj_strips", "I", 0),
             (nj_s4)(lens ? lens->length : 0));
     nj_iput(vm, self, nj_field_lookup(vm, NJ_C_TSA, "_nj_first", "I", 0),
-            NJ_ARG_INT(args, 0));
+            first);
     return NJ_OK;
 }
 
@@ -10466,24 +10571,67 @@ NJFN(m3g_varr_set_bytes)
                               NJ_ARG_INT(args, 0), NJ_ARG_INT(args, 1), 1);
 }
 M3G_I_GET(m3g_varr_getComponentType, NJ_C_VARR, "_nj_ctype")
+
+/*
+ * Shared validation for VertexArray.get().  A title hands in the first vertex
+ * and the count; the old code read from first * comp with no lower bound, so a
+ * negative firstVertex indexed before the array (a heap read underrun), and a
+ * huge count could overflow the byte count.  The specification makes a bad
+ * range or a too-small destination IllegalArgumentException/IndexOutOf-
+ * BoundsException, not a memory error.
+ */
+static nj_status m3g_varr_get_begin(nj_vm *vm, nj_ref self, nj_ref out,
+                                    nj_s4 first, nj_s4 count, nj_s4 *comp,
+                                    nj_s4 *total)
+{
+    nj_s4 vertices = nj_iget(vm, self,
+        nj_field_lookup(vm, NJ_C_VARR, "_nj_numVerts", "I", 0));
+
+    *comp = nj_iget(vm, self,
+        nj_field_lookup(vm, NJ_C_VARR, "_nj_numComp", "I", 0));
+    *total = 0;
+    if (!out) {
+        NJ_THROW(vm, "java/lang/NullPointerException", "values array is null");
+    }
+    if (*comp < 1 || *comp > 4 || vertices < 0 || first < 0 || count < 0 ||
+        first > vertices || count > vertices - first) {
+        NJ_THROW(vm, "java/lang/IllegalArgumentException",
+                 "invalid vertex range");
+    }
+    if ((nj_u8)(nj_u4)count * (nj_u8)(nj_u4)(*comp) >
+        (nj_u8)nj_array_length(out)) {
+        NJ_THROW(vm, "java/lang/IllegalArgumentException",
+                 "the values array is too small");
+    }
+    *total = count * *comp;
+    return NJ_OK;
+}
+
 NJFN(m3g_varr_get_short)
 {
     nj_ref self = NJ_THIS(args);
     nj_ref src = m3g_varr_data(vm, self);
     nj_ref out = NJ_ARG_REF(args, 2);
+    nj_s4 comp, total;
     nj_s4 first = NJ_ARG_INT(args, 0);
-    nj_s4 count = NJ_ARG_INT(args, 1);
-    nj_s4 comp = nj_iget(vm, self, m3g_fof(vm, NJ_C_VARR, "_nj_numComp", "I"));
-    nj_s4 i, total = count * (comp > 0 ? comp : 1);
+    nj_status st;
 
-    if (!src || !out) {
-        return NJ_OK;
+    st = m3g_varr_get_begin(vm, self, out, first, NJ_ARG_INT(args, 1),
+                            &comp, &total);
+    if (st != NJ_OK) {
+        return st;
     }
-    for (i = 0; i < total
-                && first * (comp > 0 ? comp : 1) + i < (nj_s4)src->length
-                && i < (nj_s4)out->length; i++) {
-        ((nj_s2 *)out->u.bytes)[i] =
-            ((const nj_s2 *)src->u.bytes)[first * (comp > 0 ? comp : 1) + i];
+    if (src && total > 0) {
+        const nj_s2 *sp = (const nj_s2 *)nj_array_data(src);
+        nj_s2 *dp = (nj_s2 *)nj_array_data(out);
+        nj_s4 base = first * comp;
+        nj_s4 i;
+
+        if (sp && dp) {
+            for (i = 0; i < total && base + i < (nj_s4)src->length; i++) {
+                dp[i] = sp[base + i];
+            }
+        }
     }
     return NJ_OK;
 }
@@ -10492,20 +10640,28 @@ NJFN(m3g_varr_get_bytes)
     nj_ref self = NJ_THIS(args);
     nj_ref src = m3g_varr_data(vm, self);
     nj_ref out = NJ_ARG_REF(args, 2);
+    nj_s4 comp, total;
     nj_s4 first = NJ_ARG_INT(args, 0);
-    nj_s4 count = NJ_ARG_INT(args, 1);
-    nj_s4 comp = nj_iget(vm, self, m3g_fof(vm, NJ_C_VARR, "_nj_numComp", "I"));
-    nj_s4 i, total = count * (comp > 0 ? comp : 1);
+    nj_status st;
 
-    if (!src || !out) {
-        return NJ_OK;
+    st = m3g_varr_get_begin(vm, self, out, first, NJ_ARG_INT(args, 1),
+                            &comp, &total);
+    if (st != NJ_OK) {
+        return st;
     }
-    for (i = 0; i < total
-                && first * (comp > 0 ? comp : 1) + i < (nj_s4)src->length
-                && i < (nj_s4)out->length; i++) {
-        nj_s2 v = ((const nj_s2 *)src->u.bytes)[first * (comp > 0 ? comp : 1) + i];
+    if (src && total > 0) {
+        const nj_s2 *sp = (const nj_s2 *)nj_array_data(src);
+        nj_u1 *dp = out->u.bytes;
+        nj_s4 base = first * comp;
+        nj_s4 i;
 
-        out->u.bytes[i] = (nj_u1)(nj_s1)(v > 127 ? 127 : (v < -128 ? -128 : v));
+        if (sp && dp) {
+            for (i = 0; i < total && base + i < (nj_s4)src->length; i++) {
+                nj_s2 v = sp[base + i];
+
+                dp[i] = (nj_u1)(nj_s1)(v > 127 ? 127 : (v < -128 ? -128 : v));
+            }
+        }
     }
     return NJ_OK;
 }
@@ -11801,6 +11957,7 @@ typedef struct {
     nj_u4 drawn;
     const nj_s4 *idx;             /* the index buffer, when the mesh has one */
     nj_s4 icount;
+    nj_s4 ilimit;                 /* how many ints idx really points at */
     const nj_s4 *lens;            /* a strip array's strip lengths */
     nj_s4 nstrip;
     nj_s4 ifirst;
@@ -12616,7 +12773,7 @@ static int jr_setup(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref ib, nj_ref app,
     nj_ref target, g, cam, arr, d, mat = 0;
     int world_cam = 0;
     const char *cn;
-    nj_s4 nverts, icount = 0, ifirst = 0;
+    nj_s4 nverts, icount = 0, ifirst = 0, ilimit = 0;
     const nj_s4 *idx = NULL, *lens = NULL;
     nj_s4 nstrip = 0;
     float view[16], proj[16], model[16];
@@ -13032,7 +13189,17 @@ static int jr_setup(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref ib, nj_ref app,
                     r.sw.tex_h = (int)nj_iget(vm, im2, m3g_fof(vm, NJ_C_IMAGE2D,
                                                                "_nj_h", "I"));
                     if (px && r.sw.tex_w > 0 && r.sw.tex_h > 0 &&
-                        (fmt == 99 || fmt == 100)) {
+                        (fmt == 99 || fmt == 100) &&
+                        /* The sampler addresses w*h texels of bpp bytes with
+                           no per-texel length check, so the pixel array must
+                           actually cover the image.  A file-loaded Image2D's
+                           fields can disagree (the constructors validate the
+                           Java path), and this is the one place that turns
+                           such an image into a pointer. */
+                        (nj_u8)nj_array_length(px) >=
+                            (nj_u8)(nj_u4)r.sw.tex_w *
+                            (nj_u8)(nj_u4)r.sw.tex_h *
+                            (nj_u8)((fmt == 100) ? 4u : 3u)) {
                         r.sw.tex = (const nj_u1 *)nj_array_data(px);
                         r.sw.tex_bpp = (fmt == 100) ? 4 : 3;
                         /* Smaller RGBA levels share the original pixels as
@@ -13114,7 +13281,10 @@ static int jr_setup(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref ib, nj_ref app,
         f = nj_field_lookup(vm, cn, "_nj_ib_data", "[I", 0);
         if (f) {
             nj_ref a = nj_rget(vm, ib, f);
-            if (a) { idx = (const nj_s4 *)nj_array_data(a); }
+            if (a) {
+                idx = (const nj_s4 *)nj_array_data(a);
+                ilimit = (nj_s4)a->length;
+            }
         }
         f = nj_field_lookup(vm, cn, "_nj_ib_count", "I", 0);
         if (f) { icount = nj_iget(vm, ib, f); }
@@ -13131,6 +13301,7 @@ static int jr_setup(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref ib, nj_ref app,
     }
     r.idx = idx;
     r.icount = icount;
+    r.ilimit = ilimit;
     r.lens = lens;
     r.nstrip = nstrip;
     r.ifirst = ifirst;
@@ -13166,11 +13337,37 @@ static nj_u4 jr_draw(m3g_jr *r)
         nj_s4 i, base = r->ifirst;
 
         for (i = 0; i < r->nstrip; i++) {
-            jr_strip(r, r->idx, r->lens[i], base);
+            nj_s4 len = r->lens[i];
+
+            /*
+             * The constructors validate strip tables now, so a well-formed
+             * one can never ask for more indices than the array has.  A file
+             * loader can still hand the renderer a malformed table, though,
+             * and a title can reach the private fields through reflection; a
+             * clamp keeps either from turning into a heap read overrun.  Only
+             * the explicit-index form needs it: the implicit form's indices
+             * are generated and jr_vertex() rejects those past the buffer.
+             */
+            if (r->idx && r->ilimit > 0) {
+                if (base < 0 || base >= r->ilimit) {
+                    break;
+                }
+                if (len > r->ilimit - base) {
+                    len = r->ilimit - base;
+                }
+            }
+            jr_strip(r, r->idx, len, base);
             base += r->lens[i];
         }
     } else if (r->idx && r->icount > 0) {
-        jr_list(r, r->idx, r->icount, r->ifirst);
+        nj_s4 count = r->icount;
+
+        /* Same defensive bound for a plain triangle list. */
+        if (r->ilimit > 0 && r->ifirst >= 0 && r->ifirst < r->ilimit &&
+            count > r->ilimit - r->ifirst) {
+            count = r->ilimit - r->ifirst;
+        }
+        jr_list(r, r->idx, count, r->ifirst);
     } else {
         /*
          * A submesh is allowed to leave its index buffer out.  What such a
@@ -13974,18 +14171,39 @@ NJFN(m3g_group_init)
 NJFN(m3g_img2d_init_pixels)
 {
     nj_ref self = NJ_THIS(args);
+    nj_s4 fmt = NJ_ARG_INT(args, 0);
+    nj_s4 w = NJ_ARG_INT(args, 1);
+    nj_s4 h = NJ_ARG_INT(args, 2);
+    nj_ref px = NJ_ARG_REF(args, 3);
 
-    if (NJ_ARG_INT(args, 0) < 96 || NJ_ARG_INT(args, 0) > 100) {
+    if (fmt < 96 || fmt > 100) {
         return nj_throw(vm, "java/lang/IllegalArgumentException", "image format");
     }
+    /*
+     * The image's dimensions and its pixel array have to agree: the texture
+     * sampler trusts w*h*bpp bytes to be present, so a short array is a heap
+     * overrun the first time the image is drawn as a texture.  Reject it at
+     * the constructor, where the specification puts the exception.  The
+     * product is taken in 64 bits so large dimensions cannot wrap into a
+     * small "required" length.
+     */
+    if (w <= 0 || h <= 0) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException", "image size");
+    }
+    if (!px) {
+        return nj_throw(vm, "java/lang/NullPointerException",
+                        "Image pixel array cannot be null.");
+    }
+    if ((nj_u8)(nj_u4)w * (nj_u8)(nj_u4)h *
+            (nj_u8)m3g_image_bpp((nj_u4)fmt) > (nj_u8)nj_array_length(px)) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException",
+                        "image byte array too small");
+    }
     nj_iput(vm, self, m3g_fof(vm, NJ_C_IMAGE2D, "_nj_fmt", "I"),
-            NJ_ARG_INT(args, 0));
-    nj_iput(vm, self, m3g_fof(vm, NJ_C_IMAGE2D, "_nj_w", "I"),
-            NJ_ARG_INT(args, 1));
-    nj_iput(vm, self, m3g_fof(vm, NJ_C_IMAGE2D, "_nj_h", "I"),
-            NJ_ARG_INT(args, 2));
-    nj_rput(vm, self, m3g_fof(vm, NJ_C_IMAGE2D, "_nj_pixels", "[B"),
-            NJ_ARG_REF(args, 3));
+            fmt);
+    nj_iput(vm, self, m3g_fof(vm, NJ_C_IMAGE2D, "_nj_w", "I"), w);
+    nj_iput(vm, self, m3g_fof(vm, NJ_C_IMAGE2D, "_nj_h", "I"), h);
+    nj_rput(vm, self, m3g_fof(vm, NJ_C_IMAGE2D, "_nj_pixels", "[B"), px);
     m3g_image_dirty(vm, self);
     return NJ_OK;
 }

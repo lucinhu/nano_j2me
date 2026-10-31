@@ -23,6 +23,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <errno.h>
+#include <sys/wait.h>
+#include <unistd.h>
 
 static int checks;
 static int failures;
@@ -966,7 +969,8 @@ static void test_image2d_set(nj_vm *vm)
         if (pal) {
             memset(nj_array_data(pal), 0, 16u);
         }
-        i_bytes = i2d_new_bytes(vm, 100, 2, 2, small8, &ok);
+        i_bytes = i2d_new_bytes(vm, 100, 2, 2,
+                                 nj_byte_array_new(vm, 16u), &ok);
         i_pal = i2d_new_paletted(vm, 98, 2, 2, small8, pal, &ok);
         i_obj = i2d_new_obj(vm, 100, small8, &ok);
         i_b2 = i2d_new_bytes2(vm, 99, 2, small8, &ok);
@@ -4252,6 +4256,383 @@ static void test_two_sided_lighting(nj_vm *vm)
           "enabling two-sided lighting is what changed the pixels");
 }
 
+/* ------------------------------------------------------------------ */
+/* Bounds validation and scene-graph cycles                           */
+/*
+ * Five API paths are exercised here because each one used to hand the
+ * implementation a value it then trusted:
+ *
+ *   VertexArray.get(firstVertex...) indexed from firstVertex * componentCount
+ *   with no lower bound, so a negative firstVertex read before the array;
+ *   VertexArray.set() multiplied the vertex count by the component count in
+ *   32 bits, so an oversized constructor wrapped the allocation down to zero
+ *   and the copy ran past it;
+ *   TriangleStripArray kept whatever strip lengths it was given, and the
+ *   rasteriser walked idx[first + i] for the whole length, reading past the
+ *   Java int[];
+ *   Image2D(format, w, h, byte[] pixels) kept a pixel array of any length and
+ *   the texture sampler addressed w*h texels of it;
+ *   Group.addChild only refused a node that already had a parent, so
+ *   addChild(this) or addChild(ancestor) built a cycle and every later walk
+ *   (render, find, duplicate) recursed until the stack was gone.
+ *
+ * The crash-prone probe for each one runs in a forked child.  A sanitizer
+ * abort in the child then shows up as one failed check instead of a dead
+ * test binary, and the remaining probes still run - which is what lets the
+ * fixed build prove all five in one pass.
+ */
+static int m3g_probe_ok(int (*probe)(nj_vm *), nj_vm *vm)
+{
+    pid_t pid;
+    int status = 0;
+
+    fflush(NULL);
+    pid = fork();
+    if (pid == 0) {
+        _exit(probe(vm) ? 0 : 1);
+    }
+    if (pid < 0) {
+        return 0;
+    }
+    while (waitpid(pid, &status, 0) < 0) {
+        if (errno != EINTR) {
+            return 0;
+        }
+    }
+    return WIFEXITED(status) && WEXITSTATUS(status) == 0;
+}
+
+static nj_ref m3g_new_varr(nj_vm *vm, int nverts, int comp)
+{
+    nj_ref va = nj_object_new(vm, CLS("VertexArray"));
+    nj_value a[3];
+
+    if (!va) {
+        return 0;
+    }
+    a[0].i = nverts; a[1].i = comp; a[2].i = 2;
+    if (nj_call_special(vm, va, CLS("VertexArray"), "<init>", "(III)V",
+                        a, NULL) != NJ_OK) {
+        return 0;
+    }
+    return va;
+}
+
+/* A negative firstVertex used to index src[-2] (component count 3, so -3). */
+static int probe_varr_get_negative(nj_vm *vm)
+{
+    nj_ref va = m3g_new_varr(vm, 2, 3);
+    nj_ref data = nj_array_new(vm, "S", 6u);
+    nj_ref out = nj_array_new(vm, "S", 6u);
+    nj_value a[3];
+    nj_status st;
+
+    if (!va || !data || !out) {
+        return 0;
+    }
+    a[0].i = 0; a[1].i = 2; a[2].r = data;
+    if (nj_call(vm, va, CLS("VertexArray"), "set", "(II[S)V", a, NULL) != NJ_OK) {
+        return 0;
+    }
+    a[0].i = -1; a[1].i = 1; a[2].r = out;
+    st = nj_call(vm, va, CLS("VertexArray"), "get", "(II[S)V", a, NULL);
+    return st != NJ_OK;
+}
+
+/* 0x3FFFFFFF * 4 wraps to a negative int; the store ran before the array. */
+static int probe_varr_set_overflow(nj_vm *vm)
+{
+    nj_ref va = m3g_new_varr(vm, 0x40000000, 4);
+    nj_ref src = nj_array_new(vm, "S", 4u);
+    nj_value a[3];
+    nj_status st;
+
+    if (!va || !src) {
+        return 0;
+    }
+    a[0].i = 0x3FFFFFFF; a[1].i = 1; a[2].r = src;
+    st = nj_call(vm, va, CLS("VertexArray"), "set", "(II[S)V", a, NULL);
+    return st != NJ_OK;
+}
+
+/* Render one image as a texture through the standard canvas. */
+static int probe_tex_render(nj_vm *vm, nj_ref img)
+{
+    i2d_canvas canvas;
+    nj_ref mat = make(vm, CLS("Material"));
+    nj_value ma[2];
+
+    if (!img || !mat || !i2d_canvas_init(vm, &canvas)) {
+        return 0;
+    }
+    ma[0].i = 2048;                    /* Material.DIFFUSE */
+    ma[1].i = (nj_s4)0xFFFFFFFFu;
+    if (nj_call(vm, mat, CLS("Material"), "setColor", "(II)V", ma, NULL) != NJ_OK) {
+        return 0;
+    }
+    return i2d_canvas_render_tex(vm, &canvas, img, mat, 240) ? 1 : 0;
+}
+
+/* A 4x4 RGBA image backed by three pixel bytes.  The Java constructor now
+ * refuses this; build it through the fields, exactly as the loader can, so
+ * the renderer's own length clamp is what the probe tests. */
+static int probe_image_short_render(nj_vm *vm)
+{
+    nj_ref img = nj_object_new(vm, CLS("Image2D"));
+    nj_ref px = nj_byte_array_new(vm, 3u);
+
+    if (!img || !px) {
+        return 0;
+    }
+    nj_iput(vm, img, nj_field_lookup(vm, CLS("Image2D"), "_nj_fmt", "I", 0), 100);
+    nj_iput(vm, img, nj_field_lookup(vm, CLS("Image2D"), "_nj_w", "I", 0), 4);
+    nj_iput(vm, img, nj_field_lookup(vm, CLS("Image2D"), "_nj_h", "I", 0), 4);
+    nj_rput(vm, img, nj_field_lookup(vm, CLS("Image2D"), "_nj_pixels", "[B", 0), px);
+    return probe_tex_render(vm, img);
+}
+
+/* A strip table no constructor would accept, written straight into the
+ * fields the way the file loader does.  Drawing it must clamp to the
+ * three-element index array instead of walking 100 entries. */
+static int probe_strip_overlong_render(nj_vm *vm)
+{
+    nj_ref tsa = nj_object_new(vm, CLS("TriangleStripArray"));
+    nj_ref idx = nj_array_new(vm, "I", 3u);
+    nj_ref lens = nj_array_new(vm, "I", 1u);
+    i2d_canvas canvas;
+    nj_value r[5];
+
+    if (!tsa || !idx || !lens || !i2d_canvas_init(vm, &canvas)) {
+        return 0;
+    }
+    ((nj_s4 *)nj_array_data(idx))[0] = 0;
+    ((nj_s4 *)nj_array_data(idx))[1] = 1;
+    ((nj_s4 *)nj_array_data(idx))[2] = 2;
+    ((nj_s4 *)nj_array_data(lens))[0] = 100;
+    nj_rput(vm, tsa, nj_field_lookup(vm, CLS("IndexBuffer"), "_nj_ib_data",
+                                     "[I", 0), idx);
+    nj_iput(vm, tsa, nj_field_lookup(vm, CLS("IndexBuffer"), "_nj_ib_count",
+                                     "I", 0), 3);
+    nj_rput(vm, tsa, nj_field_lookup(vm, CLS("TriangleStripArray"),
+                                     "_nj_lengths", "[I", 0), lens);
+    nj_iput(vm, tsa, nj_field_lookup(vm, CLS("TriangleStripArray"),
+                                     "_nj_strips", "I", 0), 1);
+    nj_iput(vm, tsa, nj_field_lookup(vm, CLS("TriangleStripArray"),
+                                     "_nj_first", "I", 0), 0);
+    r[0].r = canvas.vb; r[1].r = tsa; r[2].r = canvas.app;
+    r[3].r = 0; r[4].i = 0;
+    return nj_call(vm, canvas.g3d, CLS("Graphics3D"), "render",
+                   "(L" CLS("VertexBuffer") ";L" CLS("IndexBuffer") ";L"
+                   CLS("Appearance") ";L" CLS("Transform") ";I)V",
+                   r, NULL) == NJ_OK;
+}
+
+/* A Group that is its own child.  Before the cycle check this made
+ * render(Node) recurse forever; after it the addChild is refused and the
+ * render below just draws an empty group. */
+static int probe_cycle_render(nj_vm *vm)
+{
+    nj_ref g = make(vm, CLS("Group"));
+    i2d_canvas canvas;
+    nj_value a[2];
+
+    if (!g || !i2d_canvas_init(vm, &canvas)) {
+        return 0;
+    }
+    a[0].r = g;
+    (void)nj_call(vm, g, CLS("Group"), "addChild", "(L" CLS("Node") ";)V",
+                  a, NULL);
+    nj_clear_exception(vm);
+    a[0].r = g; a[1].r = 0;
+    return nj_call(vm, canvas.g3d, CLS("Graphics3D"), "render",
+                   "(L" CLS("Node") ";L" CLS("Transform") ";)V",
+                   a, NULL) == NJ_OK;
+}
+
+static void test_m3g_bounds_and_cycles(nj_vm *vm)
+{
+    printf("== API bounds: VertexArray, TriangleStripArray, Image2D, cycles ==\n");
+
+    /* ---- VertexArray.get: a range must be inside the array ---- */
+    {
+        nj_ref va = m3g_new_varr(vm, 2, 3);
+        nj_ref data = nj_array_new(vm, "S", 6u);
+        nj_ref out = nj_array_new(vm, "S", 6u);
+        nj_ref tiny = nj_array_new(vm, "S", 2u);
+        nj_value a[3];
+        nj_status st;
+
+        check(va && data && out && tiny,
+              "a VertexArray, its storage and two destinations exist");
+        if (va && data && out && tiny) {
+            a[0].i = 0; a[1].i = 2; a[2].r = data;
+            check(nj_call(vm, va, CLS("VertexArray"), "set", "(II[S)V",
+                           a, NULL) == NJ_OK,
+                  "two three-component vertices are uploaded");
+            check(m3g_probe_ok(probe_varr_get_negative, vm),
+                  "get(-1, ...) is refused, not read from below the array");
+            nj_clear_exception(vm);
+            a[0].i = 2; a[1].i = 2; a[2].r = out;
+            st = nj_call(vm, va, CLS("VertexArray"), "get", "(II[S)V",
+                         a, NULL);
+            check(st != NJ_OK, "get() past the last vertex is refused");
+            nj_clear_exception(vm);
+            a[0].i = 0; a[1].i = 2; a[2].r = tiny;
+            st = nj_call(vm, va, CLS("VertexArray"), "get", "(II[S)V",
+                         a, NULL);
+            check(st != NJ_OK,
+                  "get() into a destination that is too short is refused");
+            nj_clear_exception(vm);
+            a[0].i = 0; a[1].i = 2; a[2].r = out;
+            st = nj_call(vm, va, CLS("VertexArray"), "get", "(II[S)V",
+                         a, NULL);
+            check(st == NJ_OK, "a valid get() still succeeds");
+            nj_clear_exception(vm);
+        }
+    }
+
+    /* ---- VertexArray.set: the storage size must not wrap in 32 bits ---- */
+    {
+        nj_ref va = m3g_new_varr(vm, 0x40000000, 4);
+        nj_ref src = nj_array_new(vm, "S", 4u);
+
+        check(va && src, "a VertexArray with an overflowing vertex count exists");
+        if (va && src) {
+            check(m3g_probe_ok(probe_varr_set_overflow, vm),
+                  "set() refuses a range whose backing store cannot be sized");
+            nj_clear_exception(vm);
+        }
+    }
+
+    /* ---- TriangleStripArray: lengths must fit the index array ---- */
+    {
+        nj_ref idx = nj_array_new(vm, "I", 3u);
+        nj_ref lens = nj_array_new(vm, "I", 1u);
+        nj_ref tsa = nj_object_new(vm, CLS("TriangleStripArray"));
+        nj_value a[2];
+        nj_status st;
+
+        check(idx && lens && tsa, "a strip array and its two arrays exist");
+        if (idx && lens && tsa) {
+            nj_s4 *ip = (nj_s4 *)nj_array_data(idx);
+            nj_s4 *lp = (nj_s4 *)nj_array_data(lens);
+
+            ip[0] = 0; ip[1] = 1; ip[2] = 2;
+            lp[0] = 100;
+            a[0].r = idx; a[1].r = lens;
+            st = nj_call_special(vm, tsa, CLS("TriangleStripArray"), "<init>",
+                                 "([I[I)V", a, NULL);
+            check(st != NJ_OK, "a strip length past the index array is refused");
+            nj_clear_exception(vm);
+            check(m3g_probe_ok(probe_strip_overlong_render, vm),
+                  "a corrupt strip table that reaches the renderer is clamped");
+            nj_clear_exception(vm);
+            lp[0] = 2;
+            st = nj_call_special(vm, tsa, CLS("TriangleStripArray"), "<init>",
+                                 "([I[I)V", a, NULL);
+            check(st != NJ_OK, "a strip shorter than three vertices is refused");
+            nj_clear_exception(vm);
+            lp[0] = 3;
+            a[1].r = 0;
+            st = nj_call_special(vm, tsa, CLS("TriangleStripArray"), "<init>",
+                                 "([I[I)V", a, NULL);
+            check(st != NJ_OK, "a null strip-length array is refused");
+            nj_clear_exception(vm);
+            a[0].r = 0; a[1].r = lens;
+            st = nj_call_special(vm, tsa, CLS("TriangleStripArray"), "<init>",
+                                 "([I[I)V", a, NULL);
+            check(st != NJ_OK, "a null index array is refused");
+            nj_clear_exception(vm);
+            a[0].r = idx; a[1].r = lens;
+            st = nj_call_special(vm, tsa, CLS("TriangleStripArray"), "<init>",
+                                 "([I[I)V", a, NULL);
+            check(st == NJ_OK, "a strip table that fits still constructs");
+            nj_clear_exception(vm);
+        }
+    }
+
+    /* ---- Image2D(byte[]): dimensions and storage must agree ---- */
+    {
+        nj_ref shortpx = nj_byte_array_new(vm, 3u);
+        nj_ref rgbpx = nj_byte_array_new(vm, 48u);
+        nj_ref rgba64 = nj_byte_array_new(vm, 64u);
+
+        check(shortpx && rgbpx && rgba64, "the pixel arrays exist");
+        if (!shortpx || !rgbpx || !rgba64) {
+            return;
+        }
+        memset(nj_array_data(rgbpx), 0, 48u);
+        memset(nj_array_data(rgba64), 0xFF, 64u);
+        check(i2d_new_bytes_saw(vm, 100, 4, 4, shortpx,
+                               "IllegalArgumentException"),
+              "Image2D(RGBA, 4, 4, byte[3]) is refused, not rendered");
+        nj_clear_exception(vm);
+        check(i2d_new_bytes_saw(vm, 100, 4, 0, rgbpx,
+                               "IllegalArgumentException"),
+              "Image2D(..., 4, 0, ...) is refused");
+        nj_clear_exception(vm);
+        check(i2d_new_bytes_saw(vm, 100, -2, 4, rgbpx,
+                               "IllegalArgumentException"),
+              "Image2D(..., -2, 4, ...) is refused");
+        nj_clear_exception(vm);
+        check(i2d_new_bytes_saw(vm, 100, 4, 4, 0, "NullPointerException"),
+              "a null pixel array is a NullPointerException");
+        nj_clear_exception(vm);
+        check(i2d_new_bytes_saw(vm, 100, 4, 4, rgbpx,
+                               "IllegalArgumentException"),
+              "an RGB-sized array cannot stand in for RGBA storage");
+        nj_clear_exception(vm);
+        {
+            nj_ref img = 0;
+            int ok = 0;
+
+            img = i2d_new_bytes(vm, 100, 4, 4, rgba64, &ok);
+            check(ok && img != 0, "a 4x4 RGBA image with 64 bytes constructs");
+            nj_clear_exception(vm);
+        }
+        check(m3g_probe_ok(probe_image_short_render, vm),
+              "a texture whose pixel array is short is not sampled past it");
+        nj_clear_exception(vm);
+    }
+
+    /* ---- Group.addChild: no self-edge and no ancestor edge ---- */
+    {
+        nj_ref g = make(vm, CLS("Group"));
+        nj_ref child = make(vm, CLS("Group"));
+        nj_value a[2], r;
+        nj_status st;
+
+        check(g && child, "two Groups exist");
+        if (g && child) {
+            a[0].r = g;
+            st = nj_call(vm, g, CLS("Group"), "addChild",
+                         "(L" CLS("Node") ";)V", a, NULL);
+            check(st != NJ_OK, "addChild(this) is refused");
+            nj_clear_exception(vm);
+            r.i = -1;
+            call(vm, g, CLS("Group"), "getChildCount", "()I", NULL, &r);
+            check(r.i == 0, "the refused self-edge left no child behind");
+
+            a[0].r = child;
+            st = nj_call(vm, g, CLS("Group"), "addChild",
+                         "(L" CLS("Node") ";)V", a, NULL);
+            check(st == NJ_OK, "a parentless child is still adopted");
+            nj_clear_exception(vm);
+            a[0].r = g;
+            st = nj_call(vm, child, CLS("Group"), "addChild",
+                         "(L" CLS("Node") ";)V", a, NULL);
+            check(st != NJ_OK, "addChild(its own ancestor) is refused");
+            nj_clear_exception(vm);
+            r.i = -1;
+            call(vm, child, CLS("Group"), "getChildCount", "()I", NULL, &r);
+            check(r.i == 0, "the refused ancestor edge created no cycle");
+            check(m3g_probe_ok(probe_cycle_render, vm),
+                  "a self-edge cannot make the scene-graph walk recurse forever");
+            nj_clear_exception(vm);
+        }
+    }
+}
+
 int main(void)
 {
     nj_port port;
@@ -6975,6 +7356,7 @@ int main(void)
        nodes; Doom 3's level (173 meshes) lost everything past the 64th. */
     test_world_mesh_count(vm);
     test_two_sided_lighting(vm);
+    test_m3g_bounds_and_cycles(vm);
 
     /* The file format calls type 18 Sprite; the titles call the class
        Sprite3D.  Both have to be loadable.  These run before the VM is
