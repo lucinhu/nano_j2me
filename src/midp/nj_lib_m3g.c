@@ -12755,32 +12755,56 @@ static void jr_list(m3g_jr *r, const nj_s4 *idx, nj_s4 count, nj_s4 first)
 }
 
 /*
- * Everything the software pipeline needs, gathered from the Graphics3D (the
- * target, the viewport, the camera and the lights), the VertexBuffer, the
- * index buffer, the Appearance and the model matrix.  The World path and the
- * immediate render(VertexBuffer, IndexBuffer, Appearance, Transform, int)
- * path differ only in where those come from, so both build this same state
- * and then hand the triangles to jr_draw().
+ * The frame half of a draw: target, viewport, surface, depth buffer, camera,
+ * view and projection, and the light set.  A render(World) pass draws every
+ * mesh of the scene through the same Graphics3D, so all of this is resolved
+ * once per pass (jr_frame_resolve) instead of once per mesh (jr_setup).
  *
- * A 1 means the state is complete and the caller may draw.  A 0 means the
- * scene cannot be drawn at all - no target, no camera, no positions - which
- * the JSR answers with a render that draws nothing rather than an exception.
+ * The cache is a local of the World draw loop (m3g_world_draw), never a file
+ * static: every piece of mutable state belongs to the VM or to one call, which
+ * is what tools/check_no_statics.sh enforces.  It cannot go stale because it
+ * lives no longer than one m3g_world_draw() call, and no Java code runs inside
+ * one, so nothing can change the Graphics3D underneath it.
  */
-static int jr_setup(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref ib, nj_ref app,
-                    nj_ref world, const nj_ref *slights, const float *slmats,
-                    nj_s4 snlights, const float *model_in, m3g_jr *out)
+typedef struct m3g_frame {
+    nj_vm *vm;
+    nj_ref self, world;
+    nj_ref g;
+    int vb;                       /* mesh draw: an Image target gets Graphics */
+    int vx, vy, vw, vh;
+    m3g_sw sw;
+    nj_surface scratch;
+    float view[16], proj[16], pv[16];
+    nj_ref lights, lmats;
+    nj_s4 nlights;
+    const nj_ref *slights;
+    const float *slmats;
+    nj_s4 snlights;
+    nj_u4 lmode[NJ_M3G_LIGHTS];
+    nj_u4 lcol[NJ_M3G_LIGHTS];
+    float lint[NJ_M3G_LIGHTS];
+    float latt[NJ_M3G_LIGHTS][3];
+    float lspot_angle[NJ_M3G_LIGHTS];
+    float lspot_exp[NJ_M3G_LIGHTS];
+    int valid;                    /* 1 once the fields above are for the key */
+} m3g_frame;
+
+static int jr_frame_resolve(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref world,
+                            const nj_ref *slights, const float *slmats,
+                            nj_s4 snlights, m3g_frame *f)
 {
-    nj_ref target, g, cam, arr, d, mat = 0;
+    nj_ref target, g, cam, arr;
     int world_cam = 0;
     const char *cn;
-    nj_s4 nverts, icount = 0, ifirst = 0, ilimit = 0;
-    const nj_s4 *idx = NULL, *lens = NULL;
-    nj_s4 nstrip = 0;
-    float view[16], proj[16], model[16];
-    float id[16];
-    m3g_jr r;
+    float view[16], proj[16];
 
-    memset(&r, 0, sizeof(r));
+    f->valid = 0;
+    /* The light override belongs to the pass, not to the draw: set it before
+       anything reads it, so a previous pass's pointer can never be walked. */
+    f->slights = slights;
+    f->slmats = slmats;
+    f->snlights = snlights;
+
     target = nj_rget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_target",
                                        "Ljava/lang/Object;"));
     if (!target || !nj_heap_owns(vm, target)) {
@@ -12804,12 +12828,12 @@ static int jr_setup(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref ib, nj_ref app,
         } /* Sprites draw to the native surface without a Java Graphics. */
     }
 
-    r.vm = vm;
-    r.vx = (int)nj_iget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_vx", "I"));
-    r.vy = (int)nj_iget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_vy", "I"));
-    r.vw = (int)nj_iget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_vw", "I"));
-    r.vh = (int)nj_iget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_vh", "I"));
-    if (r.vw <= 0 || r.vh <= 0) {
+    f->vm = vm;
+    f->vx = (int)nj_iget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_vx", "I"));
+    f->vy = (int)nj_iget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_vy", "I"));
+    f->vw = (int)nj_iget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_vw", "I"));
+    f->vh = (int)nj_iget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_vh", "I"));
+    if (f->vw <= 0 || f->vh <= 0) {
         int tw = 0, th = 0;           /* no setViewport: the whole target */
         if (!vb && cn && strcmp(cn, "javax/microedition/lcdui/Image") == 0) {
             nj_surface scratch;
@@ -12820,38 +12844,34 @@ static int jr_setup(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref ib, nj_ref app,
             return 0;
         }
         if (tw <= 0 || th <= 0) { return 0; }
-        r.vx = r.vy = 0;
-        r.vw = tw;
-        r.vh = th;
+        f->vx = f->vy = 0;
+        f->vw = tw;
+        f->vh = th;
     }
 
     /* The surface the pixels go into.  nj_midp_surface() answers the whole
        image, or the screen for a null target; the Java call stays the
        fallback for a target this cannot reach. */
-    memset(&r.sw, 0, sizeof(r.sw));
+    memset(&f->sw, 0, sizeof(f->sw));
     {
         int x0, y0, x1, y1;
-        nj_surface *s = m3g_target_surface(vm, target, &r.scratch);
-        nj_s8 vx = (nj_s8)r.vx + nj_iget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_btx", "I"));
-        nj_s8 vy = (nj_s8)r.vy + nj_iget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_bty", "I"));
+        nj_surface *s = m3g_target_surface(vm, target, &f->scratch);
+        nj_s8 vx = (nj_s8)f->vx + nj_iget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_btx", "I"));
+        nj_s8 vy = (nj_s8)f->vy + nj_iget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_bty", "I"));
         if (vx < (-2147483647 - 1) || vx > 2147483647 ||
             vy < (-2147483647 - 1) || vy > 2147483647) return 0;
-        r.vx = (int)vx; r.vy = (int)vy;
+        f->vx = (int)vx; f->vy = (int)vy;
         if (s) {
             /* An empty visible rectangle is a no-op, never a Java fallback. */
             if (!m3g_target_bounds(vm, self, s, &x0, &y0, &x1, &y1)) return 0;
-            r.sw.surf = s;
-            r.sw.vx = x0; r.sw.vy = y0;
-            r.sw.vw = x1 - x0; r.sw.vh = y1 - y0;
-            if (!sw_depth(vm, self, &r.sw)) return 0;
+            f->sw.surf = s;
+            f->sw.vx = x0; f->sw.vy = y0;
+            f->sw.vw = x1 - x0; f->sw.vh = y1 - y0;
+            if (!sw_depth(vm, self, &f->sw)) return 0;
         }
     }
-
     memset(view, 0, sizeof(view));
-    memset(model, 0, sizeof(model));
     view[0] = view[5] = view[10] = view[15] = 1.0f;
-    model[0] = model[5] = model[10] = model[15] = 1.0f;
-    id[0] = id[5] = id[10] = id[15] = 1.0f;
     cam = nj_rget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_camera",
                                     "L" NJ_C_CAMERA ";"));
     if (world && nj_ref_class_name(world) &&
@@ -12912,17 +12932,174 @@ static int jr_setup(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref ib, nj_ref app,
     if (!cam_proj_fill(vm, cam, proj)) {
         return 0;                            /* a camera this runtime cannot use */
     }
+    /* All three matrices are Java ones, so they multiply with mat_mul() (the
+       row-major product) and not with m3g_mat_mul(), whose convention is the
+       file loader's: clip = P * V * M * v, and mv = V * M for the lights.
+       P * V belongs to the frame; each draw completes the product with its
+       own model matrix, which is why the cache stops there. */
+    memcpy(f->proj, proj, sizeof(f->proj));
+    memcpy(f->view, view, sizeof(f->view));
+    mat_mul(proj, view, f->pv);
+    f->lights = nj_rget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_lights",
+                                         "[L" NJ_C_LIGHT ";"));
+    f->lmats = nj_rget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_lmats", "[F"));
+    f->nlights = nj_iget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_nlights", "I"));
+    if (f->nlights < 0) { f->nlights = 0; }
+    if (f->lights && f->nlights > (nj_s4)f->lights->length) {
+        f->nlights = (nj_s4)f->lights->length;
+    }
+    if (!f->lights) { f->nlights = 0; }
+    /*
+     * render(World) is lit by the Light nodes that belong to that World, not
+     * by whatever addLight() left on the Graphics3D and not by the lights of
+     * the World drawn before it.  The walk in m3g_render_scene() hands that
+     * set down here; the immediate-mode paths pass no override.
+     */
+    if (slights) {
+        f->slights = slights;
+        f->slmats = slmats;
+        f->nlights = snlights;
+    }
+    /*
+     * Read each light out of its Java object here, once, instead of inside
+     * jr_lit(): that function runs per vertex per light, and the field lookups
+     * and field reads dominated a profile of Doom 3.  Nothing between this
+     * point and the last triangle can change a Light, because no Java code runs
+     * while a native render does.
+     */
+    if (f->nlights > (nj_s4)NJ_M3G_LIGHTS) { f->nlights = (nj_s4)NJ_M3G_LIGHTS; }
+    {
+        nj_field *fm = nj_field_lookup(vm, NJ_C_LIGHT, "_nj_mode", "I", 0);
+        nj_field *fi = nj_field_lookup(vm, NJ_C_LIGHT, "_nj_intensity", "F", 0);
+        nj_field *fc = nj_field_lookup(vm, NJ_C_LIGHT, "_nj_color", "I", 0);
+        nj_field *fa = nj_field_lookup(vm, NJ_C_LIGHT, "_nj_atten", "[F", 0);
+        nj_field *fsa = nj_field_lookup(vm, NJ_C_LIGHT, "_nj_spotAngle", "F", 0);
+        nj_field *fse = nj_field_lookup(vm, NJ_C_LIGHT, "_nj_spotExp", "F", 0);
+        nj_s4 i;
+
+        for (i = 0; i < f->nlights; i++) {
+            nj_ref lt = f->slights ? f->slights[i]
+                                  : nj_array_get_ref(f->lights, (nj_u4)i);
+
+            f->lmode[i] = 0u;
+            f->lcol[i] = 0xFFFFFFFFu;
+            f->lint[i] = 1.0f;
+            f->latt[i][0] = 1.0f; f->latt[i][1] = 0.0f; f->latt[i][2] = 0.0f;
+            f->lspot_angle[i] = 45.0f;
+            f->lspot_exp[i] = 0.0f;
+            if (!lt || !fm || !fi || !fc) { continue; }
+            f->lmode[i] = (nj_u4)nj_iget(vm, lt, fm);
+            f->lcol[i] = (nj_u4)nj_iget(vm, lt, fc);
+            f->lint[i] = bits2f(nj_iget(vm, lt, fi));
+            if (fa) {
+                nj_ref a = nj_rget(vm, lt, fa);
+
+                if (a && nj_array_length(a) >= 3) {
+                    const float *pp = (const float *)nj_array_data(a);
+
+                    f->latt[i][0] = pp[0];
+                    f->latt[i][1] = pp[1];
+                    f->latt[i][2] = pp[2];
+                }
+            }
+            if (!(f->latt[i][0] > 0.0f) && f->latt[i][1] == 0.0f &&
+                f->latt[i][2] == 0.0f) {
+                f->latt[i][0] = 1.0f;      /* the JSR default attenuation */
+            }
+            if (fsa) { f->lspot_angle[i] = bits2f(nj_iget(vm, lt, fsa)); }
+            if (fse) { f->lspot_exp[i] = bits2f(nj_iget(vm, lt, fse)); }
+        }
+    }
+    f->self = self;
+    f->world = world;
+    f->vb = (vb != 0);
+    f->g = g;
+    f->valid = 1;
+    return 1;
+}
+
+/*
+ * Everything the software pipeline needs, gathered from the Graphics3D (the
+ * target, the viewport, the camera and the lights), the VertexBuffer, the
+ * index buffer, the Appearance and the model matrix.  The World path and the
+ * immediate render(VertexBuffer, IndexBuffer, Appearance, Transform, int)
+ * path differ only in where those come from, so both build this same state
+ * and then hand the triangles to jr_draw().  The Graphics3D half - target,
+ * frame, matrices and lights - comes from the per-pass cache above, so only
+ * the mesh half is read here.
+ *
+ * A 1 means the state is complete and the caller may draw.  A 0 means the
+ * scene cannot be drawn at all - no target, no camera, no positions - which
+ * the JSR answers with a render that draws nothing rather than an exception.
+ */
+static int jr_setup(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref ib, nj_ref app,
+                    nj_ref world, const nj_ref *slights, const float *slmats,
+                    nj_s4 snlights, const float *model_in, m3g_frame *fc,
+                    m3g_jr *out)
+{
+    nj_ref d, arr, mat = 0;
+    const char *cn;
+    nj_s4 nverts, icount = 0, ifirst = 0, ilimit = 0;
+    const nj_s4 *idx = NULL, *lens = NULL;
+    nj_s4 nstrip = 0;
+    float model[16];
+    m3g_frame local, *f;
+    m3g_jr r;
+    nj_s4 i;
+
+    memset(&r, 0, sizeof(r));
+    /*
+     * Everything that belongs to the Graphics3D rather than to this mesh is
+     * resolved once per render pass and copied here.  The two matrices that
+     * depend on the draw (clip = P * V * M, mv = V * M) are still completed
+     * with this mesh's model matrix, in the same order and with the same
+     * mat_mul() the uncached code used, so the result is bit-for-bit what it
+     * always was.
+     */
+    if (!fc) {
+        local.valid = 0;
+        fc = &local;
+    }
+    if (!fc->valid || fc->self != self || fc->world != world ||
+        fc->vb != (vb != 0) || fc->slights != slights ||
+        fc->slmats != slmats || fc->snlights != snlights) {
+        if (!jr_frame_resolve(vm, self, vb, world, slights, slmats, snlights,
+                              fc)) {
+            return 0;
+        }
+    }
+    f = fc;
+    r.vm = f->vm;
+    r.vx = f->vx; r.vy = f->vy; r.vw = f->vw; r.vh = f->vh;
+    r.sw = f->sw;
+    if (f->sw.surf == &f->scratch) {
+        r.scratch = f->scratch;
+        r.sw.surf = &r.scratch;
+    }
+    memcpy(r.proj, f->proj, sizeof(r.proj));
+    memcpy(r.view, f->view, sizeof(r.view));
+    memset(model, 0, sizeof(model));
+    model[0] = model[5] = model[10] = model[15] = 1.0f;
     if (model_in) {
         memcpy(model, model_in, sizeof(float) * 16u);
     }
-    /* All three matrices are Java ones, so they multiply with mat_mul() (the
-       row-major product) and not with m3g_mat_mul(), whose convention is the
-       file loader's: clip = P * V * M * v, and mv = V * M for the lights. */
-    memcpy(r.proj, proj, sizeof(r.proj));
-    mat_mul(proj, view, r.mvp);
-    mat_mul(r.mvp, model, r.mvp);
-    memcpy(r.view, view, sizeof(r.view));
-    mat_mul(view, model, r.mv);
+    mat_mul(f->pv, model, r.mvp);
+    mat_mul(f->view, model, r.mv);
+    r.lights = f->lights;
+    r.lmats = f->lmats;
+    r.nlights = f->nlights;
+    r.slights = f->slights;
+    r.slmats = f->slmats;
+    for (i = 0; i < f->nlights; i++) {
+        r.lmode[i] = f->lmode[i];
+        r.lcol[i] = f->lcol[i];
+        r.lint[i] = f->lint[i];
+        r.latt[i][0] = f->latt[i][0];
+        r.latt[i][1] = f->latt[i][1];
+        r.latt[i][2] = f->latt[i][2];
+        r.lspot_angle[i] = f->lspot_angle[i];
+        r.lspot_exp[i] = f->lspot_exp[i];
+    }
 
     /* The vertex buffer's positions.  setPositions(vb, scale, bias) stores the
        scalar in _nj_bias and the per-component bias in _nj_scale. */
@@ -13010,76 +13187,6 @@ static int jr_setup(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref ib, nj_ref app,
             }
         }
     } /* Mesh vertex and material state; sprites supply their own vertices. */
-    r.lights = nj_rget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_lights",
-                                         "[L" NJ_C_LIGHT ";"));
-    r.lmats = nj_rget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_lmats", "[F"));
-    r.nlights = nj_iget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_nlights", "I"));
-    if (r.nlights < 0) { r.nlights = 0; }
-    if (r.lights && r.nlights > (nj_s4)r.lights->length) {
-        r.nlights = (nj_s4)r.lights->length;
-    }
-    if (!r.lights) { r.nlights = 0; }
-    /*
-     * render(World) is lit by the Light nodes that belong to that World, not
-     * by whatever addLight() left on the Graphics3D and not by the lights of
-     * the World drawn before it.  The walk in m3g_render_scene() hands that
-     * set down here; the immediate-mode paths pass no override.
-     */
-    if (slights) {
-        r.slights = slights;
-        r.slmats = slmats;
-        r.nlights = snlights;
-    }
-    /*
-     * Read each light out of its Java object here, once, instead of inside
-     * jr_lit(): that function runs per vertex per light, and the field lookups
-     * and field reads dominated a profile of Doom 3.  Nothing between this
-     * point and the last triangle can change a Light, because no Java code runs
-     * while a native render does.
-     */
-    if (r.nlights > (nj_s4)NJ_M3G_LIGHTS) { r.nlights = (nj_s4)NJ_M3G_LIGHTS; }
-    {
-        nj_field *fm = nj_field_lookup(vm, NJ_C_LIGHT, "_nj_mode", "I", 0);
-        nj_field *fi = nj_field_lookup(vm, NJ_C_LIGHT, "_nj_intensity", "F", 0);
-        nj_field *fc = nj_field_lookup(vm, NJ_C_LIGHT, "_nj_color", "I", 0);
-        nj_field *fa = nj_field_lookup(vm, NJ_C_LIGHT, "_nj_atten", "[F", 0);
-        nj_field *fsa = nj_field_lookup(vm, NJ_C_LIGHT, "_nj_spotAngle", "F", 0);
-        nj_field *fse = nj_field_lookup(vm, NJ_C_LIGHT, "_nj_spotExp", "F", 0);
-        nj_s4 i;
-
-        for (i = 0; i < r.nlights; i++) {
-            nj_ref lt = r.slights ? r.slights[i]
-                                  : nj_array_get_ref(r.lights, (nj_u4)i);
-
-            r.lmode[i] = 0u;
-            r.lcol[i] = 0xFFFFFFFFu;
-            r.lint[i] = 1.0f;
-            r.latt[i][0] = 1.0f; r.latt[i][1] = 0.0f; r.latt[i][2] = 0.0f;
-            r.lspot_angle[i] = 45.0f;
-            r.lspot_exp[i] = 0.0f;
-            if (!lt || !fm || !fi || !fc) { continue; }
-            r.lmode[i] = (nj_u4)nj_iget(vm, lt, fm);
-            r.lcol[i] = (nj_u4)nj_iget(vm, lt, fc);
-            r.lint[i] = bits2f(nj_iget(vm, lt, fi));
-            if (fa) {
-                nj_ref a = nj_rget(vm, lt, fa);
-
-                if (a && nj_array_length(a) >= 3) {
-                    const float *pp = (const float *)nj_array_data(a);
-
-                    r.latt[i][0] = pp[0];
-                    r.latt[i][1] = pp[1];
-                    r.latt[i][2] = pp[2];
-                }
-            }
-            if (!(r.latt[i][0] > 0.0f) && r.latt[i][1] == 0.0f &&
-                r.latt[i][2] == 0.0f) {
-                r.latt[i][0] = 1.0f;      /* the JSR default attenuation */
-            }
-            if (fsa) { r.lspot_angle[i] = bits2f(nj_iget(vm, lt, fsa)); }
-            if (fse) { r.lspot_exp[i] = bits2f(nj_iget(vm, lt, fse)); }
-        }
-    }
     /*
      * Lighting uses the Material, normals and collected lights. Without
      * normals or lights this renderer keeps the surface's unlit colours.
@@ -13307,7 +13414,7 @@ static int jr_setup(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref ib, nj_ref app,
     r.ifirst = ifirst;
 
     r.jt.vm = vm;
-    r.jt.g = g;
+    r.jt.g = f->g;
     r.jt.ox = r.vx;
     r.jt.oy = r.vy;
     r.drawn = 0u;
@@ -13402,7 +13509,7 @@ static nj_u4 m3g_render_jr(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref ib,
             memcpy(model, nj_array_data(d), sizeof(float) * 16u);
         }
     }
-    if (!jr_setup(vm, self, vb, ib, app, 0, NULL, NULL, 0, model, &r)) {
+    if (!jr_setup(vm, self, vb, ib, app, 0, NULL, NULL, 0, model, NULL, &r)) {
         return 0u;
     }
     return jr_draw(&r);
@@ -13483,7 +13590,7 @@ static void collect_lights_walk(nj_vm *vm, nj_ref o, nj_ref *out, float *mats,
 /* Sprite geometry is made on the C stack.  NULL vb selects only the common
  * camera, surface, compositing and fog state, never mesh appearance textures. */
 static nj_u4 jr_sprite(nj_vm *vm, nj_ref self, nj_ref sprite, nj_ref world,
-                        const float *model)
+                        const float *model, m3g_frame *fc)
 {
     nj_ref image = nj_rget(vm, sprite, m3g_fof(vm, NJ_C_SPRITE3D, "_nj_img",
                                               "L" NJ_C_IMAGE2D ";"));
@@ -13521,7 +13628,7 @@ static nj_u4 jr_sprite(nj_vm *vm, nj_ref self, nj_ref sprite, nj_ref world,
     if (right > iw) { right = iw; }
     if (bottom > ih) { bottom = ih; }
     if (right <= left || bottom <= top) { return 0u; }
-    if (!jr_setup(vm, self, 0, 0, app, world, NULL, NULL, 0, model, &r) ||
+    if (!jr_setup(vm, self, 0, 0, app, world, NULL, NULL, 0, model, fc, &r) ||
         !r.sw.surf) {
         return 0u;
     }
@@ -13878,6 +13985,9 @@ static nj_u4 m3g_world_draw(nj_vm *vm, nj_ref self, nj_ref root,
                             nj_s4 snlights)
 {
     nj_u4 i, drawn = 0u;
+    m3g_frame frame;                /* the Graphics3D half, per pass */
+
+    frame.valid = 0;
 
     for (i = 0u; i < n; i++) {
         nj_ref vb, ib = 0, app = 0, subs;
@@ -13885,7 +13995,8 @@ static nj_u4 m3g_world_draw(nj_vm *vm, nj_ref self, nj_ref root,
 
         const char *cn = nj_ref_class_name(meshes[i]);
         if (cn && (strcmp(cn, NJ_C_SPRITE3D) == 0 || strcmp(cn, NJ_C_M3G_SPRITE) == 0)) {
-            drawn += jr_sprite(vm, self, meshes[i], root, mats + (nj_size)i * 16u);
+            drawn += jr_sprite(vm, self, meshes[i], root,
+                               mats + (nj_size)i * 16u, &frame);
             continue;
         }
         vb = nj_rget(vm, meshes[i], nj_field_lookup(vm, NJ_C_MESH, "_nj_vb",
@@ -13928,7 +14039,7 @@ static nj_u4 m3g_world_draw(nj_vm *vm, nj_ref self, nj_ref root,
                 }
                 if (!app || !ib) continue;
                 if (jr_setup(vm, self, vb, ib, app, root, slights, slmats,
-                             snlights, mats + (nj_size)i * 16u, &r)) {
+                             snlights, mats + (nj_size)i * 16u, &frame, &r)) {
                     if (posed) {
                         r.posed_pos = posed;
                         r.posed_nrm = posed_nrm;
