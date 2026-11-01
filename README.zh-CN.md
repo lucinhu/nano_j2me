@@ -57,7 +57,7 @@
 
 融合倒数不是逐位精确的，`tests/test_m3g.c` 的包裹测试证明了这点：在
 `WRAP_REPEAT` 的贴图边界上，一个 ulp 的差别会取到隔壁那一格，所以 repeat 包裹
-的纹理保留除法（Minecraft 的云是 repeat，地形是 clamp）。`test_m3g` 848 项检查
+的纹理保留除法（Minecraft 的云是 repeat，地形是 clamp）。`test_m3g` 865 项检查
 0 失败，完整 ctest 140/140，语料门禁 `fatal 0 / 400, known 4`，同一快照的截帧
 只在云带（标题按墙钟时间做动画）有差异。详见
 `docs/notes/2026-10-31-raster-fast-paths.md`。
@@ -78,7 +78,7 @@
 ASan SEGV 与 UBSan 有符号溢出）；`TriangleStripArray` 构造函数接受超出索引
 数组的 strip 长度；`Image2D(fmt,w,h,byte[])` 接受过短甚至空的像素数组；
 `Group.addChild` 接受自环/祖先边，会让渲染遍历递归到栈溢出。`test_m3g` 现在
-ASan 与 UBSan 下 848 项检查 0 失败，同一存档世界的截帧在云带之外没有变化。
+ASan 与 UBSan 下 865 项检查 0 失败，同一存档世界的截帧在云带之外没有变化。
 
 **解释器把世界生成最耗时的循环折叠成一条指令，M3G 渲染器每个 pass 只解析一次
 帧状态。** 世界生成 >99% 的时间花在解释器派发上，而它的字节码组合里此前完全
@@ -105,6 +105,37 @@ Graphics3D 那一半每个 pass 只解析一次并存进调用栈局部变量，
 `isOpen()` 被撤掉：内置类的方法数是存档 ABI 哈希的一部分，加上它会让所有已有
 的 `world.state` 拒绝恢复，这一点已写进提交说明。详见
 `docs/notes/2026-11-01-jsr75-file-connection.md`。
+
+**挖方块不再穿过解释器重扫场景图，同时补上三个 M3G 索引缺陷。** Minecraft PE
+在方块被破坏时重建区块网格，每加一个重建好的部分都会走
+`Group.addChild()` 的重复检查——`java.util.Vector.indexOf(child)` 对每个元素
+都经解释器派发 `Object.equals`，每元素约 167 ns；而子节点向量里有 678–695 个
+场景图节点，每帧 13 次扫描约 1.5 ms。现在扫描先解析一次接收者的 `equals`，
+当它就是 `java.lang.Object.equals` 时直接比较引用；覆写了 `equals` 的类仍走
+原路径，而且这个捷径是精确的——`Object.equals(o, e)` 就是 `o == e`。挖掘爆发
+中负责渲染的那一帧从 5.75 ms 降到 3.49 ms（-39%），启动后 p99 从 6.10 ms
+降到 3.77 ms（-38%）；另外两帧仍是游戏自己的 Java 网格重建，没有变化。本轮
+加入的种子化 fuzz 驱动又发现三个 M3G 缺陷：`setLight(INT_MAX)` 的
+`(index+1)*16` 在 32 位下溢出（UBSan，随后 OOME），现在超出 16 盏灯的表就抛
+`IndexOutOfBoundsException`；`Mesh.setAppearance()` 会把子网格向量撑到调用者
+给的索引（单子网格网格上 `setAppearance(1)` 会悄悄造出第二个子网格），现在
+超出子网格数量就被拒绝；`getLight()` 原先会从数组余量或 `resetLights()` 之后
+的陈旧槽位取回答，现在以活动灯光数为界。`test_m3g` 在 ASan 与 UBSan 下
+865 项检查 0 失败，确定性驱动已提交在 `tests/fuzzdemo/`。详见
+`docs/notes/2026-11-02-dig-burst-runtime.md` 与
+`docs/notes/2026-11-02-m3g-fuzz.md`。
+
+**三个测量说“不要改”，还有一个说“手机上不要改”。** 用 `-O2`、`-O3`、
+`-O2 -flto` 构建的 Android APK 分别比发布的 `-Os` 库大 18%、25%、58%，在
+API-21 x86_64 镜像上做确定性世界回读，CPU 分别是 +2.1%、+0.6%（在噪声内）、
++1.0%，所以 Android 默认仍是 `-Os`。性能分析里的 `m3g_tsa_getStripLengths`
+热点其实是 gprof 假象——这个函数在 in-world 路径上根本不会被调用——剩余
+per-draw setup 只有 1.1%；两个逐位精确的候选改写（strip 指针环、直线化顶点
+路径）测出来更慢或持平，因此只保留了分析笔记
+（`docs/notes/2026-11-02-per-draw-residuals.md`）。还有载入路径——22 MB 世界
+的 read+prepare 共 3.08 G 次解释器派发——两个新的逐位精确折叠在桌面 gcc
+`-O3` 下快 10%，但在 APK 实际使用的 clang `-Os` 下反而慢 1.5%，所以没有
+合并；表格在 `docs/PERFORMANCE.md`。
 
 ## 0.5.3 的新内容（上一版）
 

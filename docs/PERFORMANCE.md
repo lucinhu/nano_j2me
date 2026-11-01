@@ -3382,3 +3382,101 @@ Together, fresh-world creation on the phone goes another ~8% down and in-world
 CPU-side M3G frame work ~2.4%; the desktop creation path picks up ~8%.  For
 the whole Android creation phase the replicated interpreter (previous section)
 remains the dominant win.
+
+## Round 4: a dig-burst fix, and four changes that measured no (2026-11-02)
+
+Three of this round's measurements ended without a source change, which is a
+result worth writing down: the experiment that kills a plausible idea is as
+useful as the one that ships.
+
+### The dig burst: a duplicate scan through the interpreter
+
+Minecraft PE's block break is a three-frame burst: two frames of the game's own
+Java chunk-mesh rebuild (7.6 ms and 7.5 ms against a 1.6 ms steady frame) and
+one frame that renders the rebuilt chunk.  The runtime-side cost sat in the
+third frame.  For each rebuilt part, `Group.addChild()`'s duplicate check calls
+`java.util.Vector.indexOf(child)`, whose scan compares elements with
+`o.equals(e)` through `nj_call()`: resolve the class by name string, look up the
+bridge, initialise the class, enter the interpreter - about 167 ns per
+comparison.  The group's child vector held 678-695 M3G nodes, so one scan was
+~114 us and thirteen scans per frame were ~1.5 ms of a 5.7 ms frame.  The other
+two frames are the title's own Java (`LevelRenderer.makePart`/`combine`), and no
+emulator-side duplication was found in them.
+
+`obj_equals_is_identity()` now resolves the receiver's dynamic `equals` once per
+scan; when it resolves to `java.lang.Object.equals` (native, no bytecode) the
+scan compares references, which is exact - `Object.equals(o, e)` is `o == e`.
+Classes that override `equals`, in Java or as another native, keep the old
+per-element path, and no cross-VM cache is kept because class pointers can be
+recycled after `nj_vm_destroy()`.
+
+| dig replay from a saved world, 240x320, `--fps 0`, 700 frames, 5 interleaved rounds/side | before | after |
+| --- | --- | --- |
+| burst frame 1 (Java mesh rebuild) | 7.64 ms | 7.55 ms (-1%) |
+| burst frame 2 (Java mesh rebuild) | 7.56 ms | 7.52 ms (-0.5%) |
+| burst frame 3 (render rebuilt chunk) | 5.75 ms | 3.49 ms (**-39%**) |
+| whole three-frame burst | 20.9 ms | 18.6 ms (-11%) |
+| post-startup p99 | 6.10 ms | 3.77 ms (-38%) |
+| post-startup max | ~8.0 ms | ~7.9 ms |
+| steady frame p50 | 1.556 ms | 1.583 ms (noise) |
+| run user CPU (700 frames) | 1,356 ms | 1,349 ms (-0.5%) |
+
+Bursts are scheduled from the wall clock, so the frame indexes differ between
+runs; the comparison is over burst windows, with an idle run as the visual gate
+(idle-world dumps bit-identical except the animated cloud band).  The fix is
+`src/midp/nj_lib_util.c` (+37/-4) and lands as `0be1951`; the full method is in
+`docs/notes/2026-11-02-dig-burst-runtime.md`.
+
+### Android optimisation levels, second pass: `-O2`, `-O3`, `-O2 -flto`
+
+The 2026-10-30 section concluded that the optimisation level is not a lever for
+`-O2`/`-O3`; this round added `-O2 -flto` and a deterministic world reload
+(same saved world pulled off the emulator, identical app data across installs):
+
+| build | APK size | library size vs `-Os` | deterministic reload CPU |
+| --- | --- | --- | --- |
+| `-Os` (shipped) | 915,609 B | 1,998,296 B | 7,910 ms |
+| `-O2` | +16.1% | +18.0% | 8,075 ms (+2.1%) |
+| `-O3` | +21.5% | +24.6% | 7,955 ms (+0.6%, inside noise) |
+| `-O2 -flto` | +42.1% | +58.5% | 7,990 ms (+1.0%) |
+
+LTO links fine with `-fuse-ld=lld` but buys nothing here.  Fresh-creation
+A/Bs stayed unusable because an unseeded world's size varies so much that
+per-1000-block normalisation does not track the generation phase; the
+deterministic reload is the measurement that could see the builds, and it says
+`-Os` stays.
+
+### The load path: a desktop-only win, not merged
+
+The 22 MB Minecraft world's `LOAD` phase (`read` + `prepare`) is 1.7569 G +
+1.3249 G = 3.08 G interpreter dispatches of pure Java
+(`Storage.readChunks`/`le`, `Pal.importChunk`); I/O and natives are minor.
+The largest uncovered pairs were `aload*; iload*; <array load>`
+(`aload_2->iload` 79.8 M, `aload->iload` 53.8 M), `iarith; ireturn`
+(`ior->ireturn` 33.4 M), `istore; aload` 43.2 M and `iastore; iinc` 33.4 M in
+read, `istore; iload` 63.1 M and `aload; iload` 35.0 M in prepare.  Two
+bit-exact fusions were implemented (reusing `NJ_ARRAY_LOAD_BODY` and
+`do_fused_ireturn`, digest 27/27 identical to the JVM): desktop gcc `-O3` load
+sum 6,850 -> 6,160 ms (**-10.1%**, read -11.0%, prepare -9.1%); desktop clang
+`-Os` -1.6%; on the target - x86_64 `-Os` APKs on the API-21 emulator, 7
+interleaved runs per variant on the deterministic world - **+1.46%** (read
+-0.3%, prepare +3.2%), app CPU +0.7%.  The peeks do not pay for themselves in
+the clang `-Os` interpreter body, so the change is not merged.  The
+`DataOutputStream` save path was not profiled in detail and remains untouched.
+
+### Per-draw residuals: one artifact and two rejected rewrites
+
+`m3g_tsa_getStripLengths` looked like a 61 M-calls-per-1,200-frames hotspot.
+Counters show the function is not called in-world at all (one call under
+`test_m3g`, zero across 1,200 Minecraft frames; the gprof arcs under `_init`
+are a `-pg` artifact).  The corrected profile of a saved world (`-O3`,
+`-DNDEBUG`, `-pg`, `-fno-pie`): `jr_emit`/`sw_tri` 47.1%, `nj_interp_run`
+14.1%, `jr_fetch` 11.5%, `nj_vm_load` 8.8% (snapshot load only), `jr_project`
+3.5%, `jr_strip` 3.1%, `jr_setup` now 1.1% (112,226 calls after the per-pass
+split).  The scene graph is 79.2 draws/frame, all explicit-index strips,
+4,514 `jr_strip` calls and 9,028 triangles per frame, with 18,057 `jr_fetch`
+calls/frame - 2.0 fetches per triangle, the minimum.  Two bit-exact candidates
+were implemented and rejected: a strip pointer ring that removes four 52-byte
+`memcpy`s per strip measured **1.3-1.6% slower** in 8 of 8 ABBA rounds, and a
+straight-line `pcomp==3` vertex path measured -0.33% (noise).  Only the profile
+note is kept (`docs/notes/2026-11-02-per-draw-residuals.md`, commit `cbec729`).

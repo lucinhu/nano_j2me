@@ -64,7 +64,7 @@ user CPU for 1200 in-world frames - 2.760/2.766/2.773 s down to
 The fused reciprocal is not bit-identical, and `tests/test_m3g.c`'s wrap test
 proved it matters: on a `WRAP_REPEAT` tile boundary one ulp picks the other tile,
 so repeat textures keep their divisions (Minecraft's clouds repeat, its terrain
-clamps). `test_m3g` is 848 checks / 0 failures, full ctest 140/140, corpus gate
+clamps). `test_m3g` is 865 checks / 0 failures, full ctest 140/140, corpus gate
 `fatal 0 / 400, known 4`, and frame dumps of the same snapshot differ only in
 the cloud band the title animates from the wall clock. See
 `docs/notes/2026-10-31-raster-fast-paths.md`.
@@ -89,7 +89,7 @@ out-of-bounds store - a real ASan SEGV and UBSan signed overflow);
 `TriangleStripArray` constructors accepted strip lengths past the index array;
 `Image2D(fmt,w,h,byte[])` accepted short or NULL pixel storage; and
 `Group.addChild` accepted self/ancestor edges, making render walks recurse
-until the stack died.  `test_m3g` is now 848 checks / 0 failures under ASan and
+until the stack died.  `test_m3g` is now 865 checks / 0 failures under ASan and
 UBSan, and the PPM frame dumps of the same saved world are unchanged outside
 the wall-clock cloud band.
 
@@ -125,6 +125,45 @@ against the old behaviour to **132 checks / 0 failures**, full ctest is
 is part of the saved-state ABI hash, and adding it made every existing
 `world.state` refuse to resume, which is now documented in the commit.  See
 `docs/notes/2026-11-01-jsr75-file-connection.md`.
+
+**A dig no longer re-scans the scene graph through the interpreter, and three
+more M3G index bugs are closed.**  Minecraft PE rebuilds chunk meshes the
+moment a block breaks, and adding each rebuilt part runs `Group.addChild()`'s
+duplicate check - `java.util.Vector.indexOf(child)` comparing every element
+through the interpreter's `Object.equals` dispatch at about 167 ns per element,
+over a child vector that held 678-695 scene-graph nodes, 13 scans per frame
+(~1.5 ms).  The scan now resolves the receiver's `equals` once and, when it is
+`java.lang.Object.equals`, compares references directly; classes that override
+`equals` keep the old path, and the shortcut is exact because
+`Object.equals(o, e)` is `o == e`.  The render frame of a dig burst drops
+5.75 ms -> 3.49 ms (-39%) and post-startup p99 6.10 ms -> 3.77 ms (-38%); the
+two Java mesh-rebuild frames are unchanged because they are the game's own
+work.  The round's seeded fuzz driver found three more M3G bugs:
+`setLight(INT_MAX)` overflowed `(index+1)*16` in 32 bits (UBSan, then OOME) and
+now throws `IndexOutOfBoundsException` past the 16-light table;
+`Mesh.setAppearance()` grew its submesh vector to the caller's index (so
+`setAppearance(1)` on a one-submesh mesh silently created a second one) and now
+rejects indexes outside the submesh count; and `getLight()` could answer from
+the array's slack or from stale slots after `resetLights()`, and is now bounded
+by the live light count.  `test_m3g` is 865 checks / 0 failures under ASan and
+UBSan, and the deterministic driver is committed under `tests/fuzzdemo/`.  See
+`docs/notes/2026-11-02-dig-burst-runtime.md` and
+`docs/notes/2026-11-02-m3g-fuzz.md`.
+
+**Three measurements said "do not change this", and one said "not on the
+phone".**  Android APKs built `-O2`, `-O3` and `-O2 -flto` are 18%, 25% and
+58% larger than the shipped `-Os` library, and a deterministic world reload on
+an API-21 x86_64 image measures +2.1%, +0.6% (inside noise) and +1.0% CPU, so
+`-Os` stays the Android default.  The profile's `m3g_tsa_getStripLengths`
+hotspot turned out to be a gprof artifact - the function is not called in-world
+- and the remaining per-draw setup is 1.1%; two bit-exact candidate rewrites
+(a strip pointer ring and a straight-line vertex path) measured slower or
+neutral, so only the profile note is kept
+(`docs/notes/2026-11-02-per-draw-residuals.md`).  And the load path - 3.08 G
+interpreter dispatches for read+prepare on a 22 MB world - gains 10% from two
+new bit-exact fusions with gcc `-O3` on the desktop but loses 1.5% with clang
+`-Os`, the codegen family the APK actually uses, so it is not merged;
+`docs/PERFORMANCE.md` has the tables.
 
 ## What was new in 0.5.3
 
