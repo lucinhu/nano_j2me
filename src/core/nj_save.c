@@ -387,6 +387,45 @@ static nj_u4 class_abi_hash(nj_u4 h, nj_class *c)
     return h;
 }
 
+/* Recompute the ABI hash a LEGACY shape of the class would have produced.
+ *
+ * A class whose superclass was corrected after the snapshot was taken grew by
+ * `grow` instance bytes; every instance field then sits `grow` bytes further
+ * in, and the header records the old instance_size.  Only a class with zero
+ * saved instances may use this (enforced while rebasing the arena), so the
+ * old offsets are never dereferenced - the point is just to prove that the
+ * class is otherwise the same declaration.  Static fields keep their slots.
+ */
+static nj_u4 class_abi_hash_legacy(nj_u4 h, nj_class *c, nj_u2 grow)
+{
+    nj_u2 i;
+
+    h = hash_str(h, c->name);
+    h = hash_u32(h, (nj_u4)c->instance_size - (nj_u4)grow);
+    h = hash_u32(h, c->field_count);
+    h = hash_u32(h, c->method_count);
+    h = hash_u32(h, c->is_array);
+    for (i = 0u; i < c->field_count; i++) {
+        nj_field *fd = &c->fields[i];
+        nj_u4 offset = (nj_u4)fd->offset;
+        if ((fd->flags & NJ_ACC_STATIC) == 0u && offset >= (nj_u4)grow) {
+            offset -= (nj_u4)grow;
+        }
+        h = hash_str(h, fd->name);
+        h = hash_str(h, fd->desc);
+        h = hash_u32(h, ((nj_u4)fd->flags << 16) | offset);
+        h = hash_u32(h, ((nj_u4)fd->ptype << 8) | fd->width);
+    }
+    for (i = 0u; i < c->method_count; i++) {
+        nj_method *m = &c->methods[i];
+        h = hash_str(h, m->name);
+        h = hash_str(h, m->desc);
+        h = hash_u32(h, ((nj_u4)m->max_locals << 16) | m->max_stack);
+        h = hash_u32(h, ((nj_u4)m->arg_slots << 8) | m->ret_ptype);
+    }
+    return h;
+}
+
 /* ------------------------------------------------------------------ */
 /* Small helpers                                                       */
 /* ------------------------------------------------------------------ */
@@ -1526,6 +1565,7 @@ int nj_vm_load(nj_vm *vm, FILE *f)
     nj_u2 *cstate = NULL;      /* saved class state per class              */
     nj_u2 *cinfo = NULL;       /* saved inst/fields/methods/is_array       */
     nj_u2 *order = NULL;       /* class indices sorted by statics_base     */
+    nj_u2 *legacy_grow = NULL; /* instance_size growth accepted per class  */
     nj_u1 *block = NULL;
     nj_u1 *old_base = NULL;
     nj_u1 old_external = 0u;
@@ -1648,10 +1688,12 @@ int nj_vm_load(nj_vm *vm, FILE *f)
     cstate = (nj_u2 *)nj_host_alloc(vm, (nj_size)nclasses * (nj_size)sizeof(*cstate));
     order = (nj_u2 *)nj_host_alloc(vm, (nj_size)nclasses * (nj_size)sizeof(*order));
     cinfo = (nj_u2 *)nj_host_alloc(vm, (nj_size)nclasses * 4u * (nj_size)sizeof(*cinfo));
-    if (!map || !csbase || !cstate || !order || !cinfo) {
+    legacy_grow = (nj_u2 *)nj_host_alloc(vm, (nj_size)nclasses * (nj_size)sizeof(*legacy_grow));
+    if (!map || !csbase || !cstate || !order || !cinfo || !legacy_grow) {
         NJ_LOAD_FAIL(NJ_ERR_NOMEM);
     }
     memset(map, 0, (size_t)nclasses * sizeof(*map));
+    memset(legacy_grow, 0, (size_t)nclasses * sizeof(*legacy_grow));
 
     /* Class table: read it, then resolve every class by name. */
     for (i = 0u; i < nclasses; i++) {
@@ -1749,11 +1791,11 @@ int nj_vm_load(nj_vm *vm, FILE *f)
             nj_u2 mcount = cinfo[i * 4u + 2u];
             nj_u2 is_arr = cinfo[i * 4u + 3u];
 
+            nj_u2 grow = 0u;
+
             if (map[i]->field_count != fcount ||
                 map[i]->method_count != mcount ||
-                (nj_u2)map[i]->is_array != is_arr ||
-                (cstate[i] >= NJ_CLASS_LINKED &&
-                 map[i]->instance_size != inst)) {
+                (nj_u2)map[i]->is_array != is_arr) {
                 if (getenv("NJ_SAVE_DEBUG")) {
                     fprintf(stderr, "  class %s: saved inst=%u f=%u m=%u arr=%u"
                             " have inst=%u f=%u m=%u arr=%u state=%u\n",
@@ -1766,8 +1808,45 @@ int nj_vm_load(nj_vm *vm, FILE *f)
                 }
                 NJ_LOAD_FAIL(NJ_ERR_FORMAT);   /* the JAR does not match */
             }
+            if (cstate[i] >= NJ_CLASS_LINKED &&
+                map[i]->instance_size != inst) {
+                /*
+                 * A class whose superclass was corrected after the snapshot was
+                 * taken looks like a different JAR, but it is a legacy shape:
+                 * it grew by exactly the fields it now inherits.  Accept it as
+                 * a bounded migration, but only while the saved arena holds no
+                 * instance of the class (enforced when the arena is rebased
+                 * below, so the old field offsets are never dereferenced).  The
+                 * ABI hash is recomputed with the old header numbers below, so
+                 * every other class still has to match exactly.
+                 */
+                if (map[i]->instance_size > inst) {
+                    grow = (nj_u2)(map[i]->instance_size - inst);
+                    legacy_grow[i] = grow;
+                    if (getenv("NJ_SAVE_DEBUG")) {
+                        fprintf(stderr, "  class %s: migrating legacy shape"
+                                " (saved inst=%u, have inst=%u)\n",
+                                map[i]->name, (unsigned)inst,
+                                (unsigned)map[i]->instance_size);
+                    }
+                } else {
+                    if (getenv("NJ_SAVE_DEBUG")) {
+                        fprintf(stderr, "  class %s: saved inst=%u f=%u m=%u"
+                                " arr=%u have inst=%u f=%u m=%u arr=%u state=%u\n",
+                                map[i]->name, (unsigned)inst, (unsigned)fcount,
+                                (unsigned)mcount, (unsigned)is_arr,
+                                (unsigned)map[i]->instance_size,
+                                (unsigned)map[i]->field_count,
+                                (unsigned)map[i]->method_count,
+                                (unsigned)map[i]->is_array,
+                                (unsigned)map[i]->state);
+                    }
+                    NJ_LOAD_FAIL(NJ_ERR_FORMAT);   /* the JAR does not match */
+                }
+            }
             if (cstate[i] >= NJ_CLASS_LINKED) {
-                h = class_abi_hash(h, map[i]);
+                h = (grow != 0u) ? class_abi_hash_legacy(h, map[i], grow)
+                                 : class_abi_hash(h, map[i]);
             }
         }
         if (h != abi) {
@@ -1893,6 +1972,24 @@ int nj_vm_load(nj_vm *vm, FILE *f)
                 }
                 if (!sr_u16(&rd, &ci) ||
                     (ci != NJ_SAVE_NO_CLASS && ci >= nclasses)) {
+                    NJ_LOAD_FAIL(NJ_ERR_FORMAT);
+                }
+                if (ci != NJ_SAVE_NO_CLASS && legacy_grow[ci] != 0u) {
+                    /*
+                     * The class was migrated to a larger (correct) instance
+                     * layout, but this snapshot really does hold one of its
+                     * objects with the old layout.  Refuse: the extra fields
+                     * do not exist in the image, so restoring it would either
+                     * expose them as garbage or corrupt the following block.
+                     */
+                    if (getenv("NJ_SAVE_DEBUG")) {
+                        fprintf(stderr, "nj_vm_load: saved state holds an"
+                                " instance of %s (legacy instance_size=%u,"
+                                " now %u)\n", map[ci]->name,
+                                (unsigned)(map[ci]->instance_size -
+                                           legacy_grow[ci]),
+                                (unsigned)map[ci]->instance_size);
+                    }
                     NJ_LOAD_FAIL(NJ_ERR_FORMAT);
                 }
                 if (o->kind == NJ_OBJ_CLASS) {
@@ -2223,6 +2320,9 @@ fail:
     }
     if (cinfo) {
         nj_host_free(vm, cinfo);
+    }
+    if (legacy_grow) {
+        nj_host_free(vm, legacy_grow);
     }
     if (order) {
         nj_host_free(vm, order);

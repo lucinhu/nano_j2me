@@ -4807,6 +4807,204 @@ static void test_mesh_submesh_bounds(nj_vm *vm)
     nj_clear_exception(vm);
 }
 
+
+/*
+ * JSR 184 says AnimationTrack extends Object3D, and the API stubs say so too.
+ * The builtin class table registered it as extending java/lang/Object, so the
+ * class hierarchy was wrong: inherited Object3D methods (setUserID, animate,
+ * duplicate, getReferences, ...) answered NoSuchMethodError, and a cast of a
+ * track to Object3D could not succeed.  The fuzzer found it by duplicating a
+ * track the loader had just built.
+ */
+static void test_object3d_subclass_api(nj_vm *vm)
+{
+    nj_ref kfs, track, dup;
+    nj_value a[2], r;
+    nj_status st;
+
+    kfs = kfs_new(vm, 1, 2, 176);
+    track = nj_object_new(vm, CLS("AnimationTrack"));
+    check(kfs != 0 && track != 0, "an AnimationTrack can be built");
+    if (!kfs || !track) {
+        return;
+    }
+
+    check(track->cls && track->cls->super &&
+          strcmp(track->cls->super->name, CLS("Object3D")) == 0,
+          "AnimationTrack extends Object3D in the class hierarchy");
+
+    a[0].r = kfs;
+    a[1].i = 256;                       /* AnimationTrack.ALPHA */
+    st = nj_call_special(vm, track, CLS("AnimationTrack"), "<init>",
+                         "(L" CLS("KeyframeSequence") ";I)V", a, NULL);
+    check(st == NJ_OK && !nj_has_exception(vm),
+          "an AnimationTrack is constructed from a sequence and a property");
+    nj_clear_exception(vm);
+
+    /*
+     * The interpreter resolves an inherited virtual method by looking the name
+     * up in the RECEIVER class, so these calls reproduce what a MIDlet hits:
+     * with the wrong superclass they answer NoSuchMethodError.
+     */
+    a[0].i = 7;
+    st = nj_call(vm, track, CLS("AnimationTrack"), "setUserID", "(I)V", a, NULL);
+    check(st == NJ_OK && !nj_has_exception(vm),
+          "setUserID() inherited from Object3D is callable on an AnimationTrack");
+    nj_clear_exception(vm);
+
+    st = nj_call(vm, track, CLS("AnimationTrack"), "getUserID", "()I", NULL, &r);
+    check(st == NJ_OK && !nj_has_exception(vm) && r.i == 7,
+          "an AnimationTrack keeps the userID Object3D gave it");
+    nj_clear_exception(vm);
+
+    a[0].i = 0;
+    st = nj_call(vm, track, CLS("AnimationTrack"), "animate", "(I)I", a, &r);
+    check(st == NJ_OK && !nj_has_exception(vm),
+          "animate() inherited from Object3D is callable on an AnimationTrack");
+    nj_clear_exception(vm);
+
+    st = nj_call(vm, track, CLS("AnimationTrack"), "duplicate",
+                 "()L" CLS("Object3D") ";", NULL, &r);
+    check(st == NJ_OK && !nj_has_exception(vm) && r.r != 0,
+          "duplicate() inherited from Object3D works on an AnimationTrack");
+    nj_clear_exception(vm);
+    dup = r.r;
+    if (dup) {
+        check(dup->cls && strcmp(dup->cls->name, CLS("AnimationTrack")) == 0,
+              "duplicate() of an AnimationTrack is an AnimationTrack");
+        a[0].i = 0;
+        call(vm, dup, CLS("AnimationTrack"), "getTargetProperty", "()I", a, &r);
+        check(r.i == 256,
+              "the duplicated AnimationTrack keeps its target property");
+        nj_clear_exception(vm);
+    } else {
+        check(0, "duplicate() of an AnimationTrack is an AnimationTrack");
+        check(0, "the duplicated AnimationTrack keeps its target property");
+    }
+}
+
+/*
+ * Background.setCrop() takes four ints, and clear() samples the crop through
+ * the viewport: sy = cropY + (int)((y - vy + 0.5) * cropH / vh).  The fuzzer
+ * reached a legal but extreme crop (Integer.MAX_VALUE) and the int addition
+ * overflowed - undefined behaviour in the renderer, reported by UBSan as
+ * "signed integer overflow: 2147483647 + 1073741823".  The arithmetic now runs
+ * in 64 bits and refuses values that cannot be an int; this exercises that
+ * path (with UBSan it fails before the fix, and it must never fault after it).
+ */
+static void test_background_crop_extremes(nj_vm *vm)
+{
+    nj_ref g3d = make(vm, CLS("Graphics3D"));
+    nj_ref bg = make(vm, CLS("Background"));
+    nj_ref img = 0, gfx = 0, i2d = 0;
+    nj_value a[5], r;
+    int ok;
+
+    memset(&r, 0, sizeof(r));
+    a[0].i = 16; a[1].i = 16;
+    ok = nj_call_static(vm, "javax/microedition/lcdui/Image", "createImage",
+                        "(II)Ljavax/microedition/lcdui/Image;", a, &r) == NJ_OK
+         && r.r != 0;
+    img = r.r;
+    r.r = 0;
+    if (ok) {
+        ok = nj_call(vm, img, "javax/microedition/lcdui/Image", "getGraphics",
+                     "()Ljavax/microedition/lcdui/Graphics;", NULL, &r) == NJ_OK
+             && r.r != 0;
+        gfx = r.r;
+    }
+    if (ok) {
+        i2d = i2d_new_bytes(vm, 100, 16, 16,
+                            nj_byte_array_new(vm, 16u * 16u * 4u), &ok);
+    }
+    check(g3d && bg && ok && i2d != 0, "background-crop fixtures allocate");
+    if (!g3d || !bg || !ok || !i2d) {
+        return;
+    }
+    nj_clear_exception(vm);
+    a[0].r = i2d;
+    nj_call(vm, bg, CLS("Background"), "setImage",
+            "(L" CLS("Image2D") ";)V", a, NULL);
+    a[0].i = (nj_s4)0xFF7F7F7Fu;   /* opaque grey: clear() samples the image */
+    nj_call(vm, bg, CLS("Background"), "setColor", "(I)V", a, NULL);
+    a[0].i = 0x7FFFFFFF; a[1].i = 0x7FFFFFFF;
+    a[2].i = 0x7FFFFFFF; a[3].i = 0x7FFFFFFF;
+    nj_call(vm, bg, CLS("Background"), "setCrop", "(IIII)V", a, NULL);
+    a[0].r = gfx;
+    nj_call(vm, g3d, CLS("Graphics3D"), "bindTarget",
+            "(Ljava/lang/Object;)V", a, NULL);
+    a[0].i = 0; a[1].i = 0; a[2].i = 16; a[3].i = 16;
+    nj_call(vm, g3d, CLS("Graphics3D"), "setViewport", "(IIII)V", a, NULL);
+    a[0].r = bg;
+    nj_call(vm, g3d, CLS("Graphics3D"), "clear",
+            "(L" CLS("Background") ";)V", a, NULL);
+    check(nj_exception_describe(vm) == NULL ||
+          strcmp(nj_exception_describe(vm), "(no exception)") == 0,
+          "clear(Background) with an Integer.MAX_VALUE crop does not fault");
+    nj_clear_exception(vm);
+
+    /* The same through the negative end of the range (cropY = INT_MIN). */
+    a[0].i = (nj_s4)0x80000000u; a[1].i = (nj_s4)0x80000000u;
+    a[2].i = 0x7FFFFFFF; a[3].i = 0x7FFFFFFF;
+    nj_call(vm, bg, CLS("Background"), "setCrop", "(IIII)V", a, NULL);
+    a[0].r = bg;
+    nj_call(vm, g3d, CLS("Graphics3D"), "clear",
+            "(L" CLS("Background") ";)V", a, NULL);
+    check(nj_exception_describe(vm) == NULL ||
+          strcmp(nj_exception_describe(vm), "(no exception)") == 0,
+          "clear(Background) with an Integer.MIN_VALUE crop does not fault");
+    nj_clear_exception(vm);
+    nj_call(vm, g3d, CLS("Graphics3D"), "releaseTarget", "()V", NULL, NULL);
+}
+
+/*
+ * An implicit strip (no index array) keeps its base index in the private
+ * _nj_first field; the file loader fills that field from the container
+ * without running the constructor's "the strip array's index range overflows
+ * an int" check.  jr_strip() computes first + i in int, so a container with
+ * firstIndex near Integer.MAX_VALUE overflowed (UBSan: "signed integer
+ * overflow: 2147483647 + 1") even though every fetched vertex would have
+ * been rejected later.  The test populates the same fields directly, exactly
+ * like the loader can, and renders it; before the fix UBSan aborts the forked
+ * child, after it the triangle is simply skipped.
+ */
+static int probe_implicit_strip_extreme_first(nj_vm *vm)
+{
+    nj_ref tsa = nj_object_new(vm, CLS("TriangleStripArray"));
+    nj_ref lens = nj_array_new(vm, "I", 1u);
+    i2d_canvas canvas;
+    nj_value r[5];
+
+    if (!tsa || !lens || !i2d_canvas_init(vm, &canvas)) {
+        return 0;
+    }
+    ((nj_s4 *)nj_array_data(lens))[0] = 3;
+    nj_rput(vm, tsa, nj_field_lookup(vm, CLS("IndexBuffer"), "_nj_ib_data",
+                                     "[I", 0), 0);
+    nj_iput(vm, tsa, nj_field_lookup(vm, CLS("IndexBuffer"), "_nj_ib_count",
+                                     "I", 0), 0);
+    nj_rput(vm, tsa, nj_field_lookup(vm, CLS("TriangleStripArray"),
+                                     "_nj_lengths", "[I", 0), lens);
+    nj_iput(vm, tsa, nj_field_lookup(vm, CLS("TriangleStripArray"),
+                                     "_nj_strips", "I", 0), 1);
+    nj_iput(vm, tsa, nj_field_lookup(vm, CLS("TriangleStripArray"),
+                                     "_nj_first", "I", 0), 0x7FFFFFFF);
+    r[0].r = canvas.vb; r[1].r = tsa; r[2].r = canvas.app;
+    r[3].r = 0; r[4].i = 0;
+    return nj_call(vm, canvas.g3d, CLS("Graphics3D"), "render",
+                   "(L" CLS("VertexBuffer") ";L" CLS("IndexBuffer") ";L"
+                   CLS("Appearance") ";L" CLS("Transform") ";I)V",
+                   r, NULL) == NJ_OK;
+}
+
+static void test_jr_strip_implicit_extreme_first(nj_vm *vm)
+{
+    /* Forked: before the fix this aborts the child under UBSan. */
+    check(m3g_probe_ok(probe_implicit_strip_extreme_first, vm),
+          "an implicit strip with a huge firstIndex does not overflow the index math");
+    nj_clear_exception(vm);
+}
+
 int main(void)
 {
     nj_port port;
@@ -7532,6 +7730,9 @@ int main(void)
     test_two_sided_lighting(vm);
     test_m3g_bounds_and_cycles(vm);
     test_graphics3d_light_bounds(vm);
+    test_object3d_subclass_api(vm);
+    test_background_crop_extremes(vm);
+    test_jr_strip_implicit_extreme_first(vm);
     test_mesh_submesh_bounds(vm);
 
     /* The file format calls type 18 Sprite; the titles call the class

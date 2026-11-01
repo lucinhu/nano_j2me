@@ -4099,16 +4099,37 @@ static void m3g_background_image(nj_vm *vm, nj_ref self, nj_ref bg, nj_ref targe
     if (cw <= 0 || ch <= 0) { return; }
     src = (const nj_u1 *)nj_array_data(pixels);
     for (y = y0; y < y1; y++) {
-        int sy = cy + (int)(((double)y - vy + 0.5) * ch / vh);
+        /*
+         * The crop rectangle and the viewport are Java ints, so their sum can
+         * leave int range even when every visible pixel is inside the viewport
+         * (a Background cropped to Integer.MAX_VALUE is legal API input).  Do
+         * the arithmetic in 64 bits, and refuse a double that would not fit an
+         * int at all (also covers vh == 0 and NaN) instead of casting it: a
+         * float-to-int conversion out of range is undefined behaviour, and the
+         * old int addition overflowed for crop values near Integer.MAX_VALUE.
+         */
+        double syf = ((double)y - (double)vy + 0.5) * (double)ch / (double)vh;
+        nj_s8 sy64;
+        int sy;
         nj_u1 *row;
-        if (my == 33) { sy = ((sy % ih) + ih) % ih; }
-        if (sy < 0 || sy >= ih) { continue; }
+
+        if (!(syf > -2147483649.0 && syf < 2147483648.0)) { continue; }
+        sy64 = (nj_s8)cy + (nj_s8)(int)syf;
+        if (my == 33) { sy64 = ((sy64 % ih) + ih) % ih; }
+        if (sy64 < 0 || sy64 >= (nj_s8)ih) { continue; }
+        sy = (int)sy64;
         row = (nj_u1 *)surface->pixels + (nj_size)y * surface->stride;
         for (x = x0; x < x1; x++) {
-            int sx = cx + (int)(((double)x - vx + 0.5) * cw / vw);
+            double sxf = ((double)x - (double)vx + 0.5) * (double)cw / (double)vw;
+            nj_s8 sx64;
+            int sx;
             const nj_u1 *p;
-            if (mx == 33) { sx = ((sx % iw) + iw) % iw; }
-            if (sx < 0 || sx >= iw) { continue; }
+
+            if (!(sxf > -2147483649.0 && sxf < 2147483648.0)) { continue; }
+            sx64 = (nj_s8)cx + (nj_s8)(int)sxf;
+            if (mx == 33) { sx64 = ((sx64 % iw) + iw) % iw; }
+            if (sx64 < 0 || sx64 >= (nj_s8)iw) { continue; }
+            sx = (int)sx64;
             p = src + ((nj_size)sy * iw + sx) * bpp;
             m3g_pixel_write(row + (nj_size)x * dst_bpp, surface->format,
                 0xFF000000u | ((nj_u4)p[0] << 16) | ((nj_u4)p[1] << 8) | p[2]);
@@ -12848,9 +12869,27 @@ static void jr_strip(m3g_jr *r, const nj_s4 *idx, nj_s4 count, nj_s4 first)
     int keep0_ok = 0, keep1_ok = 0;
 
     for (i = 0; i + 3 <= count; i++) {
-        nj_s4 v0 = idx ? idx[first + i] : (first + i);
-        nj_s4 v1 = idx ? idx[first + i + 1] : (first + i + 1);
-        nj_s4 v2 = idx ? idx[first + i + 2] : (first + i + 2);
+        /*
+         * The strip's base index comes from a Java int and, on the file
+         * loader path, is not checked against the vertex buffer: an implicit
+         * strip (idx == NULL) whose firstIndex is near Integer.MAX_VALUE made
+         * `first + i` overflow here - signed overflow is undefined behaviour,
+         * and it was reachable with a fuzzer-built container (UBSan reported
+         * "signed integer overflow: 2147483647 + 1").  Compute the three
+         * indices in 64 bits and skip a triangle whose index cannot be an
+         * int; jr_vertex() still rejects indices past the vertex buffer.
+         */
+        nj_s8 si0 = (nj_s8)first + (nj_s8)i;
+        nj_s8 si1 = si0 + 1;
+        nj_s8 si2 = si0 + 2;
+        nj_s4 v0, v1, v2;
+
+        if (si0 < 0 || si2 > (nj_s8)0x7FFFFFFF) {
+            continue;
+        }
+        v0 = idx ? idx[(nj_s4)si0] : (nj_s4)si0;
+        v1 = idx ? idx[(nj_s4)si1] : (nj_s4)si1;
+        v2 = idx ? idx[(nj_s4)si2] : (nj_s4)si2;
         nj_u4 a = (nj_u4)((i & 1) ? v1 : v0);
         nj_u4 b = (nj_u4)((i & 1) ? v0 : v1);
         nj_u4 c = (nj_u4)v2;
@@ -13593,7 +13632,8 @@ static int jr_setup(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref ib, nj_ref app,
 static nj_u4 jr_draw(m3g_jr *r)
 {
     if (r->nstrip > 0 && r->lens) {
-        nj_s4 i, base = r->ifirst;
+        nj_s4 i;
+        nj_s8 base = (nj_s8)r->ifirst;
 
         for (i = 0; i < r->nstrip; i++) {
             nj_s4 len = r->lens[i];
@@ -13606,17 +13646,26 @@ static nj_u4 jr_draw(m3g_jr *r)
              * clamp keeps either from turning into a heap read overrun.  Only
              * the explicit-index form needs it: the implicit form's indices
              * are generated and jr_vertex() rejects those past the buffer.
+             *
+             * base is 64-bit on purpose: a loader-built implicit strip can
+             * carry a firstIndex near Integer.MAX_VALUE in _nj_first, and
+             * accumulating the strip lengths in int overflowed here too
+             * (UBSan: "signed integer overflow: 2147483647 + 3").  A base
+             * that cannot be an int ends the table instead.
              */
             if (r->idx && r->ilimit > 0) {
-                if (base < 0 || base >= r->ilimit) {
+                if (base < 0 || base >= (nj_s8)r->ilimit) {
                     break;
                 }
-                if (len > r->ilimit - base) {
-                    len = r->ilimit - base;
+                if ((nj_s8)len > (nj_s8)r->ilimit - base) {
+                    len = (nj_s4)((nj_s8)r->ilimit - base);
                 }
             }
-            jr_strip(r, r->idx, len, base);
-            base += r->lens[i];
+            if (base < 0 || base > (nj_s8)0x7FFFFFFF) {
+                break;
+            }
+            jr_strip(r, r->idx, len, (nj_s4)base);
+            base += (nj_s8)r->lens[i];
         }
     } else if (r->idx && r->icount > 0) {
         nj_s4 count = r->icount;
@@ -14730,7 +14779,12 @@ const nj_builtin_class nj_lib_m3g_classes[] = {
       morph_fields, M3G_N(morph_fields), morph_methods, M3G_N(morph_methods) },
     { NJ_C_SKIN, NJ_C_MESH, NJ_ACC_PUBLIC,
       skin_fields, M3G_N(skin_fields), skin_methods, M3G_N(skin_methods) },
-    { NJ_C_ATRACK, "java/lang/Object", NJ_ACC_PUBLIC,
+    /* JSR 184 has AnimationTrack extend Object3D.  It was registered against
+       java/lang/Object here once, which made inherited Object3D natives
+       (duplicate()/animate()/setUserID()...) unreachable on a track.  The old
+       shape could also appear in saved states; nj_save.c migrates those when
+       the arena holds no instance of the class (see nj_vm_load). */
+    { NJ_C_ATRACK, NJ_C_O3D, NJ_ACC_PUBLIC,
       atrack_fields, M3G_N(atrack_fields), atrack_methods, M3G_N(atrack_methods) },
 
     /*
