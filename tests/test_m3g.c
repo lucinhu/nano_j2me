@@ -4633,6 +4633,180 @@ static void test_m3g_bounds_and_cycles(nj_vm *vm)
     }
 }
 
+/*
+ * Graphics3D keeps its lights in a fixed per-draw table NJ_M3G_LIGHTS
+ * entries wide, so an index past the last one cannot be lit.  The seeded
+ * fuzz driver found that Integer.MAX_VALUE was instead used to size a Java
+ * object array and to compute the byte count of the matching matrix table:
+ *
+ *   src/midp/nj_lib_m3g.c:14128: runtime error: signed integer overflow:
+ *   2147483647 + 1 cannot be represented in type 'int'
+ *
+ * The API has to refuse such an index before any arithmetic on it.
+ */
+static void test_graphics3d_light_bounds(nj_vm *vm)
+{
+    const int bad[] = { 16, 17, 0x7FFFFFFF };
+    nj_ref g3d = nj_object_new(vm, CLS("Graphics3D"));
+    nj_ref light = make(vm, CLS("Light"));
+    nj_ref xf = make(vm, CLS("Transform"));
+    nj_ref out = make(vm, CLS("Transform"));
+    nj_value a[3], r;
+    size_t i;
+
+    check(g3d && light && xf && out, "light-bound fixtures allocate");
+    if (!g3d || !light || !xf || !out) {
+        return;
+    }
+    /* Earlier tests leave their last expected exception pending. */
+    nj_clear_exception(vm);
+
+    /* The last slot the renderer can actually use still works. */
+    a[0].i = 15; a[1].r = light; a[2].r = xf;
+    nj_call(vm, g3d, CLS("Graphics3D"), "setLight",
+            "(IL" CLS("Light") ";L" CLS("Transform") ";)V", a, NULL);
+    nj_call(vm, g3d, CLS("Graphics3D"), "getLightCount", "()I", NULL, &r);
+    check(r.i == 16, "setting the last light keeps the light count consistent");
+    nj_clear_exception(vm);
+    a[0].i = 15; a[1].r = out;
+    nj_call(vm, g3d, CLS("Graphics3D"), "getLight",
+            "(IL" CLS("Transform") ";)L" CLS("Light") ";", a, &r);
+    check(r.r == light, "getLight(15) returns the light that was set");
+    nj_clear_exception(vm);
+
+    for (i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
+        a[0].i = bad[i]; a[1].r = light; a[2].r = xf;
+        nj_call(vm, g3d, CLS("Graphics3D"), "setLight",
+                "(IL" CLS("Light") ";L" CLS("Transform") ";)V", a, NULL);
+        check(nj_exception_describe(vm) != NULL &&
+              strstr(nj_exception_describe(vm), "IndexOutOfBoundsException") != NULL,
+              bad[i] == 0x7FFFFFFF ?
+              "setLight(INT_MAX) is refused by the API, not used to size an array" :
+              "setLight past the last light is refused");
+        nj_clear_exception(vm);
+    }
+
+    /*
+     * The light array has slack past the last configured light, and it keeps
+     * its slots after resetLights(); the light count is the API contract.
+     */
+    a[0].i = 16; a[1].r = out;
+    nj_call(vm, g3d, CLS("Graphics3D"), "getLight",
+            "(IL" CLS("Transform") ";)L" CLS("Light") ";", a, &r);
+    check(nj_exception_describe(vm) != NULL &&
+          strstr(nj_exception_describe(vm), "IndexOutOfBoundsException") != NULL,
+          "getLight past the last configured light is refused");
+    nj_clear_exception(vm);
+    a[0].i = -1; a[1].r = out;
+    nj_call(vm, g3d, CLS("Graphics3D"), "getLight",
+            "(IL" CLS("Transform") ";)L" CLS("Light") ";", a, &r);
+    check(nj_exception_describe(vm) != NULL &&
+          strstr(nj_exception_describe(vm), "IndexOutOfBoundsException") != NULL,
+          "getLight(-1) is refused");
+    nj_clear_exception(vm);
+
+    /* addLight is full once every slot is taken. */
+    nj_call(vm, g3d, CLS("Graphics3D"), "resetLights", "()V", NULL, NULL);
+    a[0].i = 0; a[1].r = out;
+    nj_call(vm, g3d, CLS("Graphics3D"), "getLight",
+            "(IL" CLS("Transform") ";)L" CLS("Light") ";", a, &r);
+    check(nj_exception_describe(vm) != NULL &&
+          strstr(nj_exception_describe(vm), "IndexOutOfBoundsException") != NULL,
+          "getLight after resetLights does not return a stale light");
+    nj_clear_exception(vm);
+    for (i = 0; i < 16; i++) {
+        a[0].r = light; a[1].r = xf;
+        nj_call(vm, g3d, CLS("Graphics3D"), "addLight",
+                "(L" CLS("Light") ";L" CLS("Transform") ";)I", a, &r);
+    }
+    a[0].r = light; a[1].r = xf;
+    nj_call(vm, g3d, CLS("Graphics3D"), "addLight",
+            "(L" CLS("Light") ";L" CLS("Transform") ";)I", a, &r);
+    check(nj_exception_describe(vm) != NULL &&
+          strstr(nj_exception_describe(vm), "IndexOutOfBoundsException") != NULL,
+          "addLight refuses to grow past the renderer's light table");
+    nj_clear_exception(vm);
+}
+
+/*
+ * Mesh.setAppearance(index) used to grow its submesh Vector to index + 1 with
+ * no upper bound, so Integer.MAX_VALUE asked for a two-billion element Java
+ * Vector (out of memory at best, a wrap-around loop at worst).  Pin that the
+ * index is refused before anything is sized; run it in a child with an alarm
+ * so a regression cannot hang the whole suite.
+ */
+static int probe_mesh_huge_appearance(nj_vm *vm)
+{
+    nj_ref mesh = nj_object_new(vm, CLS("Mesh"));
+    nj_ref vb = nj_object_new(vm, CLS("VertexBuffer"));
+    nj_ref ib = nj_object_new(vm, CLS("TriangleStripArray"));
+    nj_ref app = nj_object_new(vm, CLS("Appearance"));
+    nj_value a[3];
+    int refused;
+
+    if (!mesh || !vb || !ib || !app) {
+        return 0;
+    }
+    a[0].r = vb; a[1].r = ib; a[2].r = app;
+    if (nj_call_special(vm, mesh, CLS("Mesh"), "<init>",
+                        "(L" CLS("VertexBuffer") ";L" CLS("IndexBuffer")
+                        ";L" CLS("Appearance") ";)V", a, NULL) != NJ_OK) {
+        return 0;
+    }
+    a[0].i = 0x7FFFFFFF; a[1].r = app;
+    alarm(20);
+    refused = nj_call(vm, mesh, CLS("Mesh"), "setAppearance",
+                      "(IL" CLS("Appearance") ";)V", a, NULL) != NJ_OK &&
+              strstr(nj_exception_describe(vm), "IndexOutOfBoundsException") != NULL;
+    return refused;
+}
+
+static void test_mesh_submesh_bounds(nj_vm *vm)
+{
+    nj_ref mesh = nj_object_new(vm, CLS("Mesh"));
+    nj_ref vb = nj_object_new(vm, CLS("VertexBuffer"));
+    nj_ref ib = nj_object_new(vm, CLS("TriangleStripArray"));
+    nj_ref app = nj_object_new(vm, CLS("Appearance"));
+    nj_ref app2 = make(vm, CLS("Appearance"));
+    nj_value a[3], r;
+
+    check(mesh && vb && ib && app && app2, "submesh-bound fixtures allocate");
+    if (!mesh || !vb || !ib || !app || !app2) {
+        return;
+    }
+    a[0].r = vb; a[1].r = ib; a[2].r = app;
+    check(nj_call_special(vm, mesh, CLS("Mesh"), "<init>",
+                          "(L" CLS("VertexBuffer") ";L" CLS("IndexBuffer")
+                          ";L" CLS("Appearance") ";)V", a, NULL) == NJ_OK,
+          "a single-submesh mesh constructs");
+    nj_call(vm, mesh, CLS("Mesh"), "getSubmeshCount", "()I", NULL, &r);
+    check(r.i == 1, "it has the one submesh the constructor gave it");
+
+    /* Index 1 does not exist; it must not be created by writing to it. */
+    a[0].i = 1; a[1].r = app2;
+    nj_call(vm, mesh, CLS("Mesh"), "setAppearance",
+            "(IL" CLS("Appearance") ";)V", a, NULL);
+    check(nj_exception_describe(vm) != NULL &&
+          strstr(nj_exception_describe(vm), "IndexOutOfBoundsException") != NULL,
+          "setAppearance past the last submesh is refused");
+    nj_clear_exception(vm);
+    nj_call(vm, mesh, CLS("Mesh"), "getSubmeshCount", "()I", NULL, &r);
+    check(r.i == 1, "the refused index did not grow the submesh list");
+
+    /* The valid slot still works. */
+    a[0].i = 0; a[1].r = app2;
+    nj_call(vm, mesh, CLS("Mesh"), "setAppearance",
+            "(IL" CLS("Appearance") ";)V", a, NULL);
+    nj_call(vm, mesh, CLS("Mesh"), "getAppearance",
+            "(I)L" CLS("Appearance") ";", a, &r);
+    check(r.r == app2, "and setAppearance(0) still works");
+    nj_clear_exception(vm);
+
+    check(m3g_probe_ok(probe_mesh_huge_appearance, vm),
+          "setAppearance(INT_MAX) is refused, not used to size a Vector");
+    nj_clear_exception(vm);
+}
+
 int main(void)
 {
     nj_port port;
@@ -7357,6 +7531,8 @@ int main(void)
     test_world_mesh_count(vm);
     test_two_sided_lighting(vm);
     test_m3g_bounds_and_cycles(vm);
+    test_graphics3d_light_bounds(vm);
+    test_mesh_submesh_bounds(vm);
 
     /* The file format calls type 18 Sprite; the titles call the class
        Sprite3D.  Both have to be loadable.  These run before the VM is

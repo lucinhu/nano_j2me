@@ -5352,6 +5352,21 @@ NJFN(m3g_mesh_setAppearance)
     if (index < 0) {
         NJ_THROW(vm, "java/lang/IndexOutOfBoundsException", "negative submesh");
     }
+    /*
+     * A Mesh's submesh count is fixed when it is constructed (the file loader
+     * fills it the same way), so an appearance can only be set for a submesh
+     * that exists.  The growth paths below used to size the Vector from the
+     * caller's index with no upper bound: Integer.MAX_VALUE asked for a
+     * two-billion element Vector - an out-of-memory throw at best, a
+     * wrap-around loop at worst - instead of the specified exception.
+     */
+    {
+        nj_s4 count = get_submesh_count(vm, self);
+        if (count > 0 ? index >= count : index != 0) {
+            NJ_THROW(vm, "java/lang/IndexOutOfBoundsException",
+                     "invalid submesh");
+        }
+    }
     if (!vec) {
         nj_s4 i;
         vec = nj_object_new(vm, NJ_C_VECTOR);
@@ -14121,6 +14136,16 @@ NJFN(m3g_g3d_setLight)
     if (index < 0) {
         NJ_THROW(vm, "java/lang/IndexOutOfBoundsException", "negative light");
     }
+    /*
+     * The renderer and its per-draw tables are NJ_M3G_LIGHTS entries wide, so
+     * an index past the last one cannot be lit no matter what gets stored.
+     * Growing the Java side to the requested index instead let a crafted or
+     * corrupted index (Integer.MAX_VALUE) overflow the `index + 1` below
+     * before the out-of-memory check could refuse it.
+     */
+    if (index >= NJ_M3G_LIGHTS) {
+        NJ_THROW(vm, "java/lang/IndexOutOfBoundsException", "light index");
+    }
     lights = m3g_g3d_slot(vm, self, "_nj_lights", "L" NJ_C_LIGHT ";",
                               "[L" NJ_C_LIGHT ";", index);
     {
@@ -14175,7 +14200,15 @@ NJFN(m3g_g3d_getLight)
                           m3g_fof(vm, NJ_C_G3D, "_nj_lmats", "[F"));
     float *out = mat_of(vm, NJ_ARG_REF(args, 1), NJ_C_XFORM, "_nj_m");
 
-    if (lights && index >= 0 && index < (nj_s4)lights->length) {
+    /*
+     * The light array keeps its slots after resetLights() and it has slack
+     * past the last light that was set, so the array length is not the light
+     * count: indexing by it handed back a null or an already removed light
+     * where the specification asks for IndexOutOfBoundsException.
+     */
+    if (lights && index >= 0 &&
+        index < nj_iget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_nlights", "I")) &&
+        index < (nj_s4)lights->length) {
         ret->r = nj_array_get_ref(lights, (nj_u4)index);
     } else {
         NJ_THROW(vm, "java/lang/IndexOutOfBoundsException", "light index");
