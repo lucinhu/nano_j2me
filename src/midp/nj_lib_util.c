@@ -171,6 +171,30 @@ static int obj_equals(nj_vm *vm, nj_ref o, nj_ref e, int *err)
     return r.i != 0;
 }
 
+/*
+ * True when o's dynamic class resolves equals() to java.lang.Object.equals,
+ * which compares references and nothing else.  A scan that knows this can
+ * compare elements directly instead of entering the interpreter once per
+ * element: Vector.indexOf()/removeElement()/contains() run over scene-graph
+ * child lists that grow to hundreds of M3G nodes, and the per-element
+ * java.lang.Object.equals dispatch (nj_call -> class lookup by name ->
+ * bridge lookup -> native call) cost ~167 ns per comparison, i.e. over 100 us
+ * per scan of a 700-child group.  Resolving equals once per scan is exact:
+ * the answer of Object.equals(o, e) is o == e, so differing references are
+ * known to be unequal and no call is needed at all.
+ */
+static int obj_equals_is_identity(nj_ref o)
+{
+    nj_method *m;
+
+    if (!o || !o->cls) {
+        return 0;
+    }
+    m = nj_method_lookup(o->cls, "equals", "(Ljava/lang/Object;)Z");
+    return m != NULL && m->code == NULL && m->owner != NULL &&
+           strcmp(m->owner->name, "java/lang/Object") == 0;
+}
+
 /* ------------------------------------------------------------------ */
 /* java.util.Vector                                                    */
 /* ------------------------------------------------------------------ */
@@ -373,6 +397,7 @@ NJFN(vec_removeElement)
     nj_s4 i, n;
     nj_ref data;
     int err = 0;
+    int ident;
     nj_status st = vec_check(vm, v);
 
     if (st != NJ_OK) {
@@ -380,8 +405,10 @@ NJFN(vec_removeElement)
     }
     n = vec_count(vm, v);
     data = vec_data(vm, v);
+    ident = obj_equals_is_identity(o);
     for (i = 0; i < n; i++) {
-        if (obj_equals(vm, o, nj_array_get_ref(data, (nj_u4)i), &err)) {
+        nj_ref e = nj_array_get_ref(data, (nj_u4)i);
+        if (ident ? (e == o) : obj_equals(vm, o, e, &err)) {
             vec_remove_at(vm, v, i);
             ret->i = 1;
             return NJ_OK;
@@ -544,6 +571,7 @@ NJFN(vec_contains)
     nj_s4 i, n;
     nj_ref data;
     int err = 0;
+    int ident;
     nj_status st = vec_check(vm, v);
 
     if (st != NJ_OK) {
@@ -551,8 +579,10 @@ NJFN(vec_contains)
     }
     n = vec_count(vm, v);
     data = vec_data(vm, v);
+    ident = obj_equals_is_identity(o);
     for (i = 0; i < n; i++) {
-        if (obj_equals(vm, o, nj_array_get_ref(data, (nj_u4)i), &err)) {
+        nj_ref e = nj_array_get_ref(data, (nj_u4)i);
+        if (ident ? (e == o) : obj_equals(vm, o, e, &err)) {
             ret->i = 1;
             return NJ_OK;
         }
@@ -569,13 +599,15 @@ static nj_s4 vec_index_of(nj_vm *vm, nj_ref v, nj_ref o, nj_s4 from, int last)
     nj_s4 i, n = vec_count(vm, v);
     nj_ref data = vec_data(vm, v);
     int err = 0;
+    int ident = obj_equals_is_identity(o);
 
     if (last) {
         if (from >= n) {
             from = n - 1;
         }
         for (i = from; i >= 0; i--) {
-            if (obj_equals(vm, o, nj_array_get_ref(data, (nj_u4)i), &err)) {
+            nj_ref e = nj_array_get_ref(data, (nj_u4)i);
+            if (ident ? (e == o) : obj_equals(vm, o, e, &err)) {
                 return i;
             }
             if (err) {
@@ -585,7 +617,8 @@ static nj_s4 vec_index_of(nj_vm *vm, nj_ref v, nj_ref o, nj_s4 from, int last)
         }
     } else {
         for (i = from; i < n; i++) {
-            if (obj_equals(vm, o, nj_array_get_ref(data, (nj_u4)i), &err)) {
+            nj_ref e = nj_array_get_ref(data, (nj_u4)i);
+            if (ident ? (e == o) : obj_equals(vm, o, e, &err)) {
                 return i;
             }
             if (err) {
