@@ -1104,6 +1104,21 @@ static void android_display_present(void *ud, int x, int y, int w, int h)
         return;
     }
     /*
+     * The locked buffer is this frame's real window size, whatever the cached
+     * s->win_w/s->win_h say.  A resize without a new surface (rotation, a
+     * multi-window drag, a display-size change) reaches the port through
+     * nj_port_android_set_window_size(), but a window can also change under a
+     * frame that is already in flight - and the blit writes into THIS buffer,
+     * so its size is what the letterbox has to fit.  Publish it too: the
+     * status line and nj_port_android_view_limits() read the cached values.
+     */
+    if (buf.width != s->win_w || buf.height != s->win_h) {
+        pthread_mutex_lock(&s->lock);
+        s->win_w = buf.width;
+        s->win_h = buf.height;
+        pthread_mutex_unlock(&s->lock);
+    }
+    /*
      * Decide the picture: which logical pixels, at what scale, and where.
      *
      * The default is the largest INTEGER factor that fits, centred, with the
@@ -1132,12 +1147,15 @@ static void android_display_present(void *ud, int x, int y, int w, int h)
             sw = s->det_w;
             sh = s->det_h;
         }
-        /* the largest whole-number scale that fits the picture */
+        /* the largest whole-number scale that fits the picture.  The window
+         * size comes from the buffer we are about to fill, not from the size
+         * cached when the window was created: a resize without a new surface
+         * leaves that cache stale for exactly the frame that matters. */
         {
             int fx = 1, fy = 1;
-            if (s->win_w > 0 && s->win_h > 0 && sw > 0 && sh > 0) {
-                fx = s->win_w / sw;
-                fy = s->win_h / sh;
+            if (buf.width > 0 && buf.height > 0 && sw > 0 && sh > 0) {
+                fx = buf.width / sw;
+                fy = buf.height / sh;
             }
             fit = (fx < fy) ? fx : fy;
             if (fit < 1) {
@@ -4626,6 +4644,40 @@ void nj_port_android_set_window(nj_port *port, void *native_window)
     }
 }
 
+/*
+ * The SurfaceView kept its surface but changed size.
+ *
+ * Rotation, a multi-window drag and a display-size change in the developer
+ * options all arrive this way: no surfaceCreated(), no surfaceDestroyed(),
+ * only surfaceChanged() with the new width and height.  The window object and
+ * the buffer queue are the same ones this port created its buffers on, so the
+ * size it cached at creation is now a lie - and a lie here is visible: the
+ * integer fit is computed against it, the picture is drawn for the old window,
+ * and the compositor stretches the buffer into a new aspect ratio.
+ *
+ * Ask the queue for buffers in the new size and publish the numbers the frame
+ * loop and the status line read.  display_present() also takes the size from
+ * the buffer it actually locks, so a frame that was already in flight when
+ * this arrived still scales for the window it lands in.
+ */
+void nj_port_android_set_window_size(nj_port *port, int width, int height)
+{
+    android_state *s;
+
+    if (!port || !port->ud || width <= 0 || height <= 0) {
+        return;
+    }
+    s = AS(port->ud);
+    pthread_mutex_lock(&s->lock);
+    s->win_w = width;
+    s->win_h = height;
+    if (s->window) {
+        (void)ANativeWindow_setBuffersGeometry(s->window, width, height,
+                                               WINDOW_FORMAT_RGBA_8888);
+    }
+    pthread_mutex_unlock(&s->lock);
+}
+
 void nj_port_android_set_paths(nj_port *port, const char *rms_dir,
                                const char *fs_dir)
 {
@@ -5327,6 +5379,28 @@ Java_com_lucinhu_nj2me_GameActivity_nativeSetSurface(JNIEnv *env, jobject thiz,
 }
 
 /*
+ * The same surface, a different size: rotation, a multi-window drag, a
+ * display-size change.  The frame loop cannot learn this from the window - the
+ * ANativeWindow object is unchanged and its buffers are the ones this port
+ * asked for at creation - so the SurfaceHolder callback has to say it.
+ */
+JNIEXPORT void JNICALL
+Java_com_lucinhu_nj2me_GameActivity_nativeSetWindowSize(JNIEnv *env,
+                                                        jobject thiz,
+                                                        jlong handle,
+                                                        jint width,
+                                                        jint height)
+{
+    android_app *a = (android_app *)(intptr_t)handle;
+    (void)env;
+    (void)thiz;
+    if (!a) {
+        return;
+    }
+    nj_port_android_set_window_size(&a->port, (int)width, (int)height);
+}
+
+/*
  * Runs the MIDlet, and RETURNS WHEN THE MIDLET IS OVER.
  *
  * The blocking contract matters more than it looks.  Java calls this on its own
@@ -5894,6 +5968,13 @@ void nj_port_android_set_window(nj_port *port, void *native_window)
 {
     (void)port;
     (void)native_window;
+}
+
+void nj_port_android_set_window_size(nj_port *port, int width, int height)
+{
+    (void)port;
+    (void)width;
+    (void)height;
 }
 
 void nj_port_android_set_paths(nj_port *port, const char *rms_dir,

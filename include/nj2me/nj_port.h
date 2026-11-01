@@ -984,6 +984,10 @@ int nj_port_sdl2_key_for(const nj_port *port, int key);
  */
 nj_status nj_port_android(nj_port *out);
 void      nj_port_android_set_window(nj_port *port, void *native_window);
+/* The window kept the same surface but changed size (rotation, multi-window,
+ * display-size change): re-ask for buffers in the new size and publish it for
+ * the letterbox, touch mapping and status line. */
+void      nj_port_android_set_window_size(nj_port *port, int width, int height);
 void      nj_port_android_push_event(nj_port *port, const nj_event *ev);
 void      nj_port_android_push_key(nj_port *port, int android_keycode, int down);
 

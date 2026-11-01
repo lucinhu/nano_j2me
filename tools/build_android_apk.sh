@@ -151,6 +151,11 @@ PY
 # INCONSISTENT_CERTIFICATES). The default lives under build/, so an --out
 # elsewhere still signs with the same debug key.
 KS="$ROOT/build/android/debug.keystore"
+# The keyfile lives in build/android, which may not exist on a clean tree:
+# keytool -genkeypair will not create the parent directory, and the failure is
+# invisible because its stderr is dropped - the next thing the player sees is
+# apksigner refusing to sign.  Make the directory first.
+mkdir -p "$ROOT/build/android"
 if [ ! -f "$KS" ]; then
     "$JAVA_HOME_DIR/bin/keytool" -genkeypair -keystore "$KS" -storepass android \
         -keypass android -alias androiddebugkey -keyalg RSA -keysize 2048 \

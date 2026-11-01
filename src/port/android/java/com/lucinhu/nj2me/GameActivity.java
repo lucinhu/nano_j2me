@@ -166,6 +166,10 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
 
     private static native void nativeSetSurface(long handle, Surface surface);
 
+    /** The same surface at a new size: rotation, multi-window, display size. */
+    private static native void nativeSetWindowSize(long handle, int width,
+                                                   int height);
+
     private static native String nativeStats(long handle);
 
     private static native void nativeSetView(long handle, int mode, float zoom,
@@ -647,8 +651,15 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
 
     @Override
     public void surfaceChanged(SurfaceHolder holder, int format, int width, int height) {
-        /* The port reads the window size on every present, so a resize needs no
-         * announcement - the letterbox is recomputed the next frame anyway. */
+        /* Rotation, a multi-window drag and a display-size change all keep the
+         * surface and change its size.  The port asked the buffer queue for a
+         * size when it started, so it cannot see this on its own: tell it, and
+         * it re-asks for buffers and re-fits the picture to the new window. */
+        synchronized (lock) {
+            if (handle != 0) {
+                nativeSetWindowSize(handle, width, height);
+            }
+        }
     }
 
     @Override
