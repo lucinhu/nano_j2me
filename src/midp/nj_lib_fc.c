@@ -48,6 +48,7 @@
 #    include <io.h>              /* _chsize_s, _fileno */
 #  else
 #    include <sys/stat.h>
+#    include <sys/statvfs.h>       /* availableSize() */
 #    include <dirent.h>
 #    include <fcntl.h>
 #    include <unistd.h>
@@ -232,6 +233,38 @@ static nj_status fc_throw_closed(nj_vm *vm)
                     "the connection was closed before the operation");
 }
 
+/*
+ * JSR 75 mode rules: a read-only connection refuses writes, a write-only
+ * connection refuses reads, and a closed connection refuses both.  The mode is
+ * the one the MIDlet asked for in Connector.open() (written into fcMode by
+ * nj_lib_io.c), not a host permission - creating a connection is allowed
+ * before the target exists, so these checks are all that keeps a
+ * Connector.READ connection from deleting something.
+ */
+static nj_status fc_require_write(nj_vm *vm, nj_ref self)
+{
+    if (fget_int(vm, self, F_CLOSED, "Z")) {
+        return fc_throw_closed(vm);
+    }
+    if (!(fget_int(vm, self, F_MODE, "I") & 2)) {
+        return nj_throw(vm, NJ_C_ILLMODE, "connection is read-only");
+    }
+    return NJ_OK;
+}
+
+static nj_status fc_require_read(nj_vm *vm, nj_ref self)
+{
+    if (fget_int(vm, self, F_CLOSED, "Z")) {
+        return fc_throw_closed(vm);
+    }
+    /* mode 2 is Connector.WRITE: write-only, so read methods must refuse it as
+     * firmly as a READ connection refuses writes. */
+    if (!(fget_int(vm, self, F_MODE, "I") & 1)) {
+        return nj_throw(vm, NJ_C_ILLMODE, "connection is write-only");
+    }
+    return NJ_OK;
+}
+
 /* ------------------------------------------------------------------ */
 /* FileConnection natives                                              */
 /* ------------------------------------------------------------------ */
@@ -296,25 +329,51 @@ NJFN(fc_getName)
 {
     nj_ref url = fget_ref(vm, NJ_THIS(args), F_URL, "Ljava/lang/String;");
     nj_u2 buf[512];
+    nj_u2 name[514];
     int n = 0;
-    int start = 0, i;
+    int start = 0, i, k;
+    int is_dir = 0;
 
     if (!url) {
         ret->r = NULL;
         return NJ_OK;
     }
     fc_path_of(nj_string_chars(url), (int)nj_string_len(url), buf, &n);
+    /* JSR 75: "Directories are denoted with a trailing slash '/' in their
+     * returned name."  The URL spelling ("sub" vs "sub/") is not what decides
+     * it; the connection target does, so ask the filesystem and also treat a
+     * trailing sign as a directory for a target that does not exist yet. */
+    {
+        char path[NJ_FC_PATHMAX];
+        char host[NJ_FC_PATHMAX];
+        int d = 0;
+        if (n > 0 && buf[n - 1] == (nj_u2)'/') {
+            is_dir = 1;
+        }
+        if (nj_string_to_utf8(url, path, (int)sizeof(path)) > 0 &&
+            fc_resolve(vm, path, host, sizeof(host)) == 0 &&
+            fc_stat(host, &d, NULL, NULL)) {
+            is_dir = d;
+        }
+    }
     while (n > 0 && buf[n - 1] == (nj_u2)'/') {
-        n--;                                /* a directory's name has no slash */
+        n--;
     }
     for (i = 0; i < n; i++) {
         if (buf[i] == (nj_u2)'/') {
             start = i + 1;
         }
     }
-    /* The root has no name: its path is "/", which leaves nothing after the
-     * last separator.  Reporting "root" there would invent a file. */
-    ret->r = nj_string_new_chars(vm, buf + start, n - start);
+    for (k = 0; start + k < n && k < 512; k++) {
+        name[k] = buf[start + k];
+    }
+    /* The root has no name and must not become "/": its path is "/", leaving
+     * nothing after the separator, and reporting "root" there would invent a
+     * file.  A real directory keeps the trailing slash that names it as one. */
+    if (is_dir && k > 0 && k + 1 < (int)(sizeof(name) / sizeof(name[0]))) {
+        name[k++] = (nj_u2)'/';
+    }
+    ret->r = nj_string_new_chars(vm, name, k);
     return NJ_OK;
 }
 
@@ -322,8 +381,11 @@ NJFN(fc_exists)
 {
     char path[NJ_FC_PATHMAX];
     nj_ref url = fget_ref(vm, NJ_THIS(args), F_URL, "Ljava/lang/String;");
-    if (fget_int(vm, NJ_THIS(args), F_CLOSED, "Z")) {
-        return fc_throw_closed(vm);
+    {
+        nj_status st = fc_require_read(vm, NJ_THIS(args));
+        if (st != NJ_OK) {
+            return st;
+        }
     }
     if (nj_string_to_utf8(url, path, (int)sizeof(path)) <= 0) {
         ret->i = 0;
@@ -344,8 +406,11 @@ NJFN(fc_isDirectory)
     char host[NJ_FC_PATHMAX];
     int is_dir = 0;
 
-    if (fget_int(vm, NJ_THIS(args), F_CLOSED, "Z")) {
-        return fc_throw_closed(vm);
+    {
+        nj_status st = fc_require_read(vm, NJ_THIS(args));
+        if (st != NJ_OK) {
+            return st;
+        }
     }
     if (nj_string_to_utf8(url, path, (int)sizeof(path)) <= 0 ||
         fc_resolve(vm, path, host, sizeof(host)) != 0) {
@@ -362,14 +427,62 @@ NJFN(fc_fileSize)
     nj_ref url = fget_ref(vm, NJ_THIS(args), F_URL, "Ljava/lang/String;");
     char host[NJ_FC_PATHMAX];
     nj_u4 size = 0u;
+    int is_dir = 0;
+    nj_status st = fc_require_read(vm, NJ_THIS(args));
 
+    if (st != NJ_OK) {
+        return st;
+    }
     if (nj_string_to_utf8(url, path, (int)sizeof(path)) <= 0 ||
         fc_resolve(vm, path, host, sizeof(host)) != 0 ||
-        !fc_stat(host, NULL, &size, NULL)) {
-        return nj_throw(vm, "java/io/IOException", "cannot stat");
+        !fc_stat(host, &is_dir, &size, NULL)) {
+        /* JSR 75: -1 when the target does not exist or is not accessible.
+         * Throwing here made a missing file indistinguishable from a real
+         * I/O error and forced callers to catch where the API promises a
+         * sentinel. */
+        ret->j = -1;
+        return NJ_OK;
+    }
+    if (is_dir) {
+        /* JSR 75 makes this an IOException rather than reporting the
+         * directory inode's size. */
+        return nj_throw(vm, "java/io/IOException", "fileSize on a directory");
     }
     /* Anonymous unions in nj_value hold a long; the field is a Java long. */
     ret->j = (nj_s8)size;
+    return NJ_OK;
+}
+
+/*
+ * availableSize() is the free space on the volume, not the size of this file.
+ * It used to be wired to fc_fileSize, so a MIDlet asking "is there room for
+ * this download?" was told the size of the file it was about to write, and had
+ * to draw a fileSize() IOException to find out.  -1 is the JSR 75 answer when
+ * the implementation cannot determine the free space (and is the only answer
+ * available on hosts without statvfs).
+ */
+NJFN(fc_availableSize)
+{
+    nj_status st = fc_require_read(vm, NJ_THIS(args));
+
+    if (st != NJ_OK) {
+        return st;
+    }
+#if NJ_USE_LIBC && !defined(_WIN32)
+    {
+        char path[NJ_FC_PATHMAX];
+        char host[NJ_FC_PATHMAX];
+        nj_ref url = fget_ref(vm, NJ_THIS(args), F_URL, "Ljava/lang/String;");
+        struct statvfs vfs;
+        if (nj_string_to_utf8(url, path, (int)sizeof(path)) > 0 &&
+            fc_resolve(vm, path, host, sizeof(host)) == 0 &&
+            statvfs(host, &vfs) == 0) {
+            ret->j = (nj_s8)vfs.f_bavail * (nj_s8)vfs.f_frsize;
+            return NJ_OK;
+        }
+    }
+#endif
+    ret->j = -1;
     return NJ_OK;
 }
 
@@ -379,19 +492,61 @@ NJFN(fc_lastModified)
     nj_ref url = fget_ref(vm, NJ_THIS(args), F_URL, "Ljava/lang/String;");
     char host[NJ_FC_PATHMAX];
     nj_s8 mt = 0;
+    nj_status st = fc_require_read(vm, NJ_THIS(args));
 
+    if (st != NJ_OK) {
+        return st;
+    }
     if (nj_string_to_utf8(url, path, (int)sizeof(path)) <= 0 ||
         fc_resolve(vm, path, host, sizeof(host)) != 0 ||
         !fc_stat(host, NULL, NULL, &mt)) {
-        return nj_throw(vm, "java/io/IOException", "cannot stat");
+        /* JSR 75: 0L when there is no time to report (missing target, I/O
+         * error, or a host that does not track modification times). */
+        ret->j = 0;
+        return NJ_OK;
     }
     ret->j = mt;
     return NJ_OK;
 }
 
-NJFN(fc_canRead)  { NJ_UNUSED(args); ret->i = 1; return NJ_OK; }
-NJFN(fc_canWrite) { NJ_UNUSED(args); ret->i = 1; return NJ_OK; }
-NJFN(fc_isHidden) { NJ_UNUSED(args); ret->i = 0; return NJ_OK; }
+/* Shared by canRead/canWrite/isHidden: false when the target does not exist or
+ * cannot be inspected, true (or the attribute answer) otherwise. */
+static nj_status fc_permissions(nj_vm *vm, nj_value *args, nj_value *ret,
+                                int what)
+{
+    char path[NJ_FC_PATHMAX];
+    char host[NJ_FC_PATHMAX];
+    nj_ref url;
+    int is_dir = 0;
+    nj_status st = fc_require_read(vm, NJ_THIS(args));
+
+    if (st != NJ_OK) {
+        return st;
+    }
+    url = fget_ref(vm, NJ_THIS(args), F_URL, "Ljava/lang/String;");
+    if (nj_string_to_utf8(url, path, (int)sizeof(path)) <= 0 ||
+        fc_resolve(vm, path, host, sizeof(host)) != 0 ||
+        !fc_stat(host, &is_dir, NULL, NULL)) {
+        ret->i = 0;
+        return NJ_OK;
+    }
+    if (what == 2) {
+        /* Hidden is not a settable/queryable attribute on this host: JSR 75
+         * lets an implementation always answer false. */
+        ret->i = 0;
+        return NJ_OK;
+    }
+#if NJ_USE_LIBC && !defined(_WIN32)
+    ret->i = access(host, what == 0 ? R_OK : W_OK) == 0 ? 1 : 0;
+#else
+    ret->i = 1;
+#endif
+    return NJ_OK;
+}
+
+NJFN(fc_canRead)  { return fc_permissions(vm, args, ret, 0); }
+NJFN(fc_canWrite) { return fc_permissions(vm, args, ret, 1); }
+NJFN(fc_isHidden) { return fc_permissions(vm, args, ret, 2); }
 
 NJFN(fc_close)
 {
@@ -434,8 +589,13 @@ NJFN(fc_openInputStream)
     nj_u4 mark;
     int is_dir = 0;
 
-    if (fget_int(vm, NJ_THIS(args), F_CLOSED, "Z")) {
-        return fc_throw_closed(vm);
+    {
+        /* A WRITE-only connection may not read, even though this method
+         * resolves the path itself rather than going through a read hook. */
+        nj_status st = fc_require_read(vm, NJ_THIS(args));
+        if (st != NJ_OK) {
+            return st;
+        }
     }
     if (nj_string_to_utf8(url, path, (int)sizeof(path)) <= 0 ||
         fc_resolve(vm, path, host, sizeof(host)) != 0) {
@@ -746,8 +906,11 @@ static nj_status fc_list_impl(nj_vm *vm, nj_value *args, nj_value *ret,
     nj_ref vec = NULL;
     int is_dir = 0;
 
-    if (fget_int(vm, NJ_THIS(args), F_CLOSED, "Z")) {
-        return fc_throw_closed(vm);
+    {
+        nj_status st = fc_require_read(vm, NJ_THIS(args));
+        if (st != NJ_OK) {
+            return st;
+        }
     }
     if (filter && nj_string_to_utf8(filter, patbuf, (int)sizeof(patbuf)) > 0) {
         pat = patbuf;
@@ -829,7 +992,11 @@ NJFN(fc_create)
     char path[NJ_FC_PATHMAX];
     nj_ref url = fget_ref(vm, NJ_THIS(args), F_URL, "Ljava/lang/String;");
     char host[NJ_FC_PATHMAX];
+    nj_status st = fc_require_write(vm, NJ_THIS(args));
 
+    if (st != NJ_OK) {
+        return st;
+    }
     if (nj_string_to_utf8(url, path, (int)sizeof(path)) <= 0 ||
         fc_resolve(vm, path, host, sizeof(host)) != 0) {
         return nj_throw(vm, "java/io/IOException", "path is not accessible");
@@ -865,7 +1032,11 @@ NJFN(fc_mkdir)
     char path[NJ_FC_PATHMAX];
     nj_ref url = fget_ref(vm, NJ_THIS(args), F_URL, "Ljava/lang/String;");
     char host[NJ_FC_PATHMAX];
+    nj_status st = fc_require_write(vm, NJ_THIS(args));
 
+    if (st != NJ_OK) {
+        return st;
+    }
     if (nj_string_to_utf8(url, path, (int)sizeof(path)) <= 0 ||
         fc_resolve(vm, path, host, sizeof(host)) != 0) {
         return nj_throw(vm, "java/io/IOException", "path is not accessible");
@@ -954,7 +1125,11 @@ NJFN(fc_delete)
     char path[NJ_FC_PATHMAX];
     nj_ref url = fget_ref(vm, NJ_THIS(args), F_URL, "Ljava/lang/String;");
     char host[NJ_FC_PATHMAX];
+    nj_status st = fc_require_write(vm, NJ_THIS(args));
 
+    if (st != NJ_OK) {
+        return st;
+    }
     if (nj_string_to_utf8(url, path, (int)sizeof(path)) <= 0 ||
         fc_resolve(vm, path, host, sizeof(host)) != 0) {
         return nj_throw(vm, "java/io/IOException", "path is not accessible");
@@ -1149,7 +1324,7 @@ const nj_native_entry nj_lib_fc_table[] = {
     { NJ_C_FC, "mkdir",   "()V", fc_mkdir },
     { NJ_C_FC, "delete",  "()V", fc_delete },
     { NJ_C_FC, "setFileConnection", "(Ljava/lang/String;)V", fc_setFileConnection },
-    { NJ_C_FC, "availableSize", "()J", fc_fileSize },
+    { NJ_C_FC, "availableSize", "()J", fc_availableSize },
     { NJ_C_FC, "openOutputStream",   "()Ljava/io/OutputStream;", fc_openOutputStream },
     { NJ_C_FC, "openDataInputStream",  "()Ljava/io/DataInputStream;", fc_openDataInputStream },
     { NJ_C_FC, "openDataOutputStream", "()Ljava/io/DataOutputStream;", fc_openDataOutputStream },

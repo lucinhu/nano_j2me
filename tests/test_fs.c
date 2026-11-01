@@ -352,6 +352,79 @@ int main(int argc, char **argv)
            strstr(v, "ConnectionClosedException") != NULL,
            "using a closed FileConnection raises ConnectionClosedException");
 
+        /* ---- JSR 75 mode rules: the mode a MIDlet asked for is the mode it
+         * gets.  A read-only connection that still deletes is how a "view
+         * save" screen destroys the save. ---- */
+        ok(field(&cap, "closed_create", v, sizeof(v)) &&
+           strstr(v, "ConnectionClosedException") != NULL,
+           "create() on a closed connection raises ConnectionClosedException");
+        ok(field(&cap, "closed_mkdir", v, sizeof(v)) &&
+           strstr(v, "ConnectionClosedException") != NULL,
+           "mkdir() on a closed connection raises ConnectionClosedException");
+        ok(field(&cap, "closed_delete", v, sizeof(v)) &&
+           strstr(v, "ConnectionClosedException") != NULL,
+           "delete() on a closed connection raises ConnectionClosedException");
+        ok(field(&cap, "closed_preserved", v, sizeof(v)) && strcmp(v, "true") == 0,
+           "the refused closed delete left the file alone");
+        ok(field(&cap, "ro_create", v, sizeof(v)) &&
+           strstr(v, "IllegalModeException") != NULL,
+           "Connector.READ refuses create() with IllegalModeException");
+        ok(field(&cap, "ro_mkdir", v, sizeof(v)) &&
+           strstr(v, "IllegalModeException") != NULL,
+           "Connector.READ refuses mkdir() with IllegalModeException");
+        ok(field(&cap, "ro_delete", v, sizeof(v)) &&
+           strstr(v, "IllegalModeException") != NULL,
+           "Connector.READ refuses delete() with IllegalModeException");
+        ok(field(&cap, "ro_exists", v, sizeof(v)) && strcmp(v, "false") == 0,
+           "the refused read-only mkdir created nothing");
+        ok(field(&cap, "wo_exists", v, sizeof(v)) &&
+           strstr(v, "IllegalModeException") != NULL,
+           "Connector.WRITE refuses exists() with IllegalModeException");
+        ok(field(&cap, "wo_size", v, sizeof(v)) &&
+           strstr(v, "IllegalModeException") != NULL,
+           "Connector.WRITE refuses fileSize() with IllegalModeException");
+        ok(field(&cap, "wo_list", v, sizeof(v)) &&
+           strstr(v, "IllegalModeException") != NULL,
+           "Connector.WRITE refuses list() with IllegalModeException");
+
+        /* ---- names, sizes and metadata on missing targets ---- */
+        ok(field(&cap, "dir_name", v, sizeof(v)) && strcmp(v, "[sub/]") == 0,
+           "a directory's getName() carries the trailing slash");
+        ok(field(&cap, "dir_name_noslash", v, sizeof(v)) && strcmp(v, "[sub/]") == 0,
+           "a directory URL written without a slash still names a directory");
+        ok(field(&cap, "file_name", v, sizeof(v)) && strcmp(v, "[a.txt]") == 0,
+           "a file's getName() has no trailing slash");
+        ok(field(&cap, "dir_size", v, sizeof(v)) && strcmp(v, "java.io.IOException") == 0,
+           "fileSize() on a directory raises IOException");
+        ok(field(&cap, "missing_size", v, sizeof(v)) && strcmp(v, "-1") == 0,
+           "fileSize() returns -1 for a missing file instead of throwing");
+        ok(field(&cap, "missing_time_zero", v, sizeof(v)) && strcmp(v, "true") == 0,
+           "lastModified() returns 0 for a missing target");
+        ok(field(&cap, "missing_canread", v, sizeof(v)) && strcmp(v, "false") == 0,
+           "canRead() is false for a missing target");
+        ok(field(&cap, "avail", v, sizeof(v)) && strcmp(v, "true") == 0,
+           "availableSize() is the volume's free space, not the file's size");
+        ok(field(&cap, "mkdir_new", v, sizeof(v)) && strcmp(v, "true") == 0,
+           "mkdir() creates a missing directory");
+        ok(field(&cap, "mkdir_existing", v, sizeof(v)) &&
+           strcmp(v, "java.io.IOException") == 0,
+           "mkdir() on an existing directory raises IOException");
+        ok(field(&cap, "mkdir_deleted", v, sizeof(v)) && strcmp(v, "false") == 0,
+           "delete() removes the empty directory made above");
+        ok(field(&cap, "create_existing", v, sizeof(v)) &&
+           strcmp(v, "java.io.IOException") == 0,
+           "create() on an existing file raises IOException");
+        ok(field(&cap, "create_trailing", v, sizeof(v)) &&
+           strcmp(v, "java.io.IOException") == 0,
+           "create() on a URL ending in / raises IOException");
+        ok(field(&cap, "delete_notempty", v, sizeof(v)) &&
+           strcmp(v, "java.io.IOException") == 0,
+           "delete() on a non-empty directory raises IOException");
+        ok(field(&cap, "dir_noslash_isdir", v, sizeof(v)) && strcmp(v, "true") == 0,
+           "isDirectory() is true for an existing directory");
+        ok(field(&cap, "missing_dir_isdir", v, sizeof(v)) && strcmp(v, "false") == 0,
+           "isDirectory() is false when the target does not exist");
+
         if (fails) { break; }
     }
 

@@ -136,6 +136,132 @@ public class FsDemo extends MIDlet {
         target.close();
     }
 
+    /*
+     * The closed-state and mode rules from JSR 75.  A game opens a read-only
+     * connection to show a save file and a write-only one to overwrite it; if
+     * the runtime ignores the requested mode, the first call can delete the
+     * save.  Every one of these has a defined exception, so each is called and
+     * printed rather than only "did not throw".
+     */
+    private void testClosedAndModes() {
+        try {
+            FileConnection closed =
+                (FileConnection) Connector.open("file:///root/a.txt");
+            closed.close();
+            try { closed.create(); say("closed_create", "accepted"); }
+            catch (Exception e) { say("closed_create", e.getClass().getName()); }
+            try { closed.mkdir(); say("closed_mkdir", "accepted"); }
+            catch (Exception e) { say("closed_mkdir", e.getClass().getName()); }
+            try { closed.delete(); say("closed_delete", "accepted"); }
+            catch (Exception e) { say("closed_delete", e.getClass().getName()); }
+            FileConnection survivor =
+                (FileConnection) Connector.open("file:///root/a.txt", Connector.READ);
+            say("closed_preserved", "" + survivor.exists());
+            survivor.close();
+
+            /* Connector.READ: mutating calls must be refused before they touch
+             * the filesystem. */
+            FileConnection ro = (FileConnection) Connector.open(
+                    "file:///root/sub/ro.txt", Connector.READ);
+            try { ro.create(); say("ro_create", "accepted"); }
+            catch (Exception e) { say("ro_create", e.getClass().getName()); }
+            try { ro.mkdir(); say("ro_mkdir", "accepted"); }
+            catch (Exception e) { say("ro_mkdir", e.getClass().getName()); }
+            try { ro.delete(); say("ro_delete", "accepted"); }
+            catch (Exception e) { say("ro_delete", e.getClass().getName()); }
+            FileConnection roCheck = (FileConnection) Connector.open(
+                    "file:///root/sub/ro.txt", Connector.READ);
+            say("ro_exists", "" + roCheck.exists());
+            roCheck.close();
+            ro.close();
+
+            /* Connector.WRITE is write-only: reads must refuse too. */
+            FileConnection wo = (FileConnection) Connector.open(
+                    "file:///root/a.txt", Connector.WRITE);
+            try { say("wo_exists", "" + wo.exists()); }
+            catch (Exception e) { say("wo_exists", e.getClass().getName()); }
+            try { say("wo_size", "" + wo.fileSize()); }
+            catch (Exception e) { say("wo_size", e.getClass().getName()); }
+            try { wo.list(); say("wo_list", "accepted"); }
+            catch (Exception e) { say("wo_list", e.getClass().getName()); }
+            wo.close();
+        } catch (Throwable t) {
+            say("closed_modes_failed", "" + t);
+        }
+    }
+
+    /*
+     * Name, size and metadata semantics: a directory's name carries a trailing
+     * slash, fileSize() answers -1 (not an exception) for a missing file, and
+     * metadata calls on a missing target answer 0/false instead of throwing.
+     * These are the answers a game's world-list screen depends on: a throw here
+     * hides every world.
+     */
+    private void testMetadata() {
+        try {
+            FileConnection dir =
+                (FileConnection) Connector.open("file:///root/sub/");
+            say("dir_name", "[" + dir.getName() + "]");
+            say("dir_path", "[" + dir.getPath() + "]");
+            try { say("dir_size", "" + dir.fileSize()); }
+            catch (Exception e) { say("dir_size", e.getClass().getName()); }
+            dir.close();
+            FileConnection dirNoSlash =
+                (FileConnection) Connector.open("file:///root/sub");
+            say("dir_name_noslash", "[" + dirNoSlash.getName() + "]");
+            say("dir_noslash_isdir", "" + dirNoSlash.isDirectory());
+            dirNoSlash.close();
+
+            FileConnection file =
+                (FileConnection) Connector.open("file:///root/a.txt");
+            say("file_name", "[" + file.getName() + "]");
+            say("avail", "" + (file.availableSize() != file.fileSize()));
+            file.close();
+
+            FileConnection missing = (FileConnection) Connector.open(
+                    "file:///root/sub/missing-meta.txt", Connector.READ);
+            say("missing_size", "" + missing.fileSize());
+            say("missing_time_zero", "" + (missing.lastModified() == 0L));
+            say("missing_canread", "" + missing.canRead());
+            missing.close();
+
+            FileConnection newDir =
+                (FileConnection) Connector.open("file:///root/sub/newdir/");
+            newDir.mkdir();
+            say("mkdir_new", "" + newDir.exists());
+            try { newDir.mkdir(); say("mkdir_existing", "accepted"); }
+            catch (Exception e) { say("mkdir_existing", e.getClass().getName()); }
+            newDir.delete();
+            say("mkdir_deleted", "" + newDir.exists());
+            newDir.close();
+
+            FileConnection existing =
+                (FileConnection) Connector.open("file:///root/a.txt");
+            try { existing.create(); say("create_existing", "accepted"); }
+            catch (Exception e) { say("create_existing", e.getClass().getName()); }
+            existing.close();
+
+            FileConnection trailing = (FileConnection) Connector.open(
+                    "file:///root/sub/nope/");
+            try { trailing.create(); say("create_trailing", "accepted"); }
+            catch (Exception e) { say("create_trailing", e.getClass().getName()); }
+            trailing.close();
+
+            FileConnection nonEmpty =
+                (FileConnection) Connector.open("file:///root/sub/");
+            try { nonEmpty.delete(); say("delete_notempty", "accepted"); }
+            catch (Exception e) { say("delete_notempty", e.getClass().getName()); }
+            nonEmpty.close();
+
+            FileConnection missingDir = (FileConnection) Connector.open(
+                    "file:///root/sub/missing-dir/");
+            say("missing_dir_isdir", "" + missingDir.isDirectory());
+            missingDir.close();
+        } catch (Throwable t) {
+            say("metadata_failed", "" + t);
+        }
+    }
+
     public void startApp() {
         try {
             tryOpen("file:///root/a.txt");
@@ -226,6 +352,9 @@ public class FsDemo extends MIDlet {
 
             testTruncate();
             testRenameOffset();
+            /* After the listing above, so the root entry counts stay fixed. */
+            testClosedAndModes();
+            testMetadata();
 
             /* A closed connection refuses further work. */
             FileConnection c = (FileConnection) Connector.open("file:///root/a.txt");
