@@ -64,7 +64,7 @@ user CPU for 1200 in-world frames - 2.760/2.766/2.773 s down to
 The fused reciprocal is not bit-identical, and `tests/test_m3g.c`'s wrap test
 proved it matters: on a `WRAP_REPEAT` tile boundary one ulp picks the other tile,
 so repeat textures keep their divisions (Minecraft's clouds repeat, its terrain
-clamps). `test_m3g` is 818 checks / 0 failures, full ctest 140/140, corpus gate
+clamps). `test_m3g` is 848 checks / 0 failures, full ctest 140/140, corpus gate
 `fatal 0 / 400, known 4`, and frame dumps of the same snapshot differ only in
 the cloud band the title animates from the wall clock. See
 `docs/notes/2026-10-31-raster-fast-paths.md`.
@@ -92,6 +92,39 @@ out-of-bounds store - a real ASan SEGV and UBSan signed overflow);
 until the stack died.  `test_m3g` is now 848 checks / 0 failures under ASan and
 UBSan, and the PPM frame dumps of the same saved world are unchanged outside
 the wall-clock cloud band.
+
+**The interpreter folds the loops world generation spends its time in, and the
+M3G renderer resolves a frame once per pass.**  Generation is >99% interpreter
+dispatch, and its bytecode mix still had no float folds at all, so five int and
+float families now run as one dispatch: `iload`+implied-const+int-arith (7.7%
+of generation dispatch sites), const+`if_icmp` branches (3.7%), chained
+`fadd/fmul/fsub` with `fstore`/`freturn` tails, `fload`+`fload`/`fconst`+farith,
+and store+load.  The phone APK generates 8.6% faster per 1000 world blocks and
+saves 5.6% faster; the desktop fresh-world creation phase drops 8.4% (the
+fixed throughput workload goes 0.216 s -> 0.195 s and 70.5 M -> 62.5 M
+bytecodes).  In the renderer, a `render(World)` pass makes about 46 draws
+through the same `Graphics3D` but re-resolved the target, camera, matrices and
+light list on every one; the Graphics3D half is now resolved once per pass
+into a call-local and revalidated by a small key, taking another 2.35% off
+in-world user CPU (12 of 12 rounds faster, frame dumps identical to the
+pristine build).  See `docs/notes/2026-11-01-interpreter-superinstructions.md`
+and `docs/notes/2026-10-31-per-pass-frame-state.md`.
+
+**JSR 75 `FileConnection` behaves like a file system, and one bug in it
+deleted files.**  A closed connection no longer operates on the closed file -
+`delete()` on a closed connection really deleted it - and the JSR 75 mode
+rules are honoured: a `READ` connection refuses `create()`, `mkdir()` and
+`delete()`, a `WRITE`-only one refuses the metadata queries and
+`openInputStream()`.  The metadata answers match a phone: `getName()` keeps
+the trailing slash on a directory, `fileSize()` is -1 for a missing file and
+throws `IOException` for a directory, `lastModified()` is 0 when the file is
+missing, and `availableSize()` reports the volume's free space instead of the
+file's own length.  `tests/test_fs.c` went from 66 checks / 24 failures
+against the old behaviour to **132 checks / 0 failures**, full ctest is
+140/140.  A speculative `isOpen()` was dropped: a builtin class's method count
+is part of the saved-state ABI hash, and adding it made every existing
+`world.state` refuse to resume, which is now documented in the commit.  See
+`docs/notes/2026-11-01-jsr75-file-connection.md`.
 
 ## What was new in 0.5.3
 

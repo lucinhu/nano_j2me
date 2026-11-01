@@ -57,7 +57,7 @@
 
 融合倒数不是逐位精确的，`tests/test_m3g.c` 的包裹测试证明了这点：在
 `WRAP_REPEAT` 的贴图边界上，一个 ulp 的差别会取到隔壁那一格，所以 repeat 包裹
-的纹理保留除法（Minecraft 的云是 repeat，地形是 clamp）。`test_m3g` 818 项检查
+的纹理保留除法（Minecraft 的云是 repeat，地形是 clamp）。`test_m3g` 848 项检查
 0 失败，完整 ctest 140/140，语料门禁 `fatal 0 / 400, known 4`，同一快照的截帧
 只在云带（标题按墙钟时间做动画）有差异。详见
 `docs/notes/2026-10-31-raster-fast-paths.md`。
@@ -79,6 +79,32 @@ ASan SEGV 与 UBSan 有符号溢出）；`TriangleStripArray` 构造函数接受
 数组的 strip 长度；`Image2D(fmt,w,h,byte[])` 接受过短甚至空的像素数组；
 `Group.addChild` 接受自环/祖先边，会让渲染遍历递归到栈溢出。`test_m3g` 现在
 ASan 与 UBSan 下 848 项检查 0 失败，同一存档世界的截帧在云带之外没有变化。
+
+**解释器把世界生成最耗时的循环折叠成一条指令，M3G 渲染器每个 pass 只解析一次
+帧状态。** 世界生成 >99% 的时间花在解释器派发上，而它的字节码组合里此前完全
+没有浮点折叠，所以现在有五个整型/浮点家族合并为一次派发：
+`iload`+隐式常量+整数运算（占生成派发点的 7.7%）、常量+`if_icmp` 分支（3.7%）、
+串联的 `fadd/fmul/fsub` 加 `fstore`/`freturn` 尾巴、`fload`+`fload`/`fconst`+浮点
+运算，以及 store+load。手机 APK 每 1000 个世界方块的生成快 8.6%、首次保存快
+5.6%；桌面新建世界的整个阶段快 8.4%（固定吞吐负载 0.216 s → 0.195 s，字节码
+70.5 M → 62.5 M）。渲染器里一次 `render(World)` pass 通过同一个 `Graphics3D`
+画约 46 次，之前每次都要重新解析 target、相机、矩阵和灯光列表；现在
+Graphics3D 那一半每个 pass 只解析一次并存进调用栈局部变量，再用一个小 key
+校验，in-world 用户态 CPU 再降 2.35%（12/12 轮更快，截帧与未改动版本逐像素
+一致）。详见 `docs/notes/2026-11-01-interpreter-superinstructions.md` 与
+`docs/notes/2026-10-31-per-pass-frame-state.md`。
+
+**JSR 75 `FileConnection` 现在像一个文件系统，而它原来的一个缺陷会删掉文件。**
+已关闭的连接不会再操作那个文件——以前在已关闭连接上调用 `delete()` 会真的删掉
+文件；JSR 75 的模式规则也遵守了：`READ` 连接拒绝 `create()`、`mkdir()` 和
+`delete()`，只 `WRITE` 的连接拒绝元数据查询和 `openInputStream()`。元数据回答
+与手机一致：`getName()` 对目录保留结尾的 `/`，不存在的文件 `fileSize()` 为 -1、
+目录则抛 `IOException`，文件不存在时 `lastModified()` 为 0，`availableSize()`
+返回卷的空闲空间而不是文件自身长度。`tests/test_fs.c` 从旧行为下的 66 项检查/
+24 失败变成 **132 项检查 / 0 失败**，完整 ctest 140/140。曾尝试增加的
+`isOpen()` 被撤掉：内置类的方法数是存档 ABI 哈希的一部分，加上它会让所有已有
+的 `world.state` 拒绝恢复，这一点已写进提交说明。详见
+`docs/notes/2026-11-01-jsr75-file-connection.md`。
 
 ## 0.5.3 的新内容（上一版）
 

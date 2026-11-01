@@ -3316,3 +3316,69 @@ between their screenshots.  See
 `docs/notes/2026-11-01-minecraft-android-costs.md` for the whole investigation,
 including why world creation and digging are interpreter-bound rather than I/O,
 GC or M3G upload costs.
+
+## Round 3 of the interpreter, and one frame resolution per pass (2026-11-01)
+
+Two changes followed the Android round, both measured against the same saved
+Minecraft PE world and both gated by a frame dump or a digest fixture.
+
+**Superinstructions for the generation loops (`4691896`).**  Round 1 had
+already proved that world creation is >99% interpreter dispatch (4.97 G
+bytecodes, 1.26 M natives for 25 ms of native time), so the lever is dispatch
+throughput.  A pair/triple histogram of the generation window (~2.4 G
+dispatches) showed that the runtime had no float folds at all and still left
+the common int triples unfolded.  Five families now execute as one dispatch,
+all behind the existing `NJ_ENABLE_SUPERINSTR` / `NJ_FUSION_ALLOWED` gates so
+the switch and replicated bodies stay in lockstep: `iload/iload_*;
+iconst|bipush|sipush; iarith` (7.7% of generation dispatches), `const;
+if_icmp<cond>` (3.7%), `farith` chains with `fstore*/freturn` tails
+(2.2%+1.0%), `fload; fload|fconst; farith` (1.6%, two dispatches saved per
+site), and `istore*/fstore*; iload*` (3.7%).  A fused site only *peeks* at the
+following bytecodes: a branch into the middle of a sequence still runs it one
+instruction at a time, and every fused path leaves the operand stack exactly
+as the unfused instructions would (the earlier const/load folds' rule).
+
+| measurement | before | after |
+| --- | ---: | ---: |
+| fixed workload, `tools/bench.sh 5`, CPU, min-of-5 | 0.216 s | 0.195 s (**-9.7%**) |
+| same workload, counted bytecodes | 70.5 M | 62.5 M (-11.3%) |
+| desktop fresh-world replay, creation (GEN+save+prepare) | 20.79 s | 19.05 s (**-8.4%**) |
+| desktop fresh-world replay, `MCJ: GEN` alone | 14,638 ms | 13,077 ms (**-10.7%**) |
+| x86_64 APK on emulator, generation per 1000 world blocks | 17.66 ms | 16.14 ms (**-8.6%**) |
+| x86_64 APK on emulator, initial save | 5,752 ms | 5,429 ms (-5.6%) |
+
+The Android numbers are two interleaved fresh-world pairs; fresh worlds differ
+in size (1434K/1466K blocks on the baseline against 1637K/1581K on the
+candidate, because ~40-50% of fresh worlds hit a pre-existing game-side
+`StackOverflowError` in `Gen.matSolid` and the harness retries), so the
+per-1000-block normalisation is the comparable number.  The fixed workload and
+the desktop replay use the same worlds on both sides.  `check_threaded_dispatch`
+still proves the two interpreter bodies agree, and `check_superinstr_digest`
+compares 27 results against the desktop JVM.  The float fusions were
+additionally checked bit-for-bit against the unfused build on a Perlin-shaped
+loop that exercises `fload;fload`, `fload;fconst` and chained `fadd/fmul/fsub`
+patterns: every printed float and its `floatToIntBits` value was identical.
+
+**The M3G renderer resolves the frame once per pass, not once per draw
+(`9ee12ac`).**  A saved-world frame runs 86.5 `jr_setup()` calls through the
+same `Graphics3D`, and a `render(World)` pass is about 46 of them: every mesh
+re-read the target surface, `Image.getGraphics`, viewport, bounds, depth
+buffer, camera (including the World's active camera), view/projection matrices
+and the whole light list.  `jr_setup` is now split: `jr_frame_resolve()`
+resolves the Graphics3D half once per pass into a local of
+`m3g_world_draw()`, and the per-draw half multiplies only the model matrix; a
+small key (self, world, `vb != 0`, light override) re-resolves for sprites and
+immediate-mode draws, and there is no file static (`check_no_statics` gate).
+The result is bit-exact: the same `mat_mul` calls on the same values in the
+same order (`clip=(P*V)*M`, `mv=V*M`), lights copied rather than recomputed.
+Pinned to one core, 1200 in-world frames, ABBA rounds against a pristine build:
+mean 3.2313 s -> 3.1553 s user CPU (**-2.35%**), median -1.77%, candidate
+faster in 12 of 12 rounds (cleanest eight: -2.85%).  `test_m3g` 848 checks
+(also under ASan+UBSan), M3GDemo 148, and frame dumps are identical to the
+pristine build - the only pixel differences are the title's wall-clock cloud
+animation, which also differs between two pristine runs.
+
+Together, fresh-world creation on the phone goes another ~8% down and in-world
+CPU-side M3G frame work ~2.4%; the desktop creation path picks up ~8%.  For
+the whole Android creation phase the replicated interpreter (previous section)
+remains the dominant win.
