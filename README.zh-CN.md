@@ -57,7 +57,7 @@
 
 融合倒数不是逐位精确的，`tests/test_m3g.c` 的包裹测试证明了这点：在
 `WRAP_REPEAT` 的贴图边界上，一个 ulp 的差别会取到隔壁那一格，所以 repeat 包裹
-的纹理保留除法（Minecraft 的云是 repeat，地形是 clamp）。`test_m3g` 865 项检查
+的纹理保留除法（Minecraft 的云是 repeat，地形是 clamp）。`test_m3g` 878 项检查
 0 失败，完整 ctest 140/140，语料门禁 `fatal 0 / 400, known 4`，同一快照的截帧
 只在云带（标题按墙钟时间做动画）有差异。详见
 `docs/notes/2026-10-31-raster-fast-paths.md`。
@@ -78,7 +78,7 @@
 ASan SEGV 与 UBSan 有符号溢出）；`TriangleStripArray` 构造函数接受超出索引
 数组的 strip 长度；`Image2D(fmt,w,h,byte[])` 接受过短甚至空的像素数组；
 `Group.addChild` 接受自环/祖先边，会让渲染遍历递归到栈溢出。`test_m3g` 现在
-ASan 与 UBSan 下 865 项检查 0 失败，同一存档世界的截帧在云带之外没有变化。
+ASan 与 UBSan 下 878 项检查 0 失败，同一存档世界的截帧在云带之外没有变化。
 
 **解释器把世界生成最耗时的循环折叠成一条指令，M3G 渲染器每个 pass 只解析一次
 帧状态。** 世界生成 >99% 的时间花在解释器派发上，而它的字节码组合里此前完全
@@ -121,7 +121,7 @@ Graphics3D 那一半每个 pass 只解析一次并存进调用栈局部变量，
 给的索引（单子网格网格上 `setAppearance(1)` 会悄悄造出第二个子网格），现在
 超出子网格数量就被拒绝；`getLight()` 原先会从数组余量或 `resetLights()` 之后
 的陈旧槽位取回答，现在以活动灯光数为界。`test_m3g` 在 ASan 与 UBSan 下
-865 项检查 0 失败，确定性驱动已提交在 `tests/fuzzdemo/`。详见
+878 项检查 0 失败，确定性驱动已提交在 `tests/fuzzdemo/`。详见
 `docs/notes/2026-11-02-dig-burst-runtime.md` 与
 `docs/notes/2026-11-02-m3g-fuzz.md`。
 
@@ -136,6 +136,51 @@ per-draw setup 只有 1.1%；两个逐位精确的候选改写（strip 指针环
 的 read+prepare 共 3.08 G 次解释器派发——两个新的逐位精确折叠在桌面 gcc
 `-O3` 下快 10%，但在 APK 实际使用的 clang `-Os` 下反而慢 1.5%，所以没有
 合并；表格在 `docs/PERFORMANCE.md`。
+
+**窗口尺寸变化现在真的会传到画面，而不只是合成器拉伸。** Activity 一直用
+Surface 创建时的尺寸：`surfaceChanged()` 是空回调，锁定缓冲保持着初始尺寸，
+所以旋转手机或改窗口大小（多窗口、`adb shell wm size`）时，320x640 的缓冲
+会被拉伸到 480x800。现在 `surfaceChanged()` 调用 `nativeSetWindowSize()`，
+重新套用 `ANativeWindow_setBuffersGeometry()` 并更新缓存尺寸，
+`display_present()` 采用锁定缓冲自己的尺寸。在 API-21 镜像上做两次
+320x640 <-> 480x800 往返，日志显示 `window buffer 320x640` ->
+`480x800 stride 480` 再回到原尺寸，状态浮层报告新尺寸，按缩放后的坐标点击
+仍能命中 HUD 暂停图标和菜单项；桌面端口把同一入口编译成桩。提交 `0f4cf05`。
+
+**第二轮模糊测试又发现三个 M3G 缺陷，其中一个错在类表。**
+`AnimationTrack` 被登记成继承 `java/lang/Object` 而不是 `Object3D`，导致
+`duplicate()`、`animate()`、`setUserID()` 和强制转换抛
+`NoSuchMethodError`；类表改回 `Object3D`（7 项检查）。这让实例从 64 字节
+长到 96 字节，而快照 ABI 校验会比较每个类的字段/方法/数组数量和实例
+大小，于是所有旧版本写出的状态都会被拒绝。为了避免这种断裂，
+`src/core/nj_save.c` 现在接受“声明完全相同、只有实例大小增长”的变更：
+用旧大小、把非静态字段偏移回移增长量重算旧 ABI 哈希，再遍历对象表，如果
+状态里真的持有被迁移类的实例就明确拒绝。原来的 `world.state` 可以恢复
+（`class .../AnimationTrack: migrating legacy shape (saved inst=64, have
+inst=96)`），真正含该实例的旧状态会被拒绝而不是半加载；
+`tools/m3g_fuzz2_state_evidence.sh` 可重跑这三种情况。同一轮还修了两个
+UBSan 溢出：`Background.clear()` 用 INT_MAX 裁剪时
+（`2147483647 + 1073741823`）改为 double 采样、64 位回绕；装载器构造的
+隐式 strip 在 `firstIndex` 为 INT_MAX 时不再让 `jr_strip`/`jr_draw`
+溢出。模糊驱动从 33 个操作族、5 个种子扩到 41 个族、8 个种子（动画、
+蒙皮/形变网格、mipmap、合成的 `.m3g` 容器、立即模式），3552 次操作的一轮
+零 ASan/UBSan/LSan 报告，`test_m3g` 从 865 增至 878 项检查。提交 `8883341`。
+
+**为 APK 编译器专门化的光栅循环拿到一个小胜利。** 之前所有光栅优化都在
+gcc `-O3` 上测，而手机 APK 用 clang `-Os`；在 `-Os` 下，主导的
+`flat_texargb` span 循环占 in-world CPU 的 20%。它获得两个逐位精确的专门化
+（clamp 采样器变体提升不变量；主导 flag 组合删掉可证明死掉的逐像素分支）：
+在 clang `-Os` 下 8 轮 ABBA，第一个 -0.95%，两个一起 -2.27%（每次 8/8
+更快），gcc `-O3` 侧 -0.34%，截帧完全一致。提交 `3971629`。
+
+**存档路径的折叠是第四个“不要合并”。** 给 `chunks.dat` 末尾追加两个字节，
+首次 22 MB 存档就会走原地 `saveChunks0` 路径，它的 4.44 亿次解释器派发
+主要花在字节打包循环上。分析找到六个占约 20% 的热点族；实现的两个折叠在
+桌面 gcc `-O3` 下让整个存档快 11.3%，clang `-Os` 下 3.1%，但在实际的
+x86_64 `-Os` APK 上只有 1.0%（在 ±3% 的跑动波动内），所以没有合并；
+基准配方和所有表格在 `docs/notes/2026-11-02-save-path.md`（提交
+`d012e2e`）。原地快速存档是 289 ms，而首次完整存档是 5,328 ms；API-21
+镜像上的回读是 6,971 + 7,863 ms。
 
 ## 0.5.3 的新内容（上一版）
 

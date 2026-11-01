@@ -3480,3 +3480,78 @@ were implemented and rejected: a strip pointer ring that removes four 52-byte
 `memcpy`s per strip measured **1.3-1.6% slower** in 8 of 8 ABBA rounds, and a
 straight-line `pcomp==3` vertex path measured -0.33% (noise).  Only the profile
 note is kept (`docs/notes/2026-11-02-per-draw-residuals.md`, commit `cbec729`).
+
+## Round 5: the -Os raster loop, a resize fix, and two more "do not merge" (2026-11-02)
+
+### The dominant span loop, compiled the way the APK is built
+
+Every raster optimisation up to round 4 was measured on gcc `-O3`, while the
+phone APK is built with clang `-Os` (`tools/build_android.sh`).  A pristine
+clang `-Os -DNDEBUG` build of `331686f`, on the saved world, 1,200 frames,
+240x320, `--fps 0`, pinned: `jr_emit` 44.3%, `jr_fetch` 9.5%,
+`nj_interp_run` 9.2%, `jr_project` 8.6%, `nj_crc_update` 7.3%, `sw_fog` 4.2%.
+Line-level, the `flat_texargb` span loop is 20.1% of the run (0.53 s).
+The same workload: clang `-Os` 3.283 s, clang `-O3` 3.129 s (-4.7%), gcc
+`-O3` 3.105 s (-5.7%) - the shipped codegen is the slowest of the three, which
+is why it gets its own loop shapes.
+
+Two bit-exact specialisations of `flat_texargb`:
+
+1. the clamp-wrap sampler path with the sampler fields and the alpha threshold
+   hoisted out of the span loop and `sw_near_texel()` inlined for the clamp
+   case;
+2. the dominant "flat, textured, alpha-tested" flag combination written as its
+   own loop with the per-pixel branches that are provably dead in that case
+   removed (the compiler cannot prove it across the flags word).
+
+| build | user CPU A (s) | user CPU B (s) | delta |
+| --- | --- | --- | --- |
+| change 1, clang `-Os` | 2.9491 | 2.9210 | **-0.95%**, 8/8 rounds |
+| changes 1+2, clang `-Os` | 2.9946 | 2.9267 | **-2.27%**, 8/8 rounds |
+| changes 1+2, gcc `-O3` | - | - | **-0.34%** (neutral-to-better) |
+
+Gates: `test_m3g` 865/0 at that commit (Release and ASan+UBSan; 878 after the
+fuzz commit below), M3GDemo 148/0, `check_no_statics` clean, worktree ctest
+137/137, and the saved-world frame dumps pixel-identical on sampled frames.
+Commit `3971629` (`cdaddce` on main), note `docs/notes/2026-11-02-raster-os.md`.
+
+### Save path: append two bytes, then measure on the target
+
+Appending two bytes to `chunks.dat` makes `saveChunksInPlace()` throw
+"chunks.dat size", so the game falls back to the full 22 MB `saveChunks0()`
+path; pausing through the HUD icon (268,40 on the 320-wide screen) and
+"Quit to title" (160,154) logs `MCJ: SAVE`.  (BACK opens the port settings
+panel, never the game menu.)  Baselines: Android `MCJ: SAVE 2487 ms`, desktop
+gcc `-O3` SAVE 1266 ms, LOAD read 3504 / prepare 3532 ms.  The save window is
+444.5M interpreter dispatches in ~2.37 s, dominated by byte-packing loops:
+`iload` 25.4%, `ior` 8.0%, `sipush` 7.5%, `aload_2` 7.4%, `iinc` 5.5%,
+`iload_1` 5.4%, `istore` 4.4%, `baload` 3.1%, `iastore` 2.7%, `i2b` 2.7%,
+`bastore` 2.7%.  Six uncovered superinstruction families cover about 20% of the
+dispatches (`iinc+iload+const+branch` 21.7M sites, `aload+iload+arrayload`
+14.5M, `store+iload` 14.6M, `baload+const+arith` 13.9M, `i2b+bastore` 12.0M,
+`iastore+iinc` 12.2M).
+
+Two fusions implemented (`aload*;iload*;<array load>` reusing
+`NJ_ARRAY_LOAD_BODY`, and `i<arith>;ireturn` reusing `do_fused_ireturn`), all
+digest checks passing:
+
+| build | save A (ms) | save B (ms) | delta |
+| --- | --- | --- | --- |
+| desktop gcc `-O3` (5 rounds) | 1294.4 | 1147.8 | **-11.3%** |
+| desktop clang `-Os` | 1451.8 | 1407.4 | -3.1% |
+| Android x86_64 `-Os` APK (7 interleaved runs) | 2608 mean | 2583 mean | -1.0%, inside +/-3% drift |
+
+The target codegen is what the APK ships, so the change is not merged; only
+the docs note is (commit `d012e2e` on `r5-save`, `37debf9` on main,
+`docs/notes/2026-11-02-save-path.md`).  The in-place quit save is 289 ms on the
+same build against 5,328 ms for the first full save, and the API-21 reload
+reads 6,971 ms + prepares 7,863 ms.
+
+### Android buffer geometry follows the surface
+
+The other fix from this round is behavioural rather than a CPU number:
+`surfaceChanged()` now resizes the picture (`ANativeWindow_setBuffersGeometry`,
+`display_present()` adopts the locked buffer), so rotation, multi-window and
+`adb shell wm size` no longer leave a 320x640 buffer stretched across 480x800.
+Logcat before/after and the round-trip screenshots are in the verification
+ledger row; commit `0f4cf05` (`69185f7` on main).

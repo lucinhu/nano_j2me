@@ -64,7 +64,7 @@ user CPU for 1200 in-world frames - 2.760/2.766/2.773 s down to
 The fused reciprocal is not bit-identical, and `tests/test_m3g.c`'s wrap test
 proved it matters: on a `WRAP_REPEAT` tile boundary one ulp picks the other tile,
 so repeat textures keep their divisions (Minecraft's clouds repeat, its terrain
-clamps). `test_m3g` is 865 checks / 0 failures, full ctest 140/140, corpus gate
+clamps). `test_m3g` is 878 checks / 0 failures, full ctest 140/140, corpus gate
 `fatal 0 / 400, known 4`, and frame dumps of the same snapshot differ only in
 the cloud band the title animates from the wall clock. See
 `docs/notes/2026-10-31-raster-fast-paths.md`.
@@ -89,7 +89,7 @@ out-of-bounds store - a real ASan SEGV and UBSan signed overflow);
 `TriangleStripArray` constructors accepted strip lengths past the index array;
 `Image2D(fmt,w,h,byte[])` accepted short or NULL pixel storage; and
 `Group.addChild` accepted self/ancestor edges, making render walks recurse
-until the stack died.  `test_m3g` is now 865 checks / 0 failures under ASan and
+until the stack died.  `test_m3g` is now 878 checks / 0 failures under ASan and
 UBSan, and the PPM frame dumps of the same saved world are unchanged outside
 the wall-clock cloud band.
 
@@ -145,7 +145,7 @@ now throws `IndexOutOfBoundsException` past the 16-light table;
 `setAppearance(1)` on a one-submesh mesh silently created a second one) and now
 rejects indexes outside the submesh count; and `getLight()` could answer from
 the array's slack or from stale slots after `resetLights()`, and is now bounded
-by the live light count.  `test_m3g` is 865 checks / 0 failures under ASan and
+by the live light count.  `test_m3g` is 878 checks / 0 failures under ASan and
 UBSan, and the deterministic driver is committed under `tests/fuzzdemo/`.  See
 `docs/notes/2026-11-02-dig-burst-runtime.md` and
 `docs/notes/2026-11-02-m3g-fuzz.md`.
@@ -164,6 +164,63 @@ interpreter dispatches for read+prepare on a 22 MB world - gains 10% from two
 new bit-exact fusions with gcc `-O3` on the desktop but loses 1.5% with clang
 `-Os`, the codegen family the APK actually uses, so it is not merged;
 `docs/PERFORMANCE.md` has the tables.
+
+**A window resize now reaches the picture, not just the compositor.**  The
+activity used the surface's creation-time size forever: `surfaceChanged()` was
+an empty callback and the locked buffer kept its initial dimensions, so
+rotating the phone or resizing the window (multi-window, `adb shell wm size`)
+stretched a 320x640 buffer across 480x800.  `surfaceChanged()` now calls
+`nativeSetWindowSize()`, which re-applies `ANativeWindow_setBuffersGeometry()`
+and updates the cached size, and `display_present()` adopts the locked buffer's
+own dimensions.  Two 320x640 <-> 480x800 round trips on an API-21 image show
+`window buffer 320x640` -> `480x800 stride 480` and back, the status overlay
+reports the new size, and touch events at the scaled coordinates still hit the
+HUD pause icon and the menu rows; desktop ports compile the same entry point as
+a stub.  Commit `0f4cf05`.
+
+**Fuzzing round 2 found three more M3G bugs, one of them a class-table
+mistake.**  `AnimationTrack` was registered as extending `java/lang/Object`
+instead of `Object3D`, so `duplicate()`, `animate()`, `setUserID()` and casts
+threw `NoSuchMethodError`; the class table now says `Object3D` (7 checks).
+Because that grows the instance from 64 to 96 bytes, the saved-state ABI
+checker - which compares per-class field/method/array counts and the instance
+size - would refuse every state written by an older build.  Instead of shipping
+that break, `src/core/nj_save.c` now accepts a pure instance-size growth with
+identical declarations: it recomputes the legacy ABI hash with the old size and
+the non-static offsets shifted back by the growth, then walks the arena object
+table and refuses with a clear diagnostic if the state actually holds an
+instance of a migrated class.  The original `world.state` resumes
+(`class .../AnimationTrack: migrating legacy shape (saved inst=64, have
+inst=96)`), a legacy state that really contains such an instance is refused
+instead of half-loading, and `tools/m3g_fuzz2_state_evidence.sh` reruns all
+three cases.  Two UBSan overflows were fixed in the same wave:
+`Background.clear()` with an INT_MAX crop (`2147483647 + 1073741823`) now
+samples in double and wraps in 64 bits, and loader-built implicit strips whose
+`firstIndex` is INT_MAX no longer overflow in `jr_strip`/`jr_draw`.  The driver
+grew from 33 to 41 op families and 5 to 8 seeds (animation, skinned/morphing
+meshes, mipmaps, synthetic `.m3g` containers, immediate mode); a 3552-op wave
+runs with zero ASan/UBSan/LSan reports, and `test_m3g` is 865 -> 878 checks.
+Commit `8883341`.
+
+**A raster loop specialised for the APK's compiler scored a small win.**  Every
+earlier raster optimisation was measured on gcc `-O3`, but the phone APK is
+built with clang `-Os`, where the dominant `flat_texargb` span loop is 20% of
+in-world CPU.  It gained two bit-exact specialisations (a clamp-sampler variant
+with invariants hoisted, and the dominant flag combination with provably dead
+per-pixel branches removed): -0.95% for the first and -2.27% for both over 8
+ABBA rounds at clang `-Os` (8/8 rounds faster each time), -0.34% on the gcc
+`-O3` side, frame dumps identical.  Commit `3971629`.
+
+**The save-path fusions were the fourth "do not merge".**  Appending two bytes
+to `chunks.dat` turns the initial 22 MB save into the in-place `saveChunks0`
+path, whose 444M interpreter dispatches are dominated by byte-packing loops.
+The profile found six hot families covering about 20% of them; the two
+implemented fusions measure -11.3% for the whole save with desktop gcc `-O3`,
+-3.1% with clang `-Os`, and -1.0% (inside the +/-3% run-to-run drift) on the
+actual x86_64 `-Os` APK, so nothing merged; the benchmark recipe and all tables
+are in `docs/notes/2026-11-02-save-path.md` (commit `d012e2e`).  The in-place
+quit save is 289 ms against 5,328 ms for the first full save, and a reload on
+the API-21 image reads 6,971 + 7,863 ms.
 
 ## What was new in 0.5.3
 
