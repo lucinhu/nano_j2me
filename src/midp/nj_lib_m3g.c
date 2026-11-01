@@ -11764,6 +11764,142 @@ static nj_u4 sw_tri(m3g_sw *sw, const float xy[6], const float inv[3],
                 const int awrite = sw->awrite;
                 const int fog_here = fog_state;
 
+                if (!st_outer) {
+                    /* Both wraps are CLAMP on this path, so the sampler's
+                       fields do not change inside the triangle. */
+                    const nj_u1 *texp = sw->tex;
+                    const int texw = sw->tex_w, texh = sw->tex_h;
+                    const int texbpp = sw->tex_bpp;
+                    const float texwf = (float)texw, texhf = (float)texh;
+                    const int athresh = sw->athresh;
+
+                    /* The dominant in-world case: no blend, alpha tested,
+                       near fog, tinted, depth test and write on. */
+                    if (fog_here == 1 && tint && !blend_alpha && dtest &&
+                        dwrite && awrite && bpp4) {
+                for (px = xl; px <= xr; px++, o++, drow += bpp, pg += dxg,
+                         ph += dxh, pk += dxk) {
+                    nj_s4 key = (nj_s4)(pg * iz);
+                    const nj_u1 *tp;
+                    nj_u4 tr, tg, tb, ta, c;
+                    float cp;
+
+                    if (key <= 0) { continue; }
+                    if (key <= z[o]) { continue; }
+                    cp = 1.0f / pg;
+                    {
+                        float fs = ph * cp;
+                        float ft = pk * cp;
+                        int uu, vv;
+
+                        fs = fs < 0.0f ? 0.0f : (fs > 1.0f ? 1.0f : fs);
+                        ft = ft < 0.0f ? 0.0f : (ft > 1.0f ? 1.0f : ft);
+                        uu = (int)(fs * texwf);
+                        vv = (int)(ft * texhf);
+                        if (uu < 0) {
+                            uu = 0;
+                        } else if (uu >= texw) {
+                            uu = texw - 1;
+                        }
+                        if (vv < 0) {
+                            vv = 0;
+                        } else if (vv >= texh) {
+                            vv = texh - 1;
+                        }
+                        tp = texp +
+                             ((nj_size)vv * (nj_size)texw + (nj_size)uu) *
+                                 (nj_size)texbpp;
+                    }
+                    ta = (nj_u4)tp[3];
+                    if (athresh > 0 && (nj_s4)ta < athresh) { continue; }
+                    tr = tp[0]; tg = tp[1]; tb = tp[2];
+                    tr = (tr * fr) / 255u;
+                    tg = (tg * fg) / 255u;
+                    tb = (tb * fb) / 255u;
+                    z[o] = key;
+                    c = (ta << 24) | (tr << 16) | (tg << 8) | tb;
+                    memcpy(drow, &c, sizeof(c));
+                    drawn = 1u;
+                }
+                    } else {
+                for (px = xl; px <= xr; px++, o++, drow += bpp, pg += dxg,
+                         ph += dxh, pk += dxk) {
+                    nj_s4 key = (nj_s4)(pg * iz);
+                    const nj_u1 *tp;
+                    nj_u4 tr, tg, tb, ta, c;
+                    float cp;
+
+                    if (key <= 0) { continue; }
+                    if (dtest && key <= z[o]) { continue; }
+                    cp = 1.0f / pg;
+                    {
+                        float fs = ph * cp;
+                        float ft = pk * cp;
+                        int uu, vv;
+
+                        fs = fs < 0.0f ? 0.0f : (fs > 1.0f ? 1.0f : fs);
+                        ft = ft < 0.0f ? 0.0f : (ft > 1.0f ? 1.0f : ft);
+                        uu = (int)(fs * texwf);
+                        vv = (int)(ft * texhf);
+                        if (uu < 0) {
+                            uu = 0;
+                        } else if (uu >= texw) {
+                            uu = texw - 1;
+                        }
+                        if (vv < 0) {
+                            vv = 0;
+                        } else if (vv >= texh) {
+                            vv = texh - 1;
+                        }
+                        tp = texp +
+                             ((nj_size)vv * (nj_size)texw + (nj_size)uu) *
+                                 (nj_size)texbpp;
+                    }
+                    ta = bpp4 ? (nj_u4)tp[3] : 255u;
+                    if (blend_alpha && ta <= 1u) {
+                        /* A 1/255 source alpha moves the destination by at
+                         * most one unit, but the depth write still has to
+                         * happen: later geometry tests against it. */
+                        if (dwrite) { z[o] = key; }
+                        continue;
+                    }
+                    if (athresh > 0 && (nj_s4)ta < athresh) { continue; }
+                    tr = tp[0]; tg = tp[1]; tb = tp[2];
+                    if (tint) {
+                        tr = (tr * fr) / 255u;
+                        tg = (tg * fg) / 255u;
+                        tb = (tb * fb) / 255u;
+                    }
+                    if (fog_here == 2) {
+                        tr = (sw->fog_colour >> 16) & 0xFFu;
+                        tg = (sw->fog_colour >> 8) & 0xFFu;
+                        tb = sw->fog_colour & 0xFFu;
+                    } else if (fog_here == 0 && sw->fog) {
+                        nj_u4 fcd = sw_fog_d(sw, cp * area,
+                                             (tr << 16) | (tg << 8) | tb);
+
+                        tr = (fcd >> 16) & 0xFFu;
+                        tg = (fcd >> 8) & 0xFFu;
+                        tb = fcd & 0xFFu;
+                    }
+                    if (dwrite) { z[o] = key; }
+                    c = (ta << 24) | (tr << 16) | (tg << 8) | tb;
+                    if (blend_alpha && (ta < 255u || blend_other)) {
+                        m3g_pixel_write(drow, format,
+                            sw_blend(c, m3g_pixel_read(drow, format), sw->blend,
+                                     awrite));
+                        drawn = 1u;
+                        continue;
+                    }
+                    if (!awrite) {
+                        c = (c & 0x00FFFFFFu) |
+                            (m3g_pixel_read(drow, format) & 0xFF000000u);
+                    }
+                    memcpy(drow, &c, sizeof(c));
+                    drawn = 1u;
+                }
+                    }
+                } else {
                 for (px = xl; px <= xr; px++, o++, drow += bpp, pg += dxg,
                          ph += dxh, pk += dxk) {
                     nj_s4 key = (nj_s4)(pg * iz);
@@ -11818,6 +11954,7 @@ static nj_u4 sw_tri(m3g_sw *sw, const float xy[6], const float inv[3],
                     }
                     memcpy(drow, &c, sizeof(c));
                     drawn = 1u;
+                }
                 }
             } else
 #endif
