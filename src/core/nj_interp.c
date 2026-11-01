@@ -439,6 +439,24 @@ static int nj_interp_const_arith(nj_value *sp, nj_u1 op, nj_s4 v)
     }
     return 0;
 }
+
+/*
+ * The float counterpart of nj_interp_const_arith(): one float operation by
+ * opcode, used by the fused float chains.  A separate function (rather than a
+ * macro) because the caller always has the opcode in a variable, and evaluating
+ * a ternary chain on it three times per instruction is exactly the sort of
+ * expansion that hurts the I-cache on the phone build.  JVM float division by
+ * zero is IEEE (inf/NaN), not an exception, so there is nothing to report.
+ */
+static float nj_interp_farith(nj_u1 op, float a, float b)
+{
+    switch (op) {
+    case 0x62: return a + b;                                       /* fadd */
+    case 0x66: return a - b;                                       /* fsub */
+    case 0x6a: return a * b;                                       /* fmul */
+    default:   return a / b;                                       /* fdiv */
+    }
+}
 #endif
 
 #if NJ_ENABLE_SUPERINSTR
@@ -738,6 +756,182 @@ static int nj_interp_const_arith(nj_value *sp, nj_u1 op, nj_s4 v)
      (OP) == 0xa1u ? ((A) <  (B)) :                                       \
      (OP) == 0xa2u ? ((A) >= (B)) :                                       \
      (OP) == 0xa3u ? ((A) >  (B)) : ((A) <= (B)))
+
+/*
+ * ROUND 3 fusions (r2-gen): the sequences the Minecraft terrain generator,
+ * its save serialiser and its chunk rebuilders spend most of their dispatches
+ * on (see docs/notes/2026-11-01-minecraft-interp-fusions.md).
+ *
+ * Same contract as the round 1/2 folds: this only PEEKS at the following
+ * bytecodes at run time; nothing is rewritten, so a branch into the middle of
+ * a fused sequence still executes it one instruction at a time, and the
+ * operand stack, the exception pc and the local writes are exactly what the
+ * unfused instructions would have produced.  Every loop below finishes before
+ * the single DISPATCH() at the end: DISPATCH() is `continue` in the portable
+ * build, so a loop around it would resume the loop instead of the interpreter.
+ */
+
+/* `iconst|bipush|sipush; if_icmp<cond>` - the constant is the branch's top
+ * operand and never reaches the operand stack; sp[-1] is the deeper one.
+ * Branches have no exception path, so the fused site can neither throw nor
+ * change the exception pc. */
+#define NJ_CONST_BRANCH_FUSE(CONST)                                       \
+    if (NJ_FUSION_ALLOWED) {                                              \
+        if (pc + 3u <= code_len && (nj_u1)(code[pc] - 0x9fu) <= 5u) {     \
+            nj_u4 njcb_at_ = pc;                                          \
+            nj_u1 njcb_op_ = code[pc++];                                  \
+            nj_s2 njcb_off_ = S2();                                       \
+            nj_s4 njcb_a_ = sp[-1].i;                                     \
+            if (NJ_ICMP_TAKEN(njcb_op_, njcb_a_, (CONST))) {              \
+                pc = (nj_u4)(nj_s4)((nj_s4)njcb_at_ + njcb_off_);         \
+                JUMP_THREAD();                                            \
+            }                                                             \
+            /* The constant is never pushed, so only the deeper operand   \
+             * that was already on the stack is popped here. */           \
+            sp--;                                                         \
+            DISPATCH();                                                   \
+        }                                                                 \
+    }
+
+/* `iload*; iconst|bipush|sipush; int-arith` - the loaded value is pushed (so a
+ * fused idiv/irem by zero still throws with the same operand stack the unfused
+ * pair would have had) and the const+arith half goes through the same helper
+ * as the round 1 const fold.  Two dispatches become one; the count in the
+ * profile was 7.5% of the whole generation stream. */
+#define NJ_ILOAD_CONST_ARITH_FUSE(V)                                      \
+    if (NJ_FUSION_ALLOWED) {                                              \
+        if (pc < code_len) {                                              \
+            nj_u1 njic_nx_ = code[pc];                                    \
+            nj_s4 njic_c_ = 0;                                            \
+            nj_u4 njic_at_ = 0u;                                          \
+            int njic_ok_ = 0;                                             \
+            if ((nj_u1)(njic_nx_ - 0x02u) <= 6u) {                        \
+                njic_c_ = (njic_nx_ == 0x02u) ? -1 : (nj_s4)njic_nx_ - 3; \
+                njic_at_ = pc + 1u;                                       \
+                njic_ok_ = (njic_at_ < code_len) ? 1 : 0;                 \
+            } else if (njic_nx_ == 0x10u && pc + 3u <= code_len) {        \
+                njic_c_ = (nj_s4)(nj_s1)code[pc + 1u];                    \
+                njic_at_ = pc + 2u;                                       \
+                njic_ok_ = 1;                                             \
+            } else if (njic_nx_ == 0x11u && pc + 4u <= code_len) {        \
+                njic_c_ = (nj_s4)(nj_s2)(((nj_u2)code[pc + 1u] << 8) |    \
+                                         (nj_u2)code[pc + 2u]);           \
+                njic_at_ = pc + 3u;                                       \
+                njic_ok_ = 1;                                             \
+            }                                                             \
+            if (njic_ok_) {                                               \
+                nj_u4 njic_d_ = (nj_u4)code[njic_at_] - 0x60u;            \
+                if (njic_d_ < 35u &&                                      \
+                    ((NJ_CONST_ARITH_BITS >> njic_d_) & 1u) != 0u) {      \
+                    nj_u1 njic_op_ = code[njic_at_];                      \
+                    nj_s4 njic_v_ = (V);                                  \
+                    pc = njic_at_ + 1u;                                   \
+                    sp->i = njic_v_; sp++;                                \
+                    if (nj_interp_const_arith(sp, njic_op_, njic_c_) != 0) {\
+                        THROW("java/lang/ArithmeticException", "/ by zero");\
+                    }                                                     \
+                    if (pc < code_len && code[pc] == 0xacu) {             \
+                        pc++;                                             \
+                        goto do_fused_ireturn;                            \
+                    }                                                     \
+                    DISPATCH();                                           \
+                }                                                         \
+            }                                                             \
+        }                                                                 \
+    }
+
+/* The JVM's float arithmetic opcodes are 0x62 + 4*k (fadd fsub fmul fdiv). */
+#define NJ_IS_FARITH(OP)                                                  \
+    ((nj_u1)((OP) - 0x62u) <= 12u && (((nj_u1)((OP) - 0x62u)) & 3u) == 0u)
+
+/*
+ * Tail of a fused float expression.  R is the value the first fused operation
+ * produced and is NOT on the operand stack yet.  It chains further
+ * `fadd|fsub|fmul|fdiv` whose second operand is already on the stack (one pop
+ * each) - this is `a*b + c` and the Perlin interpolation, which would otherwise
+ * be three dispatches each - then either stores the result with `fstore*`,
+ * returns it with `freturn`, or pushes it.  The loop is allowed to contain no
+ * DISPATCH(), and it does not.
+ */
+#define NJ_FARITH_TAIL(R)                                                 \
+    if (NJ_FUSION_ALLOWED) {                                              \
+        float njft_r_ = (R);                                              \
+        while (pc < code_len && NJ_IS_FARITH(code[pc])) {                 \
+            nj_u1 njft_op_ = code[pc++];                                  \
+            /* The previous result is the chain op's top operand (b), the \
+             * stack value is the deeper one (a), and the new result      \
+             * lands one slot down. */                                    \
+            float njft_b_ = njft_r_;                                      \
+            sp--;                                                         \
+            njft_r_ = nj_interp_farith(njft_op_, sp[0].f, njft_b_);       \
+        }                                                                 \
+        if (pc + 2u <= code_len && code[pc] == 0x38u) {                   \
+            nj_value njft_v_;                                             \
+            njft_v_.f = njft_r_;                                          \
+            locals[(nj_u2)code[pc + 1u]].bits = njft_v_.bits;             \
+            pc += 2u;                                                     \
+            DISPATCH();                                                   \
+        }                                                                 \
+        if (pc < code_len && (nj_u1)(code[pc] - 0x43u) <= 3u) {           \
+            nj_value njft_v_;                                             \
+            njft_v_.f = njft_r_;                                          \
+            locals[code[pc] - 0x43u].bits = njft_v_.bits;                 \
+            pc++;                                                         \
+            DISPATCH();                                                   \
+        }                                                                 \
+        if (pc < code_len && code[pc] == 0xaeu) {                         \
+            sp->f = njft_r_; sp++;                                        \
+            pc++;                                                         \
+            goto do_fused_ireturn;                                        \
+        }                                                                 \
+        sp->f = njft_r_; sp++;                                            \
+        DISPATCH();                                                       \
+    }
+
+/*
+ * `fload*; ...` - the loaded float is consumed by the instruction(s) that
+ * follow, so it never reaches the operand stack.  Handles the shapes the
+ * Minecraft Perlin code is made of: fload;fload;farith (saves two dispatches),
+ * fload;fconst_0/1/2;farith (the interpolation constant, saves two) and
+ * fload;farith, where the loaded value is the top operand (saves one).
+ */
+#define NJ_FLOAD_FUSE(V)                                                  \
+    if (NJ_FUSION_ALLOWED) {                                              \
+        if (pc < code_len) {                                              \
+            nj_u1 njff_nx_ = code[pc];                                    \
+            if (njff_nx_ == 0x17u && pc + 3u <= code_len &&               \
+                NJ_IS_FARITH(code[pc + 2u])) {                            \
+                float njff_v2_ = locals[(nj_u2)code[pc + 1u]].f;          \
+                nj_u1 njff_op_ = code[pc + 2u];                           \
+                pc += 3u;                                                 \
+                NJ_FARITH_TAIL(                                           \
+                    nj_interp_farith(njff_op_, (V), njff_v2_));           \
+            } else if ((nj_u1)(njff_nx_ - 0x22u) <= 3u &&                 \
+                       pc + 2u <= code_len &&                             \
+                       NJ_IS_FARITH(code[pc + 1u])) {                     \
+                float njff_v2_ = locals[njff_nx_ - 0x22u].f;              \
+                nj_u1 njff_op_ = code[pc + 1u];                           \
+                pc += 2u;                                                 \
+                NJ_FARITH_TAIL(                                           \
+                    nj_interp_farith(njff_op_, (V), njff_v2_));           \
+            } else if ((njff_nx_ == 0x0bu || njff_nx_ == 0x0cu ||         \
+                        njff_nx_ == 0x0du) && pc + 2u <= code_len &&      \
+                       NJ_IS_FARITH(code[pc + 1u])) {                     \
+                float njff_c_ = (njff_nx_ == 0x0bu) ? 0.0f                \
+                                    : (njff_nx_ == 0x0cu) ? 1.0f : 2.0f;  \
+                nj_u1 njff_op_ = code[pc + 1u];                           \
+                pc += 2u;                                                 \
+                NJ_FARITH_TAIL(                                           \
+                    nj_interp_farith(njff_op_, (V), njff_c_));            \
+            } else if (NJ_IS_FARITH(njff_nx_)) {                          \
+                nj_u1 njff_op_ = code[pc++];                              \
+                float njff_r_ =                                           \
+                    nj_interp_farith(njff_op_, sp[-1].f, (V));            \
+                sp--;                                                     \
+                NJ_FARITH_TAIL(njff_r_);                                  \
+            }                                                             \
+        }                                                                 \
+    }
 
 /* `iload*; iload*; if_icmp<cond>` - both operands are known, so the branch
  * is decided without ever materialising them on the operand stack. */
@@ -1657,12 +1851,14 @@ nj_status nj_interp_run(nj_vm *vm, nj_thread *th, int stop_depth)
         L_0x01: case 0x01: sp->r = NULL; sp++; DISPATCH();              /* aconst_null */
         L_0x02: case 0x02:                               /* iconst_m1 */
 #if NJ_ENABLE_SUPERINSTR
+            NJ_CONST_BRANCH_FUSE(-1);
             NJ_CONST_ARITH_FUSE(-1);
 #endif
             sp->i = -1; sp++; DISPATCH();
         L_0x03: case 0x03: case 0x04: case 0x05:
         case 0x06: case 0x07: case 0x08:                   /* iconst_0..5 */
 #if NJ_ENABLE_SUPERINSTR
+            NJ_CONST_BRANCH_FUSE((nj_s4)op - 3);
             NJ_CONST_ARITH_FUSE((nj_s4)op - 3);
 #endif
             sp->i = (nj_s4)op - 3; sp++; DISPATCH();
@@ -1697,12 +1893,14 @@ nj_status nj_interp_run(nj_vm *vm, nj_thread *th, int stop_depth)
         L_0x10: case 0x10: {                     /* bipush [+ int-arith] */
             nj_s4 v = S1();
 #if NJ_ENABLE_SUPERINSTR
+            NJ_CONST_BRANCH_FUSE(v);
             NJ_CONST_ARITH_FUSE(v);
 #endif
             sp->i = v; sp++; DISPATCH(); }
         L_0x11: case 0x11: {                     /* sipush [+ int-arith] */
             nj_s4 v = S2();
 #if NJ_ENABLE_SUPERINSTR
+            NJ_CONST_BRANCH_FUSE(v);
             NJ_CONST_ARITH_FUSE(v);
 #endif
             sp->i = v; sp++; DISPATCH(); }
@@ -1755,6 +1953,7 @@ nj_status nj_interp_run(nj_vm *vm, nj_thread *th, int stop_depth)
         L_0x15: case 0x15: { nj_u2 i = (nj_u2)U1();
             nj_s4 v_ = locals[i].i;
 #if NJ_ENABLE_SUPERINSTR
+            NJ_ILOAD_CONST_ARITH_FUSE(v_);
             NJ_ILOAD_FUSE(v_);
 #endif
             sp->i = v_; sp++; DISPATCH(); }
@@ -1763,7 +1962,11 @@ nj_status nj_interp_run(nj_vm *vm, nj_thread *th, int stop_depth)
             NJ_LLOAD_LONG_FUSE(locals[i]);
 #endif
             sp[0] = locals[i]; sp[1].bits=0u; sp+=2; DISPATCH(); }
-        L_0x17: case 0x17: { nj_u2 i = (nj_u2)U1(); sp->bits = locals[i].bits; sp++; DISPATCH(); }
+        L_0x17: case 0x17: { nj_u2 i = (nj_u2)U1();
+#if NJ_ENABLE_SUPERINSTR
+            NJ_FLOAD_FUSE(locals[i].f);
+#endif
+            sp->bits = locals[i].bits; sp++; DISPATCH(); }
         L_0x18: case 0x18: { nj_u2 i = (nj_u2)U1(); sp[0] = locals[i]; sp[1].bits=0u; sp+=2; DISPATCH(); }
         L_0x19: case 0x19: { nj_u2 i = (nj_u2)U1();
             nj_ref r_ = locals[i].r;
@@ -1775,6 +1978,7 @@ nj_status nj_interp_run(nj_vm *vm, nj_thread *th, int stop_depth)
             {
                 nj_s4 v_ = locals[op - 0x1a].i;
 #if NJ_ENABLE_SUPERINSTR
+                NJ_ILOAD_CONST_ARITH_FUSE(v_);
                 NJ_ILOAD_FUSE(v_);
 #endif
                 sp->i = v_; sp++; DISPATCH();
@@ -1785,6 +1989,9 @@ nj_status nj_interp_run(nj_vm *vm, nj_thread *th, int stop_depth)
 #endif
             sp[0] = locals[op - 0x1e]; sp[1].bits = 0u; sp += 2; DISPATCH();
         L_0x22: case 0x22: case 0x23: case 0x24: case 0x25:        /* fload_0..3 */
+#if NJ_ENABLE_SUPERINSTR
+            NJ_FLOAD_FUSE(locals[op - 0x22].f);
+#endif
             sp->bits = locals[op - 0x22].bits; sp++; DISPATCH();
         L_0x26: case 0x26: case 0x27: case 0x28: case 0x29:        /* dload_0..3 */
             sp[0] = locals[op - 0x26]; sp[1].bits = 0u; sp += 2; DISPATCH();
@@ -1969,7 +2176,11 @@ nj_status nj_interp_run(nj_vm *vm, nj_thread *th, int stop_depth)
                      sp[0].j = (nj_s8)((nj_u8)sp[0].j + (nj_u8)b);
                      sp[1].bits = 0u; sp += 2; DISPATCH(); }
         L_0x62: case 0x62: { float b = (--sp)->f, a = (--sp)->f;
-                     sp->f = a + b; sp++; DISPATCH(); }
+                     float r_ = a + b;
+#if NJ_ENABLE_SUPERINSTR
+                     NJ_FARITH_TAIL(r_);
+#endif
+                     sp->f = r_; sp++; DISPATCH(); }
         L_0x63: case 0x63: { double a, b; sp -= 2;
                      memcpy(&b, &sp[0].j, 8u); sp -= 2;
                      memcpy(&a, &sp[0].j, 8u);
@@ -1981,7 +2192,11 @@ nj_status nj_interp_run(nj_vm *vm, nj_thread *th, int stop_depth)
                      sp[0].j = (nj_s8)((nj_u8)sp[0].j - (nj_u8)b);
                      sp[1].bits = 0u; sp += 2; DISPATCH(); }
         L_0x66: case 0x66: { float b = (--sp)->f, a = (--sp)->f;
-                     sp->f = a - b; sp++; DISPATCH(); }
+                     float r_ = a - b;
+#if NJ_ENABLE_SUPERINSTR
+                     NJ_FARITH_TAIL(r_);
+#endif
+                     sp->f = r_; sp++; DISPATCH(); }
         L_0x67: case 0x67: { double a, b; sp -= 2;
                      memcpy(&b, &sp[0].j, 8u); sp -= 2;
                      memcpy(&a, &sp[0].j, 8u);
@@ -1993,7 +2208,11 @@ nj_status nj_interp_run(nj_vm *vm, nj_thread *th, int stop_depth)
                      sp[0].j = (nj_s8)((nj_u8)sp[0].j * (nj_u8)b);
                      sp[1].bits = 0u; sp += 2; DISPATCH(); }
         L_0x6a: case 0x6a: { float b = (--sp)->f, a = (--sp)->f;
-                     sp->f = a * b; sp++; DISPATCH(); }
+                     float r_ = a * b;
+#if NJ_ENABLE_SUPERINSTR
+                     NJ_FARITH_TAIL(r_);
+#endif
+                     sp->f = r_; sp++; DISPATCH(); }
         L_0x6b: case 0x6b: { double a, b; sp -= 2;
                      memcpy(&b, &sp[0].j, 8u); sp -= 2;
                      memcpy(&a, &sp[0].j, 8u);
@@ -2012,7 +2231,11 @@ nj_status nj_interp_run(nj_vm *vm, nj_thread *th, int stop_depth)
                      }
                      sp[1].bits = 0u; sp += 2; DISPATCH(); }
         L_0x6e: case 0x6e: { float b = (--sp)->f, a = (--sp)->f;
-                     sp->f = a / b; sp++; DISPATCH(); }
+                     float r_ = a / b;
+#if NJ_ENABLE_SUPERINSTR
+                     NJ_FARITH_TAIL(r_);
+#endif
+                     sp->f = r_; sp++; DISPATCH(); }
         L_0x6f: case 0x6f: { double a, b; sp -= 2;
                      memcpy(&b, &sp[0].j, 8u); sp -= 2;
                      memcpy(&a, &sp[0].j, 8u);
