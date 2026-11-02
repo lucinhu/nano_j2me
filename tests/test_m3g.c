@@ -1442,6 +1442,42 @@ static void test_image2d_set(nj_vm *vm)
                   "drawing with an immutable RGBA texture succeeds");
             check(i2d_canvas_pixel(&canvas, 120, 160) == 0xFF0000u,
                   "an immutable RGBA texel renders too");
+
+            /*
+             * Texture2D allows any Image2D format.  ALPHA, LUMINANCE and
+             * LUMINANCE_ALPHA are widened to RGBA once per image; under the
+             * default MODULATE blending the widening is exact, and under
+             * REPLACE (228) LUMINANCE/LUMINANCE_ALPHA still are, because
+             * their spec rule is Cv = Ct.  These two texels pin the widening:
+             * 0x80 grey and 0x40 grey render as that RGB, not as the white
+             * untextured fallback.
+             */
+            {
+                nj_ref lum = i2d_new3(vm, 97, 1, 1, &ok);
+                nj_ref lumx = i2d_new3(vm, 98, 1, 1, &ok);
+                nj_ref lum_px = nj_byte_array_new(vm, 1u);
+                nj_ref lumx_px = nj_byte_array_new(vm, 2u);
+
+                check(lum && lumx && lum_px && lumx_px,
+                      "the LUMINANCE fixtures construct");
+                if (lum && lumx && lum_px && lumx_px) {
+                    ((nj_u1 *)nj_array_data(lum_px))[0] = 0x80u;
+                    ((nj_u1 *)nj_array_data(lumx_px))[0] = 0x40u;
+                    ((nj_u1 *)nj_array_data(lumx_px))[1] = 0xFFu;
+                    check(i2d_set_ok(vm, lum, 0, 0, 1, 1, lum_px),
+                          "a 1x1 LUMINANCE image accepts its byte");
+                    check(i2d_canvas_draw(vm, &canvas, lum),
+                          "drawing with a LUMINANCE texture succeeds");
+                    check(i2d_canvas_pixel(&canvas, 120, 160) == 0x808080u,
+                          "a LUMINANCE texel widens to grey and renders");
+                    check(i2d_set_ok(vm, lumx, 0, 0, 1, 1, lumx_px),
+                          "a 1x1 LUMINANCE_ALPHA image accepts its bytes");
+                    check(i2d_canvas_draw(vm, &canvas, lumx),
+                          "drawing with a LUMINANCE_ALPHA texture succeeds");
+                    check(i2d_canvas_pixel(&canvas, 120, 160) == 0x404040u,
+                          "a LUMINANCE_ALPHA texel widens to grey and renders");
+                }
+            }
         }
     }
     }
@@ -2639,6 +2675,130 @@ static void test_world_mesh_count(nj_vm *vm)
         printf("  (lit %d of %d columns: the truncating render draws 64)\n",
                lit, NODES);
     }
+}
+
+
+/* ------------------------------------------------------------------ */
+/* Background: setImage resets the crop, clear() stretches it          */
+/* ------------------------------------------------------------------ */
+/*
+ * JSR 184 Background.setImage() resets the crop rectangle to the whole
+ * image and clear() stretches that rectangle over the viewport.  The runtime
+ * used to leave the crop at 0x0 when a title bound an image and never called
+ * setCrop(), so clear() skipped the image entirely - Doom 3's menu sky binds
+ * an image and no crop.  Outside the source image, BORDER mode paints the
+ * background colour and REPEAT tiles the image.
+ */
+static void test_background_image(nj_vm *vm)
+{
+    nj_value a[4], r;
+    nj_ref target, tg, g3d, bg, img, bytes, pix;
+    const nj_u4 *px;
+    nj_u1 texels[12] = {
+        255u, 0u, 0u,      0u, 255u, 0u,
+        0u, 0u, 255u,      255u, 255u, 0u
+    };
+    nj_u4 i, nwhite = 0;
+    int crop[4] = { -1, -1, -1, -1 };
+
+    memset(&r, 0, sizeof(r));
+    a[0].i = 240; a[1].i = 320;
+    check(nj_call_static(vm, "javax/microedition/lcdui/Image", "createImage",
+                         "(II)Ljavax/microedition/lcdui/Image;", a, &r) == NJ_OK
+          && r.r != 0, "the Background probe target constructs");
+    if (r.r == 0) {
+        return;
+    }
+    target = r.r;
+    r.r = 0;
+    call(vm, target, "javax/microedition/lcdui/Image", "getGraphics",
+         "()Ljavax/microedition/lcdui/Graphics;", NULL, &r);
+    tg = r.r;
+    pix = nj_rget(vm, target,
+                  nj_field_lookup(vm, "javax/microedition/lcdui/Image",
+                                  "imgPixels", "[I", 0));
+    g3d = make(vm, CLS("Graphics3D"));
+    bg = make(vm, CLS("Background"));
+    bytes = nj_byte_array_new(vm, 12u);
+    img = nj_object_new(vm, CLS("Image2D"));
+    check(tg && pix && g3d && bg && bytes && img,
+          "the Background probe fixtures construct");
+    if (!tg || !pix || !g3d || !bg || !bytes || !img) {
+        return;
+    }
+    memcpy(nj_array_data(bytes), texels, sizeof(texels));
+    a[0].i = 99; a[1].i = 2; a[2].i = 2; a[3].r = bytes;
+    check(nj_call_special(vm, img, CLS("Image2D"), "<init>",
+                          "(III[B)V", a, NULL) == NJ_OK,
+          "a 2x2 RGB background image constructs");
+
+    a[0].r = img;
+    call(vm, bg, CLS("Background"), "setImage",
+         "(L" CLS("Image2D") ";)V", a, NULL);
+    /* The crop must follow the image, without an explicit setCrop(). */
+    a[0].r = 0;
+    call(vm, bg, CLS("Background"), "getCropX", "()I", NULL, &r); crop[0] = r.i;
+    call(vm, bg, CLS("Background"), "getCropY", "()I", NULL, &r); crop[1] = r.i;
+    call(vm, bg, CLS("Background"), "getCropWidth", "()I", NULL, &r); crop[2] = r.i;
+    call(vm, bg, CLS("Background"), "getCropHeight", "()I", NULL, &r); crop[3] = r.i;
+    check(crop[0] == 0 && crop[1] == 0 && crop[2] == 2 && crop[3] == 2,
+          "setImage resets the crop rectangle to the whole image");
+
+    a[0].r = tg;
+    call(vm, g3d, CLS("Graphics3D"), "bindTarget",
+         "(Ljava/lang/Object;)V", a, NULL);
+    a[0].i = 0; a[1].i = 0; a[2].i = 240; a[3].i = 320;
+    call(vm, g3d, CLS("Graphics3D"), "setViewport", "(IIII)V", a, NULL);
+
+    a[0].r = bg;
+    call(vm, g3d, CLS("Graphics3D"), "clear",
+         "(L" CLS("Background") ";)V", a, NULL);
+    px = (const nj_u4 *)nj_array_data(pix);
+    for (i = 0; i < 240u * 320u; i++) {
+        if ((px[i] & 0xFFFFFFu) == 0xFFFFFFu) {
+            nwhite++;
+        }
+    }
+    check(nwhite == 0u,
+          "the whole 240x320 target is painted by the 2x2 background image");
+    check(px[80u * 240u + 60u] == 0xFFFF0000u &&
+          px[80u * 240u + 180u] == 0xFF00FF00u &&
+          px[240u * 240u + 60u] == 0xFF0000FFu &&
+          px[240u * 240u + 180u] == 0xFFFFFF00u,
+          "the image quadrants stretch over their quarters of the viewport");
+
+    /* BORDER: the crop is larger than the image, so outside pixels take the
+       background colour; the image covers the middle. */
+    a[0].i = (nj_s4)0xFF0000FFu;   /* opaque blue */
+    call(vm, bg, CLS("Background"), "setColor", "(I)V", a, NULL);
+    a[0].i = 32; a[1].i = 32;      /* Background.BORDER */
+    call(vm, bg, CLS("Background"), "setImageMode", "(II)V", a, NULL);
+    a[0].i = -2; a[1].i = -2; a[2].i = 6; a[3].i = 6;
+    call(vm, bg, CLS("Background"), "setCrop", "(IIII)V", a, NULL);
+    a[0].r = bg;
+    call(vm, g3d, CLS("Graphics3D"), "clear",
+         "(L" CLS("Background") ";)V", a, NULL);
+    px = (const nj_u4 *)nj_array_data(pix);
+    check(px[5u * 240u + 5u] == 0xFF0000FFu,
+          "BORDER paints the background colour outside the source image");
+    check((px[160u * 240u + 120u] & 0xFFFFFFu) == 0xFFFF00u,
+          "the cropped image still covers the middle of the viewport");
+
+    /* REPEAT: the same out-of-range pixels now sample the wrapped image. */
+    a[0].i = 33; a[1].i = 33;      /* Background.REPEAT */
+    call(vm, bg, CLS("Background"), "setImageMode", "(II)V", a, NULL);
+    a[0].r = bg;
+    call(vm, g3d, CLS("Graphics3D"), "clear",
+         "(L" CLS("Background") ";)V", a, NULL);
+    px = (const nj_u4 *)nj_array_data(pix);
+    {
+        nj_u4 corner = px[5u * 240u + 5u] & 0xFFFFFFu;
+
+        check(corner == 0xFF0000u || corner == 0x00FF00u ||
+              corner == 0x0000FFu || corner == 0xFFFF00u,
+              "REPEAT tiles the image instead of painting the background");
+    }
+    call(vm, g3d, CLS("Graphics3D"), "releaseTarget", "()V", NULL, NULL);
 }
 
 /*
@@ -8015,6 +8175,9 @@ int main(void)
     /* A World larger than one render's stack array keeps all of its Mesh
        nodes; Doom 3's level (173 meshes) lost everything past the 64th. */
     test_world_mesh_count(vm);
+
+    printf("== Background image: crop reset and coverage ==\n");
+    test_background_image(vm);
     test_two_sided_lighting(vm);
     test_m3g_bounds_and_cycles(vm);
     test_graphics3d_light_bounds(vm);

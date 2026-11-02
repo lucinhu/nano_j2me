@@ -3623,9 +3623,28 @@ NJFN(m3g_bg_isDepthClear)
  */
 NJFN(m3g_bg_setImage)
 {
-    nj_rput(vm, NJ_THIS(args),
+    nj_ref self = NJ_THIS(args);
+    nj_ref im = NJ_ARG_REF(args, 0);
+
+    nj_rput(vm, self,
             nj_field_lookup(vm, NJ_C_BG, "_nj_img", "L" NJ_C_IMAGE2D ";", 0),
-            NJ_ARG_REF(args, 0));
+            im);
+    /*
+     * The crop rectangle is reset to the whole image (JSR 184
+     * Background.setImage); it is undefined only for a null image.  Without
+     * this, a title that binds an image and never calls setCrop leaves the
+     * crop at 0x0 and clear(Background) skips the image entirely - Doom 3's
+     * menu sky does exactly that.
+     */
+    if (im) {
+        nj_s4 iw = (nj_s4)nj_iget(vm, im, m3g_fof(vm, NJ_C_IMAGE2D, "_nj_w", "I"));
+        nj_s4 ih = (nj_s4)nj_iget(vm, im, m3g_fof(vm, NJ_C_IMAGE2D, "_nj_h", "I"));
+
+        nj_iput(vm, self, m3g_fof(vm, NJ_C_BG, "_nj_cropX", "I"), 0);
+        nj_iput(vm, self, m3g_fof(vm, NJ_C_BG, "_nj_cropY", "I"), 0);
+        nj_iput(vm, self, m3g_fof(vm, NJ_C_BG, "_nj_cropW", "I"), iw);
+        nj_iput(vm, self, m3g_fof(vm, NJ_C_BG, "_nj_cropH", "I"), ih);
+    }
     return NJ_OK;
 }
 
@@ -6304,8 +6323,16 @@ nj_status nj_m3g_link_misc(nj_vm *vm, const nj_m3g_object *objs, nj_u4 nobj,
             nj_iput(vm, o, m3g_fof(vm, NJ_C_BG, "_nj_immode", "I"),
                     (nj_s4)(f->b & 0xFFu));
             if (img) {
+                nj_s4 iw = (nj_s4)nj_iget(vm, img, m3g_fof(vm, NJ_C_IMAGE2D, "_nj_w", "I"));
+                nj_s4 ih = (nj_s4)nj_iget(vm, img, m3g_fof(vm, NJ_C_IMAGE2D, "_nj_h", "I"));
+
                 nj_rput(vm, o, m3g_fof(vm, NJ_C_BG, "_nj_img",
                                        "L" NJ_C_IMAGE2D ";"), img);
+                /* The crop defaults to the whole image, as setImage() does. */
+                nj_iput(vm, o, m3g_fof(vm, NJ_C_BG, "_nj_cropX", "I"), 0);
+                nj_iput(vm, o, m3g_fof(vm, NJ_C_BG, "_nj_cropY", "I"), 0);
+                nj_iput(vm, o, m3g_fof(vm, NJ_C_BG, "_nj_cropW", "I"), iw);
+                nj_iput(vm, o, m3g_fof(vm, NJ_C_BG, "_nj_cropH", "I"), ih);
             }
             break;
         }
@@ -11051,6 +11078,106 @@ static void m3g_image_dirty(nj_vm *vm, nj_ref img)
     nj_rput(vm, img, m3g_fof(vm, NJ_C_IMAGE2D, "_nj_mips", "[B"), 0);
 }
 
+/*
+ * Widen an ALPHA/LUMINANCE/LUMINANCE_ALPHA Image2D to the RGBA byte stream the
+ * sampler reads, once per image.
+ *
+ * Texture2D allows any Image2D format, and the JSR's blending table defines
+ * what the narrow ones contribute: ALPHA supplies alpha only (Cv = Cf),
+ * LUMINANCE supplies RGB (Cv = Cf * Ct under MODULATE) and LUMINANCE_ALPHA
+ * supplies both.
+ *
+ * The widened pixels are cached in the Image2D's _nj_mips field: for these
+ * three formats that field has no other meaning (m3g_image_mips() only builds
+ * chains for RGBA and returns immediately otherwise) and m3g_image_dirty()
+ * already clears it, so an upload rebuilds the cache.  A new class field
+ * would have been clearer, but the snapshot loader compares each saved
+ * class's field count, and an extra Image2D field made every existing save
+ * state refuse to load.
+ *
+ * MODULATE, the default blending mode, comes out exactly right through the
+ * normal RGBA path.  Two corners stay approximations and are deliberate: an
+ * ALPHA image under REPLACE keeps the widened white instead of the fragment
+ * colour, and the widened images have no mip chain, so FILTER_NEAREST/LINEAR
+ * level filtering samples level 0.
+ */
+static nj_ref m3g_image_rgba(nj_vm *vm, nj_ref img)
+{
+    nj_ref px, out = 0;
+    const nj_u1 *src;
+    nj_u1 *dst;
+    nj_s4 w, h, fmt, k, n;
+    nj_u4 mark;
+    nj_u8 need;
+
+    if (!img) {
+        return 0;
+    }
+    fmt = m3g_image_format(vm, img);
+    if (fmt < 96 || fmt > 98) {
+        return 0;                  /* RGB and RGBA are already in this form */
+    }
+    out = nj_rget(vm, img, m3g_fof(vm, NJ_C_IMAGE2D, "_nj_mips", "[B"));
+    if (out) {
+        return out;
+    }
+    w = nj_iget(vm, img, m3g_fof(vm, NJ_C_IMAGE2D, "_nj_w", "I"));
+    h = nj_iget(vm, img, m3g_fof(vm, NJ_C_IMAGE2D, "_nj_h", "I"));
+    px = nj_rget(vm, img, m3g_fof(vm, NJ_C_IMAGE2D, "_nj_pixels", "[B"));
+    if (!px || w <= 0 || h <= 0) {
+        return 0;
+    }
+    need = (nj_u8)(nj_u4)w * (nj_u8)(nj_u4)h * (nj_u8)(fmt == 98 ? 2 : 1);
+    if (!nj_array_data(px) || (nj_u8)nj_array_length(px) < need) {
+        return 0;
+    }
+    need = (nj_u8)(nj_u4)w * (nj_u8)(nj_u4)h * 4u;
+    if (need > 0x7FFFFFFFu) {
+        return 0;                  /* no 2 GB allocations on a phone */
+    }
+    mark = nj_root_mark(vm);
+    nj_root(vm, img);
+    nj_root(vm, px);
+    out = nj_array_new(vm, "B", (nj_u4)need);
+    if (!out) {
+        nj_root_release(vm, mark);
+        return 0;
+    }
+    out = nj_root(vm, out);
+    dst = (nj_u1 *)nj_array_data(out);
+    src = (const nj_u1 *)nj_array_data(px);
+    if (!dst || !src) {
+        nj_root_release(vm, mark);
+        return 0;
+    }
+    n = w * h;
+    for (k = 0; k < n; k++) {
+        if (fmt == 96) {           /* ALPHA: white with the stored alpha */
+            dst[k * 4 + 0u] = 255u;
+            dst[k * 4 + 1u] = 255u;
+            dst[k * 4 + 2u] = 255u;
+            dst[k * 4 + 3u] = src[k];
+        } else if (fmt == 97) {    /* LUMINANCE: grey with opaque alpha */
+            nj_u1 l = src[k];
+
+            dst[k * 4 + 0u] = l;
+            dst[k * 4 + 1u] = l;
+            dst[k * 4 + 2u] = l;
+            dst[k * 4 + 3u] = 255u;
+        } else {                   /* LUMINANCE_ALPHA: grey plus alpha */
+            nj_u1 l = src[k * 2];
+
+            dst[k * 4 + 0u] = l;
+            dst[k * 4 + 1u] = l;
+            dst[k * 4 + 2u] = l;
+            dst[k * 4 + 3u] = src[k * 2 + 1];
+        }
+    }
+    nj_rput(vm, img, m3g_fof(vm, NJ_C_IMAGE2D, "_nj_mips", "[B"), out);
+    nj_root_release(vm, mark);
+    return out;
+}
+
 static nj_ref m3g_image_mips(nj_vm *vm, nj_ref img)
 {
     nj_ref px, mips = 0;
@@ -13560,8 +13687,7 @@ static int jr_setup(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref ib, nj_ref app,
                 r.sw.filt_level = (int)nj_iget(vm, tex,
                                   m3g_fof(vm, NJ_C_TEX2D, "_nj_filtLevel", "I"));
                 if (im2) {
-                    nj_ref px = nj_rget(vm, im2, m3g_fof(vm, NJ_C_IMAGE2D,
-                                                         "_nj_pixels", "[B"));
+                    nj_ref px;
                     nj_ref mipref;
                     nj_s4 fmt = m3g_image_format(vm, im2);
 
@@ -13569,6 +13695,21 @@ static int jr_setup(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref ib, nj_ref app,
                                                                "_nj_w", "I"));
                     r.sw.tex_h = (int)nj_iget(vm, im2, m3g_fof(vm, NJ_C_IMAGE2D,
                                                                "_nj_h", "I"));
+                    /*
+                     * ALPHA, LUMINANCE and LUMINANCE_ALPHA are legal texture
+                     * formats; they arrive widened to RGBA through the cached
+                     * conversion.  The RGB and RGBA images are sampled in
+                     * place, as before.
+                     */
+                    if (fmt >= 96 && fmt <= 98) {
+                        px = m3g_image_rgba(vm, im2);
+                        if (px) {
+                            fmt = 100;
+                        }
+                    } else {
+                        px = nj_rget(vm, im2, m3g_fof(vm, NJ_C_IMAGE2D,
+                                                      "_nj_pixels", "[B"));
+                    }
                     if (px && r.sw.tex_w > 0 && r.sw.tex_h > 0 &&
                         (fmt == 99 || fmt == 100) &&
                         /* The sampler addresses w*h texels of bpp bytes with
