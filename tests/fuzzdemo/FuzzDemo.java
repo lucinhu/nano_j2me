@@ -2240,6 +2240,306 @@ public class FuzzDemo extends MIDlet {
         }
     }
 
+
+    static byte[] rawFile(byte[] body) {
+        byte[] data = cat(m3gIdent(), m3gSection(0, pad(20), 0));
+        if (body.length > 0) {
+            data = cat(data, m3gSection(0, body, body.length));
+        }
+        return data;
+    }
+
+    static byte[] groupRefs(int[] refs) {
+        byte[] b = cat(pad(12), u32(refs.length));
+        for (int k = 0; k < refs.length; k++) {
+            b = cat(b, u32(refs[k]));
+        }
+        return b;
+    }
+
+    static byte[] worldRefs(int[] kids, int cam, int bg) {
+        byte[] b = cat(pad(22), u32(kids.length));
+        for (int k = 0; k < kids.length; k++) {
+            b = cat(b, u32(kids[k]));
+        }
+        b = cat(b, u32(cam));
+        return cat(b, u32(bg));
+    }
+
+    static byte[] meshRefs(int vb, int[] pairs) {
+        byte[] b = cat(pad(16), u32(-1));
+        b = cat(b, pad(2));
+        b = cat(b, u32(vb));
+        b = cat(b, u32(pairs.length / 2));
+        for (int k = 0; k < pairs.length; k++) {
+            b = cat(b, u32(pairs[k]));
+        }
+        return b;
+    }
+
+    static byte[] chainGroups(int n) {
+        byte[] body = new byte[0];
+        for (int k = 1; k <= n; k++) {
+            int ref = (k < n) ? (k + 1) : 0;
+            body = cat(body, objStream(9, groupRefs(new int[] { ref })));
+        }
+        return body;
+    }
+
+    static void renderQuietly(Node n) {
+        boolean bound = false;
+        try {
+            g3d.bindTarget(target);
+            bound = true;
+            g3d.render(n, xfAny());
+        } catch (Throwable t) {
+            record(t);
+        } finally {
+            if (bound) {
+                try { g3d.releaseTarget(); } catch (Throwable t) { record(t); }
+            }
+        }
+    }
+
+    static void opLoaderEvil(int i) {
+        begin(i, "Loader.load evil container");
+        try {
+            byte[] body;
+            int variant = nextInt(11);
+            switch (variant) {
+                case 0:
+                    body = cat(objStream(9, groupRefs(new int[] { 2 })),
+                               objStream(9, groupRefs(new int[] { 1 })));
+                    break;
+                case 1:
+                    body = objStream(9, groupRefs(new int[] { 1 }));
+                    break;
+                case 2:
+                    body = cat(objStream(9, groupRefs(new int[] { 2 })),
+                               objStream(22, worldRefs(new int[] { 1 }, 1, 1)));
+                    break;
+                case 3:
+                    body = cat(cat(objStream(14, meshRefs(2, new int[] { 3, 4 })),
+                                   objStream(5, realPayload(5, 5))),
+                               cat(objStream(11, tsaPayload()),
+                                   objStream(3, appearancePayload(5))));
+                    break;
+                case 4:
+                    body = cat(cat(objStream(14, meshRefs(999, new int[] { 0, -1 })),
+                                   objStream(11, tsaPayload())),
+                               objStream(3, appearancePayload(3)));
+                    break;
+                case 5:
+                    body = cat(cat(objStream(22, worldRefs(new int[] { 2, 3 }, 2, 3)),
+                                   objStream(14, meshRefs(1, new int[] { 4, 4 }))),
+                               cat(objStream(5, realPayload(5, 3)),
+                                   objStream(4, realPayload(4, 3))));
+                    break;
+                case 6:
+                    body = cat(cat(objStream(17, bytes(20)),
+                                   objStream(5, realPayload(5, 2))),
+                               objStream(3, appearancePayload(2)));
+                    break;
+                case 7:
+                    body = cat(objStream(2, realPayload(2, 12)),
+                               objStream(9, groupRefs(new int[] { 0 })));
+                    break;
+                case 8:
+                    body = chainGroups(12);
+                    break;
+                case 9:
+                    body = cat(objStream(16, meshRefs(2, new int[] { 3, 4 })),
+                               cat(objStream(5, realPayload(5, 5)),
+                                   cat(objStream(11, tsaPayload()),
+                                       objStream(3, appearancePayload(5)))));
+                    break;
+                default: {
+                    byte[] full = m3gFile(6, true);
+                    Loader.load(truncated(full, nextInt(full.length)), 0);
+                    return;
+                }
+            }
+            byte[] data = rawFile(body);
+            int off = pickInt(new int[] { 0, 0, 0, 0, 0, 1, -1, data.length - 1,
+                                          data.length, 0x7FFFFFFF });
+            Object3D[] objs = Loader.load(data, off);
+            if (objs == null) {
+                return;
+            }
+            Object3D firstNode = null;
+            for (int j = 0; j < objs.length; j++) {
+                Object3D o = objs[j];
+                if (o == null) {
+                    continue;
+                }
+                if (firstNode == null && o instanceof Node) {
+                    firstNode = o;
+                }
+                try { o.setUserID(j + 1); } catch (Throwable t) { record(t); }
+                if (o instanceof Node) {
+                    renderQuietly((Node) o);
+                    try {
+                        ((Node) o).animate(pickInt(new int[] { 0, 1, 1000 }));
+                    } catch (Throwable t) { record(t); }
+                }
+                try {
+                    Object3D d = o.duplicate();
+                    if (d instanceof Node) { renderQuietly((Node) d); }
+                } catch (Throwable t) { record(t); }
+                try { o.find(0); } catch (Throwable t) { record(t); }
+            }
+            if (firstNode != null) {
+                for (int j = 0; j < objs.length; j++) {
+                    if (objs[j] instanceof AnimationTrack) {
+                        try {
+                            ((Node) firstNode).addAnimationTrack((AnimationTrack) objs[j]);
+                            ((Node) firstNode).animate(pickInt(new int[] { 0, 1, -1, 0x7FFFFFFF }));
+                        } catch (Throwable t) { record(t); }
+                    }
+                }
+            }
+        } catch (Throwable t) {
+            failA(i, t);
+        }
+    }
+
+    static void opAnimControllerEdge(int i) {
+        begin(i, "animation controller edge");
+        try {
+            int interp = pickInt(new int[] { 176, 177, 178, 179, 180 });
+            int comp = (interp == 177 || interp == 179) ? 4 : 1 + nextInt(4);
+            int nkeys = pickInt(new int[] { 1, 2, 3, 16 });
+            KeyframeSequence ks = new KeyframeSequence(comp, nkeys, interp);
+            for (int k = 0; k < nkeys; k++) {
+                float[] key = new float[comp + 1];
+                key[0] = pickFloat();
+                for (int c = 0; c < comp; c++) {
+                    key[c + 1] = pickFloat();
+                }
+                try {
+                    ks.setKeyframe(k, (int) pickFloat(), key);
+                } catch (Throwable t) { record(t); }
+            }
+            try {
+                ks.setValidRange(pickInt(new int[] { 0, 1, -1, nkeys, 0x7FFFFFFF, (int) 0x80000000 }),
+                                 pickInt(new int[] { 0, 1, -1, nkeys, 0x7FFFFFFF }));
+            } catch (Throwable t) { record(t); }
+            try {
+                ks.setDuration(pickInt(new int[] { -1, 0, 1, 1000, 0x7FFFFFFF, (int) 0x80000000 }));
+            } catch (Throwable t) { record(t); }
+            try {
+                ks.setRepeatMode(pickInt(new int[] { 192, 193, 0, -1 }));
+            } catch (Throwable t) { record(t); }
+            int prop = pickInt(new int[] { 256, 257, 258, 259, 260, 261, 262, 263, 264,
+                                           265, 266, 267, 268, 269, 270, 271, 272, 273,
+                                           274, 275, 276, 0, -1, 999, 0x7FFFFFFF });
+            AnimationTrack tr = new AnimationTrack(ks, prop);
+            AnimationController c = new AnimationController();
+            try { tr.setController(c); } catch (Throwable t) { record(t); }
+            int refTime = pickInt(new int[] { 0, 1, -1, 0x7FFFFFFF, (int) 0x80000000 });
+            try { c.setSpeed(pickFloat(), refTime); } catch (Throwable t) { record(t); }
+            try { c.setPosition(pickFloat(), refTime); } catch (Throwable t) { record(t); }
+            try { c.setWeight(pickFloat()); } catch (Throwable t) { record(t); }
+            try {
+                c.setActiveInterval(pickInt(new int[] { 0, 1, -1, 0x7FFFFFFF, (int) 0x80000000 }),
+                                    pickInt(new int[] { 0, 1, -1, 0x7FFFFFFF }));
+            } catch (Throwable t) { record(t); }
+            Node nd = (Node) new Group();
+            try { nd.addAnimationTrack(tr); } catch (Throwable t) { record(t); }
+            for (int k = 0; k < 4; k++) {
+                try {
+                    nd.animate(pickInt(new int[] { 0, 1, -1, 1000, 0x7FFFFFFF, (int) 0x80000000 }));
+                } catch (Throwable t) { record(t); }
+            }
+            try { c.setActiveInterval(0, 0); } catch (Throwable t) { record(t); }
+            try { nd.animate(0); } catch (Throwable t) { record(t); }
+            if (nextInt(3) == 0) {
+                try { nd.removeAnimationTrack(tr); } catch (Throwable t) { record(t); }
+                try { nd.animate(0); } catch (Throwable t) { record(t); }
+            }
+            try {
+                Object3D d = nd.duplicate();
+                if (d instanceof Node) { renderQuietly((Node) d); }
+            } catch (Throwable t) { record(t); }
+            renderQuietly(nd);
+        } catch (Throwable t) {
+            failA(i, t);
+        }
+    }
+
+    static void opSpriteTexture(int i) {
+        begin(i, "sprite and texture churn");
+        try {
+            int w = 1 + nextInt(8), h = 1 + nextInt(8);
+            Image2D img = new Image2D(100, w, h, bytes(w * h * 4));
+            Image2D one = new Image2D(100, 1, 1, bytes(4));
+            Texture2D tex = new Texture2D(img);
+            int[] filter = new int[] { 208, 209, 210, 0, -1, 211 };
+            int[] wrap = new int[] { 240, 241, 0, -1, 242 };
+            try { tex.setFiltering(pickInt(filter), pickInt(filter)); } catch (Throwable t) { record(t); }
+            try { tex.setWrapping(pickInt(wrap), pickInt(wrap)); } catch (Throwable t) { record(t); }
+            try {
+                tex.setBlending(pickInt(new int[] { 224, 225, 226, 227, 228, 0, -1, 229 }));
+            } catch (Throwable t) { record(t); }
+            try {
+                tex.setBlendColor(pickInt(new int[] { 0, -1, 0x7FFFFFFF, (int) 0x80000000 }));
+            } catch (Throwable t) { record(t); }
+            Appearance ap = new Appearance();
+            try { ap.setTexture(0, tex); } catch (Throwable t) { record(t); }
+            Sprite3D s = new Sprite3D(nextInt(2) == 0, img, ap);
+            try {
+                s.setCrop(pickInt(new int[] { 0, 1, -1, 0x7FFFFFFF, (int) 0x80000000 }),
+                          pickInt(new int[] { 0, 1, -1, 0x7FFFFFFF, (int) 0x80000000 }),
+                          pickInt(new int[] { 0, 1, -1, 0x7FFFFFFF, (int) 0x80000000 }),
+                          pickInt(new int[] { 0, 1, -1, 0x7FFFFFFF, (int) 0x80000000 }));
+            } catch (Throwable t) { record(t); }
+            renderQuietly(s);
+            try { s.setImage(nextInt(2) == 0 ? one : img); } catch (Throwable t) { record(t); }
+            try { tex.setImage(nextInt(3) == 0 ? one : img); } catch (Throwable t) { record(t); }
+            try { ap.setTexture(0, nextInt(4) == 0 ? null : tex); } catch (Throwable t) { record(t); }
+            renderQuietly(s);
+            try { s.setAppearance(nextInt(3) == 0 ? null : ap); } catch (Throwable t) { record(t); }
+            renderQuietly(s);
+        } catch (Throwable t) {
+            failA(i, t);
+        }
+    }
+
+    static void opLifeChurn(int i) {
+        begin(i, "object lifetime churn");
+        try {
+            g3d.bindTarget(target);
+            g3d.releaseTarget();
+            try { g3d.bindTarget(target, true, 0); } catch (Throwable t) { record(t); }
+            try { g3d.releaseTarget(); } catch (Throwable t) { record(t); }
+            try { g3d.releaseTarget(); } catch (Throwable t) { record(t); }
+            for (int k = 0; k < 4; k++) {
+                Object3D[] objs = Loader.load(m3gFile(5, true), 0);
+                if (objs != null) {
+                    for (int j = 0; j < objs.length; j++) {
+                        if (objs[j] instanceof Node) { renderQuietly((Node) objs[j]); }
+                    }
+                }
+                World w = new World();
+                Camera cam = new Camera();
+                cam.setPerspective(60.0f, 1.0f, 0.1f, 100.0f);
+                w.setActiveCamera(cam);
+                Group grp = new Group();
+                w.addChild(grp);
+                g3d.bindTarget(target);
+                try { g3d.render(w); } catch (Throwable t) { record(t); }
+                g3d.releaseTarget();
+            }
+            Node nd = (Node) new Group();
+            for (int k = 0; k < 16; k++) {
+                Object3D d = nd.duplicate();
+                if (d instanceof Node) { renderQuietly((Node) d); }
+            }
+        } catch (Throwable t) {
+            failA(i, t);
+        }
+    }
+
     // ---------------------------------------------------------------- driver
 
     static void runSeed(int s) {
@@ -2247,7 +2547,7 @@ public class FuzzDemo extends MIDlet {
         System.out.println("FUZZ SEED " + s);
         for (int i = 0; i < OPS_PER_SEED; i++) {
             int i0 = i;
-            int k = nextInt(42);
+            int k = nextInt(46);
             switch (k) {
                 case 0: case 1: case 2: opVertexArray(i0); break;
                 case 3: opVertexArrayExtreme(i0); break;
@@ -2283,6 +2583,10 @@ public class FuzzDemo extends MIDlet {
                 case 39: opLoaderBytes(i0); break;
                 case 40: opImmediateDeep(i0); break;
                 case 41: opFileEdge(i0); break;
+                case 42: opLoaderEvil(i0); break;
+                case 43: opAnimControllerEdge(i0); break;
+                case 44: opSpriteTexture(i0); break;
+                case 45: opLifeChurn(i0); break;
                 default: opWorld(i0); break;
             }
         }

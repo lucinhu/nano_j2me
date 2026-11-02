@@ -2824,11 +2824,24 @@ static int m3g_anim_apply(nj_vm *vm, nj_ref self, nj_s4 prop, const float *v)
  * motion it contains.
  */
 static nj_s4 m3g_animate_object(nj_vm *vm, nj_ref self, nj_s4 time,
-                                nj_ref scratch)
+                                nj_ref scratch, unsigned depth)
 {
     nj_s4 validity = 0x7FFFFFFF;
     nj_ref tracks;
     int composed = 0;
+
+    /*
+     * A file can name a child list that closes a loop: the loader links a
+     * Group's children from raw references and, unlike Group.addChild(), has
+     * no ancestor test to refuse an edge that would make the graph cyclic.
+     * The render walks stop at depth 32 for exactly this reason.  animate()
+     * walks the same graph and used to recurse without a bound, so a crafted
+     * or damaged .m3g killed the runtime with a stack overflow the first time
+     * a title animated its scene.
+     */
+    if (depth > 32u) {
+        return validity;
+    }
 
     if (m3g_is_a(vm, self, NJ_C_GROUP)) {
         nj_ref kids = nj_rget(vm, self, m3g_fof(vm, NJ_C_GROUP,
@@ -2846,7 +2859,8 @@ static nj_s4 m3g_animate_object(nj_vm *vm, nj_ref self, nj_s4 time,
                 a[0].i = n.i - 1;
                 if (nj_call(vm, kids, NJ_C_VECTOR, "elementAt",
                             "(I)Ljava/lang/Object;", a, &e) == NJ_OK && e.r) {
-                    nj_s4 v = m3g_animate_object(vm, e.r, time, scratch);
+                    nj_s4 v = m3g_animate_object(vm, e.r, time, scratch,
+                                                depth + 1u);
                     if (v < validity) {
                         validity = v;
                     }
@@ -2959,7 +2973,7 @@ NJFN(m3g_animate)
         ret->i = 0;
         return nj_throw_oom(vm);
     }
-    ret->i = m3g_animate_object(vm, NJ_THIS(args), time, scratch);
+    ret->i = m3g_animate_object(vm, NJ_THIS(args), time, scratch, 0u);
     nj_root_release(vm, mark);
     return NJ_OK;
 }
@@ -6942,6 +6956,7 @@ static nj_status m3g_build_objects(nj_vm *vm, const nj_u1 *data, nj_u4 len,
     }
     {
         nj_u4 count = 0u, world = 0u, at = 0u;
+        nj_u4 fallback = 0u;
         nj_u4 rootmark;
 
         for (i = 0u; i < nobj; i++) {
@@ -6957,6 +6972,7 @@ static nj_status m3g_build_objects(nj_vm *vm, const nj_u1 *data, nj_u4 len,
         if (count == 0u) {
             /* every object is named by another one: answer with what exists,
              * or the title gets an empty scene for a file full of geometry */
+            fallback = 1u;
             for (i = 0u; i < nobj; i++) {
                 if (nj_array_get_ref(arr, i + 1u)) {
                     count++;
@@ -6981,7 +6997,12 @@ static nj_status m3g_build_objects(nj_vm *vm, const nj_u1 *data, nj_u4 len,
         }
         for (i = 0u; i < nobj && at < count; i++) {
             nj_ref o = nj_array_get_ref(arr, i + 1u);
-            if (!o || i + 1u == world || is_ref[i + 1u]) {
+            /* In the fallback the is_ref marks are exactly what made count
+               fall back, so they must not filter the fill as well: the array
+               JSR 184 hands back is "guaranteed not to contain any null
+               objects", and skipping every marked object filled it with the
+               declared number of nulls. */
+            if (!o || i + 1u == world || (!fallback && is_ref[i + 1u])) {
                 continue;
             }
             nj_array_set_ref(roots, at++, o);
@@ -13239,6 +13260,23 @@ static int jr_setup(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref ib, nj_ref app,
     nj_s4 i;
 
     memset(&r, 0, sizeof(r));
+    /*
+     * A Mesh loaded from a file names its vertex buffer with a raw reference,
+     * and the loader stores whatever that reference resolves to.  Nothing
+     * requires it to be a VertexBuffer, so reading VertexBuffer fields out of
+     * a Camera (or any other object) turned one of that object's fields into
+     * an array reference: UBSan reported "member access within misaligned
+     * address 0x000000050001 for type 'struct nj_object'" in nj_array_data,
+     * reached from the _nj_positions read below.  JSR 184 answers a scene it
+     * cannot draw with a render that draws nothing, so a mesh whose buffer is
+     * not a VertexBuffer is refused before any field is read.
+     */
+    if (vb) {
+        const char *vcn = nj_ref_class_name(vb);
+        if (!vcn || strcmp(vcn, NJ_C_VBUF) != 0) {
+            return 0;
+        }
+    }
     /*
      * Everything that belongs to the Graphics3D rather than to this mesh is
      * resolved once per render pass and copied here.  The two matrices that

@@ -4997,6 +4997,222 @@ static int probe_implicit_strip_extreme_first(nj_vm *vm)
                    r, NULL) == NJ_OK;
 }
 
+/*
+ * A file's Group children are raw references, not addChild() calls: the loader
+ * links them without the ancestor test, so two groups can name each other and
+ * the scene graph becomes cyclic.  The render walks bound their recursion
+ * depth for exactly this reason; animate() recursed through every child with
+ * no bound, so animating a scene loaded from a crafted or damaged .m3g
+ * overflowed the stack (ASan: stack-overflow in m3g_animate_object).  The
+ * file below carries two Groups, each naming the other as its only child.
+ * Its payload shape is the Group from build_anim_file(): the Node header ends
+ * at payload+25 and the child count/refs end the object.
+ */
+static nj_u4 build_group_cycle_file(nj_u1 *b, nj_u4 cap)
+{
+    static const nj_u1 ident[12] = {
+        0xAB, 0x4A, 0x53, 0x52, 0x31, 0x38, 0x34,
+        0xBB, 0x0D, 0x0A, 0x1A, 0x0A
+    };
+    nj_u4 hdr_sec = 30u, len = 34u, body, sec, total, k;
+    nj_u1 *p;
+
+    body = 2u * (5u + len);
+    sec = 9u + body + 4u;
+    total = 12u + hdr_sec + sec;
+    if (cap < total) {
+        return 0u;
+    }
+    memset(b, 0, cap);
+    memcpy(b, ident, 12u);
+    /* the file header section, exactly as build_anim_file() writes it */
+    b[12] = 0u;
+    put_le32(b + 13, hdr_sec);
+    put_le32(b + 17, 17u);
+    put_le32(b + 22, 12u);
+    b[26] = 1u;
+    put_le32(b + 29, total);
+    put_le32(b + 33, total);
+    /* the object section */
+    b[42] = 0u;
+    put_le32(b + 43, sec);
+    put_le32(b + 47, body);
+    p = b + 51;
+    for (k = 0u; k < 2u; k++) {
+        p[0] = 9u;                         /* Group */
+        put_le32(p + 1, len);
+        p += 5;
+        p[18] = 1u;                        /* rendering enabled */
+        p[19] = 1u;                        /* picking enabled */
+        p[20] = 0xFFu;                     /* alpha */
+        put_le32(p + 26, 1u);              /* exactly one child */
+        put_le32(p + 30, k == 0u ? 2u : 1u); /* the other Group */
+        p += len;
+    }
+    return total;
+}
+
+static nj_ref new_vector(nj_vm *vm)
+{
+    nj_ref v = nj_object_new(vm, "java/util/Vector");
+
+    if (!v) {
+        return 0;
+    }
+    if (nj_call_special(vm, v, "java/util/Vector", "<init>", "()V",
+                        NULL, NULL) != NJ_OK) {
+        return 0;
+    }
+    return v;
+}
+
+static int vector_add(nj_vm *vm, nj_ref v, nj_ref o)
+{
+    nj_value a[2];
+
+    a[0].r = o;
+    return nj_call(vm, v, "java/util/Vector", "addElement",
+                   "(Ljava/lang/Object;)V", a, NULL) == NJ_OK
+        && !nj_has_exception(vm);
+}
+
+static int probe_loader_cyclic_roots(nj_vm *vm)
+{
+    nj_u1 buf[256];
+    nj_u4 n = build_group_cycle_file(buf, (nj_u4)sizeof buf);
+    nj_ref bytes, arr;
+    nj_value a[4], r;
+    nj_u4 i, len, groups = 0u;
+    nj_status st;
+
+    if (n == 0u) {
+        return 0;
+    }
+    bytes = nj_array_new(vm, "B", n);
+    if (!bytes) {
+        return 0;
+    }
+    memcpy(nj_array_data(bytes), buf, n);
+    a[0].r = bytes;
+    a[1].i = 0;
+    r.r = 0;
+    nj_clear_exception(vm);
+    st = nj_call(vm, 0, CLS("Loader"), "load",
+                 "([BI)[L" CLS("Object3D") ";", a, &r);
+    if (st != NJ_OK || !r.r) {
+        nj_clear_exception(vm);
+        return 0;
+    }
+    arr = r.r;
+    len = nj_array_length(arr);
+    for (i = 0u; i < len; i++) {
+        nj_ref o = nj_array_get_ref(arr, i);
+        const char *cn = o ? nj_ref_class_name(o) : NULL;
+
+        if (!cn || strcmp(cn, "javax/microedition/m3g/Group") != 0) {
+            return 0;
+        }
+        groups++;
+    }
+    nj_clear_exception(vm);
+    return groups == 2u;
+}
+
+static int probe_group_cycle_animate(nj_vm *vm)
+{
+    nj_ref a_node = make(vm, CLS("Group"));
+    nj_ref b_node = make(vm, CLS("Group"));
+    nj_ref kids;
+    nj_field *kids_f = nj_field_lookup(vm, CLS("Group"), "_nj_kids",
+                                       "Ljava/util/Vector;", 0);
+
+    /* Group.addChild() refuses this edge, so the loop is written the way a
+       file's raw references create it: each Group's child list names the
+       other.  That is the graph the loader can hand a title. */
+    if (!a_node || !b_node || !kids_f) {
+        return 0;
+    }
+    kids = new_vector(vm);
+    if (!kids || !vector_add(vm, kids, b_node)) {
+        return 0;
+    }
+    nj_rput(vm, a_node, kids_f, kids);
+    kids = new_vector(vm);
+    if (!kids || !vector_add(vm, kids, a_node)) {
+        return 0;
+    }
+    nj_rput(vm, b_node, kids_f, kids);
+    {
+        nj_value a[2];
+
+        a[0].i = 0;
+        nj_clear_exception(vm);
+        return nj_call(vm, a_node, CLS("Object3D"), "animate", "(I)I",
+                       a, NULL) == NJ_OK && !nj_has_exception(vm);
+    }
+}
+
+static void test_loader_cyclic_roots(nj_vm *vm)
+{
+    printf("== a cyclic container's roots are not null ==\n");
+    check(m3g_probe_ok(probe_loader_cyclic_roots, vm),
+          "a cyclic .m3g still returns its two Group roots, not nulls");
+    nj_clear_exception(vm);
+}
+
+static void test_loader_group_cycle_animate(nj_vm *vm)
+{
+    printf("== a cyclic Group graph animates without recursion ==\n");
+    /* Forked: before the fix the child dies of a stack overflow. */
+    check(m3g_probe_ok(probe_group_cycle_animate, vm),
+          "animate() on a cyclic group graph terminates");
+    nj_clear_exception(vm);
+}
+
+static int probe_mesh_foreign_vertex_buffer(nj_vm *vm)
+{
+    i2d_canvas canvas;
+    nj_ref world, mesh, foreign;
+    nj_value a[3];
+
+    if (!i2d_canvas_init(vm, &canvas)) {
+        return 0;
+    }
+    world = make(vm, CLS("World"));
+    mesh = nj_object_new(vm, CLS("Mesh"));
+    /* A Material is what the fuzzer ended up with: anything can be named. */
+    foreign = make(vm, CLS("Material"));
+    if (!world || !mesh || !foreign) {
+        return 0;
+    }
+    a[0].r = canvas.vb; a[1].r = canvas.ib; a[2].r = canvas.app;
+    if (nj_call_special(vm, mesh, CLS("Mesh"), "<init>",
+                        "(L" CLS("VertexBuffer") ";L" CLS("IndexBuffer") ";L"
+                        CLS("Appearance") ";)V", a, NULL) != NJ_OK) {
+        return 0;
+    }
+    /* The loader stores Mesh._nj_vb straight from the file's reference list,
+       so a malformed container can make it name anything. */
+    nj_rput(vm, mesh, nj_field_lookup(vm, CLS("Mesh"), "_nj_vb",
+                                      "L" CLS("VertexBuffer") ";", 0), foreign);
+    a[0].r = mesh;
+    call(vm, world, CLS("Group"), "addChild", "(L" CLS("Node") ";)V", a, NULL);
+    a[0].r = world;
+    return nj_call(vm, canvas.g3d, CLS("Graphics3D"), "render",
+                   "(L" CLS("World") ";)V", a, NULL) == NJ_OK
+        && !nj_has_exception(vm);
+}
+
+static void test_mesh_foreign_vertex_buffer(nj_vm *vm)
+{
+    printf("== a mesh whose file reference names a foreign object ==\n");
+    /* Forked: before the fix this reads a foreign object's fields as a
+       VertexBuffer and the child aborts under UBSan (misaligned nj_object). */
+    check(m3g_probe_ok(probe_mesh_foreign_vertex_buffer, vm),
+          "a mesh whose vertex buffer is not a VertexBuffer draws nothing, without faulting");
+    nj_clear_exception(vm);
+}
+
 static void test_jr_strip_implicit_extreme_first(nj_vm *vm)
 {
     /* Forked: before the fix this aborts the child under UBSan. */
@@ -7733,6 +7949,9 @@ int main(void)
     test_object3d_subclass_api(vm);
     test_background_crop_extremes(vm);
     test_jr_strip_implicit_extreme_first(vm);
+    test_loader_cyclic_roots(vm);
+    test_loader_group_cycle_animate(vm);
+    test_mesh_foreign_vertex_buffer(vm);
     test_mesh_submesh_bounds(vm);
 
     /* The file format calls type 18 Sprite; the titles call the class
