@@ -7619,7 +7619,45 @@ nj_status nj_m3g_late_init(nj_vm *vm)
         { NJ_C_TEX2D, "FUNC_ADD", 224 }, { NJ_C_TEX2D, "FUNC_BLEND", 225 },
         { NJ_C_TEX2D, "FUNC_DECAL", 226 }, { NJ_C_TEX2D, "FUNC_MODULATE", 227 },
         { NJ_C_TEX2D, "FUNC_REPLACE", 228 },
-        { NJ_C_TEX2D, "WRAP_CLAMP", 240 }, { NJ_C_TEX2D, "WRAP_REPEAT", 241 }
+        { NJ_C_TEX2D, "WRAP_CLAMP", 240 }, { NJ_C_TEX2D, "WRAP_REPEAT", 241 },
+        /*
+         * The PolygonMode, CompositingMode and Texture2D rows above have no
+         * matching builtin field yet: those classes declare none of their JSR
+         * constants today, so nj_field_lookup() returns NULL and the entries
+         * are skipped.  They are deliberately kept as the forward half of the
+         * fix for the remaining constant gap (see
+         * docs/notes/2026-11-02-m3g-api-gaps.md): adding the missing field
+         * declarations is a class-shape change and needs the append-only ABI
+         * migration first, so it is a separate task.  Removing these rows
+         * would only mean re-adding them then; with no field to write they
+         * are ABI-neutral and harmless.
+         *
+         * The remaining declared-but-unseeded constants (Material, Fog,
+         * KeyframeSequence, AnimationTrack) do have fields in their builtin
+         * class tables, so seeding them is ABI-free and is done here.  Values
+         * are the JSR 184 1.1 javadoc constant-values page; Material's four
+         * are bit flags (1024/2048/4096/8192), not sequential enums.
+         */
+        { NJ_C_MAT, "AMBIENT", 1024 },    { NJ_C_MAT, "DIFFUSE", 2048 },
+        { NJ_C_MAT, "EMISSIVE", 4096 },   { NJ_C_MAT, "SPECULAR", 8192 },
+        { NJ_C_FOG, "EXPONENTIAL", 80 },  { NJ_C_FOG, "LINEAR", 81 },
+        { NJ_C_KFS, "LINEAR", 176 },      { NJ_C_KFS, "SLERP", 177 },
+        { NJ_C_KFS, "SPLINE", 178 },      { NJ_C_KFS, "SQUAD", 179 },
+        { NJ_C_KFS, "STEP", 180 },        { NJ_C_KFS, "CONSTANT", 192 },
+        { NJ_C_KFS, "LOOP", 193 },
+        { NJ_C_ATRACK, "ALPHA", 256 },    { NJ_C_ATRACK, "AMBIENT_COLOR", 257 },
+        { NJ_C_ATRACK, "COLOR", 258 },    { NJ_C_ATRACK, "CROP", 259 },
+        { NJ_C_ATRACK, "DENSITY", 260 },  { NJ_C_ATRACK, "DIFFUSE_COLOR", 261 },
+        { NJ_C_ATRACK, "EMISSIVE_COLOR", 262 },
+        { NJ_C_ATRACK, "FAR_DISTANCE", 263 },
+        { NJ_C_ATRACK, "FIELD_OF_VIEW", 264 },
+        { NJ_C_ATRACK, "INTENSITY", 265 }, { NJ_C_ATRACK, "MORPH_WEIGHTS", 266 },
+        { NJ_C_ATRACK, "NEAR_DISTANCE", 267 },
+        { NJ_C_ATRACK, "ORIENTATION", 268 }, { NJ_C_ATRACK, "PICKABILITY", 269 },
+        { NJ_C_ATRACK, "SCALE", 270 },    { NJ_C_ATRACK, "SHININESS", 271 },
+        { NJ_C_ATRACK, "SPECULAR_COLOR", 272 },
+        { NJ_C_ATRACK, "SPOT_ANGLE", 273 }, { NJ_C_ATRACK, "SPOT_EXPONENT", 274 },
+        { NJ_C_ATRACK, "TRANSLATION", 275 }, { NJ_C_ATRACK, "VISIBILITY", 276 }
     };
     size_t i;
 

@@ -5221,6 +5221,78 @@ static void test_jr_strip_implicit_extreme_first(nj_vm *vm)
     nj_clear_exception(vm);
 }
 
+static void test_constant_seeds(nj_vm *vm)
+{
+    /*
+     * JSR 184 1.1 constants that the builtin class tables declared but that
+     * nj_m3g_late_init() never seeded before task-26: reading any of these
+     * static fields returned 0.  Values are from the javadoc constant-values
+     * page; Material's four are bit flags (1024/2048/4096/8192).
+     */
+    static const struct { const char *cls; const char *name; nj_s4 value; } k[] = {
+        { CLS("Material"), "AMBIENT", 1024 },
+        { CLS("Material"), "DIFFUSE", 2048 },
+        { CLS("Material"), "EMISSIVE", 4096 },
+        { CLS("Material"), "SPECULAR", 8192 },
+        { CLS("Fog"), "EXPONENTIAL", 80 },
+        { CLS("Fog"), "LINEAR", 81 },
+        { CLS("KeyframeSequence"), "LINEAR", 176 },
+        { CLS("KeyframeSequence"), "SLERP", 177 },
+        { CLS("KeyframeSequence"), "SPLINE", 178 },
+        { CLS("KeyframeSequence"), "SQUAD", 179 },
+        { CLS("KeyframeSequence"), "STEP", 180 },
+        { CLS("KeyframeSequence"), "CONSTANT", 192 },
+        { CLS("KeyframeSequence"), "LOOP", 193 },
+        { CLS("AnimationTrack"), "ALPHA", 256 },
+        { CLS("AnimationTrack"), "AMBIENT_COLOR", 257 },
+        { CLS("AnimationTrack"), "COLOR", 258 },
+        { CLS("AnimationTrack"), "CROP", 259 },
+        { CLS("AnimationTrack"), "DENSITY", 260 },
+        { CLS("AnimationTrack"), "DIFFUSE_COLOR", 261 },
+        { CLS("AnimationTrack"), "EMISSIVE_COLOR", 262 },
+        { CLS("AnimationTrack"), "FAR_DISTANCE", 263 },
+        { CLS("AnimationTrack"), "FIELD_OF_VIEW", 264 },
+        { CLS("AnimationTrack"), "INTENSITY", 265 },
+        { CLS("AnimationTrack"), "MORPH_WEIGHTS", 266 },
+        { CLS("AnimationTrack"), "NEAR_DISTANCE", 267 },
+        { CLS("AnimationTrack"), "ORIENTATION", 268 },
+        { CLS("AnimationTrack"), "PICKABILITY", 269 },
+        { CLS("AnimationTrack"), "SCALE", 270 },
+        { CLS("AnimationTrack"), "SHININESS", 271 },
+        { CLS("AnimationTrack"), "SPECULAR_COLOR", 272 },
+        { CLS("AnimationTrack"), "SPOT_ANGLE", 273 },
+        { CLS("AnimationTrack"), "SPOT_EXPONENT", 274 },
+        { CLS("AnimationTrack"), "TRANSLATION", 275 },
+        { CLS("AnimationTrack"), "VISIBILITY", 276 }
+    };
+    size_t i;
+
+    printf("== declared JSR 184 constants read their spec values ==\n");
+    for (i = 0; i < sizeof(k) / sizeof(k[0]); i++) {
+        nj_field *f = nj_field_lookup(vm, k[i].cls, k[i].name, "I", 1);
+        char what[160];
+        snprintf(what, sizeof what, "%s.%s is seeded to %d",
+                 k[i].cls, k[i].name, (int)k[i].value);
+        check(f != NULL && nj_field_read_int(vm, 0, f) == k[i].value, what);
+    }
+    /*
+     * Negative controls: Material's constants are bit flags and every one of
+     * them is nonzero, so a zero default (the pre-fix state) cannot pass, and
+     * the exact value catches a plausible-looking enum substitute.
+     */
+    {
+        nj_field *f = nj_field_lookup(vm, CLS("Material"), "AMBIENT", "I", 1);
+        check(f != NULL && nj_field_read_int(vm, 0, f) == 1024,
+              "Material.AMBIENT is the nonzero bit flag 1024, not a zero default");
+    }
+    {
+        nj_field *f = nj_field_lookup(vm, CLS("AnimationTrack"), "ALPHA", "I", 1);
+        check(f != NULL && nj_field_read_int(vm, 0, f) == 256,
+              "AnimationTrack.ALPHA is 256, not a zero default");
+    }
+    nj_clear_exception(vm);
+}
+
 int main(void)
 {
     nj_port port;
@@ -7953,6 +8025,7 @@ int main(void)
     test_loader_group_cycle_animate(vm);
     test_mesh_foreign_vertex_buffer(vm);
     test_mesh_submesh_bounds(vm);
+    test_constant_seeds(vm);
 
     /* The file format calls type 18 Sprite; the titles call the class
        Sprite3D.  Both have to be loadable.  These run before the VM is
