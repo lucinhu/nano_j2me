@@ -3618,6 +3618,11 @@ w < 2^24), and it also folds the intermediate into the projection expression:
 
 Frame dumps against the pristine parent match exactly on 9 of 12 sampled frames
 and differ by at most 3 pixels (cloud band) on the rest.
+An independent verification (clean worktree, no author scripts, host load
+~13) reproduced the direction and magnitude: 4.2702 -> 4.1719 s = -2.30% mean,
+-2.44% median, 8/8 rounds faster, gcc `-O3` 4.0765 -> 3.9531 s (-3.03%), frame
+dumps pixel-identical on the same-phase frames; the JIT slowdown also
+reproduced independently (`bench.jar` +70.2%, Minecraft GEN +48.8%).
 
 ### Field resolution: the same gcc-only pattern again
 
