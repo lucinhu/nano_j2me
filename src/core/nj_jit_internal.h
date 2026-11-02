@@ -88,6 +88,8 @@ int nj_rv32_compile(nj_vm *vm, const nj_method *m, nj_u4 pc, nj_u1 *buf,
                     nj_size capacity, nj_jit_block *out);
 int nj_arm64_compile(nj_vm *vm, const nj_method *m, nj_u4 pc, nj_u1 *buf,
                      nj_size capacity, nj_jit_block *out);
+int nj_x86_64_compile(nj_vm *vm, const nj_method *m, nj_u4 pc, nj_u1 *buf,
+                      nj_size capacity, nj_jit_block *out);
 
 /* Scan only: no emission, allocation, resolution or callbacks. size is zero;
  * emission may later shorten the prefix to fit the code buffer. This is the
@@ -96,6 +98,8 @@ int nj_rv32_analyze(nj_vm *vm, const nj_method *m, nj_u4 pc,
                     nj_jit_block *out);
 int nj_arm64_analyze(nj_vm *vm, const nj_method *m, nj_u4 pc,
                      nj_jit_block *out);
+int nj_x86_64_analyze(nj_vm *vm, const nj_method *m, nj_u4 pc,
+                      nj_jit_block *out);
 
 /* Record one runtime-faulting instruction in a block under construction.
  * `start_pc` is the block entry, `fault_pc` the instruction's own pc and

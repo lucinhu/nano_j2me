@@ -724,7 +724,16 @@
 #else
 #  define NJ_JIT_HOST_ARM64 0
 #endif
-#define NJ_JIT_HOST_SUPPORTED (NJ_JIT_HOST_RV32 || NJ_JIT_HOST_ARM64)
+/* System V x86-64: LP64 flat pointers and the standard SSE2 float unit; the
+ * backend emits only baseline integer/SSE2 instructions. */
+#if defined(__x86_64__) && defined(__LP64__) && \
+    (!defined(__BYTE_ORDER__) || __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__)
+#  define NJ_JIT_HOST_X86_64 1
+#else
+#  define NJ_JIT_HOST_X86_64 0
+#endif
+#define NJ_JIT_HOST_SUPPORTED \
+    (NJ_JIT_HOST_RV32 || NJ_JIT_HOST_ARM64 || NJ_JIT_HOST_X86_64)
 
 /* Mascot Capsule triangle rasteriser: write the attribute combinations that
  * dominate real scenes (textured and untextured, flat and smooth shaded,

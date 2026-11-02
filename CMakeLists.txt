@@ -194,6 +194,7 @@ set(NJ_SOURCES
   src/core/nj_jit.c
   src/core/nj_jit_rv32.c
   src/core/nj_jit_arm64.c
+  src/core/nj_jit_x86_64.c
   src/core/nj_app.c
   src/core/nj_builtins.c
   src/core/nj_device.c
@@ -778,6 +779,8 @@ if(NJ_BUILD_TESTS)
     target_compile_features(test_jit_rv32 PRIVATE c_std_11)
     nj_add_test(test_jit_arm64 tests/test_jit_arm64.c)
     target_compile_features(test_jit_arm64 PRIVATE c_std_11)
+    nj_add_test(test_jit_x86_64 tests/test_jit_x86_64.c)
+    target_compile_features(test_jit_x86_64 PRIVATE c_std_11)
     add_executable(test_jit_perf tests/test_jit_perf.c)
     target_link_libraries(test_jit_perf PRIVATE nj2me)
     target_compile_features(test_jit_perf PRIVATE c_std_11)

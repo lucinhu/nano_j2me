@@ -27,6 +27,7 @@ idf_component_register(
         "${NJ_ROOT}/src/core/nj_jit.c"
         "${NJ_ROOT}/src/core/nj_jit_rv32.c"
         "${NJ_ROOT}/src/core/nj_jit_arm64.c"
+        "${NJ_ROOT}/src/core/nj_jit_x86_64.c"
         "${NJ_ROOT}/src/core/nj_app.c"
         "${NJ_ROOT}/src/core/nj_device.c"
         "${NJ_ROOT}/src/core/nj_builtins.c"

@@ -107,6 +107,10 @@ struct nj_jit {
 #  define NJ_JIT_COMPILE nj_arm64_compile
 #  define NJ_JIT_ANALYZE nj_arm64_analyze
 #  define NJ_JIT_ENGINE_NAME "arm64-baseline"
+#elif NJ_JIT_HOST_X86_64
+#  define NJ_JIT_COMPILE nj_x86_64_compile
+#  define NJ_JIT_ANALYZE nj_x86_64_analyze
+#  define NJ_JIT_ENGINE_NAME "x86_64-baseline"
 #endif
 
 static void jit_snapshot(const struct nj_jit *jit, nj_jit_stats *out)
