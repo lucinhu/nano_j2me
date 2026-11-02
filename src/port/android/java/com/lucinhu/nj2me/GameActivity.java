@@ -138,6 +138,50 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
     private int pictureAA;        /* 0 nearest, 1 bilinear: 画面反锯齿 */
     private int insetL, insetT, insetR, insetB;
 
+    /*
+     * Audio focus.  A game that plays sound has to ask the phone for the
+     * output instead of talking over whatever is already playing, and it has
+     * to go quiet when another app takes it away - a call, a video, a music
+     * player.  The port owns both the MIDI Players and the mixer, so the
+     * request is made here on the main thread and a loss is answered by
+     * pausing the MIDI Players this app started.  The port's own mixer
+     * follows onPause()/onResume() as it always has; a focus loss that does
+     * not pause the game must not silently stop the MIDlet's music forever,
+     * so the listener resumes on AUDIOFOCUS_GAIN when the activity is still
+     * resumed.
+     */
+    private AudioManager audioManager;
+    private boolean audioFocusHeld;
+    private boolean resumed;
+    private final AudioManager.OnAudioFocusChangeListener audioFocusListener =
+            new AudioManager.OnAudioFocusChangeListener() {
+        @Override
+        public void onAudioFocusChange(int change) {
+            if (change == AudioManager.AUDIOFOCUS_GAIN) {
+                if (resumed) {
+                    MidiPlayer.resumeAll();
+                }
+                Log.i(TAG, "audio focus: gained");
+                return;
+            }
+            /* LOSS, LOSS_TRANSIENT and LOSS_TRANSIENT_CAN_DUCK: the port
+             * cannot duck a MIDI Player, so it pauses.  The game keeps its
+             * frames - a notification blip is not a reason to freeze it. */
+            MidiPlayer.pauseAll();
+            Log.i(TAG, "audio focus: paused (change=" + change + ")");
+        }
+    };
+
+    /*
+     * Hardware keys the player is holding.  The pad's own keys live in
+     * PadPress; these are the codes dispatchKeyEvent forwards to the MIDlet,
+     * and the one thing they need that PadPress does not do for them is a
+     * release when the key stream goes away: a dialog takes the keyboard, a
+     * paused activity gets no ACTION_UP, and the MIDlet would hold that key
+     * down until the player pressed it again.
+     */
+    private final java.util.HashSet<Integer> heldKeys = new java.util.HashSet<Integer>();
+
     private final Handler ui = new Handler(Looper.getMainLooper());
     private final Runnable statusTick = new Runnable() {
         @Override
@@ -538,6 +582,8 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
     protected void onResume() {
         super.onResume();
         imePaused = false;
+        resumed = true;
+        requestAudioFocus();
         if (imeActive && imeEditor != null) { requestIme(true); }
         applyFullscreen();
         /* The editor may have changed the layout or moved the picture while
@@ -563,7 +609,15 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
     protected void onPause() {
         publishIme();
         imePaused = true;
+        resumed = false;
         hideIme();
+        /* Let go of everything the player is holding before the VM parks: an
+         * activity that is going away gets no matching ACTION_UP, so a key
+         * held through Home would stay down in the MIDlet and walk the player
+         * off a cliff when they came back.  PadPress's keys and pointer are
+         * released by the pad; the physical-keyboard codes are this class's. */
+        releaseHeldKeys();
+        pad.releaseAllKeys();
         /* Park the VM before the surface goes away: a MIDlet that keeps ticking
          * behind a locked screen burns battery and gains nothing. */
         saveView();
@@ -572,6 +626,7 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
                 nativeSetActive(handle, false);
             }
         }
+        abandonAudioFocus();
         /* The port pauses its mixer; a MIDI Player is a MediaPlayer and has to
          * be paused here too, or the music follows the player into the library. */
         MidiPlayer.pauseAll();
@@ -602,6 +657,65 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
          * key press has already gone to the game.  Back opens the panel, where
          * 退出 is one deliberate tap away. */
         showPanel();
+    }
+
+    /* ------------------------------------------------------------ audio focus */
+
+    /*
+     * Legacy requestAudioFocus() on purpose: it is the call that exists on
+     * every API level this port supports (minSdk 21).  The AudioFocusRequest
+     * object would be tidier on 26+, but it also means a second code path
+     * that only runs on half the phones this runs on.  The framework's
+     * automatic ducking of a legacy stream while another app's notification
+     * plays is exactly what a game wants; only the pause/resume decisions are
+     * this class's to make.
+     */
+    @SuppressWarnings("deprecation")
+    private void requestAudioFocus() {
+        if (audioFocusHeld) {
+            return;
+        }
+        if (audioManager == null) {
+            audioManager = (AudioManager) getSystemService(AUDIO_SERVICE);
+        }
+        if (audioManager == null) {
+            return;
+        }
+        int r = audioManager.requestAudioFocus(audioFocusListener,
+                AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN);
+        audioFocusHeld = r == AudioManager.AUDIOFOCUS_REQUEST_GRANTED;
+        Log.i(TAG, "audio focus: " + (audioFocusHeld ? "granted" : "denied"));
+    }
+
+    private void abandonAudioFocus() {
+        if (!audioFocusHeld) {
+            return;
+        }
+        if (audioManager != null) {
+            audioManager.abandonAudioFocus(audioFocusListener);
+        }
+        audioFocusHeld = false;
+        Log.i(TAG, "audio focus: abandoned");
+    }
+
+    /*
+     * Send the ups for every code still held, and forget them.  Called from
+     * onPause() and when the panel opens: both take the key stream away, and
+     * the MIDlet has no way to learn the player let go.
+     */
+    private void releaseHeldKeys() {
+        if (heldKeys.isEmpty()) {
+            return;
+        }
+        synchronized (lock) {
+            if (handle != 0) {
+                for (Integer code : heldKeys) {
+                    nativeKey(handle, code, false);
+                }
+            }
+        }
+        Log.i(TAG, "keys: released " + heldKeys.size() + " held key(s)");
+        heldKeys.clear();
     }
 
     /* --------------------------------------------------------------- surface */
@@ -908,6 +1022,14 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
         if (down && ev.getRepeatCount() > 0) {
             return true;        /* MIDP has no key repeat; a held key is held */
         }
+        /* Remember what this class forwards: when the stream is taken away by
+         * the panel or by the activity pausing, releaseHeldKeys() sends the
+         * ACTION_UP the framework is not going to deliver. */
+        if (down) {
+            heldKeys.add(code);
+        } else {
+            heldKeys.remove(code);
+        }
         synchronized (lock) {
             if (handle != 0) {
                 nativeKey(handle, code, down);
@@ -1116,6 +1238,12 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
      * one deliberate tap inside a dialog instead of a button next to the game.
      */
     private void showPanel() {
+        /* The dialog takes the key and touch streams with it, so anything the
+         * player is holding must be released now: no release event is coming
+         * through a modal window, and the MIDlet would keep that key down (or
+         * that pointer pressed) after the panel is dismissed. */
+        releaseHeldKeys();
+        pad.releaseAllKeys();
         LinearLayout box = Md3.body(this);
         box.addView(Md3.title(this, jarTitle));
         box.addView(Md3.supporting(this, screenW + "x" + screenH
