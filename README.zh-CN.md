@@ -57,7 +57,7 @@
 
 融合倒数不是逐位精确的，`tests/test_m3g.c` 的包裹测试证明了这点：在
 `WRAP_REPEAT` 的贴图边界上，一个 ulp 的差别会取到隔壁那一格，所以 repeat 包裹
-的纹理保留除法（Minecraft 的云是 repeat，地形是 clamp）。`test_m3g` 878 项检查
+的纹理保留除法（Minecraft 的云是 repeat，地形是 clamp）。`test_m3g` 933 项检查
 0 失败，完整 ctest 140/140，语料门禁 `fatal 0 / 400, known 4`，同一快照的截帧
 只在云带（标题按墙钟时间做动画）有差异。详见
 `docs/notes/2026-10-31-raster-fast-paths.md`。
@@ -78,7 +78,7 @@
 ASan SEGV 与 UBSan 有符号溢出）；`TriangleStripArray` 构造函数接受超出索引
 数组的 strip 长度；`Image2D(fmt,w,h,byte[])` 接受过短甚至空的像素数组；
 `Group.addChild` 接受自环/祖先边，会让渲染遍历递归到栈溢出。`test_m3g` 现在
-ASan 与 UBSan 下 878 项检查 0 失败，同一存档世界的截帧在云带之外没有变化。
+ASan 与 UBSan 下 933 项检查 0 失败，同一存档世界的截帧在云带之外没有变化。
 
 **解释器把世界生成最耗时的循环折叠成一条指令，M3G 渲染器每个 pass 只解析一次
 帧状态。** 世界生成 >99% 的时间花在解释器派发上，而它的字节码组合里此前完全
@@ -121,7 +121,7 @@ Graphics3D 那一半每个 pass 只解析一次并存进调用栈局部变量，
 给的索引（单子网格网格上 `setAppearance(1)` 会悄悄造出第二个子网格），现在
 超出子网格数量就被拒绝；`getLight()` 原先会从数组余量或 `resetLights()` 之后
 的陈旧槽位取回答，现在以活动灯光数为界。`test_m3g` 在 ASan 与 UBSan 下
-878 项检查 0 失败，确定性驱动已提交在 `tests/fuzzdemo/`。详见
+933 项检查 0 失败，确定性驱动已提交在 `tests/fuzzdemo/`。详见
 `docs/notes/2026-11-02-dig-burst-runtime.md` 与
 `docs/notes/2026-11-02-m3g-fuzz.md`。
 
@@ -181,6 +181,14 @@ x86_64 `-Os` APK 上只有 1.0%（在 ±3% 的跑动波动内），所以没有�
 基准配方和所有表格在 `docs/notes/2026-11-02-save-path.md`（提交
 `d012e2e`）。原地快速存档是 289 ms，而首次完整存档是 5,328 ms；API-21
 镜像上的回读是 6,971 + 7,863 ms。
+
+**给宿主机补了一个 JIT，结论是解释器仍然更快。** `src/core/nj_jit.c` 的契约只有在手机后端上才可测，于是我们加了 System V x86_64 后端（`src/core/nj_jit_x86_64.c`，1,507 行，`tests/test_jit_x86_64.c` 里 4,416 条断言），用 `NJ_ENABLE_JIT=1` 打开，在真正可测的机器上量出上限。它把 32% 的执行字节码编译成平均 10.5 条字节码的原生块，然后更慢：Minecraft 桌面地形生成在 gcc `-O3` 下 13.1 -> 20.8 秒（墙钟 +34%），clang `-Os` 下 14.2 -> 23.6 秒；`bench.sh` 0.177 -> 0.279 秒（+57%）。原因是结构性的：5-10 条字节码的块在 15-20 ns 的 C 到 JIT 边界之前就结束了，而且开 JIT 的构建还会关掉解释器的超级指令。基础设施保留（默认关闭，打开时 ctest 141/141），笔记里排了真正有前途的方向——编译折叠后的序列、块链接、保留折叠——但这份数据不足以支撑补完 ARM64 后端（`docs/notes/2026-11-02-jit_x86_64.md`，提交 `3ba080f`）。
+
+**更重的 in-world 场景里，一次投影提升在 `-Os` 下值 2.8%；字段查找缓存又撞上“不要合并”的墙。** 保存的水面场景只有约 1,400 三角形/帧，所以第七轮基准先瞄准岸线再存档，得到确定性的 2.3 倍视角（3,283 三角形/帧，600 帧共 2,005,022 个三角形）。clang `-Os` 的帧内分析是 `jr_emit` 43.7%、`jr_project` 17.0%（4,410 万次调用）、`jr_fetch` 8.1%、`sw_fog` 2.0%，而 5.3% 的 `nj_crc_update` 其实是 34 MB 快照载入，不是帧工作。`jr_project` 每个顶点先乘一次倒数，然后在四个调用点各乘一次半视口值；把 `0.5f*vw`/`0.5f*vh` 提到 `m3g_jr` 里是逐位精确的（w < 2^24 时 0.5f*w 精确），8 轮干净的 ABBA 平均 -2.84% 用户 CPU（8/8 更快），gcc `-O3` 侧 -3.12%，截帧与原始构建一致（`docs/notes/2026-11-02-heavy-scene-os.md`，提交 `6bb74c2`）。同一份设备侧归因里的另一个候选——按指针三元组跳过三次 `strcmp` 校验的字段/类解析 memo——在 gcc `-O3` in-world 下 -2.7%，但 clang `-Os` 下 +0.2%、`bench.sh` +1.2%、APK 上 -1.8% 且正负号混杂、落在 ±2% 波动内，所以只保留分析笔记（`docs/notes/2026-11-03-field-lookup.md`，提交 `21989cd`）。
+
+**第三轮 M3G 模糊测试、Background 裁剪重置和窄纹理。** 种子化 API 模糊驱动长到 46 个操作族，掉出三个真实缺陷，每个都有先失败后通过的测试：从 `.m3g` 载入的环形 Group 图让 `Node.animate()` 无界递归（装载器链接子引用时没做祖先检查），现在和渲染遍历一样有深度 32 上限；每个对象都被引用时 `Loader.load()` 返回全 null 数组（roots 回退路径数了对象，但填充循环仍跳过被引用标记的），违反 JSR 184 的 no-nulls 保证；畸形 `.m3g` 可以把 Material 指成 Mesh 的顶点缓冲，让 `jr_setup` 从异物里读 VertexBuffer 偏移——现在类检查后直接不画。另外，`Background.setImage()` 按规范把裁剪重置为整幅图（毁灭战士3 绑了两张背景图却从不调 `setCrop`，旧的 0x0 裁剪让整次 blit 被跳过）；ALPHA/LUMINANCE/LUMINANCE_ALPHA 纹理现在每张图一次性扩成 RGBA，缓存在图像原本没用的 `_nj_mips` 字段里（加新字段会让所有旧存档无法载入，因为快照载入器会比较每个类的字段数）；34 个已声明但未赋值的 JSR 184 常量（Material 标志、Fog 模式、KeyframeSequence/AnimationTrack 枚举）也补上了。API 审计显示表面已经完整——30/30 规范类、没有缺失成员、只剩一个需要只追加存档迁移的 41 常量缺口（`docs/notes/2026-11-02-m3g-fuzz3.md`、`2026-11-03-background-coverage.md`、`2026-11-03-m3g-api-gaps.md`，提交 `8e3ae85`、`dbddc20`、`0149f16`）。对 27 个 M3G 语料标题携带的 975 个 `.m3g` 资产做变异模糊测试（10,000 个变异体分别过 `Loader`、`duplicate()`、主要 getter 和光栅路径，全程 ASan+UBSan+LSan）没有发现内存安全或泄漏缺陷：846 个资产能独立载入，129 个需要外部 PNG 的按规范抛 `IOException`；harness 已提交为 `tests/m3gmutdemo/` 与 `tools/m3g_mutation_fuzz.py`（`docs/notes/2026-11-03-m3g-mutation-fuzz.md`）。
+
+**Android：音频焦点、BACK 语义、手柄，以及一个诚实的测量基线。** 移植层以前从不申请音频焦点，所以来电时 MIDI 还在响；现在 `onResume` 申请、`onPause` 放弃，焦点变化时暂停/恢复 `MidiPlayer`（模拟器上打过 GSM 电话验证）。暂停和打开面板时释放按住的手柄/硬件键。BACK 在抬起时决定：短按只给 MIDlet 一次完整的右软键按下/抬起，按住 550 ms 只打开移植层面板，二者绝不叠加。之前被丢弃的手柄 KEYCODE_BUTTON_A/B/X/Y 现在映射到开火、软键和游戏 A/B/C/D。API-36 镜像跑同一套创建/回读/缩放/音频矩阵，只发现 BLUETOOTH_CONNECT 运行时权限缺口（仅报告，API 31+）。余量审计改变了以后的测量方式：在这个 AVD 上游戏被模拟器 vsync 钉在 60.0 fps，只用了 16.7 ms 预算的约 21%（3.48 ms/帧 guest CPU），SurfaceFlinger 一帧没丢，所以 fps 和 p99 无法验证 guest 侧改动——`perf` 归因和 guest CPU 毫秒/帧可以（`docs/notes/2026-11-03-android-headroom.md`、`2026-11-02-android-input.md`、`2026-11-03-input.md`，提交 `404f4fc`、`cac808f`）。
 
 ## 0.5.3 的新内容（上一版）
 

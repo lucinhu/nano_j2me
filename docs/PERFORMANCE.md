@@ -3555,3 +3555,108 @@ The other fix from this round is behavioural rather than a CPU number:
 `adb shell wm size` no longer leave a 320x640 buffer stretched across 480x800.
 Logcat before/after and the round-trip screenshots are in the verification
 ledger row; commit `0f4cf05` (`69185f7` on main).
+
+## Round 6-7: the JIT ceiling, a heavier scene, and measuring the phone honestly (2026-11-03)
+
+Round 6 asked whether a JIT is the missing lever for Minecraft; round 7 asked
+what the phone actually spends its frame budget on.  The answers are a measured
+"not yet" for the JIT, one real 2.8% -Os win in the renderer, and a correction
+to how we measure Android from now on.
+
+### The x86_64 JIT backend: a measured ceiling, not a ship
+
+`src/core/nj_jit.c` only had testable backends for the phones, so a System V
+x86_64 backend was written (`src/core/nj_jit_x86_64.c`, 1,507 lines,
+`tests/test_jit_x86_64.c`, 4,416 assertions) behind `NJ_ENABLE_JIT=1`, to
+measure the interpreter-to-native gap on the machine we can run.  The backend
+mirrors the ARM64 opcode coverage and the block/fault contract
+(`src/core/nj_jit_internal.h`); default builds do not compile it.
+
+| measurement (same machine, pinned CPU) | JIT off | JIT on | delta |
+| --- | --- | --- | --- |
+| Minecraft desktop fresh-world GEN, gcc `-O3` | 13,102 ms (wall 33.1 s) | 20,807 ms (wall 44.4 s) | +58% GEN, +34% wall |
+| Minecraft desktop fresh-world GEN, clang `-Os` | 14,212 ms | 23,641 ms | +66% |
+| `tools/bench.sh 5` min CPU, gcc `-O3` | 0.177 s | 0.279 s | +57% |
+| `tools/bench.sh 5` min CPU, clang `-Os` | 0.192 s | 0.292 s | +52% |
+
+Coverage is 32% of executed bytecodes (7.305e9 of 15.352e9), average block
+10.5 bytecodes.  The ceiling is structural: a 5-10 bytecode block ends before
+the 15-20 ns C-to-JIT boundary is amortised, and a JIT-enabled build also
+disables the interpreter's superinstructions.  Productive directions recorded
+in the note: compile fused sequences, chain blocks (fall-through + back-edge),
+and keep the fusions.  Completing the ARM64 backend is not justified by this
+data; the harness and the contract tests stay for a future owner.
+
+### Heavy scene at clang `-Os`: one projection hoist, -2.8%
+
+The saved water scene renders only ~1,400 triangles/frame, so the benchmark
+first aims at the shoreline and saves a deterministic 2.3x view
+(`bh.state`; 3,283 triangles/frame, 2,005,022 triangles over 600 frames, two
+identical replays differ by 6 cloud-band pixels and 0.17% triangle count).
+
+clang `-Os` profile of 1,200 frames (`-pg`, one core):
+
+| symbol | share |
+| --- | --- |
+| `jr_emit` (triangle setup + span fill) | 43.7% |
+| `jr_project` (44.1M calls) | 17.0% |
+| `jr_fetch` | 8.1% |
+| `nj_crc_update` | 5.3% (34 MB snapshot load, not frame work) |
+| `nj_interp_run` | 4.5% |
+| `sw_fog` (37.3M calls) | 2.0% |
+
+`jr_project` already multiplied by the projection reciprocal once per vertex,
+but then did `0.5f * vw` / `0.5f * vh` multiplications at each of four call
+sites.  Hoisting the half-extents into `m3g_jr` is exact (0.5f*w is exact for
+w < 2^24), and it also folds the intermediate into the projection expression:
+
+| build | baseline | candidate | delta |
+| --- | --- | --- | --- |
+| clang `-Os`, 8 ABBA rounds, user CPU | 4.2221 s mean / 4.2350 median | 4.1024 mean / 4.1466 median | **-2.84% mean / -2.77% median, 8/8 faster** |
+| gcc `-O3` side | 3.105 s | 3.008 s | **-3.12%** |
+| clang `-Os`, inlined `jr_project` body (rejected) | - | +2.7% slower | - |
+
+Frame dumps against the pristine parent match exactly on 9 of 12 sampled frames
+and differ by at most 3 pixels (cloud band) on the rest.
+
+### Field resolution: the same gcc-only pattern again
+
+The off-device attribution put `nj_field_lookup` at 2.8% plus 4.3% `strcmp`.
+A per-VM pointer-triple memo (skip the three `strcmp` content validations when
+the pointer triple repeats) measured:
+
+| build | baseline | candidate | delta |
+| --- | --- | --- | --- |
+| desktop gcc `-O3` in-world wall | 3.130 s | 3.046 s | -2.7% |
+| desktop clang `-Os` in-world | 3.300 s | 3.307 s | +0.2% (noise) |
+| `tools/bench.sh 5` min CPU | 0.168 s | 0.170 s | +1.2% |
+| Android x86_64 `-Os` APK, guest CPU ms/frame | 6.439 | 6.321 | -1.8%, mixed signs, ±2% spread |
+
+Not merged (only the note is).  The call graph also showed where the cost
+actually lives: `nj_field_lookup` is called 18.7M times per 1,200 frames
+(15.6K/frame) and the callers are M3G/lcdui library code
+(`vec_elementAt` 8.0M, `m3g_fof` 5.74M, `collect_walk` 1.89M, `jr_setup` 731K,
+`nj_m3g_collect_meshes` 547K), not the interpreter.  A future owner should
+resolve field offsets once per M3G node/attribute inside the accessors.
+
+### What the phone actually spends: a vsync-locked AVD
+
+In-world landscape scene on the x86_64 APK (22 MB / 753K-block world), guest
+CPU measured with `perf` and frame pacing with SurfaceFlinger:
+
+- uncapped (`frameCap=0`) and 60-capped runs both present exactly 60.0 fps,
+  intervals p50 = p95 = p99 = max = 16.667 ms, zero frames > 17 ms;
+- guest process CPU 3.48 ms/frame uncapped, 3.51 ms/frame capped - about 21%
+  of one core, ~79% headroom.
+
+So fps/p99 cannot validate guest-side optimizations on this AVD (it explains
+the flat 56-60 fps of earlier rounds); use guest CPU ms/frame here or a real
+device.  Attribution from 633 samples: kernel 29.4% (GPU ioctls/syscalls),
+`android_pixel` 15.0%, `nj_interp_run` 10.3%, `android_display_present` 6.8%,
+`nj_region_draw` 5.7%, `memcpy` 4.3%, `strcmp` 4.3%, `nj_field_lookup` 2.8%,
+`nj_565_row_from_argb` 1.9%, `memset` 1.7%.  Ranked candidates for later:
+software present path (1:1 row fast path + 565->RGBA8888 table; guest
+CPU/power only, needs a device), M3G raster, and the M3G-side field caching
+above.  The reusable recipe (system `perf` under adb root, SurfaceFlinger
+latency dumps, `display.xml` `frameCap=0`, keyevent navigation) is in
+`docs/notes/2026-11-03-android-headroom.md`.

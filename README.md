@@ -64,7 +64,7 @@ user CPU for 1200 in-world frames - 2.760/2.766/2.773 s down to
 The fused reciprocal is not bit-identical, and `tests/test_m3g.c`'s wrap test
 proved it matters: on a `WRAP_REPEAT` tile boundary one ulp picks the other tile,
 so repeat textures keep their divisions (Minecraft's clouds repeat, its terrain
-clamps). `test_m3g` is 878 checks / 0 failures, full ctest 140/140, corpus gate
+clamps). `test_m3g` is 933 checks / 0 failures, full ctest 140/140, corpus gate
 `fatal 0 / 400, known 4`, and frame dumps of the same snapshot differ only in
 the cloud band the title animates from the wall clock. See
 `docs/notes/2026-10-31-raster-fast-paths.md`.
@@ -89,7 +89,7 @@ out-of-bounds store - a real ASan SEGV and UBSan signed overflow);
 `TriangleStripArray` constructors accepted strip lengths past the index array;
 `Image2D(fmt,w,h,byte[])` accepted short or NULL pixel storage; and
 `Group.addChild` accepted self/ancestor edges, making render walks recurse
-until the stack died.  `test_m3g` is now 878 checks / 0 failures under ASan and
+until the stack died.  `test_m3g` is now 933 checks / 0 failures under ASan and
 UBSan, and the PPM frame dumps of the same saved world are unchanged outside
 the wall-clock cloud band.
 
@@ -145,7 +145,7 @@ now throws `IndexOutOfBoundsException` past the 16-light table;
 `setAppearance(1)` on a one-submesh mesh silently created a second one) and now
 rejects indexes outside the submesh count; and `getLight()` could answer from
 the array's slack or from stale slots after `resetLights()`, and is now bounded
-by the live light count.  `test_m3g` is 878 checks / 0 failures under ASan and
+by the live light count.  `test_m3g` is 933 checks / 0 failures under ASan and
 UBSan, and the deterministic driver is committed under `tests/fuzzdemo/`.  See
 `docs/notes/2026-11-02-dig-burst-runtime.md` and
 `docs/notes/2026-11-02-m3g-fuzz.md`.
@@ -221,6 +221,89 @@ actual x86_64 `-Os` APK, so nothing merged; the benchmark recipe and all tables
 are in `docs/notes/2026-11-02-save-path.md` (commit `d012e2e`).  The in-place
 quit save is 289 ms against 5,328 ms for the first full save, and a reload on
 the API-21 image reads 6,971 + 7,863 ms.
+
+**A JIT was built for the host, and the interpreter is still faster.**  The
+`src/core/nj_jit.c` contract only had testable backends for the phones, so we
+added a System V x86_64 backend (`src/core/nj_jit_x86_64.c`, 1,507 lines, 4,416
+assertions in `tests/test_jit_x86_64.c`) behind `NJ_ENABLE_JIT=1` to find the
+ceiling on the machine we can actually measure.  It compiles 32% of executed
+bytecodes into native blocks averaging 10.5 bytecodes, and it is slower:
+Minecraft desktop GEN 13.1 -> 20.8 s with gcc `-O3` (+34% wall) and 14.2 ->
+23.6 s with clang `-Os`; `bench.sh` 0.177 -> 0.279 s (+57%).  The cause is
+structural - a 5-10 bytecode block ends before the 15-20 ns C-to-JIT boundary
+pays off, and a JIT build also disables the interpreter's superinstructions.
+The infrastructure stays (opt-in, full ctest 141/141 with it on) and the note
+ranks the productive directions - compile fused sequences, chain blocks, keep
+the fusions - but completing the ARM64 backend is not justified on this data
+(`docs/notes/2026-11-02-jit_x86_64.md`, commit `3ba080f`).
+
+**A heavier in-world scene pays 2.8% for one projection hoist at `-Os`, and the
+field-lookup cache hit the same "do not merge" wall.**  The saved water scene
+is only ~1,400 tris/frame, so the round-7 benchmark saves a deterministic 2.3x
+view (3,283 tris/frame, 2,005,022 tris over 600 frames) by aiming at the
+shoreline before the state is written.  At clang `-Os` the frame profile is
+`jr_emit` 43.7%, `jr_project` 17.0% (44.1M calls), `jr_fetch` 8.1%, `sw_fog`
+2.0%, and `nj_crc_update` 5.3% that turned out to be the 34 MB snapshot load,
+not frame work.  `jr_project` divided by the reciprocal once per vertex and
+then multiplied by half-viewport values at four call sites; hoisting
+`0.5f*vw`/`0.5f*vh` into `m3g_jr` is bit-exact (0.5f*w is exact for w < 2^24)
+and measures -2.84% mean user CPU over 8 clean ABBA rounds (8/8 faster),
+-3.12% on the gcc `-O3` side, with frame dumps identical to the pristine build
+(`docs/notes/2026-11-02-heavy-scene-os.md`, commit `6bb74c2`).  The other
+candidate from the on-device attribution - a per-VM pointer-triple memo for
+field/class resolution that skips the three `strcmp` validations - wins -2.7%
+on gcc `-O3` in-world, but is +0.2% at clang `-Os`, +1.2% on `bench.sh`, and
+-1.8% on the APK with mixed signs inside a +/-2% spread, so only the profile
+note is kept (`docs/notes/2026-11-03-field-lookup.md`, commit `21989cd`).
+
+**M3G fuzz round 3, a background crop reset, and narrow textures.**  The seeded
+API fuzz driver grew to 46 op families and produced three real bugs, each with
+a pre-fix failing test: `Node.animate()` recursed without bound on a cyclic
+Group graph loaded from a `.m3g` (the loader links child references without an
+ancestor test) and now has the same depth-32 guard as the render walks;
+`Loader.load()` returned an array of nulls when every object was referenced
+(the roots fallback counted objects but the fill loop still skipped
+reference-marked ones), violating JSR 184's no-nulls guarantee; and a malformed
+`.m3g` could name a Material as a Mesh vertex buffer, so `jr_setup` read
+VertexBuffer offsets out of a foreign object - a class guard now draws
+nothing.  Separately, `Background.setImage()` resets the crop to the whole
+image per spec (毁灭战士3 binds two background images and never calls
+`setCrop`, so its stale 0x0 crop had skipped the blit entirely), ALPHA /
+LUMINANCE / LUMINANCE_ALPHA textures are widened to RGBA once per image and
+cached in the image's unused `_nj_mips` field (a new field would have broken
+every saved state: the snapshot loader compares per-class field counts), and
+the 34 declared-but-unseeded JSR 184 constants (Material flags, Fog modes,
+KeyframeSequence/AnimationTrack enums) are seeded.  The API audit shows the
+surface is otherwise complete - 30/30 spec classes, no missing members, one
+41-constant gap that needs an append-only saved-state migration
+(`docs/notes/2026-11-02-m3g-fuzz3.md`, `2026-11-03-background-coverage.md`,
+`2026-11-03-m3g-api-gaps.md`; commits `8e3ae85`, `dbddc20`, `0149f16`).  A
+mutation-fuzz pass over the 975 `.m3g` assets the 27 M3G corpus titles carry
+(10,000 mutants through `Loader`, `duplicate()`, the main getters and the
+raster path, under ASan+UBSan+LSan) found no memory-safety or leak defect: 846
+assets load standalone, and the 129 that need external PNGs throw the
+spec-required `IOException`.  The harness is committed as `tests/m3gmutdemo/`
+with `tools/m3g_mutation_fuzz.py`
+(`docs/notes/2026-11-03-m3g-mutation-fuzz.md`).
+
+**Android: audio focus, a BACK decision, the gamepad, and an honest measurement
+baseline.**  The port never requested audio focus, so MIDI kept playing over a
+phone call; it now requests in `onResume`, abandons in `onPause`, and
+pauses/resumes `MidiPlayer` on focus changes (verified by a GSM call on the
+emulator).  Held pad keys and hardware buttons are released on pause and when
+the port panel opens.  BACK is decided on release: a short press is one
+complete soft-right press/release pair to the MIDlet, a 550 ms hold opens the
+port panel, never both.  Gamepad KEYCODE_BUTTON_A/B/X/Y, previously dropped,
+map to fire, the soft keys, and game A/B/C/D.  An API-36 image runs the same
+create/reload/resize/audio matrix and finds only a BLUETOOTH_CONNECT
+runtime-permission gap (report-only, API 31+).  The headroom audit changes how
+we measure from now on: on this AVD the game is pinned at 60.0 fps by the
+emulator's vsync and uses only ~21% of the 16.7 ms budget (3.48 ms/frame guest
+CPU) with zero missed SurfaceFlinger frames, so fps and p99 cannot validate
+guest changes - `perf` attribution and guest CPU ms/frame can
+(`docs/notes/2026-11-03-android-headroom.md`,
+`2026-11-02-android-input.md`, `2026-11-03-input.md`; commits `404f4fc`,
+`cac808f`).
 
 ## What was new in 0.5.3
 
