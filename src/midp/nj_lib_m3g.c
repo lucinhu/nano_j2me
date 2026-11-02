@@ -12145,6 +12145,7 @@ typedef struct {
     float mvp[16];
     float proj[16];               /* clip = proj * (camera space) */
     int vx, vy, vw, vh;
+    float hw, hh;                 /* 0.5f * viewport w/h, hoisted per draw */
     m3g_java_target jt;
     nj_u4 dif;
     nj_u4 default_colour;
@@ -12224,7 +12225,7 @@ typedef struct {
  * row.  Mixing the two conventions is what made every model and view
  * transform silently do nothing.
  */
-static void jr_project(const float m[16], const float v[3], int w, int h,
+static void jr_project(const float m[16], const float v[3], float hw, float hh,
                        float out[2], float *inv)
 {
     float x = m[0] * v[0] + m[1] * v[1] + m[2]  * v[2] + m[3];
@@ -12237,8 +12238,12 @@ static void jr_project(const float m[16], const float v[3], int w, int h,
         out[1] = 0.0f;
         return;
     }
-    out[0] = (x / ww + 1.0f) * 0.5f * (float)w;
-    out[1] = (1.0f - y / ww) * 0.5f * (float)h;
+    /* (t * 0.5f) * w and t * (0.5f * w) are the same float for every viewport
+       an int is wide enough to hold: 0.5f * w is exact for w < 2^24, so both
+       sides round (t * w / 2) once.  hw/hh are that exact half, hoisted out of
+       the per-vertex call. */
+    out[0] = (x / ww + 1.0f) * hw;
+    out[1] = (1.0f - y / ww) * hh;
     if (ww > 1.0e-6f) { inv[0] = 1.0f / ww; }
 }
 
@@ -12283,7 +12288,7 @@ static int jr_vertex(m3g_jr *r, nj_u4 v, float xy[2], float *inv, float st[2],
     }
     /* The clip-space w: the depth buffer keeps its reciprocal, because 1/w
        is what interpolates linearly across a projected triangle. */
-    jr_project(r->mvp, p, r->vw, r->vh, xy, inv);
+    jr_project(r->mvp, p, r->hw, r->hh, xy, inv);
     /*
      * The eye-space position, which the lights need.  mv is view * model in
      * the Java layout jr_project reads (translation in m[3], m[7], m[11]).
@@ -12713,7 +12718,7 @@ static void jr_blend(m3g_jr *r, const jr_vtx *a, const jr_vtx *b, float t,
     } else {
         o->rgb2 = 0u;
     }
-    jr_project(r->proj, o->pe, r->vw, r->vh, o->xy, &o->inv);
+    jr_project(r->proj, o->pe, r->hw, r->hh, o->xy, &o->inv);
 }
 
 static void jr_emit(m3g_jr *r, const jr_vtx *v0, const jr_vtx *v1,
@@ -13300,6 +13305,8 @@ static int jr_setup(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref ib, nj_ref app,
     f = fc;
     r.vm = f->vm;
     r.vx = f->vx; r.vy = f->vy; r.vw = f->vw; r.vh = f->vh;
+    r.hw = 0.5f * (float)r.vw;
+    r.hh = 0.5f * (float)r.vh;
     r.sw = f->sw;
     if (f->sw.surf == &f->scratch) {
         r.scratch = f->scratch;
@@ -13872,7 +13879,7 @@ static nj_u4 jr_sprite(nj_vm *vm, nj_ref self, nj_ref sprite, nj_ref world,
         return 0u;
     }
     origin[0] = r.mv[3]; origin[1] = r.mv[7]; origin[2] = r.mv[11];
-    jr_project(r.proj, origin, r.vw, r.vh, center, &inv);
+    jr_project(r.proj, origin, 0.5f * (float)r.vw, 0.5f * (float)r.vh, center, &inv);
     if (!isfinite(inv) || inv <= 0.0f || !isfinite(center[0]) ||
         !isfinite(center[1]) || !isfinite(origin[2])) { return 0u; }
     scaled = nj_iget(vm, sprite, m3g_fof(vm, NJ_C_SPRITE3D, "_nj_scaled", "Z"));
@@ -13884,12 +13891,12 @@ static nj_u4 jr_sprite(nj_vm *vm, nj_ref self, nj_ref sprite, nj_ref world,
                               (double)r.mv[5]*r.mv[5] + (double)r.mv[9]*r.mv[9]);
         memcpy(extent, origin, sizeof(extent));
         extent[0] += (float)hx;
-        jr_project(r.proj, extent, r.vw, r.vh, projected, &wi);
+        jr_project(r.proj, extent, 0.5f * (float)r.vw, 0.5f * (float)r.vh, projected, &wi);
         if (!(wi > 0.0f)) { return 0u; }
         halfw = fabs((double)projected[0] - center[0]);
         memcpy(extent, origin, sizeof(extent));
         extent[1] += (float)hy;
-        jr_project(r.proj, extent, r.vw, r.vh, projected, &wi);
+        jr_project(r.proj, extent, 0.5f * (float)r.vw, 0.5f * (float)r.vh, projected, &wi);
         if (!(wi > 0.0f)) { return 0u; }
         halfh = fabs((double)projected[1] - center[1]);
     } else {
