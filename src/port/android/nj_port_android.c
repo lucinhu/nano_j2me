@@ -1575,6 +1575,34 @@ static const android_keymap_entry k_keymap[] = {
 
 #define KEYMAP_N ((int)(sizeof(k_keymap) / sizeof(k_keymap[0])))
 
+/*
+ * Controller buttons.  These are deliberately NOT in k_keymap: the keypad
+ * editor offers the keys a phone has, and a pad row for "button A of a gamepad
+ * that may not be connected" would be a second set of aliases for 确定/软键.
+ * A Bluetooth pad's face buttons are a device translation - the port turns
+ * them into the MIDP keys a J2ME title already understands, and the on-screen
+ * pad keeps emitting the phone keys it always did.
+ *
+ * The mapping is the conventional one for a J2ME title: A fires, B cancels
+ * (right soft key), X is the left soft key, Y is game button A, the shoulders
+ * are game buttons B/C and the triggers cover game button D and a second fire,
+ * START opens the soft-left menu and SELECT cancels.
+ */
+static const android_keymap_entry k_gamepadmap[] = {
+    {  96, NJ_KEY_FIRE,       "Pad A"    },  /* KEYCODE_BUTTON_A      */
+    {  97, NJ_KEY_SOFT_RIGHT, "Pad B"    },  /* KEYCODE_BUTTON_B      */
+    {  98, NJ_KEY_SOFT_LEFT,  "Pad X"    },  /* KEYCODE_BUTTON_X      */
+    {  99, NJ_KEY_GAME_A,     "Pad Y"    },  /* KEYCODE_BUTTON_Y      */
+    { 102, NJ_KEY_GAME_B,     "Pad L1"   },  /* KEYCODE_BUTTON_L1     */
+    { 103, NJ_KEY_GAME_C,     "Pad R1"   },  /* KEYCODE_BUTTON_R1     */
+    { 104, NJ_KEY_GAME_D,     "Pad L2"   },  /* KEYCODE_BUTTON_L2     */
+    { 105, NJ_KEY_FIRE,       "Pad R2"   },  /* KEYCODE_BUTTON_R2     */
+    { 108, NJ_KEY_SOFT_LEFT,  "Pad Start"},  /* KEYCODE_BUTTON_START  */
+    { 109, NJ_KEY_SOFT_RIGHT, "Pad Select"}  /* KEYCODE_BUTTON_SELECT */
+};
+
+#define GAMEPAD_N ((int)(sizeof(k_gamepadmap) / sizeof(k_gamepadmap[0])))
+
 void nj_port_android_push_key(nj_port *port, int android_keycode, int down)
 {
     nj_event ev;
@@ -1588,6 +1616,15 @@ void nj_port_android_push_key(nj_port *port, int android_keycode, int down)
         if (k_keymap[i].android == android_keycode) {
             k = (int)k_keymap[i].nj;
             break;
+        }
+    }
+    if (k == NJ_KEY_NONE) {
+        /* Not a phone key: it may be a gamepad button. */
+        for (i = 0; i < GAMEPAD_N; i++) {
+            if (k_gamepadmap[i].android == android_keycode) {
+                k = (int)k_gamepadmap[i].nj;
+                break;
+            }
         }
     }
     if (k == NJ_KEY_NONE) {

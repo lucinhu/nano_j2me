@@ -182,6 +182,32 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
      */
     private final java.util.HashSet<Integer> heldKeys = new java.util.HashSet<Integer>();
 
+    /*
+     * BACK has two jobs on a J2ME phone, and doing them on the same press was
+     * the bug: the key is the MIDlet's right soft key (the game's own menu),
+     * and on a phone with no other menu key it is also the port's panel handle.
+     * A press used to do both - the game opened its menu and the settings
+     * dialog came down on top of it.  So the press is decided on key-up: a
+     * short press is handed to the MIDlet as one complete soft-key press, a
+     * long press opens the panel and sends nothing.  The delay for a short
+     * press is the release itself, not a timer, and MIDP has no key-repeat for
+     * a press whose press/release arrive together.
+     */
+    private static final long BACK_LONG_MS = 550;
+    private boolean backDown;
+    private boolean backLongPressed;
+    private final Runnable backLongPress = new Runnable() {
+        @Override
+        public void run() {
+            if (!backDown) {
+                return;
+            }
+            backLongPressed = true;
+            Log.i(TAG, "back: long press -> port panel");
+            showPanel();
+        }
+    };
+
     private final Handler ui = new Handler(Looper.getMainLooper());
     private final Runnable statusTick = new Runnable() {
         @Override
@@ -653,9 +679,11 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
 
     @Override
     public void onBackPressed() {
-        /* Not a hard exit: a MIDlet's back button is its right soft key, so the
-         * key press has already gone to the game.  Back opens the panel, where
-         * 退出 is one deliberate tap away. */
+        /* The hardware BACK key is handled in dispatchKeyEvent (short press =
+         * the MIDlet's right soft key, long press = the panel).  This remains
+         * for the paths the port does not consume itself - a framework
+         * accessibility action, a gesture the OEM routes around the key stream:
+         * not a hard exit, still the panel, where 退出 is one tap away. */
         showPanel();
     }
 
@@ -1019,6 +1047,37 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
                 return super.dispatchKeyEvent(ev);
             }
         }
+        if (code == KeyEvent.KEYCODE_BACK) {
+            /*
+             * The one key the port plays both sides of.  Short press: the
+             * MIDlet's right soft key, delivered as a complete press/release
+             * pair now (the press was held while we were still deciding).
+             * Long press: the port panel, no key to the game.  Never both.
+             */
+            if (down) {
+                if (ev.getRepeatCount() == 0) {
+                    backDown = true;
+                    backLongPressed = false;
+                    ui.postDelayed(backLongPress, BACK_LONG_MS);
+                    Log.i(TAG, "back: down");
+                }
+            } else {
+                backDown = false;
+                ui.removeCallbacks(backLongPress);
+                if (backLongPressed) {
+                    Log.i(TAG, "back: up after long press, panel only");
+                } else {
+                    synchronized (lock) {
+                        if (handle != 0) {
+                            nativeKey(handle, KeyEvent.KEYCODE_BACK, true);
+                            nativeKey(handle, KeyEvent.KEYCODE_BACK, false);
+                        }
+                    }
+                    Log.i(TAG, "back: short press -> MIDP soft-right");
+                }
+            }
+            return true;
+        }
         if (down && ev.getRepeatCount() > 0) {
             return true;        /* MIDP has no key repeat; a held key is held */
         }
@@ -1034,16 +1093,6 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
             if (handle != 0) {
                 nativeKey(handle, code, down);
             }
-        }
-        if (code == KeyEvent.KEYCODE_BACK) {
-            /* Consumed, always: the framework's idea of back is "leave the
-             * activity", and a MIDlet is not finished with the screen just
-             * because the player pressed its right soft key.  The key itself
-             * already reached the game above. */
-            if (!down) {
-                onBackPressed();
-            }
-            return true;
         }
         return true;
     }
