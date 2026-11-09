@@ -4,7 +4,7 @@
 
 [![最新发布](https://img.shields.io/github/v/release/lucinhu/nano_j2me?sort=semver&label=release&color=blue)](https://github.com/lucinhu/nano_j2me/releases/latest)
 [![许可](https://img.shields.io/github/license/lucinhu/nano_j2me)](LICENSE)
-[![测试](https://img.shields.io/badge/tests-140%20passing-brightgreen)](docs/VERIFICATION.md)
+[![测试](https://img.shields.io/badge/tests-151%20passing-brightgreen)](docs/VERIFICATION.md)
 [![sanitizer](https://img.shields.io/badge/sanitized-ASan%20%2B%20UBSan%20%2B%20LSan-brightgreen)](tools/run_sanitized_tests.sh)
 [![C99，零依赖](https://img.shields.io/badge/C99-no%20dependencies-informational)](#设计上的硬约束)
 
@@ -40,6 +40,22 @@
                     │  headless · SDL2 · Android · ESP32-S3    │
                     └──────────────────────────────────────────┘
 ```
+
+## 0.5.5 的新内容
+
+Minecraft 兼容性修复包括：深度缓冲跨宿主帧保留、网格与云层 alpha、World 默认背景
+清除、LEQUAL 深度比较、平行和通用相机的投影深度、深度范围与多边形偏移。
+Linux 桌面界面还支持自动 DPI 适配和保存 UI 缩放设置。
+
+Release 构建采用正常的解释器优化等级。在固定工作量的 Minecraft 世界生成基准中，
+三个种子比此前强制 `-O2` 的构建减少了 19–20% CPU 时间，世界数据完全一致。
+变换后的二维绘制与 String.getChars 也有实测优化，并修复了流、集合、RMS、
+StringBuffer、图片解码、Nokia DirectGraphics 和声音回调问题。这些基准不代表整款
+游戏的 FPS 提升。
+
+**快速快照兼容性：** 含 Graphics3D 实例的旧版快速快照无法在新深度编码下恢复；
+请重新启动游戏，再读取游戏自身的存档。游戏 JAR、世界文件和 RMS 存档不受影响。
+新快照需要新版运行时。详见[发布说明与验证记录](docs/RELEASE_0.5.5.md)。
 
 ## 0.5.4 的新内容
 

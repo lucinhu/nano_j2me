@@ -43,8 +43,8 @@ extern "C" {
 /* Version of the runtime, reported by --version and in logs. */
 #define NJ_VERSION_MAJOR 0
 #define NJ_VERSION_MINOR 5
-#define NJ_VERSION_PATCH 4
-#define NJ_VERSION_STRING "0.5.4"
+#define NJ_VERSION_PATCH 5
+#define NJ_VERSION_STRING "0.5.5"
 
 /*
  * Run an embedded JAR with a caller-provided port, using a MIDlet class name

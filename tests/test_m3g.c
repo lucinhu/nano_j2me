@@ -136,7 +136,7 @@ static void test_camera_clip(nj_vm *vm)
     const nj_s2 positive_legal[9] = {-2,-2,4, 2,-2,4, 0,2,4};
     const nj_s2 before_zero[9] = {-2,-2,1, 2,-2,1, 0,2,1};
     const nj_s2 before_negative[9] = {-2,-2,24, 2,-2,24, 0,2,24};
-    nj_ref g3d = nj_object_new(vm, CLS("Graphics3D"));
+    nj_ref g3d = make(vm, CLS("Graphics3D"));
     nj_ref cam = make(vm, CLS("Camera")), xf = make(vm, CLS("Transform"));
     nj_ref va = nj_object_new(vm, CLS("VertexArray"));
     nj_ref vb = make(vm, CLS("VertexBuffer"));
@@ -4807,7 +4807,7 @@ static void test_m3g_bounds_and_cycles(nj_vm *vm)
 static void test_graphics3d_light_bounds(nj_vm *vm)
 {
     const int bad[] = { 16, 17, 0x7FFFFFFF };
-    nj_ref g3d = nj_object_new(vm, CLS("Graphics3D"));
+    nj_ref g3d = make(vm, CLS("Graphics3D"));
     nj_ref light = make(vm, CLS("Light"));
     nj_ref xf = make(vm, CLS("Transform"));
     nj_ref out = make(vm, CLS("Transform"));
@@ -6841,7 +6841,7 @@ int main(void)
         nj_value one, r;
 
         nj_vm_get_stats(vm, &before);
-        g3d = nj_object_new(vm, CLS("Graphics3D"));
+        g3d = make(vm, CLS("Graphics3D"));
         check(g3d != 0, "Graphics3D can be instantiated for the counter");
         /* The return slot is only read when the call succeeded.  The first
            version read it unconditionally and the test segfaulted inside
@@ -7166,7 +7166,7 @@ int main(void)
         pos[3] =  50;  pos[4] = -50;  pos[5] = -200;
         pos[6] = -50;  pos[7] =  50;  pos[8] = -200;
 
-        g3d = nj_object_new(vm, CLS("Graphics3D"));
+        g3d = make(vm, CLS("Graphics3D"));
         check(g3d != 0, "a Graphics3D exists to render with");
         {
             nj_value ia[2];
@@ -7332,7 +7332,7 @@ int main(void)
          * user reported.
          */
         {
-            nj_ref g2 = nj_object_new(vm, CLS("Graphics3D"));
+            nj_ref g2 = make(vm, CLS("Graphics3D"));
             int lit2 = 0;
 
             check(g2 != 0, "a second Graphics3D exists");
@@ -7931,7 +7931,7 @@ int main(void)
             gr = r.r;
         }
         check(img && gr, "a light-regression target image exists");
-        g3d = nj_object_new(vm, CLS("Graphics3D"));
+        g3d = make(vm, CLS("Graphics3D"));
         check(g3d != 0, "a light-regression Graphics3D exists");
         if (g3d) {
             a[0].r = gr;

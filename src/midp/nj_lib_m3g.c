@@ -2410,19 +2410,6 @@ NJFN(m3g_duplicate)
 }
 
 /*
- * resetLights() and the Graphics3D constructor have nothing to do: this
- * module keeps no light state and no per-instance state beyond its fields.
- * They are bound to a named native rather than to NULL so that the method
- * table and the native table agree - test_natives checks exactly that, and a
- * NULL entry would be reported as a missing implementation.
- */
-NJFN(m3g_noop_init)
-{
-    (void)args;
-    return NJ_OK;
-}
-
-/*
  * Animation tracks are stored but not interpolated: animate() reports "no
  * change" rather than a wrong pose, and the three accessors agree with each
  * other because they share one Vector field.
@@ -4048,11 +4035,27 @@ NJFN(m3g_bindTarget)
         nj_iput(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_vw", "I"), w);
         nj_iput(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_vh", "I"), h);
     }
+    nj_iput(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_depth", "Z"), 1);
+    nj_iput(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_hints", "I"), 0);
     /* Depth is valid only within this binding. Reuse the serialized zframe
        slot as a validity marker: negative needs initialization, nonnegative
        is valid. Host presents can occur between draws on the same target. */
     nj_iput(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_zframe", "I"), -1);
     return NJ_OK;
+}
+
+NJFN(m3g_bindTarget3)
+{
+    nj_status st = m3g_bindTarget(vm, th, args, ret);
+
+    if (st == NJ_OK) {
+        nj_ref self = NJ_THIS(args);
+        nj_iput(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_depth", "Z"),
+                NJ_ARG_INT(args, 1) != 0);
+        nj_iput(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_hints", "I"),
+                NJ_ARG_INT(args, 2));
+    }
+    return st;
 }
 
 NJFN(m3g_releaseTarget)
@@ -10886,6 +10889,12 @@ NJFN(m3g_world_init)
 }
 
 /* ---- Graphics3D ---------------------------------------------------- */
+NJFN(m3g_g3d_init)
+{
+    nj_iput(vm, NJ_THIS(args), m3g_fof(vm, NJ_C_G3D, "_nj_drfar", "F"),
+            f2bits(1.0f));
+    return NJ_OK;
+}
 M3G_REF_GET(m3g_g3d_getTarget, NJ_C_G3D, "_nj_target", "Ljava/lang/Object;")
 M3G_I_GET(m3g_g3d_getHints, NJ_C_G3D, "_nj_hints")
 M3G_Z_GET(m3g_g3d_isDepthBuffer, NJ_C_G3D, "_nj_depth")
@@ -10896,7 +10905,11 @@ M3G_I_GET(m3g_g3d_getViewportH, NJ_C_G3D, "_nj_vh")
 NJFN(m3g_g3d_setDepthRange)
 {
     nj_ref self = NJ_THIS(args);
+    float near = NJ_ARG_FLOAT(args, 0), far = NJ_ARG_FLOAT(args, 1);
 
+    if (near < 0.0f || near > 1.0f || far < 0.0f || far > 1.0f) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException", NULL);
+    }
     nj_iput(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_drnear", "F"),
             f2bits(NJ_ARG_FLOAT(args, 0)));
     nj_iput(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_drfar", "F"),
@@ -10918,9 +10931,10 @@ M3G_F_GET(m3g_g3d_getDepthRangeFar, NJ_C_G3D, "_nj_drfar")
  *
  * The depth buffer lives in a Java int[] on the Graphics3D (a C buffer
  * would have to be owned by someone, and the only lifetime the collector
- * understands is a Java one).  Entries hold 1/w scaled by 65536: larger is
- * nearer, and a freshly allocated array is all zero = "nothing drawn",
- * which is exactly the state a new buffer must be in. Binding a target starts
+ * understands is a Java one). Entries are reversed 24-bit window Z keys:
+ * 1 + round((1 - windowZ) * 16777215). Larger is nearer; zero is reserved
+ * for a cleared buffer, so the far plane (key 1) can still be written.
+ * Binding a target starts
  * its depth-buffer lifetime; explicit clear() clears it during that binding.
  * JSR 184 uses LEQUAL: in this reversed key domain, equal keys must pass,
  * so the raster loops accept key >= stored (and reject only key < stored).
@@ -10945,6 +10959,8 @@ typedef struct {
     int athresh;               /* the alpha test, 0..255 */
     int awrite;                /* alphaWriteEnable */
     int dtest, dwrite;          /* independent CompositingMode depth controls */
+    float depth_near, depth_far;
+    float depth_factor, depth_units; /* window-Z slope / depth-buffer ticks */
     int sprite;                /* sprite-only post-texture alpha and fog */
     int sprite_alpha;
     int sprite_l, sprite_t, sprite_r, sprite_b;
@@ -11603,18 +11619,648 @@ static inline int sw_ceil_i(float f)
     return i;
 }
 
+/* Non-finite offset arguments have no specified Java exception. Saturate
+ * infinities and discard an indeterminate NaN instead of converting it to int. */
+static inline nj_s4 sw_depth_key(double key, int clamp)
+{
+    if (!clamp) { return (nj_s4)key; }
+    if (key != key) { return 0; }
+    if (key <= 1.0) { return 1; }
+    if (key >= 16777216.0) { return 16777216; }
+    return (nj_s4)key;
+}
+
+/* Keep sampling paths small enough for register allocation and loop
+ * specialization. Span state belongs to one rasterized row; inverse-w and
+ * projected depth keep independent interpolation and rounding. */
+typedef struct {
+    m3g_sw *sw;
+    int format, bpp, gouraud, alpha_ramp, tex_near, st_outer, has_tex, depth_constant,
+        depth_clamp, dtest, dwrite, xl, xr, py;
+    nj_u4 flat;
+    nj_s4 constant_key;
+    nj_s4 *z;
+    nj_size o;
+    nj_u1 *drow;
+    float x0, y0, x1, y1, x2, y2, area, ia, pg, ph, pk, rr, rgc, rbc, ra, dxg, dxh, dxk,
+        dxr, dxgc, dxb, dxa;
+    double pz, dxz;
+    int flat_opaque, flat_tex565, flat_texargb, fog_state;
+} m3g_span;
+
+#if NJ_M3G_FAST_PATHS
+static nj_u4 sw_span_flat_opaque(const m3g_span *p)
+{
+    int px;
+    nj_u4 drawn = 0u;
+    m3g_sw *sw = p->sw;
+    int format = p->format;
+    int bpp = p->bpp;
+    int depth_constant = p->depth_constant;
+    int depth_clamp = p->depth_clamp;
+    int dtest = p->dtest;
+    int dwrite = p->dwrite;
+    int xl = p->xl;
+    int xr = p->xr;
+    nj_u4 flat = p->flat;
+    nj_s4 constant_key = p->constant_key;
+    nj_s4 *z = p->z;
+    nj_size o = p->o;
+    nj_u1 *drow = p->drow;
+    float ia = p->ia;
+    float pg = p->pg;
+    float dxg = p->dxg;
+    double pz = p->pz;
+    double dxz = p->dxz;
+    int fog_state = p->fog_state;
+
+    const int fog_here = fog_state;
+    const nj_u4 fog_const = (flat & 0xFF000000u) | sw->fog_colour;
+
+    for (px = xl; px <= xr; px++, o++, drow += bpp, pz += dxz, pg += dxg) {
+        nj_s4 key = depth_constant ? constant_key : sw_depth_key(pz, depth_clamp);
+
+        if (key > 0 && (!dtest || key >= z[o])) {
+            if (dwrite) {
+                z[o] = key;
+            }
+            m3g_pixel_write(
+                drow, format,
+                fog_here == 2
+                    ? fog_const
+                    : (fog_here == 0 && sw->fog ? sw_fog(sw, pg * ia, flat) : flat));
+            drawn = 1u;
+        }
+    }
+
+    return drawn;
+}
+#endif
+
+#if NJ_M3G_FAST_PATHS
+static nj_u4 sw_span_flat_tex565(const m3g_span *p)
+{
+    int px;
+    nj_u4 drawn = 0u;
+    m3g_sw *sw = p->sw;
+    int format = p->format;
+    int bpp = p->bpp;
+    int st_outer = p->st_outer;
+    int depth_constant = p->depth_constant;
+    int depth_clamp = p->depth_clamp;
+    int dtest = p->dtest;
+    int dwrite = p->dwrite;
+    int xl = p->xl;
+    int xr = p->xr;
+    nj_u4 flat = p->flat;
+    nj_s4 constant_key = p->constant_key;
+    nj_s4 *z = p->z;
+    nj_size o = p->o;
+    nj_u1 *drow = p->drow;
+    float area = p->area;
+    float pg = p->pg;
+    float ph = p->ph;
+    float pk = p->pk;
+    float dxg = p->dxg;
+    float dxh = p->dxh;
+    float dxk = p->dxk;
+    double pz = p->pz;
+    double dxz = p->dxz;
+    int fog_state = p->fog_state;
+
+    const nj_u4 fr = (flat >> 16) & 0xFFu;
+    const nj_u4 fg = (flat >> 8) & 0xFFu;
+    const nj_u4 fb = flat & 0xFFu;
+    const int blend_alpha = sw->blend != 68;
+    const int blend_other = sw->blend >= 65 && sw->blend <= 67;
+    const int tint =
+        sw->texfunc != 228 && sw->texfunc != 226 && (flat & 0x00FFFFFFu) != 0x00FFFFFFu;
+    const int bpp4 = sw->tex_bpp == 4;
+    const int awrite = sw->awrite;
+    const int fog_here = fog_state;
+
+    for (px = xl; px <= xr;
+         px++, o++, drow += bpp, pz += dxz, pg += dxg, ph += dxh, pk += dxk) {
+        nj_s4 key = depth_constant ? constant_key : sw_depth_key(pz, depth_clamp);
+        const nj_u1 *tp;
+        nj_u4 tr, tg, tb, ta, c;
+        float cp;
+
+        if (key <= 0) {
+            continue;
+        }
+        if (dtest && key < z[o]) {
+            continue;
+        }
+        cp = 1.0f / pg;
+        tp = sw_near_texel(sw, st_outer ? ph / pg : ph * cp,
+                           st_outer ? pk / pg : pk * cp);
+        ta = sw_tex_alpha(sw, bpp4 ? (nj_u4)tp[3] : 255u, flat);
+        if (sw->athresh > 0 && (nj_s4)ta < sw->athresh) {
+            continue;
+        }
+        tr = tp[0];
+        tg = tp[1];
+        tb = tp[2];
+        if (tint) {
+            tr = (tr * fr) / 255u;
+            tg = (tg * fg) / 255u;
+            tb = (tb * fb) / 255u;
+        }
+        if (fog_here == 2) {
+            tr = (sw->fog_colour >> 16) & 0xFFu;
+            tg = (sw->fog_colour >> 8) & 0xFFu;
+            tb = sw->fog_colour & 0xFFu;
+        } else if (fog_here == 0 && sw->fog) {
+            nj_u4 fcd = sw_fog_d(sw, cp * area, (tr << 16) | (tg << 8) | tb);
+
+            tr = (fcd >> 16) & 0xFFu;
+            tg = (fcd >> 8) & 0xFFu;
+            tb = fcd & 0xFFu;
+        }
+        if (dwrite) {
+            z[o] = key;
+        }
+        if (blend_alpha) {
+            if (ta < 255u || blend_other) {
+                c = (ta << 24) | (tr << 16) | (tg << 8) | tb;
+                m3g_pixel_write(
+                    drow, format,
+                    sw_blend(c, m3g_pixel_read(drow, format), sw->blend, awrite));
+                drawn = 1u;
+                continue;
+            }
+        }
+        c = ((tr >> 3) << 11) | ((tg >> 2) << 5) | (tb >> 3);
+        {
+            nj_u2 v2 = (nj_u2)c;
+            memcpy(drow, &v2, sizeof(v2));
+        }
+        drawn = 1u;
+    }
+
+    return drawn;
+}
+#endif
+
+#if NJ_M3G_FAST_PATHS
+static nj_u4 sw_span_flat_texargb(const m3g_span *p)
+{
+    int px;
+    nj_u4 drawn = 0u;
+    m3g_sw *sw = p->sw;
+    int format = p->format;
+    int bpp = p->bpp;
+    int st_outer = p->st_outer;
+    int depth_constant = p->depth_constant;
+    int depth_clamp = p->depth_clamp;
+    int dtest = p->dtest;
+    int dwrite = p->dwrite;
+    int xl = p->xl;
+    int xr = p->xr;
+    nj_u4 flat = p->flat;
+    nj_s4 constant_key = p->constant_key;
+    nj_s4 *z = p->z;
+    nj_size o = p->o;
+    nj_u1 *drow = p->drow;
+    float area = p->area;
+    float pg = p->pg;
+    float ph = p->ph;
+    float pk = p->pk;
+    float dxg = p->dxg;
+    float dxh = p->dxh;
+    float dxk = p->dxk;
+    double pz = p->pz;
+    double dxz = p->dxz;
+    int fog_state = p->fog_state;
+
+    const nj_u4 fr = (flat >> 16) & 0xFFu;
+    const nj_u4 fg = (flat >> 8) & 0xFFu;
+    const nj_u4 fb = flat & 0xFFu;
+    const int blend_alpha = sw->blend != 68;
+    const int blend_other = sw->blend >= 65 && sw->blend <= 67;
+    const int tint =
+        sw->texfunc != 228 && sw->texfunc != 226 && (flat & 0x00FFFFFFu) != 0x00FFFFFFu;
+    const int bpp4 = sw->tex_bpp == 4;
+    const int awrite = sw->awrite;
+    const int fog_here = fog_state;
+
+    if (!st_outer) {
+        /* Both wraps are CLAMP on this path, so the sampler's
+           fields do not change inside the triangle. */
+        const nj_u1 *texp = sw->tex;
+        const int texw = sw->tex_w, texh = sw->tex_h;
+        const int texbpp = sw->tex_bpp;
+        const float texwf = (float)texw, texhf = (float)texh;
+        const int athresh = sw->athresh;
+
+        /* The dominant in-world case: no blend, alpha tested,
+           near fog, tinted, depth test and write on. */
+        if (fog_here == 1 && tint && !blend_alpha && dtest && dwrite && awrite &&
+            bpp4) {
+            for (px = xl; px <= xr;
+                 px++, o++, drow += bpp, pz += dxz, pg += dxg, ph += dxh, pk += dxk) {
+                nj_s4 key =
+                    depth_constant ? constant_key : sw_depth_key(pz, depth_clamp);
+                const nj_u1 *tp;
+                nj_u4 tr, tg, tb, ta, c;
+                float cp;
+
+                if (key <= 0) {
+                    continue;
+                }
+                if (key < z[o]) {
+                    continue;
+                }
+                cp = 1.0f / pg;
+                {
+                    float fs = ph * cp;
+                    float ft = pk * cp;
+                    int uu, vv;
+
+                    fs = fs < 0.0f ? 0.0f : (fs > 1.0f ? 1.0f : fs);
+                    ft = ft < 0.0f ? 0.0f : (ft > 1.0f ? 1.0f : ft);
+                    uu = (int)(fs * texwf);
+                    vv = (int)(ft * texhf);
+                    if (uu < 0) {
+                        uu = 0;
+                    } else if (uu >= texw) {
+                        uu = texw - 1;
+                    }
+                    if (vv < 0) {
+                        vv = 0;
+                    } else if (vv >= texh) {
+                        vv = texh - 1;
+                    }
+                    tp = texp +
+                         ((nj_size)vv * (nj_size)texw + (nj_size)uu) * (nj_size)texbpp;
+                }
+                ta = sw_tex_alpha(sw, (nj_u4)tp[3], flat);
+                if (athresh > 0 && (nj_s4)ta < athresh) {
+                    continue;
+                }
+                tr = tp[0];
+                tg = tp[1];
+                tb = tp[2];
+                tr = (tr * fr) / 255u;
+                tg = (tg * fg) / 255u;
+                tb = (tb * fb) / 255u;
+                z[o] = key;
+                c = (ta << 24) | (tr << 16) | (tg << 8) | tb;
+                memcpy(drow, &c, sizeof(c));
+                drawn = 1u;
+            }
+        } else {
+            for (px = xl; px <= xr;
+                 px++, o++, drow += bpp, pz += dxz, pg += dxg, ph += dxh, pk += dxk) {
+                nj_s4 key =
+                    depth_constant ? constant_key : sw_depth_key(pz, depth_clamp);
+                const nj_u1 *tp;
+                nj_u4 tr, tg, tb, ta, c;
+                float cp;
+
+                if (key <= 0) {
+                    continue;
+                }
+                if (dtest && key < z[o]) {
+                    continue;
+                }
+                cp = 1.0f / pg;
+                {
+                    float fs = ph * cp;
+                    float ft = pk * cp;
+                    int uu, vv;
+
+                    fs = fs < 0.0f ? 0.0f : (fs > 1.0f ? 1.0f : fs);
+                    ft = ft < 0.0f ? 0.0f : (ft > 1.0f ? 1.0f : ft);
+                    uu = (int)(fs * texwf);
+                    vv = (int)(ft * texhf);
+                    if (uu < 0) {
+                        uu = 0;
+                    } else if (uu >= texw) {
+                        uu = texw - 1;
+                    }
+                    if (vv < 0) {
+                        vv = 0;
+                    } else if (vv >= texh) {
+                        vv = texh - 1;
+                    }
+                    tp = texp +
+                         ((nj_size)vv * (nj_size)texw + (nj_size)uu) * (nj_size)texbpp;
+                }
+                ta = sw_tex_alpha(sw, bpp4 ? (nj_u4)tp[3] : 255u, flat);
+                if (athresh > 0 && (nj_s4)ta < athresh) {
+                    continue;
+                }
+                tr = tp[0];
+                tg = tp[1];
+                tb = tp[2];
+                if (tint) {
+                    tr = (tr * fr) / 255u;
+                    tg = (tg * fg) / 255u;
+                    tb = (tb * fb) / 255u;
+                }
+                if (fog_here == 2) {
+                    tr = (sw->fog_colour >> 16) & 0xFFu;
+                    tg = (sw->fog_colour >> 8) & 0xFFu;
+                    tb = sw->fog_colour & 0xFFu;
+                } else if (fog_here == 0 && sw->fog) {
+                    nj_u4 fcd = sw_fog_d(sw, cp * area, (tr << 16) | (tg << 8) | tb);
+
+                    tr = (fcd >> 16) & 0xFFu;
+                    tg = (fcd >> 8) & 0xFFu;
+                    tb = fcd & 0xFFu;
+                }
+                if (dwrite) {
+                    z[o] = key;
+                }
+                c = (ta << 24) | (tr << 16) | (tg << 8) | tb;
+                if (blend_alpha && (ta < 255u || blend_other)) {
+                    m3g_pixel_write(
+                        drow, format,
+                        sw_blend(c, m3g_pixel_read(drow, format), sw->blend, awrite));
+                    drawn = 1u;
+                    continue;
+                }
+                if (!awrite) {
+                    c = (c & 0x00FFFFFFu) |
+                        (m3g_pixel_read(drow, format) & 0xFF000000u);
+                }
+                memcpy(drow, &c, sizeof(c));
+                drawn = 1u;
+            }
+        }
+    } else {
+        for (px = xl; px <= xr;
+             px++, o++, drow += bpp, pz += dxz, pg += dxg, ph += dxh, pk += dxk) {
+            nj_s4 key = depth_constant ? constant_key : sw_depth_key(pz, depth_clamp);
+            const nj_u1 *tp;
+            nj_u4 tr, tg, tb, ta, c;
+            float cp;
+
+            if (key <= 0) {
+                continue;
+            }
+            if (dtest && key < z[o]) {
+                continue;
+            }
+            cp = 1.0f / pg;
+            tp = sw_near_texel(sw, st_outer ? ph / pg : ph * cp,
+                               st_outer ? pk / pg : pk * cp);
+            ta = sw_tex_alpha(sw, bpp4 ? (nj_u4)tp[3] : 255u, flat);
+            if (sw->athresh > 0 && (nj_s4)ta < sw->athresh) {
+                continue;
+            }
+            tr = tp[0];
+            tg = tp[1];
+            tb = tp[2];
+            if (tint) {
+                tr = (tr * fr) / 255u;
+                tg = (tg * fg) / 255u;
+                tb = (tb * fb) / 255u;
+            }
+            if (fog_here == 2) {
+                tr = (sw->fog_colour >> 16) & 0xFFu;
+                tg = (sw->fog_colour >> 8) & 0xFFu;
+                tb = sw->fog_colour & 0xFFu;
+            } else if (fog_here == 0 && sw->fog) {
+                nj_u4 fcd = sw_fog_d(sw, cp * area, (tr << 16) | (tg << 8) | tb);
+
+                tr = (fcd >> 16) & 0xFFu;
+                tg = (fcd >> 8) & 0xFFu;
+                tb = fcd & 0xFFu;
+            }
+            if (dwrite) {
+                z[o] = key;
+            }
+            c = (ta << 24) | (tr << 16) | (tg << 8) | tb;
+            if (blend_alpha && (ta < 255u || blend_other)) {
+                m3g_pixel_write(
+                    drow, format,
+                    sw_blend(c, m3g_pixel_read(drow, format), sw->blend, awrite));
+                drawn = 1u;
+                continue;
+            }
+            if (!awrite) {
+                c = (c & 0x00FFFFFFu) | (m3g_pixel_read(drow, format) & 0xFF000000u);
+            }
+            memcpy(drow, &c, sizeof(c));
+            drawn = 1u;
+        }
+    }
+
+    return drawn;
+}
+#endif
+
+static nj_u4 sw_span(const m3g_span *p)
+{
+    int px;
+    nj_u4 drawn = 0u;
+    m3g_sw *sw = p->sw;
+    int format = p->format;
+    int bpp = p->bpp;
+    int gouraud = p->gouraud;
+    int alpha_ramp = p->alpha_ramp;
+    int tex_near = p->tex_near;
+    int st_outer = p->st_outer;
+    int has_tex = p->has_tex;
+    int depth_constant = p->depth_constant;
+    int depth_clamp = p->depth_clamp;
+    int dtest = p->dtest;
+    int dwrite = p->dwrite;
+    int xl = p->xl;
+    int xr = p->xr;
+    int py = p->py;
+    nj_u4 flat = p->flat;
+    nj_s4 constant_key = p->constant_key;
+    nj_s4 *z = p->z;
+    nj_size o = p->o;
+    nj_u1 *drow = p->drow;
+    float x0 = p->x0;
+    float y0 = p->y0;
+    float x1 = p->x1;
+    float y1 = p->y1;
+    float x2 = p->x2;
+    float y2 = p->y2;
+    float area = p->area;
+    float ia = p->ia;
+    float pg = p->pg;
+    float ph = p->ph;
+    float pk = p->pk;
+    float rr = p->rr;
+    float rgc = p->rgc;
+    float rbc = p->rbc;
+    float ra = p->ra;
+    float dxg = p->dxg;
+    float dxh = p->dxh;
+    float dxk = p->dxk;
+    float dxr = p->dxr;
+    float dxgc = p->dxgc;
+    float dxb = p->dxb;
+    float dxa = p->dxa;
+    double pz = p->pz;
+    double dxz = p->dxz;
+#if NJ_M3G_FAST_PATHS
+    int flat_opaque = p->flat_opaque;
+    int flat_tex565 = p->flat_tex565;
+    int flat_texargb = p->flat_texargb;
+#endif
+#if NJ_M3G_FAST_PATHS
+    /* Window depth is independent of 1/w (used only for UV/fog).
+     * All paths share the same depth plane and key conversion. */
+    if (flat_opaque) {
+        drawn |= sw_span_flat_opaque(p);
+    } else
+#endif
+#if NJ_M3G_FAST_PATHS
+        if (flat_tex565) {
+        drawn |= sw_span_flat_tex565(p);
+    } else if (flat_texargb) {
+        drawn |= sw_span_flat_texargb(p);
+    } else
+#endif
+        for (px = xl; px <= xr; px++, o++, drow += bpp, pz += dxz, pg += dxg, ph += dxh,
+            pk += dxk, rr += dxr, rgc += dxgc, rbc += dxb, ra += dxa) {
+            nj_s4 key = depth_constant ? constant_key : sw_depth_key(pz, depth_clamp);
+            nj_u4 c, ca;
+
+            if (sw->sprite) {
+                const float xx[3] = {x0, x1, x2};
+                const float yy[3] = {y0, y1, y2};
+                int edge, outside = 0;
+                for (edge = 0; edge < 3; edge++) {
+                    int next = (edge + 1) % 3;
+                    float dx = xx[next] - xx[edge], dy = yy[next] - yy[edge];
+                    float e = dx * ((float)py + 0.5f - yy[edge]) -
+                              dy * ((float)px + 0.5f - xx[edge]);
+                    if (area < 0.0f) {
+                        e = -e;
+                        dx = -dx;
+                        dy = -dy;
+                    }
+                    if (e < 0.0f ||
+                        (e == 0.0f && !(dy < 0.0f || (dy == 0.0f && dx > 0.0f)))) {
+                        outside = 1;
+                        break;
+                    }
+                }
+                if (outside) {
+                    continue;
+                }
+            }
+            if (key <= 0) {
+                continue;
+            }
+            if (dtest && key < z[o]) {
+                continue;
+            }
+            if (gouraud) {
+                c = (flat & 0xFF000000u) | ((nj_u4)(rr * ia + 0.5f) << 16) |
+                    ((nj_u4)(rgc * ia + 0.5f) << 8) | (nj_u4)(rbc * ia + 0.5f);
+            } else {
+                c = flat;
+            }
+            if (alpha_ramp) {
+                float a = ra * ia + 0.5f;
+                nj_u4 alpha = a < 0.0f ? 0u : a > 255.0f ? 255u : (nj_u4)a;
+
+                c = (c & 0x00FFFFFFu) | (alpha << 24);
+            }
+            if (has_tex) {
+                float rcp = 1.0f / pg;
+
+                if (tex_near) {
+                    /* The nearest sample without sw_texel()'s filter and
+                       format dispatch.  Same texfunc rule: DECAL and
+                       MODULATE hand the texture through, the rest tint it
+                       with the Gouraud colour, per sw_texel(). */
+                    const nj_u1 *tp = sw_near_texel(sw, st_outer ? ph / pg : ph * rcp,
+                                                    st_outer ? pk / pg : pk * rcp);
+                    nj_u4 tr = tp[0], tg = tp[1], tb = tp[2];
+                    nj_u4 ta =
+                        sw_tex_alpha(sw, (sw->tex_bpp == 4) ? (nj_u4)tp[3] : 255u, c);
+
+                    if (sw->texfunc == 228 || sw->texfunc == 226) {
+                        c = (ta << 24) | (tr << 16) | (tg << 8) | tb;
+                    } else {
+                        c = (ta << 24) | (((tr * ((c >> 16) & 0xFFu)) / 255u) << 16) |
+                            (((tg * ((c >> 8) & 0xFFu)) / 255u) << 8) |
+                            ((tb * (c & 0xFFu)) / 255u);
+                    }
+                } else {
+                    c = sw_texel(sw, st_outer ? ph / pg : ph * rcp,
+                                 st_outer ? pk / pg : pk * rcp, c);
+                }
+                if (!sw->sprite) {
+                    c = sw_fog_d(sw, rcp * area, c);
+                }
+            } else if (!sw->sprite) {
+                c = sw_fog(sw, pg * ia, c);
+            }
+            if (sw->sprite) {
+                nj_u4 a = ((c >> 24) * (nj_u4)sw->sprite_alpha + 127u) / 255u;
+                float f = sw->sprite_fog;
+                int ch;
+                nj_u4 fogged = a << 24;
+                for (ch = 0; ch < 3; ch++) {
+                    int shift = 16 - 8 * ch;
+                    float value =
+                        (float)((c >> shift) & 255u) * f +
+                        (float)((sw->sprite_fog_colour >> shift) & 255u) * (1.0f - f);
+                    fogged |= (nj_u4)(value + 0.5f) << shift;
+                }
+                c = fogged;
+            }
+            ca = (c >> 24) & 0xFFu;
+            /* The alpha test is a test on the fragment, so a discarded
+               one leaves no depth behind - which is what lets a cut-out
+               sprite pass in front of the thing behind it. */
+            if (sw->athresh > 0 && (nj_s4)ca < sw->athresh) {
+                continue;
+            }
+            if (dwrite) {
+                z[o] = key;
+            }
+            if (sw->blend == 68) { /* REPLACE */
+                m3g_pixel_write(drow, format,
+                                sw->awrite
+                                    ? c
+                                    : ((c & 0x00FFFFFFu) |
+                                       (m3g_pixel_read(drow, format) & 0xFF000000u)));
+            } else if (ca < 255u || sw->blend == 65 || sw->blend == 66 ||
+                       sw->blend == 67) {
+                m3g_pixel_write(
+                    drow, format,
+                    sw_blend(c, m3g_pixel_read(drow, format), sw->blend, sw->awrite));
+            } else {
+                m3g_pixel_write(drow, format,
+                                sw->awrite
+                                    ? c
+                                    : ((c & 0x00FFFFFFu) |
+                                       (m3g_pixel_read(drow, format) & 0xFF000000u)));
+            }
+            drawn = 1u;
+        }
+    return drawn;
+}
+
 static nj_u4 sw_tri(m3g_sw *sw, const float xy[6], const float inv[3],
-                    const float st[6], int has_tex, const nj_u4 rgb[3],
-                    const nj_u4 rgb2[3], int twosided)
+                    const double depth[3], const float st[6], int has_tex,
+                    const nj_u4 rgb[3], const nj_u4 rgb2[3], int twosided)
 {
     float x0 = xy[0], y0 = xy[1], x1 = xy[2], y1 = xy[3], x2 = xy[4], y2 = xy[5];
     float area = (x1 - x0) * (y2 - y0) - (x2 - x0) * (y1 - y0);
     float ia;
     int cull = sw->cull ? sw->cull : M3G_SW_BACK;
     int wind = sw->winding ? sw->winding : M3G_SW_CCW;
-    int back, minx, maxx, miny, maxy, px, py;
+    int back, minx, maxx, miny, maxy, py;
     float e0, e1, e2, g, h, k;
     float dxe0, dye0, dxe1, dye1, dxe2, dye2, dxg, dyg, dxh, dyh, dxk, dyk;
+    double zrow = 1.0, dxz = 0.0, dyz = 0.0;
+    m3g_span span;
+    int depth_clamp = 0, depth_constant;
+    nj_s4 constant_key;
     nj_u1 *dst;
     int format, bpp;
     nj_u4 drawn = 0u;
@@ -11637,10 +12283,10 @@ static nj_u4 sw_tri(m3g_sw *sw, const float xy[6], const float inv[3],
     int flat_tex, flat_tex565, flat_texargb;
 #endif
 #if NJ_M3G_FAST_PATHS
-    int fog_state = 0;   /* 0 per pixel, 1 no fog, 2 fully fogged */
+    int fog_state = 0; /* 0 per pixel, 1 no fog, 2 fully fogged */
 #endif
-    int st_outer;        /* a texture coordinate range that a reciprocal
-                          * cannot be trusted with: see the sampler note */
+    int st_outer; /* a texture coordinate range that a reciprocal
+                   * cannot be trusted with: see the sampler note */
 
     if (!sw->surf || !sw->z || !sw->surf->pixels) {
         return 0u;
@@ -11650,7 +12296,10 @@ static nj_u4 sw_tri(m3g_sw *sw, const float xy[6], const float inv[3],
         format != NJ_PIXFMT_RGB888) {
         return 0u;
     }
-    if (area == 0.0f) {
+    if (!isfinite(x0) || !isfinite(y0) || !isfinite(x1) || !isfinite(y1) ||
+        !isfinite(x2) || !isfinite(y2) || !isfinite(area) || !isfinite(depth[0]) ||
+        !isfinite(depth[1]) || !isfinite(depth[2]) || !isfinite(inv[0]) ||
+        !isfinite(inv[1]) || !isfinite(inv[2]) || area == 0.0f) {
         return 0u;
     }
     /* In NDC (y up) the JSR's front face is counter-clockwise; the
@@ -11671,20 +12320,18 @@ static nj_u4 sw_tri(m3g_sw *sw, const float xy[6], const float inv[3],
     }
     gouraud = ((rgb[0] & 0x00FFFFFFu) != (rgb[1] & 0x00FFFFFFu) ||
                (rgb[1] & 0x00FFFFFFu) != (rgb[2] & 0x00FFFFFFu));
-    alpha_ramp = ((rgb[0] >> 24) != (rgb[1] >> 24) ||
-                  (rgb[1] >> 24) != (rgb[2] >> 24));
+    alpha_ramp = ((rgb[0] >> 24) != (rgb[1] >> 24) || (rgb[1] >> 24) != (rgb[2] >> 24));
     flat = rgb[0];
 #if NJ_M3G_FAST_PATHS
     /* Hoist flat/nearest texture dispatch out of the pixel loop. Clamp,
      * replace/decal and non-default compositing are common in real scenes;
      * none needs the general Gouraud/sprite/filter branch tree. Alpha testing
      * still precedes depth writes and all blend modes use sw_blend unchanged. */
-    flat_opaque = !has_tex && !gouraud && !alpha_ramp &&
-                  (flat >> 24) == 255u && !sw->sprite && sw->awrite &&
-                  sw->athresh <= 255 && (sw->blend == 64 || sw->blend == 68);
-    flat_tex = has_tex && !gouraud && !alpha_ramp && !sw->sprite &&
-               sw->tex != NULL && sw->tex_bpp >= 3 &&
-               sw->tex_w > 0 && sw->tex_h > 0 &&
+    flat_opaque = !has_tex && !gouraud && !alpha_ramp && (flat >> 24) == 255u &&
+                  !sw->sprite && sw->awrite && sw->athresh <= 255 &&
+                  (sw->blend == 64 || sw->blend == 68);
+    flat_tex = has_tex && !gouraud && !alpha_ramp && !sw->sprite && sw->tex != NULL &&
+               sw->tex_bpp >= 3 && sw->tex_w > 0 && sw->tex_h > 0 &&
                sw->filt_image != 209 && sw->filt_image != 129;
     flat_tex565 = flat_tex && format == NJ_PIXFMT_RGB565;
     flat_texargb = flat_tex && format == NJ_PIXFMT_ARGB8888;
@@ -11694,9 +12341,9 @@ static nj_u4 sw_tri(m3g_sw *sw, const float xy[6], const float inv[3],
 #ifdef NJ_AB_NOTEXNEAR
     tex_near = 0;
 #else
-    tex_near = has_tex && sw->tex != NULL && sw->tex_bpp >= 3 &&
-               sw->tex_w > 0 && sw->tex_h > 0 && !sw->sprite &&
-               sw->filt_image != 209 && sw->filt_image != 129;
+    tex_near = has_tex && sw->tex != NULL && sw->tex_bpp >= 3 && sw->tex_w > 0 &&
+               sw->tex_h > 0 && !sw->sprite && sw->filt_image != 209 &&
+               sw->filt_image != 129;
 #endif
 #endif
     ia = 1.0f / area;
@@ -11743,19 +12390,43 @@ static nj_u4 sw_tri(m3g_sw *sw, const float xy[6], const float inv[3],
         float ly = y0 < y1 ? (y0 < y2 ? y0 : y2) : (y1 < y2 ? y1 : y2);
         float hy = y0 > y1 ? (y0 > y2 ? y0 : y2) : (y1 > y2 ? y1 : y2);
 
-        if (lx < cxl) { lx = cxl; } else if (lx > cxa) { lx = cxa; }
-        if (hx < cxl) { hx = cxl; } else if (hx > cxa) { hx = cxa; }
-        if (ly < cyl) { ly = cyl; } else if (ly > cya) { ly = cya; }
-        if (hy < cyl) { hy = cyl; } else if (hy > cya) { hy = cya; }
+        if (lx < cxl) {
+            lx = cxl;
+        } else if (lx > cxa) {
+            lx = cxa;
+        }
+        if (hx < cxl) {
+            hx = cxl;
+        } else if (hx > cxa) {
+            hx = cxa;
+        }
+        if (ly < cyl) {
+            ly = cyl;
+        } else if (ly > cya) {
+            ly = cya;
+        }
+        if (hy < cyl) {
+            hy = cyl;
+        } else if (hy > cya) {
+            hy = cya;
+        }
         minx = sw_floor_i(lx);
         maxx = sw_ceil_i(hx);
         miny = sw_floor_i(ly);
         maxy = sw_ceil_i(hy);
     }
-    if (minx < sw->vx) { minx = sw->vx; }
-    if (miny < sw->vy) { miny = sw->vy; }
-    if (maxx > sw->vx + sw->vw - 1) { maxx = sw->vx + sw->vw - 1; }
-    if (maxy > sw->vy + sw->vh - 1) { maxy = sw->vy + sw->vh - 1; }
+    if (minx < sw->vx) {
+        minx = sw->vx;
+    }
+    if (miny < sw->vy) {
+        miny = sw->vy;
+    }
+    if (maxx > sw->vx + sw->vw - 1) {
+        maxx = sw->vx + sw->vw - 1;
+    }
+    if (maxy > sw->vy + sw->vh - 1) {
+        maxy = sw->vy + sw->vh - 1;
+    }
     if (minx > maxx || miny > maxy) {
         return 0u;
     }
@@ -11767,9 +12438,12 @@ static nj_u4 sw_tri(m3g_sw *sw, const float xy[6], const float inv[3],
        pixel per edge.  The same trick covers the interpolation - s/w, t/w
        and 1/w are all linear in screen space, so each is one accumulator
        and one add per pixel. */
-    dxe0 = -(y1 - y0); dye0 = (x1 - x0);
-    dxe1 = -(y2 - y1); dye1 = (x2 - x1);
-    dxe2 = -(y0 - y2); dye2 = (x0 - x2);
+    dxe0 = -(y1 - y0);
+    dye0 = (x1 - x0);
+    dxe1 = -(y2 - y1);
+    dye1 = (x2 - x1);
+    dxe2 = -(y0 - y2);
+    dye2 = (x0 - x2);
     e0 = (x1 - x0) * ((float)miny + 0.5f - y0) - (y1 - y0) * ((float)minx + 0.5f - x0);
     e1 = (x2 - x1) * ((float)miny + 0.5f - y1) - (y2 - y1) * ((float)minx + 0.5f - x1);
     e2 = (x0 - x2) * ((float)miny + 0.5f - y2) - (y0 - y2) * ((float)minx + 0.5f - x2);
@@ -11836,11 +12510,50 @@ static nj_u4 sw_tri(m3g_sw *sw, const float xy[6], const float inv[3],
     int dir2 = (sd2 > 0.0f) ? 1 : ((sd2 < 0.0f) ? -1 : 0);
     float fminx = (float)minx;
     float fmaxx = (float)maxx + 1.0f; /* Exclusive upper pixel-index bound. */
-    float iz = ia * 65536.0f;      /* the depth scale, once */
     int dtest = sw->dtest;
     int dwrite = sw->dwrite;
     nj_s4 *z = sw->z;
 
+    if (dtest || dwrite) {
+        double ax = (double)x1 - x0, ay = (double)y1 - y0;
+        double bx = (double)x2 - x0, by = (double)y2 - y0;
+        double da = ax * by - bx * ay;
+        double dz1 = depth[1] - depth[0], dz2 = depth[2] - depth[0];
+        double slope, bias = 0.0;
+
+        if (da == 0.0 || !isfinite(da)) {
+            return 0u;
+        }
+        dxz = (dz1 * by - dz2 * ay) / da;
+        dyz = (ax * dz2 - bx * dz1) / da;
+        slope = fabs(dxz) > fabs(dyz) ? fabs(dxz) : fabs(dyz);
+        if (sw->depth_factor != 0.0f) {
+            bias = slope * sw->depth_factor;
+        }
+        if (sw->depth_units != 0.0f) {
+            bias += (double)sw->depth_units / 16777215.0;
+        }
+        zrow = depth[0] + dxz * ((double)minx + 0.5 - x0) +
+               dyz * ((double)miny + 0.5 - y0) + bias;
+        /* Scale the affine plane once, including round-to-nearest. A linear
+         * plane's extrema over the whole raster bounding box are at corners.
+         * Prove the ordinary casts safe there; only saturated/non-finite
+         * triangles need the per-pixel clamp. Leave one key of safety margin
+         * for incremental floating-point rounding at a boundary. */
+        zrow = 1.5 + (1.0 - zrow) * 16777215.0;
+        dxz *= -16777215.0;
+        dyz *= -16777215.0;
+        {
+            double zx = dxz * (double)(maxx - minx);
+            double zy = dyz * (double)(maxy - miny);
+            double low = zrow + fmin(0.0, zx) + fmin(0.0, zy);
+            double high = zrow + fmax(0.0, zx) + fmax(0.0, zy);
+            depth_clamp =
+                !isfinite(low) || !isfinite(high) || low < 2.0 || high >= 16777216.0;
+        }
+    }
+    depth_constant = dxz == 0.0 && dyz == 0.0;
+    constant_key = depth_constant ? sw_depth_key(zrow, depth_clamp) : 0;
     for (py = miny; py <= maxy; py++) {
         float rg = g, rh = h, rk = k;
         float rr = cr, rgc = cg, rbc = cb, ra = ca_row;
@@ -11852,28 +12565,40 @@ static nj_u4 sw_tri(m3g_sw *sw, const float xy[6], const float inv[3],
 
         if (dir0 > 0) {
             float x = fminx + (-w0) / sd0;
-            if (x > lo) { lo = x; }
+            if (x > lo) {
+                lo = x;
+            }
         } else if (dir0 < 0) {
             float x = fminx + w0 / (-sd0);
-            if (x < hi) { hi = x; }
+            if (x < hi) {
+                hi = x;
+            }
         } else if (w0 < 0.0f || (w0 == 0.0f && sw0 < 0.0f)) {
             empty = 1;
         }
         if (dir1 > 0) {
             float x = fminx + (-w1) / sd1;
-            if (x > lo) { lo = x; }
+            if (x > lo) {
+                lo = x;
+            }
         } else if (dir1 < 0) {
             float x = fminx + w1 / (-sd1);
-            if (x < hi) { hi = x; }
+            if (x < hi) {
+                hi = x;
+            }
         } else if (w1 < 0.0f || (w1 == 0.0f && sw1 < 0.0f)) {
             empty = 1;
         }
         if (dir2 > 0) {
             float x = fminx + (-w2) / sd2;
-            if (x > lo) { lo = x; }
+            if (x > lo) {
+                lo = x;
+            }
         } else if (dir2 < 0) {
             float x = fminx + w2 / (-sd2);
-            if (x < hi) { hi = x; }
+            if (x < hi) {
+                hi = x;
+            }
         } else if (w2 < 0.0f || (w2 == 0.0f && sw2 < 0.0f)) {
             empty = 1;
         }
@@ -11890,13 +12615,20 @@ static nj_u4 sw_tri(m3g_sw *sw, const float xy[6], const float inv[3],
              * inside the viewport's pixel range; the round-to-int is safe. */
             xl = sw_ceil_i(lo);
             xr = sw_ceil_i(hi) - 1;
-            if (xl < minx) { xl = minx; }
-            if (xr > maxx) { xr = maxx; }
-            if (xl > xr) { empty = 1; }
+            if (xl < minx) {
+                xl = minx;
+            }
+            if (xr > maxx) {
+                xr = maxx;
+            }
+            if (xl > xr) {
+                empty = 1;
+            }
         }
         if (!empty) {
             float skip = (float)(xl - minx);
             float pg = rg + dxg * skip;
+            double pz = zrow + dxz * (double)skip;
             float ph = rh + dxh * skip, pk = rk + dxk * skip;
 
             rr += dxr * skip;
@@ -11905,396 +12637,68 @@ static nj_u4 sw_tri(m3g_sw *sw, const float xy[6], const float inv[3],
             ra += dxa * skip;
             o = (nj_size)py * (nj_size)sw->surf->width + (nj_size)xl;
             drow = dst + (nj_size)py * (nj_size)sw->surf->stride + (nj_size)xl * bpp;
+            span.sw = sw;
+            span.format = format;
+            span.bpp = bpp;
+            span.gouraud = gouraud;
+            span.alpha_ramp = alpha_ramp;
+            span.tex_near = tex_near;
+            span.st_outer = st_outer;
+            span.has_tex = has_tex;
+            span.depth_constant = depth_constant;
+            span.depth_clamp = depth_clamp;
+            span.dtest = dtest;
+            span.dwrite = dwrite;
+            span.xl = xl;
+            span.xr = xr;
+            span.py = py;
+            span.flat = flat;
+            span.constant_key = constant_key;
+            span.z = z;
+            span.o = o;
+            span.drow = drow;
+            span.x0 = x0;
+            span.y0 = y0;
+            span.x1 = x1;
+            span.y1 = y1;
+            span.x2 = x2;
+            span.y2 = y2;
+            span.area = area;
+            span.ia = ia;
+            span.pg = pg;
+            span.ph = ph;
+            span.pk = pk;
+            span.rr = rr;
+            span.rgc = rgc;
+            span.rbc = rbc;
+            span.ra = ra;
+            span.dxg = dxg;
+            span.dxh = dxh;
+            span.dxk = dxk;
+            span.dxr = dxr;
+            span.dxgc = dxgc;
+            span.dxb = dxb;
+            span.dxa = dxa;
+            span.pz = pz;
+            span.dxz = dxz;
 #if NJ_M3G_FAST_PATHS
-            /* The opaque, flat case needs only one interpolant. Keep its
-             * expression and stepping order identical to the general loop:
-             * reassociating the depth arithmetic can change a tie. */
-            if (flat_opaque) {
-                const int fog_here = fog_state;
-                const nj_u4 fog_const = (flat & 0xFF000000u) | sw->fog_colour;
-
-                for (px = xl; px <= xr; px++, o++, drow += bpp, pg += dxg) {
-                    nj_s4 key = (nj_s4)(pg * iz);
-
-                    if (key > 0 && (!dtest || key >= z[o])) {
-                        if (dwrite) { z[o] = key; }
-                        m3g_pixel_write(drow, format,
-                                        fog_here == 2 ? fog_const :
-                                        (fog_here == 0 && sw->fog
-                                             ? sw_fog(sw, pg * ia, flat) : flat));
-                        drawn = 1u;
-                    }
-                }
-            } else
+            span.flat_opaque = flat_opaque;
+            span.flat_tex565 = flat_tex565;
+            span.flat_texargb = flat_texargb;
+            span.fog_state = fog_state;
 #endif
-#if NJ_M3G_FAST_PATHS
-            if (flat_tex565) {
-                const nj_u4 fr = (flat >> 16) & 0xFFu;
-                const nj_u4 fg = (flat >> 8) & 0xFFu;
-                const nj_u4 fb = flat & 0xFFu;
-                const int blend_alpha = sw->blend != 68;
-                const int blend_other = sw->blend >= 65 && sw->blend <= 67;
-                const int tint = sw->texfunc != 228 && sw->texfunc != 226 &&
-                                 (flat & 0x00FFFFFFu) != 0x00FFFFFFu;
-                const int bpp4 = sw->tex_bpp == 4;
-                const int awrite = sw->awrite;
-                const int fog_here = fog_state;
-
-                for (px = xl; px <= xr; px++, o++, drow += bpp, pg += dxg,
-                         ph += dxh, pk += dxk) {
-                    nj_s4 key = (nj_s4)(pg * iz);
-                    const nj_u1 *tp;
-                    nj_u4 tr, tg, tb, ta, c;
-                    float cp;
-
-                    if (key <= 0) { continue; }
-                    if (dtest && key < z[o]) { continue; }
-                    cp = 1.0f / pg;
-                    tp = sw_near_texel(sw, st_outer ? ph / pg : ph * cp,
-                                       st_outer ? pk / pg : pk * cp);
-                    ta = sw_tex_alpha(sw, bpp4 ? (nj_u4)tp[3] : 255u, flat);
-                    if (sw->athresh > 0 && (nj_s4)ta < sw->athresh) { continue; }
-                    tr = tp[0]; tg = tp[1]; tb = tp[2];
-                    if (tint) {
-                        tr = (tr * fr) / 255u;
-                        tg = (tg * fg) / 255u;
-                        tb = (tb * fb) / 255u;
-                    }
-                    if (fog_here == 2) {
-                        tr = (sw->fog_colour >> 16) & 0xFFu;
-                        tg = (sw->fog_colour >> 8) & 0xFFu;
-                        tb = sw->fog_colour & 0xFFu;
-                    } else if (fog_here == 0 && sw->fog) {
-                        nj_u4 fcd = sw_fog_d(sw, cp * area,
-                                             (tr << 16) | (tg << 8) | tb);
-
-                        tr = (fcd >> 16) & 0xFFu;
-                        tg = (fcd >> 8) & 0xFFu;
-                        tb = fcd & 0xFFu;
-                    }
-                    if (dwrite) { z[o] = key; }
-                    if (blend_alpha) {
-                        if (ta < 255u || blend_other) {
-                            c = (ta << 24) | (tr << 16) | (tg << 8) | tb;
-                            m3g_pixel_write(drow, format,
-                                sw_blend(c, m3g_pixel_read(drow, format),
-                                         sw->blend, awrite));
-                            drawn = 1u;
-                            continue;
-                        }
-                    }
-                    c = ((tr >> 3) << 11) | ((tg >> 2) << 5) | (tb >> 3);
-                    {
-                        nj_u2 v2 = (nj_u2)c;
-                        memcpy(drow, &v2, sizeof(v2));
-                    }
-                    drawn = 1u;
-                }
-            } else if (flat_texargb) {
-                const nj_u4 fr = (flat >> 16) & 0xFFu;
-                const nj_u4 fg = (flat >> 8) & 0xFFu;
-                const nj_u4 fb = flat & 0xFFu;
-                const int blend_alpha = sw->blend != 68;
-                const int blend_other = sw->blend >= 65 && sw->blend <= 67;
-                const int tint = sw->texfunc != 228 && sw->texfunc != 226 &&
-                                 (flat & 0x00FFFFFFu) != 0x00FFFFFFu;
-                const int bpp4 = sw->tex_bpp == 4;
-                const int awrite = sw->awrite;
-                const int fog_here = fog_state;
-
-                if (!st_outer) {
-                    /* Both wraps are CLAMP on this path, so the sampler's
-                       fields do not change inside the triangle. */
-                    const nj_u1 *texp = sw->tex;
-                    const int texw = sw->tex_w, texh = sw->tex_h;
-                    const int texbpp = sw->tex_bpp;
-                    const float texwf = (float)texw, texhf = (float)texh;
-                    const int athresh = sw->athresh;
-
-                    /* The dominant in-world case: no blend, alpha tested,
-                       near fog, tinted, depth test and write on. */
-                    if (fog_here == 1 && tint && !blend_alpha && dtest &&
-                        dwrite && awrite && bpp4) {
-                for (px = xl; px <= xr; px++, o++, drow += bpp, pg += dxg,
-                         ph += dxh, pk += dxk) {
-                    nj_s4 key = (nj_s4)(pg * iz);
-                    const nj_u1 *tp;
-                    nj_u4 tr, tg, tb, ta, c;
-                    float cp;
-
-                    if (key <= 0) { continue; }
-                    if (key < z[o]) { continue; }
-                    cp = 1.0f / pg;
-                    {
-                        float fs = ph * cp;
-                        float ft = pk * cp;
-                        int uu, vv;
-
-                        fs = fs < 0.0f ? 0.0f : (fs > 1.0f ? 1.0f : fs);
-                        ft = ft < 0.0f ? 0.0f : (ft > 1.0f ? 1.0f : ft);
-                        uu = (int)(fs * texwf);
-                        vv = (int)(ft * texhf);
-                        if (uu < 0) {
-                            uu = 0;
-                        } else if (uu >= texw) {
-                            uu = texw - 1;
-                        }
-                        if (vv < 0) {
-                            vv = 0;
-                        } else if (vv >= texh) {
-                            vv = texh - 1;
-                        }
-                        tp = texp +
-                             ((nj_size)vv * (nj_size)texw + (nj_size)uu) *
-                                 (nj_size)texbpp;
-                    }
-                    ta = sw_tex_alpha(sw, (nj_u4)tp[3], flat);
-                    if (athresh > 0 && (nj_s4)ta < athresh) { continue; }
-                    tr = tp[0]; tg = tp[1]; tb = tp[2];
-                    tr = (tr * fr) / 255u;
-                    tg = (tg * fg) / 255u;
-                    tb = (tb * fb) / 255u;
-                    z[o] = key;
-                    c = (ta << 24) | (tr << 16) | (tg << 8) | tb;
-                    memcpy(drow, &c, sizeof(c));
-                    drawn = 1u;
-                }
-                    } else {
-                for (px = xl; px <= xr; px++, o++, drow += bpp, pg += dxg,
-                         ph += dxh, pk += dxk) {
-                    nj_s4 key = (nj_s4)(pg * iz);
-                    const nj_u1 *tp;
-                    nj_u4 tr, tg, tb, ta, c;
-                    float cp;
-
-                    if (key <= 0) { continue; }
-                    if (dtest && key < z[o]) { continue; }
-                    cp = 1.0f / pg;
-                    {
-                        float fs = ph * cp;
-                        float ft = pk * cp;
-                        int uu, vv;
-
-                        fs = fs < 0.0f ? 0.0f : (fs > 1.0f ? 1.0f : fs);
-                        ft = ft < 0.0f ? 0.0f : (ft > 1.0f ? 1.0f : ft);
-                        uu = (int)(fs * texwf);
-                        vv = (int)(ft * texhf);
-                        if (uu < 0) {
-                            uu = 0;
-                        } else if (uu >= texw) {
-                            uu = texw - 1;
-                        }
-                        if (vv < 0) {
-                            vv = 0;
-                        } else if (vv >= texh) {
-                            vv = texh - 1;
-                        }
-                        tp = texp +
-                             ((nj_size)vv * (nj_size)texw + (nj_size)uu) *
-                                 (nj_size)texbpp;
-                    }
-                    ta = sw_tex_alpha(sw, bpp4 ? (nj_u4)tp[3] : 255u, flat);
-                    if (athresh > 0 && (nj_s4)ta < athresh) { continue; }
-                    tr = tp[0]; tg = tp[1]; tb = tp[2];
-                    if (tint) {
-                        tr = (tr * fr) / 255u;
-                        tg = (tg * fg) / 255u;
-                        tb = (tb * fb) / 255u;
-                    }
-                    if (fog_here == 2) {
-                        tr = (sw->fog_colour >> 16) & 0xFFu;
-                        tg = (sw->fog_colour >> 8) & 0xFFu;
-                        tb = sw->fog_colour & 0xFFu;
-                    } else if (fog_here == 0 && sw->fog) {
-                        nj_u4 fcd = sw_fog_d(sw, cp * area,
-                                             (tr << 16) | (tg << 8) | tb);
-
-                        tr = (fcd >> 16) & 0xFFu;
-                        tg = (fcd >> 8) & 0xFFu;
-                        tb = fcd & 0xFFu;
-                    }
-                    if (dwrite) { z[o] = key; }
-                    c = (ta << 24) | (tr << 16) | (tg << 8) | tb;
-                    if (blend_alpha && (ta < 255u || blend_other)) {
-                        m3g_pixel_write(drow, format,
-                            sw_blend(c, m3g_pixel_read(drow, format), sw->blend,
-                                     awrite));
-                        drawn = 1u;
-                        continue;
-                    }
-                    if (!awrite) {
-                        c = (c & 0x00FFFFFFu) |
-                            (m3g_pixel_read(drow, format) & 0xFF000000u);
-                    }
-                    memcpy(drow, &c, sizeof(c));
-                    drawn = 1u;
-                }
-                    }
-                } else {
-                for (px = xl; px <= xr; px++, o++, drow += bpp, pg += dxg,
-                         ph += dxh, pk += dxk) {
-                    nj_s4 key = (nj_s4)(pg * iz);
-                    const nj_u1 *tp;
-                    nj_u4 tr, tg, tb, ta, c;
-                    float cp;
-
-                    if (key <= 0) { continue; }
-                    if (dtest && key < z[o]) { continue; }
-                    cp = 1.0f / pg;
-                    tp = sw_near_texel(sw, st_outer ? ph / pg : ph * cp,
-                                       st_outer ? pk / pg : pk * cp);
-                    ta = sw_tex_alpha(sw, bpp4 ? (nj_u4)tp[3] : 255u, flat);
-                    if (sw->athresh > 0 && (nj_s4)ta < sw->athresh) { continue; }
-                    tr = tp[0]; tg = tp[1]; tb = tp[2];
-                    if (tint) {
-                        tr = (tr * fr) / 255u;
-                        tg = (tg * fg) / 255u;
-                        tb = (tb * fb) / 255u;
-                    }
-                    if (fog_here == 2) {
-                        tr = (sw->fog_colour >> 16) & 0xFFu;
-                        tg = (sw->fog_colour >> 8) & 0xFFu;
-                        tb = sw->fog_colour & 0xFFu;
-                    } else if (fog_here == 0 && sw->fog) {
-                        nj_u4 fcd = sw_fog_d(sw, cp * area,
-                                             (tr << 16) | (tg << 8) | tb);
-
-                        tr = (fcd >> 16) & 0xFFu;
-                        tg = (fcd >> 8) & 0xFFu;
-                        tb = fcd & 0xFFu;
-                    }
-                    if (dwrite) { z[o] = key; }
-                    c = (ta << 24) | (tr << 16) | (tg << 8) | tb;
-                    if (blend_alpha && (ta < 255u || blend_other)) {
-                        m3g_pixel_write(drow, format,
-                            sw_blend(c, m3g_pixel_read(drow, format), sw->blend,
-                                     awrite));
-                        drawn = 1u;
-                        continue;
-                    }
-                    if (!awrite) {
-                        c = (c & 0x00FFFFFFu) |
-                            (m3g_pixel_read(drow, format) & 0xFF000000u);
-                    }
-                    memcpy(drow, &c, sizeof(c));
-                    drawn = 1u;
-                }
-                }
-            } else
-#endif
-            for (px = xl; px <= xr; px++, o++, drow += bpp, pg += dxg, ph += dxh,
-                     pk += dxk, rr += dxr, rgc += dxgc, rbc += dxb, ra += dxa) {
-                nj_s4 key = (nj_s4)(pg * iz);
-                nj_u4 c, ca;
-
-                if (sw->sprite) {
-                    const float xx[3] = { x0, x1, x2 };
-                    const float yy[3] = { y0, y1, y2 };
-                    int edge, outside = 0;
-                    for (edge = 0; edge < 3; edge++) {
-                        int next = (edge + 1) % 3;
-                        float dx = xx[next] - xx[edge], dy = yy[next] - yy[edge];
-                        float e = dx * ((float)py + 0.5f - yy[edge]) -
-                                  dy * ((float)px + 0.5f - xx[edge]);
-                        if (area < 0.0f) { e = -e; dx = -dx; dy = -dy; }
-                        if (e < 0.0f || (e == 0.0f &&
-                            !(dy < 0.0f || (dy == 0.0f && dx > 0.0f)))) {
-                            outside = 1; break;
-                        }
-                    }
-                    if (outside) { continue; }
-                }
-                if (key <= 0) {
-                    continue;
-                }
-                if (dtest && key < z[o]) {
-                    continue;
-                }
-                if (gouraud) {
-                    c = (flat & 0xFF000000u) |
-                        ((nj_u4)(rr * ia + 0.5f) << 16) |
-                        ((nj_u4)(rgc * ia + 0.5f) << 8) |
-                        (nj_u4)(rbc * ia + 0.5f);
-                } else {
-                    c = flat;
-                }
-                if (alpha_ramp) {
-                    float a = ra * ia + 0.5f;
-                    nj_u4 alpha = a < 0.0f ? 0u : a > 255.0f ? 255u : (nj_u4)a;
-
-                    c = (c & 0x00FFFFFFu) | (alpha << 24);
-                }
-                if (has_tex) {
-                    float rcp = 1.0f / pg;
-
-                    if (tex_near) {
-                        /* The nearest sample without sw_texel()'s filter and
-                           format dispatch.  Same texfunc rule: DECAL and
-                           MODULATE hand the texture through, the rest tint it
-                           with the Gouraud colour, per sw_texel(). */
-                        const nj_u1 *tp = sw_near_texel(sw,
-                            st_outer ? ph / pg : ph * rcp,
-                            st_outer ? pk / pg : pk * rcp);
-                        nj_u4 tr = tp[0], tg = tp[1], tb = tp[2];
-                        nj_u4 ta = sw_tex_alpha(sw,
-                            (sw->tex_bpp == 4) ? (nj_u4)tp[3] : 255u, c);
-
-                        if (sw->texfunc == 228 || sw->texfunc == 226) {
-                            c = (ta << 24) | (tr << 16) | (tg << 8) | tb;
-                        } else {
-                            c = (ta << 24) |
-                                (((tr * ((c >> 16) & 0xFFu)) / 255u) << 16) |
-                                (((tg * ((c >> 8) & 0xFFu)) / 255u) << 8) |
-                                ((tb * (c & 0xFFu)) / 255u);
-                        }
-                    } else {
-                        c = sw_texel(sw, st_outer ? ph / pg : ph * rcp,
-                                     st_outer ? pk / pg : pk * rcp, c);
-                    }
-                    if (!sw->sprite) {
-                        c = sw_fog_d(sw, rcp * area, c);
-                    }
-                } else if (!sw->sprite) {
-                    c = sw_fog(sw, pg * ia, c);
-                }
-                if (sw->sprite) {
-                    nj_u4 a = ((c >> 24) * (nj_u4)sw->sprite_alpha + 127u) / 255u;
-                    float f = sw->sprite_fog;
-                    int ch;
-                    nj_u4 fogged = a << 24;
-                    for (ch = 0; ch < 3; ch++) {
-                        int shift = 16 - 8 * ch;
-                        float value = (float)((c >> shift) & 255u) * f +
-                            (float)((sw->sprite_fog_colour >> shift) & 255u) * (1.0f - f);
-                        fogged |= (nj_u4)(value + 0.5f) << shift;
-                    }
-                    c = fogged;
-                }
-                ca = (c >> 24) & 0xFFu;
-                /* The alpha test is a test on the fragment, so a discarded
-                   one leaves no depth behind - which is what lets a cut-out
-                   sprite pass in front of the thing behind it. */
-                if (sw->athresh > 0 && (nj_s4)ca < sw->athresh) {
-                    continue;
-                }
-                if (dwrite) { z[o] = key; }
-                if (sw->blend == 68) {              /* REPLACE */
-                    m3g_pixel_write(drow, format, sw->awrite ? c :
-                        ((c & 0x00FFFFFFu) | (m3g_pixel_read(drow, format) & 0xFF000000u)));
-                } else if (ca < 255u || sw->blend == 65 || sw->blend == 66 ||
-                           sw->blend == 67) {
-                    m3g_pixel_write(drow, format,
-                        sw_blend(c, m3g_pixel_read(drow, format), sw->blend, sw->awrite));
-                } else {
-                    m3g_pixel_write(drow, format, sw->awrite ? c :
-                        ((c & 0x00FFFFFFu) | (m3g_pixel_read(drow, format) & 0xFF000000u)));
-                }
-                drawn = 1u;
-            }
+            drawn |= sw_span(&span);
         }
-        w0 += sw0; w1 += sw1; w2 += sw2;
-        g += dyg; h += dyh; k += dyk;
-        cr += dyr; cg += dygc; cb += dyb;
+        w0 += sw0;
+        w1 += sw1;
+        w2 += sw2;
+        g += dyg;
+        h += dyh;
+        k += dyk;
+        zrow += dyz;
+        cr += dyr;
+        cg += dygc;
+        cb += dyb;
         ca_row += dya;
     }
     return drawn;
@@ -12417,13 +12821,14 @@ typedef struct {
  * transform silently do nothing.
  */
 static void jr_project(const float m[16], const float v[3], float hw, float hh,
-                       float out[2], float *inv)
+                       float out[2], float *inv, float *ndc_z)
 {
     float x = m[0] * v[0] + m[1] * v[1] + m[2]  * v[2] + m[3];
     float y = m[4] * v[0] + m[5] * v[1] + m[6]  * v[2] + m[7];
     float ww = m[12] * v[0] + m[13] * v[1] + m[14] * v[2] + m[15];
 
     inv[0] = 0.0f;
+    if (ndc_z) { *ndc_z = 0.0f; }
     if (ww == 0.0f) {
         out[0] = 0.0f;               /* a vertex at infinity has no pixel */
         out[1] = 0.0f;
@@ -12433,13 +12838,17 @@ static void jr_project(const float m[16], const float v[3], float hw, float hh,
        an int is wide enough to hold: 0.5f * w is exact for w < 2^24, so both
        sides round (t * w / 2) once.  hw/hh are that exact half, hoisted out of
        the per-vertex call. */
+    if (ndc_z) {
+        float z = m[8] * v[0] + m[9] * v[1] + m[10] * v[2] + m[11];
+        *ndc_z = z / ww;
+    }
     out[0] = (x / ww + 1.0f) * hw;
     out[1] = (1.0f - y / ww) * hh;
     if (ww > 1.0e-6f) { inv[0] = 1.0f / ww; }
 }
 
 static int jr_vertex(m3g_jr *r, nj_u4 v, float xy[2], float *inv, float st[2],
-                     float pe[3], float ne[3])
+                     float pe[3], float ne[3], float *ndc_z)
 {
     float p[4];
     nj_u4 k;
@@ -12477,9 +12886,8 @@ static int jr_vertex(m3g_jr *r, nj_u4 v, float xy[2], float *inv, float st[2],
             p[k] = raw * r->pfac + r->pbias[k];
         }
     }
-    /* The clip-space w: the depth buffer keeps its reciprocal, because 1/w
-       is what interpolates linearly across a projected triangle. */
-    jr_project(r->mvp, p, r->hw, r->hh, xy, inv);
+    /* Texture and fog keep 1/w; depth independently uses projected Z/w. */
+    jr_project(r->mvp, p, r->hw, r->hh, xy, inv, ndc_z);
     /*
      * The eye-space position, which the lights need.  mv is view * model in
      * the Java layout jr_project reads (translation in m[3], m[7], m[11]).
@@ -12800,7 +13208,8 @@ static void jr_lit(m3g_jr *r, const float pe[3], const float ne[3],
  */
 typedef struct {
     float xy[2];
-    float inv;                     /* 1 / w */
+    float inv;                     /* 1 / w: texture and fog only */
+    float ndc_z;                   /* clip Z / clip W, reprojected after clipping */
     float st[2];
     float pe[3];                   /* camera space: z is negative in front */
     float ne[3];
@@ -12814,13 +13223,13 @@ static int jr_fetch(m3g_jr *r, nj_u4 v, jr_vtx *o)
     nj_u4 argb, alpha, vc;
 
     o->xy[0] = o->xy[1] = 0.0f;
-    o->inv = 0.0f;
+    o->inv = o->ndc_z = 0.0f;
     o->st[0] = o->st[1] = 0.0f;
     o->pe[0] = o->pe[1] = o->pe[2] = 0.0f;
     o->ne[0] = o->ne[1] = o->ne[2] = 0.0f;
     o->rgb = 0u;
     o->rgb2 = 0u;
-    if (!jr_vertex(r, v, o->xy, &o->inv, o->st, o->pe, o->ne)) {
+    if (!jr_vertex(r, v, o->xy, &o->inv, o->st, o->pe, o->ne, &o->ndc_z)) {
         return 0;
     }
     vc = jr_vertex_colour(r, v);
@@ -12902,13 +13311,14 @@ static void jr_blend(m3g_jr *r, const jr_vtx *a, const jr_vtx *b, float t,
     } else {
         o->rgb2 = 0u;
     }
-    jr_project(r->proj, o->pe, r->hw, r->hh, o->xy, &o->inv);
+    jr_project(r->proj, o->pe, r->hw, r->hh, o->xy, &o->inv, &o->ndc_z);
 }
 
 static void jr_emit(m3g_jr *r, const jr_vtx *v0, const jr_vtx *v1,
                     const jr_vtx *v2)
 {
     float xy[6], st[6], inv[3];
+    double depth[3];
     nj_u4 rgb[3], rgb2[3];
 
     xy[0] = v0->xy[0]; xy[1] = v0->xy[1];
@@ -12918,6 +13328,13 @@ static void jr_emit(m3g_jr *r, const jr_vtx *v0, const jr_vtx *v1,
     st[2] = v1->st[0]; st[3] = v1->st[1];
     st[4] = v2->st[0]; st[5] = v2->st[1];
     inv[0] = v0->inv; inv[1] = v1->inv; inv[2] = v2->inv;
+    {
+        double near = r->sw.depth_near;
+        double span = (double)r->sw.depth_far - near;
+        depth[0] = near + 0.5 * ((double)v0->ndc_z + 1.0) * span;
+        depth[1] = near + 0.5 * ((double)v1->ndc_z + 1.0) * span;
+        depth[2] = near + 0.5 * ((double)v2->ndc_z + 1.0) * span;
+    }
     rgb[0] = v0->rgb; rgb[1] = v1->rgb; rgb[2] = v2->rgb;
     rgb2[0] = v0->rgb2; rgb2[1] = v1->rgb2; rgb2[2] = v2->rgb2;
     if (r->sw.surf) {
@@ -12966,7 +13383,7 @@ static void jr_emit(m3g_jr *r, const jr_vtx *v0, const jr_vtx *v1,
             }
         }
         /* The rasteriser writes the pixels: depth, texture, culling. */
-        if (sw_tri(&r->sw, xy, inv, st,
+        if (sw_tri(&r->sw, xy, inv, depth, st,
                    r->sw.tex != NULL && (r->tpos != NULL || r->sw.sprite),
                    rgb, rgb2, r->twosided) != 0u) {
             r->drawn++;
@@ -12989,7 +13406,7 @@ static float jr_clip_distance(const float m[16], const jr_vtx *v, int plane)
     return plane == 0 ? w + z : w - z;
 }
 
-/* Clip before rasterisation: jr_project only divides x/y by w. Clipping a
+/* Clip before rasterisation: jr_project divides clip coordinates by w. Clipping a
  * convex polygon against one plane adds at most one vertex, so a triangle
  * needs at most four vertices after near and five after far. Both workspaces
  * are bounded stack arrays; jr_blend interpolates attributes and reprojects
@@ -13267,6 +13684,8 @@ static int jr_frame_resolve(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref world,
        image, or the screen for a null target; the Java call stays the
        fallback for a target this cannot reach. */
     memset(&f->sw, 0, sizeof(f->sw));
+    f->sw.depth_near = bits2f(nj_iget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_drnear", "F")));
+    f->sw.depth_far = bits2f(nj_iget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_drfar", "F")));
     {
         int x0, y0, x1, y1;
         nj_surface *s = m3g_target_surface(vm, target, &f->scratch);
@@ -13689,6 +14108,10 @@ static int jr_setup(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref ib, nj_ref app,
                                                  "L" NJ_C_COMP ";"));
 
             if (cm) {
+                r.sw.depth_factor = bits2f(nj_iget(vm, cm,
+                                  m3g_fof(vm, NJ_C_COMP, "_nj_dofact", "F")));
+                r.sw.depth_units = bits2f(nj_iget(vm, cm,
+                                 m3g_fof(vm, NJ_C_COMP, "_nj_dounits", "F")));
                 r.sw.dtest = (int)nj_iget(vm, cm,
                               m3g_fof(vm, NJ_C_COMP, "_nj_dtest", "I"));
                 r.sw.dwrite = (int)nj_iget(vm, cm,
@@ -13870,6 +14293,9 @@ static int jr_setup(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref ib, nj_ref app,
     r.jt.ox = r.vx;
     r.jt.oy = r.vy;
     r.drawn = 0u;
+    if (!nj_iget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_depth", "Z"))) {
+        r.sw.dtest = r.sw.dwrite = 0;
+    }
     *out = r;
     /*
      * sw.surf is the one field that points into the draw state itself: the
@@ -14063,7 +14489,7 @@ static nj_u4 jr_sprite(nj_vm *vm, nj_ref self, nj_ref sprite, nj_ref world,
     nj_s8 aw, ah, left, top, right, bottom;
     m3g_jr r;
     jr_vtx v[4];
-    float origin[3], center[2], inv, alpha = 1.0f;
+    float origin[3], center[2], inv, ndc_z, alpha = 1.0f;
     double halfw, halfh, x0, x1, y0, y1, sx0, sx1, sy0, sy1;
     double u0, u1, t0, t1;
     int k, scaled, flipx, flipy;
@@ -14095,7 +14521,7 @@ static nj_u4 jr_sprite(nj_vm *vm, nj_ref self, nj_ref sprite, nj_ref world,
         return 0u;
     }
     origin[0] = r.mv[3]; origin[1] = r.mv[7]; origin[2] = r.mv[11];
-    jr_project(r.proj, origin, 0.5f * (float)r.vw, 0.5f * (float)r.vh, center, &inv);
+    jr_project(r.proj, origin, 0.5f * (float)r.vw, 0.5f * (float)r.vh, center, &inv, &ndc_z);
     if (!isfinite(inv) || inv <= 0.0f || !isfinite(center[0]) ||
         !isfinite(center[1]) || !isfinite(origin[2])) { return 0u; }
     scaled = nj_iget(vm, sprite, m3g_fof(vm, NJ_C_SPRITE3D, "_nj_scaled", "Z"));
@@ -14107,12 +14533,12 @@ static nj_u4 jr_sprite(nj_vm *vm, nj_ref self, nj_ref sprite, nj_ref world,
                               (double)r.mv[5]*r.mv[5] + (double)r.mv[9]*r.mv[9]);
         memcpy(extent, origin, sizeof(extent));
         extent[0] += (float)hx;
-        jr_project(r.proj, extent, 0.5f * (float)r.vw, 0.5f * (float)r.vh, projected, &wi);
+        jr_project(r.proj, extent, 0.5f * (float)r.vw, 0.5f * (float)r.vh, projected, &wi, NULL);
         if (!(wi > 0.0f)) { return 0u; }
         halfw = fabs((double)projected[0] - center[0]);
         memcpy(extent, origin, sizeof(extent));
         extent[1] += (float)hy;
-        jr_project(r.proj, extent, 0.5f * (float)r.vw, 0.5f * (float)r.vh, projected, &wi);
+        jr_project(r.proj, extent, 0.5f * (float)r.vw, 0.5f * (float)r.vh, projected, &wi, NULL);
         if (!(wi > 0.0f)) { return 0u; }
         halfh = fabs((double)projected[1] - center[1]);
     } else {
@@ -14170,6 +14596,7 @@ static nj_u4 jr_sprite(nj_vm *vm, nj_ref self, nj_ref sprite, nj_ref world,
         double y = k >= 2 ? sy1 : sy0;
         v[k].xy[0] = (float)(x + r.vx); v[k].xy[1] = (float)(y + r.vy);
         v[k].inv = inv;
+        v[k].ndc_z = ndc_z;
         v[k].st[0] = (float)(u0 + (u1-u0) * ((x-x0)/(x1-x0)));
         v[k].st[1] = (float)(t0 + (t1-t0) * ((y-y0)/(y1-y0)));
         memcpy(v[k].pe, origin, sizeof(origin));
@@ -15163,10 +15590,10 @@ const nj_native_entry nj_lib_m3g_table[] = {
     { NJ_C_BG, "isColorClearEnabled", "()Z",  m3g_bg_isColorClear },
     { NJ_C_BG, "setDepthClearEnable", "(Z)V", m3g_bg_setDepthClear },
     { NJ_C_BG, "isDepthClearEnabled", "()Z",  m3g_bg_isDepthClear },
-    { NJ_C_G3D, "<init>",        "()V",                    m3g_noop_init },
+    { NJ_C_G3D, "<init>",        "()V",                    m3g_g3d_init },
     { NJ_C_G3D, "getInstance",   "()L" NJ_C_G3D ";",       m3g_getInstance },
     { NJ_C_G3D, "bindTarget",    "(Ljava/lang/Object;)V",  m3g_bindTarget },
-    { NJ_C_G3D, "bindTarget",    "(Ljava/lang/Object;ZI)V", m3g_bindTarget },
+    { NJ_C_G3D, "bindTarget",    "(Ljava/lang/Object;ZI)V", m3g_bindTarget3 },
     { NJ_C_G3D, "releaseTarget", "()V",                    m3g_releaseTarget },
     { NJ_C_G3D, "setViewport",   "(IIII)V",                m3g_setViewport },
     { NJ_C_G3D, "setCamera",

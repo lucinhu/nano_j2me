@@ -17,7 +17,7 @@
 #  built and is what the tests use).
 # =====================================================================
 cmake_minimum_required(VERSION 3.16)
-project(nano_j2me VERSION 0.5.4 LANGUAGES C)
+project(nano_j2me VERSION 0.5.5 LANGUAGES C)
 
 set(CMAKE_C_STANDARD 99)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -821,6 +821,7 @@ if(NJ_BUILD_TESTS)
   nj_add_test(test_m3g_targets tests/test_m3g_targets.c)
   nj_add_test(test_m3g_depth tests/test_m3g_depth.c)
   nj_add_test(test_m3g_depth_compare tests/test_m3g_depth_compare.c)
+  nj_add_test(test_m3g_projection_depth tests/test_m3g_projection_depth.c)
   nj_add_test(test_m3g_alpha tests/test_m3g_alpha.c)
   nj_add_test(test_m3g_references tests/test_m3g_references.c)
   nj_add_test(test_mascot    tests/test_mascot.c)
@@ -1478,6 +1479,7 @@ nj_add_test(test_clip tests/test_clip.c)
   # mid-run and resumes it in a second VM in the same process.
   if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_save.c)
     nj_add_test(test_save tests/test_save.c)
+    nj_add_test(test_save_m3g_depth tests/test_save_m3g_depth.c)
   endif()
 
   # The desktop client, headlessly: a JAR's name and icon, the settings file,

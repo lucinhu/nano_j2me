@@ -4,7 +4,7 @@
 
 [![latest release](https://img.shields.io/github/v/release/lucinhu/nano_j2me?sort=semver&label=release&color=blue)](https://github.com/lucinhu/nano_j2me/releases/latest)
 [![licence](https://img.shields.io/github/license/lucinhu/nano_j2me)](LICENSE)
-[![tests](https://img.shields.io/badge/tests-140%20passing-brightgreen)](docs/VERIFICATION.md)
+[![tests](https://img.shields.io/badge/tests-151%20passing-brightgreen)](docs/VERIFICATION.md)
 [![sanitized](https://img.shields.io/badge/sanitized-ASan%20%2B%20UBSan%20%2B%20LSan-brightgreen)](tools/run_sanitized_tests.sh)
 [![C99, no dependencies](https://img.shields.io/badge/C99-no%20dependencies-informational)](#design-commitments)
 
@@ -42,6 +42,26 @@ Android, an ESP32-S3, or whatever you are holding.
                     │  headless · SDL2 · Android · ESP32-S3    │
                     └──────────────────────────────────────────┘
 ```
+
+## What's new in 0.5.5
+
+Minecraft compatibility now includes persistent depth between host frames,
+correct mesh and cloud alpha, default World background clearing, LEQUAL depth
+tests, projected depth for parallel and generic cameras, depth ranges and polygon
+offset. Linux desktop controls also support automatic DPI scaling and a saved UI
+scale setting.
+
+Release builds use their normal interpreter optimization level. In a fixed-work
+Minecraft generation benchmark, three seeds took 19–20% less CPU time than the
+previous forced `-O2` build, with identical world data. Transformed 2D drawing and
+String.getChars also have measured optimizations. Stream, collection, RMS,
+StringBuffer, image decoding, Nokia DirectGraphics and sound callback fixes are
+included. These measurements do not predict whole-game FPS.
+
+**Fast snapshots:** old snapshots containing a Graphics3D instance cannot resume
+under the new depth encoding; start the game again and load its own save.
+Game JARs, world files and RMS saves are unaffected. New snapshots require the
+new runtime. See [release details and verification](docs/RELEASE_0.5.5.md).
 
 ## What's new in 0.5.4
 

@@ -88,6 +88,12 @@ static int restore_native_object(nj_vm *vm, nj_ref object, nj_u4 offset, void *u
  * zeros.
  */
 #define NJ_SAVE_VERSION   3u
+/* Bit 1 marks projected window-depth keys and the corrected default range.
+ * Older readers reject it. Untagged snapshots remain usable unless they hold
+ * a Graphics3D instance: its old range/cache cannot be migrated losslessly. */
+#define NJ_SAVE_F_MOTOROLA      1u
+#define NJ_SAVE_F_WINDOW_DEPTH  2u
+#define NJ_SAVE_F_KNOWN         (NJ_SAVE_F_MOTOROLA | NJ_SAVE_F_WINDOW_DEPTH)
 #define NJ_SAVE_ENDIAN    0x01020304u
 #define NJ_SAVE_HDR_SIZE  176u
 /* Explicit heaps may exceed the library default. Loading may use that
@@ -1068,7 +1074,8 @@ static void save_header(nj_u1 *h, nj_vm *vm, nj_u4 abi, nj_u4 arena_crc,
     put_u32(h + 8, NJ_SAVE_HDR_SIZE);
     put_u32(h + 12, (nj_u4)sizeof(void *));
     put_u32(h + 16, NJ_SAVE_ENDIAN);
-    put_u32(h + 20, vm->motorola_softkeys ? 1u : 0u); /* Canvas soft keys */
+    put_u32(h + 20, NJ_SAVE_F_WINDOW_DEPTH |
+                   (vm->motorola_softkeys ? NJ_SAVE_F_MOTOROLA : 0u));
     put_u64(h + 24, (nj_u8)vm->heap.size);
     put_u64(h + 32, (nj_u8)vm->heap.bump);
     put_u64(h + 40, (nj_u8)vm->heap.used);
@@ -1339,6 +1346,89 @@ static nj_class *resolve_saved_class(nj_vm *vm, const char *name)
         }
     }
     return nj_class_resolve(vm, name);
+}
+
+/* Untagged images may contain 1/w depth keys and a zero default far range.
+ * Neither can be distinguished from all explicit application states. Inspect
+ * only block headers and the saved class indices, BEFORE replacing the caller's
+ * heap or statics. Class registration, mirrors and arrays alone are compatible.
+ * The independent readers also leave the main reader at the static slots. */
+static int check_legacy_depth(const nj_sreader *reader, nj_u4 nstatics,
+                              nj_size heap_bump, nj_u4 ninterned,
+                              nj_class *const *map, nj_u4 nclasses)
+{
+    nj_sreader objects = *reader;
+    nj_sreader arena;
+
+    /* The trailing CRC is not part of any of these sections. Division before
+     * multiplication keeps every span bounded even on a 32-bit host. */
+    if (objects.len < 4u || objects.pos > objects.len - 4u) {
+        return NJ_ERR_FORMAT;
+    }
+    objects.len -= 4u;
+    if (nstatics > (objects.len - objects.pos) / 8u ||
+        !sr_raw(&objects, NULL, (nj_size)nstatics * 8u)) {
+        return NJ_ERR_FORMAT;
+    }
+    arena = objects;
+    if (!sr_raw(&objects, NULL, heap_bump)) {
+        return NJ_ERR_FORMAT;
+    }
+    arena.len = objects.pos;
+    if (ninterned > (objects.len - objects.pos) / 4u ||
+        !sr_raw(&objects, NULL, (nj_size)ninterned * 4u)) {
+        return NJ_ERR_FORMAT;
+    }
+    while (arena.pos < arena.len) {
+        nj_size start = arena.pos;
+        nj_block block;
+        nj_object object;
+        nj_u2 ci, mi;
+
+        /* Serialized headers need not have host alignment. Never dereference
+         * the saved object/class pointers; only aligned local copies are read. */
+        if (arena.len - start < NJ_BLOCK_HDR ||
+            !sr_raw(&arena, &block, (nj_size)sizeof(block)) ||
+            block.size < NJ_BLOCK_HDR ||
+            (block.size & (NJ_OBJ_ALIGN - 1u)) != 0u ||
+            block.size > arena.len - start) {
+            return NJ_ERR_FORMAT;
+        }
+        /* NJ_BLOCK_HDR includes padding beyond sizeof(nj_block). */
+        arena.pos = start + NJ_BLOCK_HDR;
+        if (block.magic == NJ_BLOCK_MAGIC) {
+            nj_class *c;
+            nj_u4 depth;
+            if (block.size - NJ_BLOCK_HDR < sizeof(object) ||
+                !sr_raw(&arena, &object, (nj_size)sizeof(object)) ||
+                object.size < sizeof(object) ||
+                object.size > block.size - NJ_BLOCK_HDR ||
+                object.kind > NJ_OBJ_THROW ||
+                !sr_u16(&objects, &ci) ||
+                (ci != NJ_SAVE_NO_CLASS && ci >= nclasses)) {
+                return NJ_ERR_FORMAT;
+            }
+            if (object.kind == NJ_OBJ_CLASS &&
+                (!sr_u16(&objects, &mi) ||
+                 (mi != NJ_SAVE_NO_CLASS && mi >= nclasses))) {
+                return NJ_ERR_FORMAT;
+            }
+            c = ci == NJ_SAVE_NO_CLASS ? NULL : map[ci];
+            for (depth = 0u; object.kind == NJ_OBJ_PLAIN && c &&
+                             depth < nclasses; depth++, c = c->super) {
+                if (strcmp(c->name, "javax/microedition/m3g/Graphics3D") == 0) {
+                    if (getenv("NJ_SAVE_DEBUG")) {
+                        fprintf(stderr, "nj_vm_load: legacy snapshot holds a"
+                                " Graphics3D instance (%s); depth encoding and"
+                                " default range are incompatible\n", map[ci]->name);
+                    }
+                    return NJ_ERR_UNSUPPORTED;
+                }
+            }
+        }
+        arena.pos = start + block.size;
+    }
+    return NJ_OK;
 }
 
 /* Clear every host-derived cache and per-class pointer that a restore
@@ -1640,7 +1730,8 @@ int nj_vm_load(nj_vm *vm, FILE *f)
     ptr_size = get_u32(hdr + 12);
     endian = get_u32(hdr + 16);
     flags = get_u32(hdr + 20);
-    if ((flags & ~1u) != 0u || magic != NJ_SAVE_MAGIC || version != NJ_SAVE_VERSION ||
+    if ((flags & ~NJ_SAVE_F_KNOWN) != 0u || magic != NJ_SAVE_MAGIC ||
+        version != NJ_SAVE_VERSION ||
         hdr_size != NJ_SAVE_HDR_SIZE || endian != NJ_SAVE_ENDIAN ||
         ptr_size != (nj_u4)sizeof(void *)) {
         NJ_LOAD_FAIL(NJ_ERR_UNSUPPORTED);
@@ -1855,6 +1946,14 @@ int nj_vm_load(nj_vm *vm, FILE *f)
     }
     if (nstatics != vm->nstatics) {
         NJ_LOAD_FAIL(NJ_ERR_FORMAT);          /* static slots do not line up */
+    }
+
+    if ((flags & NJ_SAVE_F_WINDOW_DEPTH) == 0u) {
+        int depth_status = check_legacy_depth(&rd, nstatics, (nj_size)heap_bump,
+                                              ninterned, map, nclasses);
+        if (depth_status != NJ_OK) {
+            NJ_LOAD_FAIL(depth_status);
+        }
     }
 
     /* Static slots, verbatim.  From here until the arena image is in place no
@@ -2259,7 +2358,7 @@ int nj_vm_load(nj_vm *vm, FILE *f)
     nj_host_free(vm, cstate);
     nj_host_free(vm, csbase);
     nj_host_free(vm, map);
-    vm->motorola_softkeys = (nj_u1)(flags & 1u);
+    vm->motorola_softkeys = (nj_u1)(flags & NJ_SAVE_F_MOTOROLA);
     return NJ_OK;
 
 fail:
