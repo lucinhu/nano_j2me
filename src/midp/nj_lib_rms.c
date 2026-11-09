@@ -281,14 +281,39 @@ static int vec_del(nj_vm *vm, nj_ref v, nj_s4 i)
                    a1, NULL) == NJ_OK;
 }
 
-/* Index of record id `id` in the id vector, or -1. */
-static nj_s4 rs_find(nj_vm *vm, nj_ref rs, nj_s4 id)
+/* Index of the first matching id, including in old files with unordered or
+ * repeated ids. The store owns a builtin Vector of builtin Integers: reading
+ * their fields avoids two Java/native bridges per comparison. There are no
+ * allocations or callbacks while the backing array is in use. Unusual object
+ * types retain the original virtual calls, without retaining array pointers
+ * across them. No sortedness assumption or persistent lookup cache is needed. */
+static nj_s4 rs_find_ids(nj_vm *vm, nj_ref ids, nj_s4 id)
 {
-    nj_ref ids = rs_get(vm, rs, NJ_F_RS_IDS, "Ljava/util/Vector;");
+    nj_field *data, *count, *value;
     nj_s4 n, i;
 
-    if (!ids) {
-        return -1;
+    if (!ids) return -1;
+    data = nj_field_lookup(vm, "java/util/Vector", "elementData",
+                           "[Ljava/lang/Object;", 0);
+    count = nj_field_lookup(vm, "java/util/Vector", "elementCount", "I", 0);
+    value = nj_field_lookup(vm, "java/lang/Integer", "value", "I", 0);
+    if (data && count && value && ids->kind == NJ_OBJ_PLAIN &&
+        ids->cls == data->owner) {
+        nj_ref array = nj_field_read_ref_fast(vm, ids, data);
+        n = nj_field_read_int_fast(vm, ids, count);
+        if (n == 0) return -1;
+        if (n > 0 && array && array->kind == NJ_OBJ_ARRAY &&
+            array->aflags == NJ_ARRAY_T_REF && array->u.refs &&
+            (nj_u4)n <= array->length) {
+            for (i = 0; i < n; i++) {
+                nj_ref o = array->u.refs[i];
+                if (!o) continue;
+                if (o->kind != NJ_OBJ_PLAIN || o->cls != value->owner)
+                    break;
+                if (nj_field_read_int_fast(vm, o, value) == id) return i;
+            }
+            if (i == n) return -1;
+        }
     }
     n = vec_size(vm, ids);
     for (i = 0; i < n; i++) {
@@ -299,6 +324,11 @@ static nj_s4 rs_find(nj_vm *vm, nj_ref rs, nj_s4 id)
         }
     }
     return -1;
+}
+
+static nj_s4 rs_find(nj_vm *vm, nj_ref rs, nj_s4 id)
+{
+    return rs_find_ids(vm, rs_get(vm, rs, NJ_F_RS_IDS, "Ljava/util/Vector;"), id);
 }
 
 static nj_ref rs_int_obj(nj_vm *vm, nj_s4 v)
@@ -742,18 +772,11 @@ static int rs_replace_record(nj_vm *vm, nj_ref recs, nj_ref ids, nj_s4 id,
                              nj_ref rec)
 {
     nj_u4 roots = nj_root_mark(vm);
-    nj_s4 n, i;
+    nj_s4 i;
     int result = 0;
     if (!rs_root(vm, rec)) return 0;
-    n = vec_size(vm, ids);
-    for (i = 0; i < n; i++) {
-        nj_ref ido = vec_at(vm, ids, i);
-        if (ido && nj_call_int(vm, ido, "java/lang/Integer", "intValue",
-                               "()I", NULL) == id) {
-            result = vec_set(vm, recs, i, rec);
-            break;
-        }
-    }
+    i = rs_find_ids(vm, ids, id);
+    if (i >= 0) result = vec_set(vm, recs, i, rec);
     nj_root_release(vm, roots);
     return result;
 }
