@@ -472,7 +472,8 @@ static void snd_notify(nj_vm *vm, nj_ref self, nj_s4 state)
     if (!l) {
         return;
     }
-    a[0].i = state;
+    a[0].r = self;
+    a[1].i = state;
     (void)nj_call(vm, l, NJ_C_SLISTEN, "soundStateChanged",
                   "(L" NJ_C_SOUND ";I)V", a, NULL);
 }

@@ -1817,6 +1817,182 @@ static void test_image_region_limits(tctx *t)
     ts_free(&expected);
 }
 
+/* Source-ordered differential oracle for transformed compositing.  The
+ * reference uses the public single-pixel blend and forward transform. */
+static void test_transform_compositing(tctx *t)
+{
+    static const int formats[] = {NJ_PIXFMT_RGB565, NJ_PIXFMT_RGB888, NJ_PIXFMT_ARGB8888};
+    static const int sizes[][2] = {{7, 5}, {1, 1}, {1, 5}, {5, 1}};
+    static const int clips[][6] = {
+        {0, 3, 0, 0, 11, 10}, {0, 3, 3, 3, 1, 1},
+        {-3, 0, 0, 0, 11, 10}, {7, 8, 0, 0, 11, 10}, {0, 3, 0, 0, 0, 10}
+    };
+    static const nj_u4 alphas[] = {0, 1, 2, 63, 127, 128, 254, 255};
+    nj_u1 source[9 * 8 * 4 + 2], maskbuf[9 * 8 * 4 + 2];
+    nj_u1 saved[sizeof source], savedmask[sizeof maskbuf];
+    nj_u1 actual[10 * (11 * 4 + 5) + 2], expected[sizeof actual];
+    nj_surface src;
+    nj_image img, mask;
+    int f, z, tr, paint, masked, xm, c, x, y;
+
+    printf("[17] transformed compositing: alpha, masks, XOR and clip\n");
+    memset(source, SENTINEL, sizeof source);
+    memset(maskbuf, SENTINEL, sizeof maskbuf);
+    memset(&src, 0, sizeof src); memset(&img, 0, sizeof img); memset(&mask, 0, sizeof mask);
+    src.pixels = source + 1; src.width = 9; src.height = 8;
+    src.stride = 9 * 4; src.format = NJ_PIXFMT_ARGB8888;
+    img.pixels = (nj_u4 *)(void *)(source + 1); img.width = 9; img.height = 8;
+    img.format = NJ_PIXFMT_ARGB8888; img.has_alpha = 1;
+    mask.pixels = (nj_u4 *)(void *)(maskbuf + 1); mask.width = 9; mask.height = 8;
+    mask.format = NJ_PIXFMT_ARGB8888;
+    for (y = 0; y < 8; y++) {
+        for (x = 0; x < 9; x++) {
+            nj_u4 mc = alphas[(x + y * 3) % 8] << 24;
+            nj_surface_set(&src, x, y, (alphas[(x + y * 9) % 8] << 24)
+                           | (nj_u4)(0x145321 + x * 17231 + y * 39271));
+            memcpy(maskbuf + 1 + (y * 9 + x) * 4, &mc, 4);
+        }
+    }
+    memcpy(saved, source, sizeof source); memcpy(savedmask, maskbuf, sizeof maskbuf);
+    for (f = 0; f < 3; f++) {
+        int bpp = fmt_bpp_of(formats[f]);
+        tsurf ts, ref;
+        memset(&ts, 0, sizeof ts);
+        ts.buf = actual + 1; ts.bpp = bpp; ts.pad = 5;
+        ts.s.pixels = ts.buf; ts.s.width = 11; ts.s.height = 10;
+        ts.s.stride = 11 * bpp + 5; ts.s.format = formats[f];
+        ref = ts; ref.buf = expected + 1; ref.s.pixels = ref.buf;
+        for (z = 0; z < 4; z++) {
+            int w = sizes[z][0], h = sizes[z][1];
+            for (tr = 0; tr < 8; tr++) {
+                for (paint = 0; paint < 2; paint++) {
+                    for (masked = 0; masked < 2; masked++) {
+                        for (xm = 0; xm < 3; xm++) {
+                            for (c = 0; c < 5; c++) {
+                                nj_gfx g;
+                                nj_u4 xc = xm == 1 ? 0x8372A61Du : 0x4F183B97u;
+                                int same;
+                                memset(actual, SENTINEL, sizeof actual);
+                                memset(expected, SENTINEL, sizeof expected);
+                                nj_surface_fill(&ts.s, 0x65476B9Du);
+                                nj_surface_fill(&ref.s, 0x65476B9Du);
+                                nj_gfx_init(&g, &ts.s); nj_gfx_translate(&g, 2, -1);
+                                nj_gfx_set_clip(&g, clips[c][2] - 2, clips[c][3] + 1,
+                                                clips[c][4], clips[c][5]);
+                                if (xm == 2) nj_gfx_set_xor(&g, xc);
+                                nj_gfx_draw_region(&g, &img, 1, 1, w, h,
+                                                   TRANS_CASES[tr].transform, xm == 1, xc,
+                                                   masked ? &mask : NULL, clips[c][0], clips[c][1],
+                                                   paint ? NJ_ROP_PAINT : NJ_ROP_SET);
+                                for (y = 0; y < h; y++) {
+                                    for (x = 0; x < w; x++) {
+                                        int i, j, dx, dy;
+                                        nj_u4 color = nj_surface_get(&src, x + 1, y + 1), mc;
+                                        ref_transform(TRANS_CASES[tr].transform, x, y, w, h, &i, &j);
+                                        dx = i + clips[c][0] + 2; dy = j + clips[c][1] - 1;
+                                        if (dx < clips[c][2] || dy < clips[c][3]
+                                            || dx >= clips[c][2] + clips[c][4]
+                                            || dy >= clips[c][3] + clips[c][5]
+                                            || dx < 0 || dy < 0 || dx >= 11 || dy >= 10) continue;
+                                        memcpy(&mc, maskbuf + 1 + (j * 9 + i) * 4, 4);
+                                        if (masked && (mc >> 24) == 0) continue;
+                                        if (xm) {
+                                            if (!paint || (color >> 24) != 0)
+                                                nj_surface_set(&ref.s, dx, dy,
+                                                    nj_surface_get(&ref.s, dx, dy) ^ color ^ xc);
+                                        } else if (paint) {
+                                            nj_gfx_blend_pixel(&ref.s, dx, dy, color, 255);
+                                        } else {
+                                            nj_surface_set(&ref.s, dx, dy, color);
+                                        }
+                                    }
+                                }
+                                same = memcmp(actual, expected, sizeof actual) == 0;
+                                if (!same) printf("  fmt=%d size=%dx%d tr=%d paint=%d mask=%d xor=%d clip=%d\n",
+                                                  formats[f], w, h, tr, paint, masked, xm, c);
+                                CHECK(t, same);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        /* Every source alpha, varying destination alpha and channel rounding.
+         * A 1x1 region also exercises all transformed row-start directions. */
+        for (tr = 0; tr < 8; tr++) {
+            for (x = 0; x < 256; x++) {
+                nj_gfx g;
+                nj_u4 color = ((nj_u4)x << 24) | (nj_u4)(0x872143 + x * 1967);
+                memset(actual, SENTINEL, sizeof actual); memset(expected, SENTINEL, sizeof expected);
+                nj_surface_fill(&ts.s, ((nj_u4)(255 - x) << 24) | 0x426198u);
+                nj_surface_fill(&ref.s, ((nj_u4)(255 - x) << 24) | 0x426198u);
+                nj_surface_set(&src, 1, 1, color);
+                nj_gfx_init(&g, &ts.s);
+                nj_gfx_draw_region(&g, &img, 1, 1, 1, 1, TRANS_CASES[tr].transform,
+                                   0, 0, NULL, 2, 3, NJ_ROP_PAINT);
+                nj_gfx_blend_pixel(&ref.s, 2, 3, color, 255);
+                CHECK(t, memcmp(actual, expected, sizeof actual) == 0);
+            }
+        }
+        memcpy(source, saved, sizeof source);
+    }
+    CHECK(t, memcmp(source, saved, sizeof source) == 0);
+    CHECK(t, memcmp(maskbuf, savedmask, sizeof maskbuf) == 0);
+}
+
+static void test_short_masks(tctx *t)
+{
+    static const int dimensions[][2] = {{1, 1}, {2, 3}, {5, 1}, {1, 5}};
+    static const int positions[][2] = {{1, 1}, {-1, -1}, {-2, 0}, {0, -3}};
+    nj_u4 pixels[5 * 3];
+    nj_image img, mask;
+    int d, p, tr, paint, x, y;
+
+    printf("[18] short destination-local masks: dimensions, stride and negative positions\n");
+    memset(&img, 0, sizeof img); memset(&mask, 0, sizeof mask);
+    img.pixels = pixels; img.width = 5; img.height = 3; img.format = NJ_PIXFMT_ARGB8888;
+    for (x = 0; x < 15; x++) pixels[x] = 0xFF123456u + (nj_u4)(x * 2137);
+    mask.format = NJ_PIXFMT_ARGB8888;
+    for (d = 0; d < 4; d++) {
+        int mw = dimensions[d][0], mh = dimensions[d][1];
+        /* Exact allocation makes both a short row and a short height visible
+         * to ASan; extra guard storage would hide the old overread. */
+        mask.pixels = (nj_u4 *)malloc((size_t)mw * mh * 4);
+        if (!mask.pixels) { CHECK(t, 0); return; }
+        mask.width = mw; mask.height = mh;
+        for (x = 0; x < mw * mh; x++) mask.pixels[x] = x % 3 ? 0x01000000u : 0xFF000000u;
+        for (tr = 0; tr < 8; tr++) {
+            for (p = 0; p < 4; p++) {
+                for (paint = 0; paint < 2; paint++) {
+                    tsurf ts, ref;
+                    nj_gfx g;
+                    ts_init(&ts, 7, 7, NJ_PIXFMT_ARGB8888, 5, 0x73234567u);
+                    ts_init(&ref, 7, 7, NJ_PIXFMT_ARGB8888, 5, 0x73234567u);
+                    nj_gfx_init(&g, &ts.s);
+                    nj_gfx_translate(&g, 1, -1);
+                    nj_gfx_set_clip(&g, 0, 1, 5, 6);
+                    nj_gfx_draw_region(&g, &img, 0, 0, 5, 3, TRANS_CASES[tr].transform,
+                                       0, 0, &mask, positions[p][0] - 1, positions[p][1] + 1,
+                                       paint ? NJ_ROP_PAINT : NJ_ROP_SET);
+                    for (y = 0; y < 3; y++) {
+                        for (x = 0; x < 5; x++) {
+                            int i, j, dx, dy;
+                            ref_transform(TRANS_CASES[tr].transform, x, y, 5, 3, &i, &j);
+                            dx = positions[p][0] + i; dy = positions[p][1] + j;
+                            if (i >= mw || j >= mh || dx < 1 || dy < 0 || dx >= 6 || dy >= 6) continue;
+                            nj_surface_set(&ref.s, dx, dy, pixels[y * 5 + x]);
+                        }
+                    }
+                    CHECK(t, memcmp(ts.buf, ref.buf, (size_t)ts.s.stride * ts.s.height) == 0);
+                    CHECK(t, ts_pad_ok(&ts));
+                    ts_free(&ts); ts_free(&ref);
+                }
+            }
+        }
+        free(mask.pixels);
+    }
+}
+
 /* ================================================================== */
 int main(void)
 {
@@ -1841,6 +2017,8 @@ int main(void)
     write_ppm_demo(&t);
     test_transform_boundaries(&t);
     test_image_region_limits(&t);
+    test_transform_compositing(&t);
+    test_short_masks(&t);
 
     printf("\ntest_gfx: %u assertions, %u failures -> %s\n",
            t.checks, t.fails, t.fails == 0u ? "PASS" : "FAIL");

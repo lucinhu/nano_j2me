@@ -1321,10 +1321,16 @@ static nj_status sb_ensure(nj_vm *vm, nj_ref sb, nj_u4 need)
         return NJ_OK;
     }
     {
-        nj_u4 cap = arr ? arr->length : 16u;
+        nj_u4 cap = arr ? arr->length : 0u;
         nj_ref na;
-        while (cap < need) {
-            cap = cap * 2u + 8u;
+        /* Java array lengths and the public count/capacity are signed ints.
+         * Compute the documented growth once, saturating before doubling. */
+        if (need > 0x7fffffffu) {
+            return nj_throw_oom(vm);
+        }
+        cap = cap > (0x7fffffffu - 2u) / 2u ? 0x7fffffffu : cap * 2u + 2u;
+        if (cap < need) {
+            cap = need;
         }
         na = nj_new_array(vm, NULL, cap, NJ_ARRAY_T_CHAR);
         if (!na) {
@@ -1388,45 +1394,50 @@ static nj_status sb_append_cstr(nj_vm *vm, nj_ref sb, const char *c)
     return NJ_OK;
 }
 
-NJFN(sb_init)
+static nj_status sb_init_capacity(nj_vm *vm, nj_ref sb, nj_u4 capacity)
 {
-    nj_ref sb = NJ_THIS(args);
     nj_field *fv = sb_value(vm);
     nj_field *fc = sb_count(vm);
+    nj_ref arr;
     if (!fv || !fc) {
         return nj_throw(vm, "java/lang/InternalError", "StringBuffer layout");
     }
-    nj_field_write_ref(vm, sb, fv, NULL);
+    if (capacity > 0x7fffffffu) {
+        return nj_throw_oom(vm);
+    }
+    arr = nj_new_array(vm, NULL, capacity, NJ_ARRAY_T_CHAR);
+    if (!arr) {
+        return nj_throw_oom(vm);
+    }
+    nj_field_write_ref(vm, sb, fv, arr);
     nj_field_write_int(vm, sb, fc, 0);
-    return sb_ensure(vm, sb, 16u);
+    return NJ_OK;
+}
+
+NJFN(sb_init)
+{
+    return sb_init_capacity(vm, NJ_THIS(args), 16u);
 }
 
 NJFN(sb_init_int)
 {
     nj_s4 cap = NJ_ARG_INT(args, 0);
-    nj_ref sb = NJ_THIS(args);
-    nj_field *fv = sb_value(vm);
-    nj_field *fc = sb_count(vm);
-    if (!fv || !fc) {
-        return nj_throw(vm, "java/lang/InternalError", "StringBuffer layout");
-    }
     if (cap < 0) {
         return nj_throw(vm, "java/lang/NegativeArraySizeException", NULL);
     }
-    nj_field_write_ref(vm, sb, fv, NULL);
-    nj_field_write_int(vm, sb, fc, 0);
-    return sb_ensure(vm, sb, (nj_u4)cap + 1u);
+    return sb_init_capacity(vm, NJ_THIS(args), (nj_u4)cap);
 }
 
 NJFN(sb_init_str)
 {
     nj_ref s = NJ_ARG_REF(args, 0);
-    nj_status st = sb_init(vm, th, args, ret);
-    if (st != NJ_OK) {
-        return st;
-    }
+    nj_status st;
     if (!s) {
         return nj_throw(vm, "java/lang/NullPointerException", NULL);
+    }
+    st = sb_init_capacity(vm, NJ_THIS(args), nj_string_len(s) + 16u);
+    if (st != NJ_OK) {
+        return st;
     }
     return sb_append_chars(vm, NJ_THIS(args), nj_string_chars(s), nj_string_len(s));
 }
@@ -1482,7 +1493,7 @@ NJFN(sb_ensureCapacity)
 {
     nj_s4 min = NJ_ARG_INT(args, 0);
     if (min > 0) {
-        (void)sb_ensure(vm, NJ_THIS(args), (nj_u4)min);
+        return sb_ensure(vm, NJ_THIS(args), (nj_u4)min);
     }
     return NJ_OK;
 }
@@ -1661,7 +1672,8 @@ NJFN(sb_append_chars_range)
     if (!arr) {
         return nj_throw(vm, "java/lang/NullPointerException", NULL);
     }
-    if (off < 0 || len < 0 || (nj_u4)(off + len) > arr->length) {
+    if (off < 0 || len < 0 || (nj_u4)off > arr->length ||
+        (nj_u4)len > arr->length - (nj_u4)off) {
         return nj_throw(vm, "java/lang/IndexOutOfBoundsException", NULL);
     }
     if (sb_append_chars(vm, NJ_THIS(args), (nj_u2 *)arr->u.bytes + off,

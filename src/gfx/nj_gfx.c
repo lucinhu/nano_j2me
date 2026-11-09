@@ -1756,6 +1756,24 @@ static void nj_trans_inverse(int transform, int i, int j, int sw, int sh,
     }
 }
 
+/* Source byte step along a destination row, including backwards traversal. */
+static nj_s8 nj_trans_row_step(int transform, int bpp, nj_s8 stride)
+{
+    switch (transform) {
+    case NJ_TRANS_MIRROR:
+    case NJ_TRANS_ROT180:
+        return -bpp;
+    case NJ_TRANS_MIRROR_ROT270:
+    case NJ_TRANS_ROT270:
+        return stride;
+    case NJ_TRANS_ROT90:
+    case NJ_TRANS_MIRROR_ROT90:
+        return -stride;
+    default:
+        return bpp;
+    }
+}
+
 /*
  * Shared blit for drawImage / drawImageROP / drawRGB / drawRegion.
  *
@@ -1771,9 +1789,10 @@ static void nj_trans_inverse(int transform, int i, int j, int sw, int sh,
  * alone and alpha blends the rest with `alpha` (0..255) as an extra coverage
  * multiplier.
  *
- * `mask`, when non-NULL, is an ARGB8888 image with the dimensions of the
- * transformed source, indexed by destination-local coordinates; a destination
- * pixel is written only where the mask pixel is not fully transparent.
+ * `mask`, when non-NULL, is an ARGB8888 image indexed by destination-local
+ * coordinates; a destination pixel is written only where the mask pixel is
+ * not fully transparent.  Coordinates outside the mask's actual dimensions
+ * are transparent, even when it is smaller than the transformed source.
  */
 /*
  * One translucent ARGB8888 source pixel onto an RGB565 destination, with the
@@ -1788,7 +1807,7 @@ static void nj_trans_inverse(int transform, int i, int j, int sw, int sh,
  * blit - and each of them went through three nested calls and a handle on the
  * surface to rediscover the same format.
  */
-static void nj_blend565(nj_u1 *dp, nj_u4 argb)
+static inline void nj_blend565(nj_u1 *dp, nj_u4 argb)
 {
     nj_u2 v;
     nj_u4 a, sr, sg, sb, dr, dg, db, nr, ng, nb;
@@ -1927,7 +1946,8 @@ static void nj_565_row_from_argb(nj_u1 *dp, const nj_u1 *sp, int n, int bpp)
 
 static void nj_region_draw(nj_gfx *g, const nj_u1 *src, nj_s8 src_stride_bytes,
                            int src_format, const nj_u1 *mask,
-                           int mask_stride, int sx, int sy, int sw, int sh,
+                           int mask_stride, int mask_height,
+                           int sx, int sy, int sw, int sh,
                            int transform, int rop, int xor_on, nj_u4 xor_argb,
                            int dx, int dy, int alpha)
 {
@@ -1961,6 +1981,12 @@ static void nj_region_draw(nj_gfx *g, const nj_u1 *src, nj_s8 src_stride_bytes,
     cy0 = nj_max64(Y0, g->clip_y);
     cx1 = nj_min64(X0 + tw - 1, (nj_s8)g->clip_x + g->clip_w - 1);
     cy1 = nj_min64(Y0 + th - 1, (nj_s8)g->clip_y + g->clip_h - 1);
+    if (mask) {
+        /* Mask coordinates remain relative to the original destination,
+         * independent of clipping, translation and the source transform. */
+        cx1 = nj_min64(cx1, X0 + mask_stride - 1);
+        cy1 = nj_min64(cy1, Y0 + mask_height - 1);
+    }
     if (cx0 > cx1 || cy0 > cy1) {
         return;
     }
@@ -2034,23 +2060,7 @@ static void nj_region_draw(nj_gfx *g, const nj_u1 *src, nj_s8 src_stride_bytes,
             }
             return;
         }
-        switch (transform) {
-        case NJ_TRANS_MIRROR:
-        case NJ_TRANS_ROT180:
-            step = -src_bpp;
-            break;
-        case NJ_TRANS_MIRROR_ROT270:
-        case NJ_TRANS_ROT270:
-            step = src_stride_bytes;
-            break;
-        case NJ_TRANS_ROT90:
-        case NJ_TRANS_MIRROR_ROT90:
-            step = -src_stride_bytes;
-            break;
-        default:
-            step = src_bpp;
-            break;
-        }
+        step = nj_trans_row_step(transform, src_bpp, src_stride_bytes);
         for (Y = cy0; Y <= cy1; Y++) {
             int u, v, i;
             nj_s8 off;
@@ -2394,6 +2404,62 @@ static void nj_region_draw(nj_gfx *g, const nj_u1 *src, nj_s8 src_stride_bytes,
         return;
     }
 
+    /* Transformed ARGB PAINT: inverse-map once per clipped row, then advance
+     * the source by a signed byte step.  Reuse the exact source-over helpers
+     * from the untransformed blits; zero alpha skips, 255 replaces, and all
+     * intermediate values retain the same integer rounding.  Mask and XOR
+     * keep their general path below. */
+    if (mask == NULL && !xor_on && alpha == 255 && rop != NJ_ROP_SET
+        && src_format == NJ_PIXFMT_ARGB8888
+        && (g->surf->format == NJ_PIXFMT_ARGB8888
+            || g->surf->format == NJ_PIXFMT_RGB565)) {
+        nj_s8 step;
+        nj_u1 *dst = (nj_u1 *)g->surf->pixels;
+        int first = (int)(cx0 - X0), n = (int)(cx1 - cx0 + 1);
+
+        if (sw == 1 && sh == 1) {
+            nj_u4 c = nj_word_get(src + (nj_s8)sy * src_stride_bytes + (nj_s8)sx * 4, 0);
+            nj_u1 *dp = dst + cy0 * g->surf->stride + cx0 * bpp;
+
+            if (bpp == 4) {
+                nj_paint_argb_pixel(dp, c);
+            } else if ((c >> 24) == 255) {
+                nj_dst_pixel(dp, 2, NJ_PIXFMT_RGB565, c);
+            } else if ((c >> 24) != 0) {
+                nj_blend565(dp, c);
+            }
+            return;
+        }
+        step = nj_trans_row_step(transform, 4, src_stride_bytes);
+        for (Y = cy0; Y <= cy1; Y++) {
+            int u, v, i;
+            nj_s8 off;
+            nj_u1 *dp = dst + Y * g->surf->stride + cx0 * bpp;
+
+            nj_trans_inverse(transform, first, (int)(Y - Y0), sw, sh, &u, &v);
+            off = (nj_s8)(sy + v) * src_stride_bytes + (nj_s8)(sx + u) * 4;
+            /* Advance an integer offset so the final backwards step never
+             * constructs a pointer before the source allocation. */
+            if (bpp == 4) {
+                for (i = 0; i < n; i++, off += step, dp += 4) {
+                    nj_paint_argb_pixel(dp, nj_word_get(src + off, 0));
+                }
+            } else {
+                for (i = 0; i < n; i++, off += step, dp += 2) {
+                    nj_u4 c = nj_word_get(src + off, 0);
+                    nj_u4 a = c >> 24;
+
+                    if (a == 255) {
+                        nj_dst_pixel(dp, 2, NJ_PIXFMT_RGB565, c);
+                    } else if (a != 0) {
+                        nj_blend565(dp, c);
+                    }
+                }
+            }
+        }
+        return;
+    }
+
     for (Y = cy0; Y <= cy1; Y++) {
         int j = (int)(Y - Y0);
 
@@ -2506,7 +2572,7 @@ void nj_gfx_draw_image(nj_gfx *g, const nj_image *img, int dx, int dy,
     rop = (g->blend == NJ_BLEND_SRC_OVER) ? NJ_ROP_PAINT : NJ_ROP_SET;
     nj_region_draw(g, (const nj_u1 *)img->pixels,
                    (nj_s8)img->width * nj_image_bpp(fmt), fmt,
-                   NULL, 0, sx, sy, sw, sh, NJ_TRANS_NONE, rop,
+                   NULL, 0, 0, sx, sy, sw, sh, NJ_TRANS_NONE, rop,
                    g->use_xor, g->xor_color, dx, dy, 255);
 }
 
@@ -2522,7 +2588,7 @@ void nj_gfx_draw_image_rop(nj_gfx *g, const nj_image *img, int dx, int dy,
     fmt = nj_image_format(img);
     nj_region_draw(g, (const nj_u1 *)img->pixels,
                    (nj_s8)img->width * nj_image_bpp(fmt), fmt,
-                   NULL, 0, sx, sy, sw, sh, transform, rop,
+                   NULL, 0, 0, sx, sy, sw, sh, transform, rop,
                    g->use_xor, g->xor_color, dx, dy, 255);
 }
 
@@ -2538,7 +2604,7 @@ void nj_gfx_draw_rgb(nj_gfx *g, const nj_u1 *rgb, int scanlen, int alpha,
     if (!g || !rgb || sw <= 0 || sh <= 0 || scanlen <= 0) {
         return;
     }
-    nj_region_draw(g, rgb, scanlen, NJ_PIXFMT_RGB888, NULL, 0,
+    nj_region_draw(g, rgb, scanlen, NJ_PIXFMT_RGB888, NULL, 0, 0,
                    sx, sy, sw, sh, transform, rop,
                    g->use_xor, g->xor_color, dx, dy, alpha);
 }
@@ -2548,7 +2614,7 @@ void nj_gfx_draw_region(nj_gfx *g, const nj_image *src, int sx, int sy, int sw,
                         const nj_image *clip_src, int dx, int dy, int rop)
 {
     const nj_u1 *mask = NULL;
-    int mask_stride = 0;
+    int mask_stride = 0, mask_height = 0;
     int xor_on, fmt;
 
     if (!g || !nj_image_region(src, &sx, &sy, &sw, &sh)) {
@@ -2558,6 +2624,7 @@ void nj_gfx_draw_region(nj_gfx *g, const nj_image *src, int sx, int sy, int sw,
         && clip_src->height > 0) {
         mask = (const nj_u1 *)clip_src->pixels;
         mask_stride = clip_src->width;
+        mask_height = clip_src->height;
     }
     /* The caller's is_xor/xor_argb pair drives sprite drawing; the graphics
      * context's own XOR mode also applies. */
@@ -2565,6 +2632,6 @@ void nj_gfx_draw_region(nj_gfx *g, const nj_image *src, int sx, int sy, int sw,
     fmt = nj_image_format(src);
     nj_region_draw(g, (const nj_u1 *)src->pixels,
                    (nj_s8)src->width * nj_image_bpp(fmt), fmt,
-                   mask, mask_stride, sx, sy, sw, sh, transform, rop,
+                   mask, mask_stride, mask_height, sx, sy, sw, sh, transform, rop,
                    xor_on, is_xor ? xor_argb : g->xor_color, dx, dy, 255);
 }

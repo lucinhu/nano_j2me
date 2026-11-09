@@ -1,11 +1,7 @@
 /*
- * com.nokia.mid.sound.Sound.convertFreqToNote()
- *
- * The Nokia UI helper maps a tone frequency onto a MIDI note number,
- * n = round(12 * log2(f / 8.176)) clamped at zero.  Real titles use it to turn
- * an entered frequency into the note the tone player plays, and the reference
- * implementation computes it with Math.log/Math.round, which the runtime has
- * to reproduce without a floating-point math library of its own.
+ * Nokia Sound frequency conversion and SoundListener callback arguments.
+ * The listener must receive the Sound that changed and its new state; games
+ * use both to select the channel that finished or stopped playing.
  */
 #include <stdio.h>
 #include <string.h>
@@ -48,6 +44,82 @@ static nj_s4 note_of(nj_vm *vm, nj_s4 freq)
     return ret.i;
 }
 
+#define SOUND "com/nokia/mid/sound/Sound"
+#define LISTENER "com/nokia/mid/sound/SoundListener"
+
+static nj_ref g_expected_sound;
+static nj_s4 g_expected_event;
+static int g_notifications;
+
+NJ_NATIVE_FN(sound_changed)
+{
+    nj_ref sound = NJ_ARG_REF(args, 0);
+    nj_value state;
+    (void)th;
+    (void)ret;
+    g_notifications++;
+    OK(sound == g_expected_sound, "callback receives the Sound whose state changed");
+    OK(NJ_ARG_INT(args, 1) == g_expected_event, "callback receives the new state");
+    /* Only dereference a valid Sound, so the old broken callback produces an
+     * assertion failure rather than crashing this regression fixture. */
+    if (sound == g_expected_sound) {
+        nj_gc_collect(vm);
+        OK(nj_call(vm, sound, SOUND, "getState", "()I", NULL, &state) == NJ_OK,
+           "the callback Sound survives collection");
+        OK(state.i == g_expected_event, "getState agrees with the callback event");
+    }
+    return NJ_OK;
+}
+
+static void test_sound_listener(nj_vm *vm)
+{
+    static const nj_builtin_method methods[] = {
+        {"soundStateChanged", "(L" SOUND ";I)V", NJ_ACC_PUBLIC}
+    };
+    static const nj_builtin_class def = {
+        "test/NokiaSoundListener", "java/lang/Object", NJ_ACC_PUBLIC,
+        NULL, 0, methods, 1
+    };
+    nj_class *cls = nj_class_create_builtin(vm, &def);
+    nj_u4 mark = nj_root_mark(vm);
+    nj_ref sound, listener;
+    nj_value a[3];
+
+    OK(cls != NULL, "create the native listener fixture");
+    if (!cls) return;
+    cls->methods[0].native = sound_changed;
+    sound = nj_root(vm, nj_object_new(vm, SOUND));
+    listener = nj_root(vm, nj_object_new(vm, def.name));
+    OK(sound != NULL && listener != NULL, "create Sound and listener");
+    if (!sound || !listener) goto done;
+    a[0].bits = a[1].bits = a[2].bits = 0;
+    a[0].i = 440; a[1].j = 100;
+    OK(nj_call(vm, sound, SOUND, "<init>", "(IJ)V", a, NULL) == NJ_OK,
+       "initialize a stopped Sound");
+    a[0].r = listener;
+    OK(nj_call(vm, sound, SOUND, "setSoundListener", "(L" LISTENER ";)V", a, NULL) == NJ_OK,
+       "register the listener");
+    g_expected_sound = sound;
+    g_notifications = 0;
+    g_expected_event = 0; /* SOUND_PLAYING, Nokia's actual value */
+    a[0].i = 1;
+    OK(nj_call(vm, sound, SOUND, "play", "(I)V", a, NULL) == NJ_OK,
+       "play invokes the listener");
+    OK(g_notifications == 1, "play sends one notification");
+    g_expected_event = 1; /* SOUND_STOPPED */
+    OK(nj_call(vm, sound, SOUND, "stop", "()V", NULL, NULL) == NJ_OK,
+       "stop invokes the listener");
+    OK(g_notifications == 2, "stop sends one notification");
+    g_expected_event = 0;
+    OK(nj_call(vm, sound, SOUND, "resume", "()V", NULL, NULL) == NJ_OK,
+       "resume invokes the listener");
+    OK(g_notifications == 3, "resume sends one notification");
+    OK(!nj_has_exception(vm), "notifications leave no exception pending");
+    g_expected_sound = NULL;
+done:
+    nj_root_release(vm, mark);
+}
+
 int main(void)
 {
     nj_port port;
@@ -83,6 +155,8 @@ int main(void)
     OK(note_of(vm, 8176) == 120, "8.176 kHz is MIDI note 120");
     OK(note_of(vm, 0) == 0, "zero frequency clamps to note 0");
     OK(note_of(vm, -5) == 0, "a negative frequency clamps to note 0");
+
+    test_sound_listener(vm);
 
     nj_vm_destroy(vm);
     nj_port_shutdown(&port);

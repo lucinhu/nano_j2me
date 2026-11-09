@@ -119,6 +119,111 @@ static void test_buffer_get_chars(nj_vm *vm)
     nj_root_release(vm, mark);
 }
 
+/* Constructor capacities and public growth are part of the CLDC contract. */
+static void test_buffer_capacity(nj_vm *vm)
+{
+    static const char *classes[] = {"java/lang/StringBuffer", "java/lang/StringBuilder"};
+    static const int capacities[] = {0, 1, 15, 16, 17, 31, 64};
+    static const int minimums[] = {0, -1, INT_MIN, 17, 35, 200, 1};
+    static const int expected[] = {16, 16, 16, 34, 70, 200, 200};
+    static const int bad[][2] = {{-1, 1}, {0, -1}, {INT_MAX, 1},
+                                {1, INT_MAX}, {INT_MAX, INT_MAX}, {4, 0}};
+    static const nj_u2 text[] = {'A', 0, 0x4e2d};
+    nj_u4 mark = nj_root_mark(vm);
+    nj_ref chars = nj_root(vm, nj_array_new(vm, "C", 3));
+    nj_ref s = nj_root(vm, nj_new_string_utf16(vm, text, 3));
+    int k, i;
+    memcpy(nj_array_data(chars), text, sizeof(text));
+    for (k = 0; k < 2; k++) {
+        nj_ref sb;
+        nj_value a[3], r;
+        nj_ref ex;
+        char desc[64];
+        for (i = 0; i < (int)(sizeof(capacities) / sizeof(capacities[0])); i++) {
+            sb = nj_root(vm, nj_object_new(vm, classes[k]));
+            a[0].i = capacities[i];
+            check(nj_call(vm, sb, classes[k], "<init>", "(I)V", a, NULL) == NJ_OK,
+                  "capacity: integer constructor succeeds");
+            check(nj_call(vm, sb, classes[k], "capacity", "()I", NULL, &r) == NJ_OK &&
+                  r.i == capacities[i], "capacity: integer constructor preserves exact request");
+            check(nj_call(vm, sb, classes[k], "length", "()I", NULL, &r) == NJ_OK &&
+                  r.i == 0, "capacity: constructed buffer is empty");
+        }
+        sb = nj_root(vm, nj_object_new(vm, classes[k]));
+        a[0].i = -1;
+        check(nj_call(vm, sb, classes[k], "<init>", "(I)V", a, NULL) != NJ_OK,
+              "capacity: negative constructor throws");
+        ex = nj_take_exception(vm);
+        check(ex && nj_class_is_assignable(ex->cls,
+              nj_class_find(vm, "java/lang/NegativeArraySizeException")),
+              "capacity: negative constructor exception type");
+        a[0].r = s;
+        check(nj_call(vm, sb, classes[k], "<init>", "(Ljava/lang/String;)V", a, NULL) == NJ_OK,
+              "capacity: string constructor succeeds");
+        check(nj_call(vm, sb, classes[k], "capacity", "()I", NULL, &r) == NJ_OK && r.i == 19,
+              "capacity: string constructor reserves length plus sixteen");
+        a[0].i = 2;
+        check(nj_call(vm, sb, classes[k], "charAt", "(I)C", a, &r) == NJ_OK && r.i == 0x4e2d,
+              "capacity: string constructor preserves UTF-16 content");
+        check(nj_call(vm, sb, classes[k], "<init>", "()V", NULL, NULL) == NJ_OK,
+              "capacity: default constructor succeeds");
+        for (i = 0; i < (int)(sizeof(minimums) / sizeof(minimums[0])); i++) {
+            a[0].i = minimums[i];
+            check(nj_call(vm, sb, classes[k], "ensureCapacity", "(I)V", a, NULL) == NJ_OK,
+                  "capacity: valid ensureCapacity succeeds");
+            check(nj_call(vm, sb, classes[k], "capacity", "()I", NULL, &r) == NJ_OK &&
+                  r.i == expected[i], "capacity: growth is max(request, twice old plus two)");
+        }
+        a[0].r = chars; a[1].i = 0; a[2].i = 3;
+        snprintf(desc, sizeof(desc), "([CII)L%s;", classes[k]);
+        check(nj_call(vm, sb, classes[k], "append", desc, a, &r) == NJ_OK,
+              "capacity: populate buffer for failure checks");
+        a[0].i = 201;
+        check(nj_call(vm, sb, classes[k], "ensureCapacity", "(I)V", a, NULL) == NJ_OK,
+              "capacity: nonempty buffer grows successfully");
+        check(nj_call(vm, sb, classes[k], "capacity", "()I", NULL, &r) == NJ_OK && r.i == 402,
+              "capacity: nonempty growth follows the same capacity rule");
+        a[0].i = 1;
+        check(nj_call(vm, sb, classes[k], "charAt", "(I)C", a, &r) == NJ_OK && r.i == 0,
+              "capacity: growth preserves embedded zero character");
+        for (i = 0; i < (int)(sizeof(bad) / sizeof(bad[0])); i++) {
+            a[0].r = chars; a[1].i = bad[i][0]; a[2].i = bad[i][1];
+            check(nj_call(vm, sb, classes[k], "append", desc, a, &r) != NJ_OK,
+                  "append range: invalid or overflowing window throws");
+            ex = nj_take_exception(vm);
+            check(ex && nj_class_is_assignable(ex->cls,
+                  nj_class_find(vm, "java/lang/IndexOutOfBoundsException")),
+                  "append range: exception has expected type");
+        }
+        a[0].i = INT_MAX;
+        check(nj_call(vm, sb, classes[k], "ensureCapacity", "(I)V", a, NULL) != NJ_OK,
+              "capacity: allocation failure returns error status");
+        ex = nj_take_exception(vm);
+        check(ex && nj_class_is_assignable(ex->cls,
+              nj_class_find(vm, "java/lang/OutOfMemoryError")),
+              "capacity: allocation failure leaves OutOfMemoryError");
+        check(nj_call(vm, sb, classes[k], "capacity", "()I", NULL, &r) == NJ_OK && r.i == 402,
+              "capacity: failed growth preserves old storage");
+        check(nj_call(vm, sb, classes[k], "length", "()I", NULL, &r) == NJ_OK && r.i == 3,
+              "capacity: failed operations preserve length");
+        a[0].i = 2;
+        check(nj_call(vm, sb, classes[k], "charAt", "(I)C", a, &r) == NJ_OK && r.i == 0x4e2d,
+              "capacity: failed operations preserve content");
+        a[0].i = 0;
+        check(nj_call(vm, sb, classes[k], "<init>", "(I)V", a, NULL) == NJ_OK,
+              "capacity: zero-capacity constructor succeeds");
+        a[0].i = 1;
+        check(nj_call(vm, sb, classes[k], "setLength", "(I)V", a, NULL) == NJ_OK,
+              "capacity: zero-capacity buffer can grow");
+        check(nj_call(vm, sb, classes[k], "capacity", "()I", NULL, &r) == NJ_OK && r.i == 2,
+              "capacity: growth from zero uses two characters");
+        a[0].i = 0;
+        check(nj_call(vm, sb, classes[k], "charAt", "(I)C", a, &r) == NJ_OK && r.i == 0,
+              "capacity: setLength initializes new character to zero");
+    }
+    nj_root_release(vm, mark);
+}
+
 int main(void)
 {
     nj_port port;
@@ -233,6 +338,7 @@ int main(void)
     }
 
     test_buffer_get_chars(vm);
+    test_buffer_capacity(vm);
 
     nj_vm_destroy(vm);
     nj_port_shutdown(&port);
