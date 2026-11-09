@@ -344,12 +344,22 @@ static nj_ref img_alloc(nj_vm *vm, int w, int h, int mutable)
         return NULL;
     }
     img = nj_root(vm, img);
+    if (nj_root_mark(vm) != mark + 1u) {
+        nj_root_release(vm, mark);
+        (void)nj_throw_oom(vm);
+        return NULL;
+    }
     px = nj_int_array_new(vm, (nj_u4)w * (nj_u4)h);
     if (!px) {
         nj_root_release(vm, mark);
         return NULL;
     }
     px = nj_root(vm, px);
+    if (nj_root_mark(vm) != mark + 2u) {
+        nj_root_release(vm, mark);
+        (void)nj_throw_oom(vm);
+        return NULL;
+    }
     if (mutable) {
         /*
          * MIDP 2.0, Image.createImage(int width, int height): "Every pixel
@@ -2219,25 +2229,65 @@ static int fmt_hex2(char *buf, int at, nj_u4 b)
  * into a Java int[] (which the GC then owns) and the host block is released, so
  * nothing outside the Java heap outlives the call.
  */
+/* Codec error strings describe content, not allocation status. Track actual
+ * host allocation failures so malformed bytes and an exhausted device do not
+ * become the same Java exception. The provider still uses VM-owned storage. */
+typedef struct img_decode_alloc {
+    nj_vm *vm;
+    int failed;
+} img_decode_alloc;
+
+static void *img_decode_alloc_mem(void *ud, nj_size bytes)
+{
+    img_decode_alloc *a = (img_decode_alloc *)ud;
+    void *p = nj_host_alloc(a->vm, bytes);
+    if (!p) { a->failed = 1; }
+    return p;
+}
+
+static void img_decode_free_mem(void *ud, void *p)
+{
+    img_decode_alloc *a = (img_decode_alloc *)ud;
+    nj_host_free(a->vm, p);
+}
+
 static nj_status img_decode_into(nj_vm *vm, nj_ref arr, nj_s4 off, nj_s4 len,
-                                 nj_ref *out)
+                                 const char *format_exception, nj_ref *out)
 {
     nj_image *dec;
     nj_ref img;
     const char *why;
+    nj_codec_req req;
+    img_decode_alloc allocation;
 
     if (!arr) {
         return nj_throw(vm, "java/lang/NullPointerException", "data is null");
     }
-    if (off < 0 || len < 0 || (nj_u4)(off + len) > arr->length) {
+    if (off < 0 || len < 0 || (nj_u4)off > arr->length ||
+        (nj_u4)len > arr->length - (nj_u4)off) {
         return nj_throw(vm, "java/lang/ArrayIndexOutOfBoundsException", NULL);
     }
     if (len == 0) {
-        return nj_throw(vm, "java/lang/IllegalArgumentException",
-                        "no image data");
+        return nj_throw(vm, format_exception, "no image data");
     }
     why = NULL;
-    dec = nj_image_decode_mem(vm, arr->u.bytes + off, (nj_u4)len, &why);
+    allocation.vm = vm;
+    allocation.failed = 0;
+    memset(&req, 0, sizeof(req));
+    req.data = arr->u.bytes + off;
+    req.size = (nj_u4)len;
+    req.vm = vm;
+    req.alloc = img_decode_alloc_mem;
+    req.dealloc = img_decode_free_mem;
+    req.ud = &allocation;
+    req.want_alpha = 1;
+    req.out_format = NJ_CODEC_OUT_ANY;
+    req.err = &why;
+    dec = nj_image_decode(vm, &req, &why);
+    if (nj_has_exception(vm)) {
+        if (dec) { nj_image_release(vm, dec); }
+        return NJ_ERR;
+    }
     if (!dec || !dec->pixels || dec->width <= 0 || dec->height <= 0) {
         char msg[256];
         int n;
@@ -2246,6 +2296,9 @@ static nj_status img_decode_into(nj_vm *vm, nj_ref arr, nj_s4 off, nj_s4 len,
 
         if (dec) {
             nj_image_release(vm, dec);
+        }
+        if (allocation.failed) {
+            return nj_throw_oom(vm);
         }
         /*
          * Say what was offered.  "cannot decode image" with no clue sent a
@@ -2274,7 +2327,7 @@ static nj_status img_decode_into(nj_vm *vm, nj_ref arr, nj_s4 off, nj_s4 len,
             n = fmt_put_max(msg, n, (int)sizeof(msg) - 1, why);
             msg[n] = '\0';
         }
-        return nj_throw(vm, "java/io/IOException", msg);
+        return nj_throw(vm, format_exception, msg);
     }
     img = nj_midp_image_adopt(vm, dec->pixels, dec->width, dec->height);
     nj_image_release(vm, dec);
@@ -2314,10 +2367,14 @@ NJFN(img_createImage_stream)
     }
     bytes = nj_byte_array_new(vm, cap);
     if (!bytes) {
-        return NJ_ERR;
+        return vm->exception ? NJ_ERR : nj_throw_oom(vm);
     }
     mark = nj_root_mark(vm);
     bytes = nj_root(vm, bytes);
+    if (nj_root_mark(vm) != mark + 1u) {
+        nj_root_release(vm, mark);
+        return nj_throw_oom(vm);
+    }
     for (;;) {
         nj_value r;
         nj_s4 b;
@@ -2333,18 +2390,23 @@ NJFN(img_createImage_stream)
         }
         if (len == cap) {
             nj_ref bigger = nj_byte_array_new(vm, cap * 2u);
+            nj_u4 before = nj_root_mark(vm);
 
             if (!bigger) {
                 nj_root_release(vm, mark);
-                return NJ_ERR;
+                return vm->exception ? NJ_ERR : nj_throw_oom(vm);
             }
             memcpy(bigger->u.bytes, bytes->u.bytes, len);
             bytes = nj_root(vm, bigger);
+            if (nj_root_mark(vm) != before + 1u) {
+                nj_root_release(vm, mark);
+                return nj_throw_oom(vm);
+            }
             cap *= 2u;
         }
         ((unsigned char *)bytes->u.bytes)[len++] = (unsigned char)(nj_u4)b;
     }
-    st = img_decode_into(vm, bytes, 0, (nj_s4)len, &out);
+    st = img_decode_into(vm, bytes, 0, (nj_s4)len, "java/io/IOException", &out);
     nj_root_release(vm, mark);
     if (st != NJ_OK) {
         return st;
@@ -2360,10 +2422,14 @@ NJFN(img_createImage_bytes)
     nj_s4 len = NJ_ARG_INT(args, 2);
     nj_status st;
 
-    if (len == 0) {
-        len = (nj_s4)(NJ_ARG_REF(args, 0) ? NJ_ARG_REF(args, 0)->length : 0u) - off;
+    /* Preserve the legacy four-argument extension's zero-length policy.
+     * Validate off before subtracting, including INT_MIN. */
+    if (len == 0 && NJ_ARG_REF(args, 0) && off >= 0 &&
+        (nj_u4)off <= NJ_ARG_REF(args, 0)->length) {
+        len = (nj_s4)NJ_ARG_REF(args, 0)->length - off;
     }
-    st = img_decode_into(vm, NJ_ARG_REF(args, 0), off, len, &out);
+    st = img_decode_into(vm, NJ_ARG_REF(args, 0), off, len,
+                         "java/lang/IllegalArgumentException", &out);
     if (st != NJ_OK) {
         return st;
     }
@@ -2375,7 +2441,8 @@ NJFN(img_createImage_bytes3)
 {
     nj_ref out = NULL;
     nj_status st = img_decode_into(vm, NJ_ARG_REF(args, 0), NJ_ARG_INT(args, 1),
-                                   NJ_ARG_INT(args, 2), &out);
+                                   NJ_ARG_INT(args, 2),
+                                   "java/lang/IllegalArgumentException", &out);
     if (st != NJ_OK) {
         return st;
     }

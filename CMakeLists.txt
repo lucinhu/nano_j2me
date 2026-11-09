@@ -1315,6 +1315,7 @@ add_test(NAME check_splash_budget
   nj_add_test(test_directgraphics_bytes tests/test_directgraphics_bytes.c --bounded)
   nj_add_test(test_directgraphics_shapes tests/test_directgraphics_shapes.c)
   nj_add_test(test_directutils tests/test_directutils.c)
+  nj_add_test(test_image_decode tests/test_image_decode.c)
 nj_add_test(test_clip tests/test_clip.c)
   nj_add_test(test_blocked_init tests/test_blocked_init.c ${NJ_FIXTURES})
   # A quit request is an end, not a failed construction: closing the port's
@@ -1495,6 +1496,12 @@ nj_add_test(test_clip tests/test_clip.c)
     nj_add_test(test_port_binds tests/test_port_binds.c)
     target_include_directories(test_port_binds PRIVATE ${SDL2_INCLUDE_DIRS})
     target_link_libraries(test_port_binds PRIVATE ${SDL2_LIBRARIES})
+  endif()
+
+  if(UNIX AND SDL2_FOUND AND EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_sdl2_dpi.c)
+    nj_add_test(test_sdl2_dpi tests/test_sdl2_dpi.c)
+    target_include_directories(test_sdl2_dpi PRIVATE ${SDL2_INCLUDE_DIRS})
+    target_link_libraries(test_sdl2_dpi PRIVATE ${SDL2_LIBRARIES})
   endif()
 
   if(SDL2_FOUND AND EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_port_gamepad.c)

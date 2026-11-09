@@ -1508,10 +1508,33 @@ int main(void)
     CHECK(nj_client_ui_capture_key(ui, "n") == 1, "bound n before the reset");
     CHECK(settings.binds[0][0] != '\0', "binding stored before the reset");
 
-    /* 恢复默认 */
+    /* Interface scale is independent of the game's integer scale. */
     key(ui, NJ_CLIENT_KEY_ESCAPE);              /* binds -> settings */
     key(ui, NJ_CLIENT_KEY_END);
+    key(ui, NJ_CLIENT_KEY_UP);                  /* interface scale */
+    CHECK(settings.ui_scale == 0, "interface scale follows desktop by default");
+    {
+        static const int expected[] = { 100, 125, 150, 175, 200, 250, 300, 0 };
+        int i;
+        int game_scale = settings.game_scale;
+        for (i = 0; i < 8; ++i) {
+            key(ui, NJ_CLIENT_KEY_RIGHT);
+            CHECK(settings.ui_scale == expected[i], "interface scale steps and wraps");
+        }
+        key(ui, NJ_CLIENT_KEY_LEFT);
+        CHECK(settings.ui_scale == 300, "interface scale wraps backwards");
+        draw_dump(ui, s, env.out, "05d_settings_ui_scale.ppm");
+        CHECK(settings.game_scale == game_scale, "interface scale keeps game resolution scale");
+        {
+            nj_client_settings saved;
+            CHECK(nj_client_settings_load(&saved, NULL) == 1 && saved.ui_scale == 300,
+                  "interface scale changes persist immediately");
+        }
+    }
+    /* 恢复默认 */
+    key(ui, NJ_CLIENT_KEY_END);
     key(ui, NJ_CLIENT_KEY_ENTER);
+    CHECK(settings.ui_scale == 0, "reset restores automatic desktop scaling");
     CHECK(settings.game_scale == 0, "reset restores auto scale");
     CHECK(settings.keys_visible == 1, "reset restores on-screen keys");
     CHECK(settings.gamepad == 1, "reset restores the gamepad default");

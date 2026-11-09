@@ -21,6 +21,7 @@
 #include "nj2me/nj.h"
 
 #include <SDL.h>
+#include "nj_sdl2_dpi.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -41,6 +42,9 @@ typedef struct nj_sdl_client {
 
     int width;
     int height;
+    nj_sdl2_dpi dpi;
+    int ui_percent;
+    int dpi_dirty;
     int frames;
     int frames_limit;      /* NJ2ME_CLIENT_FRAMES: 0 = no limit */
     const char *shot_path; /* NJ2ME_CLIENT_SCREENSHOT: PPM or NULL */
@@ -88,8 +92,37 @@ static int client_resize(nj_sdl_client *c, int width, int height)
     return 1;
 }
 
+/* Scale changes preserve the logical UI size. Resizes save logical units, so
+ * existing window=720x540 configurations stay portable between displays.
+ * Rendering always fills the drawable; mouse coordinates are explicitly mapped
+ * window -> logical surface. SDL_RenderSetLogicalSize is deliberately absent. */
+static int client_sync_dpi(nj_sdl_client *c, nj_client_ui *ui,
+                           nj_client_settings *settings, int preserve_size)
+{
+    nj_sdl2_dpi next = nj_sdl2_get_dpi(c->window, c->renderer, settings->ui_scale);
+    int w, h;
+    if (preserve_size && c->width > 0 && c->height > 0 &&
+        (next.window_x != c->dpi.window_x || next.window_y != c->dpi.window_y)) {
+        w = nj_sdl2_ui_extent(c->width, next.window_x);
+        h = nj_sdl2_ui_extent(c->height, next.window_y);
+        nj_sdl2_limit_window(c->window, &w, &h);
+        SDL_SetWindowSize(c->window, w, h);
+        next = nj_sdl2_get_dpi(c->window, c->renderer, settings->ui_scale);
+    }
+    c->dpi = next;
+    c->ui_percent = settings->ui_scale;
+    c->dpi_dirty = 0;
+    w = (int)(next.window_w / next.window_x + 0.5);
+    h = (int)(next.window_h / next.window_y + 0.5);
+    if (!client_resize(c, w, h)) return 0;
+    nj_client_ui_resize(ui, c->width, c->height);
+    settings->launcher_w = c->width;
+    settings->launcher_h = c->height;
+    return 1;
+}
+
 static int client_launcher_open(nj_sdl_client *c, int width, int height,
-                                nj_client_ui *ui)
+                                nj_client_ui *ui, nj_client_settings *settings)
 {
     memset(c, 0, sizeof(*c));
     if (SDL_Init(SDL_INIT_VIDEO) != 0) {
@@ -100,7 +133,8 @@ static int client_launcher_open(nj_sdl_client *c, int width, int height,
     c->window = SDL_CreateWindow("nano_j2me",
                                  SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
                                  width, height,
-                                 SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE);
+                                 SDL_WINDOW_HIDDEN | SDL_WINDOW_RESIZABLE |
+                                 SDL_WINDOW_ALLOW_HIGHDPI);
     if (c->window == NULL) {
         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
                      "client: cannot open the launcher window: %s",
@@ -117,7 +151,11 @@ static int client_launcher_open(nj_sdl_client *c, int width, int height,
         SDL_Quit();
         return 0;
     }
-    if (!client_resize(c, width, height)) {
+    /* Create the renderer before choosing the physical size: on Wayland the
+     * drawable/window ratio may already implement the desktop's scale. */
+    c->width = width;
+    c->height = height;
+    if (!client_sync_dpi(c, ui, settings, 1)) {
         SDL_DestroyRenderer(c->renderer);
         SDL_DestroyWindow(c->window);
         c->renderer = NULL;
@@ -125,7 +163,7 @@ static int client_launcher_open(nj_sdl_client *c, int width, int height,
         SDL_Quit();
         return 0;
     }
-    nj_client_ui_resize(ui, width, height);
+    SDL_ShowWindow(c->window);
     {
         const char *limit = getenv("NJ2ME_CLIENT_FRAMES");
         c->frames_limit = (limit != NULL && limit[0] != '\0') ? atoi(limit) : 0;
@@ -181,18 +219,15 @@ static void client_dump_ppm(const nj_sdl_client *c, const char *path)
     SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "client: wrote %s", path);
 }
 
-static void client_draw(nj_sdl_client *c, nj_client_ui *ui)
+static void client_draw(nj_sdl_client *c, nj_client_ui *ui,
+                         nj_client_settings *settings)
 {
-    SDL_Rect dst;
-
+    if (nj_sdl2_dpi_size_changed(c->window, c->renderer, &c->dpi) &&
+        !client_sync_dpi(c, ui, settings, 1)) return;
     nj_client_ui_draw(ui, &c->surface);
     SDL_UpdateTexture(c->texture, NULL, c->pixels, c->surface.stride);
-    dst.x = 0;
-    dst.y = 0;
-    dst.w = c->width;
-    dst.h = c->height;
     SDL_RenderClear(c->renderer);
-    SDL_RenderCopy(c->renderer, c->texture, NULL, &dst);
+    SDL_RenderCopy(c->renderer, c->texture, NULL, NULL);
     SDL_RenderPresent(c->renderer);
 }
 
@@ -243,24 +278,27 @@ static int client_launcher_events(nj_sdl_client *c, nj_client_ui *ui,
     nj_client_action action;
     int close = 0;
 
+    if ((c->dpi_dirty || c->ui_percent != settings->ui_scale ||
+         nj_sdl2_dpi_size_changed(c->window, c->renderer, &c->dpi)) &&
+        !client_sync_dpi(c, ui, settings, 1)) return 1;
     while (SDL_PollEvent(&ev)) {
+        if ((c->dpi_dirty || c->ui_percent != settings->ui_scale ||
+         nj_sdl2_dpi_size_changed(c->window, c->renderer, &c->dpi)) &&
+            !client_sync_dpi(c, ui, settings, 1)) return 1;
         switch (ev.type) {
         case SDL_QUIT:
             close = 1;
             break;
         case SDL_WINDOWEVENT:
-            if (ev.window.event == SDL_WINDOWEVENT_SIZE_CHANGED ||
-                ev.window.event == SDL_WINDOWEVENT_RESIZED) {
-                int w = 0;
-                int h = 0;
-                SDL_GetWindowSize(c->window, &w, &h);
-                if (w > 0 && h > 0 && client_resize(c, w, h)) {
-                    nj_client_ui_resize(ui, w, h);
-                    /* Saved by nj_client_run() when the client exits, so the
-                     * next start opens where this one was left. */
-                    settings->launcher_w = w;
-                    settings->launcher_h = h;
-                }
+            if (ev.window.event == SDL_WINDOWEVENT_MOVED
+#if SDL_VERSION_ATLEAST(2, 0, 18)
+                || ev.window.event == SDL_WINDOWEVENT_DISPLAY_CHANGED
+#endif
+                ) {
+                c->dpi_dirty = 1;
+            } else if (ev.window.event == SDL_WINDOWEVENT_SIZE_CHANGED ||
+                       ev.window.event == SDL_WINDOWEVENT_RESIZED) {
+                if (!client_sync_dpi(c, ui, settings, 0)) close = 1;
             }
             break;
         case SDL_KEYDOWN: {
@@ -296,17 +334,35 @@ static int client_launcher_events(nj_sdl_client *c, nj_client_ui *ui,
             break;
         }
         case SDL_MOUSEBUTTONDOWN:
-            if (ev.button.button == SDL_BUTTON_LEFT) {
-                nj_client_ui_pointer(ui, ev.button.x, ev.button.y, 1);
+            if (ev.button.button == SDL_BUTTON_LEFT &&
+                ev.button.which != SDL_TOUCH_MOUSEID) {
+                nj_client_ui_pointer(ui,
+                    nj_sdl2_coord(ev.button.x, c->dpi.window_w, c->width),
+                    nj_sdl2_coord(ev.button.y, c->dpi.window_h, c->height), 1);
             }
             break;
         case SDL_MOUSEBUTTONUP:
-            if (ev.button.button == SDL_BUTTON_LEFT) {
-                nj_client_ui_pointer(ui, ev.button.x, ev.button.y, 0);
+            if (ev.button.button == SDL_BUTTON_LEFT &&
+                ev.button.which != SDL_TOUCH_MOUSEID) {
+                nj_client_ui_pointer(ui,
+                    nj_sdl2_coord(ev.button.x, c->dpi.window_w, c->width),
+                    nj_sdl2_coord(ev.button.y, c->dpi.window_h, c->height), 0);
             }
             break;
         case SDL_MOUSEMOTION:
-            nj_client_ui_pointer_move(ui, ev.motion.x, ev.motion.y);
+            if (ev.motion.which == SDL_TOUCH_MOUSEID) break;
+            nj_client_ui_pointer_move(ui,
+                nj_sdl2_coord(ev.motion.x, c->dpi.window_w, c->width),
+                nj_sdl2_coord(ev.motion.y, c->dpi.window_h, c->height));
+            break;
+        case SDL_FINGERDOWN:
+        case SDL_FINGERUP:
+            nj_client_ui_pointer(ui, (int)(ev.tfinger.x * c->width),
+                (int)(ev.tfinger.y * c->height), ev.type == SDL_FINGERDOWN);
+            break;
+        case SDL_FINGERMOTION:
+            nj_client_ui_pointer_move(ui, (int)(ev.tfinger.x * c->width),
+                (int)(ev.tfinger.y * c->height));
             break;
         case SDL_MOUSEWHEEL:
             nj_client_ui_wheel(ui, ev.wheel.y);
@@ -354,7 +410,7 @@ static int client_launcher_run(nj_sdl_client *c, nj_client_ui *ui,
     int running = 1;
     int take_game = 0;
 
-    if (!client_launcher_open(c, width, height, ui)) {
+    if (!client_launcher_open(c, width, height, ui, settings)) {
         *quit = 1;
         return 0;
     }
@@ -387,7 +443,7 @@ static int client_launcher_run(nj_sdl_client *c, nj_client_ui *ui,
         }
 
         nj_client_ui_tick(ui, SDL_GetTicks());
-        client_draw(c, ui);
+        client_draw(c, ui, settings);
         c->frames++;
 
         if (c->frames_limit > 0 && c->frames >= c->frames_limit) {
@@ -399,7 +455,7 @@ static int client_launcher_run(nj_sdl_client *c, nj_client_ui *ui,
                 nj_lib_scan_step(lib, 64);
             }
             nj_client_ui_tick(ui, SDL_GetTicks());
-            client_draw(c, ui);
+            client_draw(c, ui, settings);
             client_dump_ppm(c, c->shot_path);
             *quit = 1;
             break;
@@ -447,6 +503,11 @@ nj_size nj_client_apply_game_settings(nj_port *port,
     SDL_setenv("NJ_SDL2_MUTE", settings->mute ? "1" : "0", 1);
     SDL_setenv("NJ_SDL2_NO_NETWORK", settings->network ? "0" : "1", 1);
     SDL_setenv("NJ_SDL2_GAMEPAD", settings->gamepad ? "1" : "0", 1);
+    {
+        char percent[16];
+        SDL_snprintf(percent, sizeof(percent), "%d", settings->ui_scale);
+        SDL_setenv("NJ_SDL2_UI_SCALE", percent, 1);
+    }
 
     if (port != NULL) {
         for (i = 0; i < NJ_PORT_BIND_COUNT; i++) {

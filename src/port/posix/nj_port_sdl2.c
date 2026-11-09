@@ -43,6 +43,7 @@
 #include "nj2me/nj_types.h"
 
 #include <SDL.h>
+#include "nj_sdl2_dpi.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -141,6 +142,8 @@ typedef struct sdl_state {
     SDL_Window   *window;
     SDL_Renderer *renderer;
     SDL_Texture  *texture;
+    nj_sdl2_dpi dpi;
+    int dpi_dirty;
 
     int  width;
     int  height;
@@ -189,7 +192,7 @@ typedef struct sdl_state {
      * Default on.  F12 or Tab hides them; NJ_SDL2_KEYS=0 starts hidden.
      */
     int  keys_visible;
-    SDL_Rect game_dst;      /* the letterboxed game area, in window pixels */
+    SDL_Rect game_dst;      /* the letterboxed game area, in drawable pixels */
     SDL_Rect btn[NJ_SDL2_NBTN];
     int      btn_n;
     int      btn_held;      /* the cap being held down, or -1 */
@@ -219,7 +222,7 @@ typedef struct sdl_state {
     int    speed_percent;
     int    speed_applied;   /* 0 until the VM has been told; then == speed */
     int    speed_held;      /* the button / finger went down on the badge */
-    SDL_Rect speed_btn;     /* the badge, in window pixels; w==0: off screen */
+    SDL_Rect speed_btn;     /* badge, in drawable pixels; w==0: off screen */
 
     /*
      * Save state.  The port cannot see the JAR path (nj_port has no such
@@ -473,7 +476,8 @@ static int sdl_display_init(void *ud, int *w, int *h, int *stride, void **px)
     s->window = SDL_CreateWindow("nano_j2me",
                                  SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
                                  s->width * s->scale, s->height * s->scale,
-                                 SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE);
+                                 SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE |
+                                 SDL_WINDOW_ALLOW_HIGHDPI);
     if (!s->window) {
         return -1;
     }
@@ -522,6 +526,7 @@ static int sdl_display_init(void *ud, int *w, int *h, int *stride, void **px)
             return -1;
         }
     }
+    s->dpi_dirty = 1;
     /*
      * NO SDL_RenderSetLogicalSize.  It would letterbox the game for us, and it
      * would also put every subsequent drawing call in GAME pixels - so the
@@ -1182,10 +1187,9 @@ static void sdl_drop_queue(sdl_state *s, const char *path)
     sdl_request_quit(s);
 }
 
-/* Window pixels to device pixels.  The window is the screen at an integer
- * scale, so this is exact and needs no rounding. */
-/* Window point -> game point, through the letterbox.  A click in the bars maps
- * outside the screen, which the runtime clips for us. */
+/* Drawable point -> game point, through the integer-scaled letterbox. Mouse
+ * window coordinates have already been converted to drawable pixels once.
+ * A click in the bars maps outside the screen, which the runtime clips. */
 static void sdl_to_game(sdl_state *s, int wx, int wy, int *gx, int *gy)
 {
     int scale = (s->scale > 0) ? s->scale : 1;
@@ -1209,9 +1213,19 @@ static void sdl_layout(sdl_state *s)
     int win_w = 0, win_h = 0;
     int scale, bs, ks, gs, pad, gap;
     int dx, dy, fx, fy, kx, ky, gy, vy, cy;
+    double overlay_dpi;
 
-    if (s->window) {
-        SDL_GetWindowSize(s->window, &win_w, &win_h);
+    if (s->window && s->renderer) {
+        if (s->dpi_dirty ||
+            nj_sdl2_dpi_size_changed(s->window, s->renderer, &s->dpi)) {
+            const char *percent = SDL_getenv("NJ_SDL2_UI_SCALE");
+            s->dpi = nj_sdl2_get_dpi(s->window, s->renderer,
+                                      percent ? SDL_atoi(percent) : 0);
+            s->dpi_dirty = 0;
+        }
+        /* All game and overlay rectangles are in physical drawable pixels.
+         * SDL window events are converted once before hit testing below. */
+        SDL_GetRendererOutputSize(s->renderer, &win_w, &win_h);
     }
     if (win_w <= 0 || win_h <= 0 || s->width <= 0 || s->height <= 0) {
         s->game_dst.x = s->game_dst.y = 0;
@@ -1243,10 +1257,34 @@ static void sdl_layout(sdl_state *s)
      * alone, so the keys stay tappable in a small window and do not turn into
      * billboards in a large one.
      */
-    bs = win_h / 11;   if (bs > 56) { bs = 56; }   if (bs < 16) { bs = 16; }
-    ks = bs * 9 / 10;  if (ks > 48) { ks = 48; }   if (ks < 14) { ks = 14; }
-    gs = bs * 4 / 5;   if (gs > 44) { gs = 44; }   if (gs < 14) { gs = 14; }
-    pad = bs / 4;      if (pad < 4) { pad = 4; }
+    {
+        double dpi = s->dpi.pixels > 0.0 ? s->dpi.pixels : 1.0;
+        /* Keep the old size at 100%, then scale every overlay control. Scaling
+         * only the clamps would leave small-window buttons unchanged at 200%. */
+        bs = s->dpi.window_h / 11;
+        if (bs > 56) bs = 56;
+        if (bs < 16) bs = 16;
+        ks = bs * 9 / 10;  if (ks > 48) ks = 48; if (ks < 14) ks = 14;
+        gs = bs * 4 / 5;   if (gs > 44) gs = 44; if (gs < 14) gs = 14;
+        pad = bs / 4;     if (pad < 4) pad = 4;
+        /* A manually shrunk window must keep every key reachable. Reduce the
+         * overlay as a group only when its left/right stacks cannot fit. */
+        {
+            int left_h = 2 * pad + 3 * bs + 2 * gs;
+            int right_h = 3 * pad + 4 * ks + 2 * gs;
+            int need_h = left_h > right_h ? left_h : right_h;
+            int need_w = 3 * pad + 4 * bs + 3 * ks;
+            double fit_h = (double)win_h / (need_h + 4);
+            double fit_w = (double)win_w / (need_w + 4);
+            if (dpi > fit_h) dpi = fit_h;
+            if (dpi > fit_w) dpi = fit_w;
+        }
+        overlay_dpi = dpi;
+        bs = nj_sdl2_ui_extent(bs, dpi);
+        ks = nj_sdl2_ui_extent(ks, dpi);
+        gs = nj_sdl2_ui_extent(gs, dpi);
+        pad = nj_sdl2_ui_extent(pad, dpi);
+    }
     gap = pad;
 
     /*
@@ -1262,8 +1300,10 @@ static void sdl_layout(sdl_state *s)
      */
     {
         int bh = bs * 2 / 3;
-        if (bh > 36) { bh = 36; }
-        if (bh < 14) { bh = 14; }
+        int max_bh = nj_sdl2_ui_extent(36, overlay_dpi);
+        int min_bh = nj_sdl2_ui_extent(14, overlay_dpi);
+        if (bh > max_bh) { bh = max_bh; }
+        if (bh < min_bh) { bh = min_bh; }
 
         s->speed_btn.w = bh * 2;
         s->speed_btn.h = bh;
@@ -1874,7 +1914,15 @@ static void sdl_text_input(void *ud, const nj_text_input_state *state)
         if (s->ime_active || s->text_always) { SDL_StartTextInput(); }
     }
     s->ime_multiline = state->multiline;
-    if (s->ime_active) { SDL_SetTextInputRect(&s->game_dst); }
+    if (s->ime_active) {
+        /* SDL's IME API takes window units, while game_dst is drawable pixels. */
+        SDL_Rect rect;
+        rect.x = nj_sdl2_coord(s->game_dst.x, s->dpi.output_w, s->dpi.window_w);
+        rect.y = nj_sdl2_coord(s->game_dst.y, s->dpi.output_h, s->dpi.window_h);
+        rect.w = nj_sdl2_coord(s->game_dst.w, s->dpi.output_w, s->dpi.window_w);
+        rect.h = nj_sdl2_coord(s->game_dst.h, s->dpi.output_h, s->dpi.window_h);
+        SDL_SetTextInputRect(&rect);
+    }
 }
 
 static void sdl_display_present(void *ud, int x, int y, int w, int h)
@@ -1885,7 +1933,17 @@ static void sdl_display_present(void *ud, int x, int y, int w, int h)
 
     /* Pump the window system here: present() is called exactly once per frame
      * and is the natural place to do it, whatever the port. */
+    sdl_layout(s);
     while (SDL_PollEvent(&ev)) {
+        /* No SDL logical-size event filter is installed. Convert window mouse
+         * units to renderer pixels exactly once; touch is already normalized. */
+        if (ev.type == SDL_MOUSEBUTTONDOWN || ev.type == SDL_MOUSEBUTTONUP) {
+            ev.button.x = nj_sdl2_coord(ev.button.x, s->dpi.window_w, s->dpi.output_w);
+            ev.button.y = nj_sdl2_coord(ev.button.y, s->dpi.window_h, s->dpi.output_h);
+        } else if (ev.type == SDL_MOUSEMOTION) {
+            ev.motion.x = nj_sdl2_coord(ev.motion.x, s->dpi.window_w, s->dpi.output_w);
+            ev.motion.y = nj_sdl2_coord(ev.motion.y, s->dpi.window_h, s->dpi.output_h);
+        }
         nj_event e;
         memset(&e, 0, sizeof(e));
         switch (ev.type) {
@@ -2231,6 +2289,16 @@ static void sdl_display_present(void *ud, int x, int y, int w, int h)
             }
             break;
         case SDL_WINDOWEVENT:
+            if (ev.window.event == SDL_WINDOWEVENT_MOVED ||
+                ev.window.event == SDL_WINDOWEVENT_SIZE_CHANGED ||
+                ev.window.event == SDL_WINDOWEVENT_RESIZED
+#if SDL_VERSION_ATLEAST(2, 0, 18)
+                || ev.window.event == SDL_WINDOWEVENT_DISPLAY_CHANGED
+#endif
+                ) {
+                s->dpi_dirty = 1;
+                sdl_layout(s);
+            }
             /*
              * The pointer left the window, so nothing is under it any more and
              * nothing may stay pressed: without this a cap held down by a drag
@@ -2255,11 +2323,9 @@ static void sdl_display_present(void *ud, int x, int y, int w, int h)
              * have to come back to window pixels before the on-screen keys can
              * be hit-tested, and then through the letterbox to reach the game.
              */
-            int ww = 0, wh = 0;
             int wx, wy, gx, gy;
-            SDL_GetWindowSize(s->window, &ww, &wh);
-            wx = (int)(ev.tfinger.x * (float)ww);
-            wy = (int)(ev.tfinger.y * (float)wh);
+            wx = (int)(ev.tfinger.x * (float)s->dpi.output_w);
+            wy = (int)(ev.tfinger.y * (float)s->dpi.output_h);
 
             /*
              * A finger is lifted, so it is holding nothing any more: this is

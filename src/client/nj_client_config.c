@@ -204,6 +204,7 @@ void nj_client_settings_default(nj_client_settings *s)
     }
     memcpy(s->last_dir, s->games_dir, sizeof(s->last_dir));
     s->game_scale = 0;   /* fit the window */
+    s->ui_scale = 0;     /* follow desktop DPI / compositor scaling */
     s->keys_visible = 1; /* the SDL2 port shows them by default */
     s->fps_cap = 0;      /* uncapped: the VM paces itself by the MIDP timer */
     s->filter_linear = 0; /* nearest: pixels stay pixels */
@@ -419,6 +420,9 @@ int nj_client_settings_load(nj_client_settings *s, const char *path)
         } else if (strcmp(key, "game_scale") == 0) {
             int v = cfg_int(val, s->game_scale);
             if (v >= 0 && v <= 4) s->game_scale = v;
+        } else if (strcmp(key, "ui_scale") == 0) {
+            int v = cfg_int(val, s->ui_scale);
+            if (v == 0 || (v >= 100 && v <= 300)) s->ui_scale = v;
         } else if (strcmp(key, "keys_visible") == 0) {
             s->keys_visible = cfg_int(val, s->keys_visible) ? 1 : 0;
         } else if (strcmp(key, "fps_cap") == 0) {
@@ -516,6 +520,7 @@ int nj_client_settings_save(const nj_client_settings *s, const char *path)
     fprintf(f, "games_dir = %s\n", s->games_dir);
     fprintf(f, "last_dir = %s\n", s->last_dir);
     fprintf(f, "game_scale = %d\n", s->game_scale);
+    fprintf(f, "ui_scale = %d\n", s->ui_scale);
     fprintf(f, "keys_visible = %d\n", s->keys_visible ? 1 : 0);
     fprintf(f, "fps_cap = %d\n", s->fps_cap);
     fprintf(f, "filter_linear = %d\n", s->filter_linear ? 1 : 0);

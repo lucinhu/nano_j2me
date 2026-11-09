@@ -1307,6 +1307,7 @@ enum {
     UI_SET_ROW_HEAP,
     UI_SET_ROW_MUTE,
     UI_SET_ROW_NETWORK,
+    UI_SET_ROW_UI_SCALE,
     UI_SET_ROW_RESET
 };
 
@@ -1325,6 +1326,7 @@ static const char *ui_setting_label(int row)
     case UI_SET_ROW_HEAP: return "堆大小";
     case UI_SET_ROW_MUTE: return "静音";
     case UI_SET_ROW_NETWORK: return "网络";
+    case UI_SET_ROW_UI_SCALE: return "界面缩放";
     default: return "恢复默认";
     }
 }
@@ -1394,6 +1396,10 @@ static void ui_settings_value(const nj_client_ui *ui, int row, char *out,
         break;
     case UI_SET_ROW_NETWORK:
         snprintf(out, (size_t)cap, "%s", s->network ? "开" : "关");
+        break;
+    case UI_SET_ROW_UI_SCALE:
+        if (s->ui_scale == 0) snprintf(out, (size_t)cap, "自动");
+        else snprintf(out, (size_t)cap, "%d%%", s->ui_scale);
         break;
     default:
         break;
@@ -1483,6 +1489,15 @@ static void ui_settings_cycle(nj_client_ui *ui, int dir)
     case UI_SET_ROW_NETWORK:
         s->network = s->network ? 0 : 1;
         break;
+    case UI_SET_ROW_UI_SCALE: {
+        static const int scales[] = { 0, 100, 125, 150, 175, 200, 250, 300 };
+        int idx = 0, i;
+        for (i = 1; i < 8; ++i) {
+            if (s->ui_scale >= scales[i]) idx = i;
+        }
+        s->ui_scale = scales[(idx + dir + 8) % 8];
+        break;
+    }
     default:
         return;                          /* games dir, binds and reset rows */
     }

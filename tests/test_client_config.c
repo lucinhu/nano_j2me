@@ -167,6 +167,7 @@ static void test_round_trip(const char *config_home)
     strcpy(a.games_dir, games);
     strcpy(a.last_dir, config_home);
     a.game_scale = 3;
+    a.ui_scale = 175;
     a.keys_visible = 0;
     a.fps_cap = 60;
     a.filter_linear = 1;
@@ -190,6 +191,7 @@ static void test_round_trip(const char *config_home)
     CHECK(strcmp(b.games_dir, games) == 0, "the UTF-8 games dir survives");
     CHECK(strcmp(b.last_dir, config_home) == 0, "last_dir survives");
     CHECK(b.game_scale == 3, "scale survives");
+    CHECK(b.ui_scale == 175, "fractional interface scaling survives");
     CHECK(b.keys_visible == 0, "keys_visible survives");
     CHECK(b.fps_cap == 60, "fps cap survives");
     CHECK(b.filter_linear == 1, "the linear filter survives");
@@ -277,6 +279,7 @@ static void test_bad_files(const char *config_home)
     memset(&s, 0, sizeof(s));
     CHECK(nj_client_settings_load(&s, path) == 1, "the file is read");
     CHECK(s.game_scale == 0, "an out-of-range scale is ignored");
+    CHECK(s.ui_scale == 0, "old config files use automatic desktop scaling");
     CHECK(s.keys_visible == 1, "keys_visible = 3 means on");
     CHECK(s.fps_cap == 0, "an unsupported fps cap is ignored");
     CHECK(strcmp(s.last_dir, "/tmp") == 0, "known keys after unknown ones stick");
@@ -306,6 +309,24 @@ static void test_bad_files(const char *config_home)
     CHECK(s.launcher_w == 1920 && s.launcher_h == 1080,
           "a window size that parses is kept");
     CHECK(s.gamepad == 0, "gamepad = 0 is read");
+    {
+        static const int valid[] = { 0, 100, 125, 175, 200, 300 };
+        static const char *invalid[] = { "-1", "99", "301", "nonsense" };
+        char text[64];
+        size_t i;
+        for (i = 0; i < sizeof(valid) / sizeof(valid[0]); ++i) {
+            snprintf(text, sizeof(text), "ui_scale = %d\n", valid[i]);
+            write_file(path, text);
+            CHECK(nj_client_settings_load(&s, path) == 1 && s.ui_scale == valid[i],
+                  "automatic and manual interface scales load");
+        }
+        for (i = 0; i < sizeof(invalid) / sizeof(invalid[0]); ++i) {
+            snprintf(text, sizeof(text), "ui_scale = %s\n", invalid[i]);
+            write_file(path, text);
+            CHECK(nj_client_settings_load(&s, path) == 1 && s.ui_scale == 0,
+                  "invalid interface scales keep automatic default");
+        }
+    }
 }
 
 

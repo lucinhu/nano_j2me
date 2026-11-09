@@ -55,6 +55,7 @@ typedef struct nj_client_settings {
     char games_dir[NJ_CLIENT_PATH_MAX]; /* the library directory              */
     char last_dir[NJ_CLIENT_PATH_MAX];  /* file browser starts here          */
     int  game_scale;                    /* 0 = auto, 1..4 = integer scale    */
+    int  ui_scale;                      /* 0 = desktop DPI, 100..300 percent */
     int  keys_visible;                  /* on-screen keypad in games, 0/1    */
     int  fps_cap;                       /* 0 = uncapped, else 30/60/120      */
     int  filter_linear;                 /* scale filter 0=nearest 1=linear   */
