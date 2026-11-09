@@ -191,6 +191,10 @@ static void rs_setl(nj_vm *vm, nj_ref rs, const char *name, nj_s8 v)
 #define NJ_C_RENUM "javax/microedition/rms/RecordEnumeration"
 #define NJ_C_RFILTER "javax/microedition/rms/RecordFilter"
 #define NJ_C_RCOMP "javax/microedition/rms/RecordComparator"
+/* Implementation state lives in Java objects, without changing the public
+ * builtin layouts (including their snapshot ABI). Neither class has statics. */
+#define NJ_C_RMETA "nj2me/rms/Records"
+#define NJ_C_RENUM_IMPL "nj2me/rms/Enumeration"
 
 /*
  * The rsf/rs_get/rs_geti family looks fields up on RecordStore and nowhere
@@ -325,6 +329,106 @@ static int rs_root(nj_vm *vm, nj_ref ref)
     nj_root(vm, ref);
     return nj_root_mark(vm) == roots + 1u;
 }
+
+/* Only use an implementation field after checking the actual object's class.
+ * In particular, snapshots can still contain the original base classes. */
+static int rms_is(nj_ref o, const char *name)
+{
+    nj_class *c = o ? o->cls : NULL;
+    for (; c; c = c->super) {
+        if (strcmp(c->name, name) == 0) return 1;
+    }
+    return 0;
+}
+
+static nj_ref rms_getref(nj_vm *vm, nj_ref o, const char *cls,
+                         const char *name, const char *desc)
+{
+    nj_field *f = nj_field_lookup(vm, cls, name, desc, 0);
+    return f ? nj_field_read_ref(vm, o, f) : NULL;
+}
+
+static void rms_setref(nj_vm *vm, nj_ref o, const char *cls,
+                       const char *name, const char *desc, nj_ref value)
+{
+    nj_field *f = nj_field_lookup(vm, cls, name, desc, 0);
+    if (f) nj_field_write_ref(vm, o, f, value);
+}
+
+static nj_s4 rms_getint(nj_vm *vm, nj_ref o, const char *cls, const char *name)
+{
+    nj_field *f = nj_field_lookup(vm, cls, name, "I", 0);
+    return f ? nj_field_read_int(vm, o, f) : 0;
+}
+
+static void rms_setint(nj_vm *vm, nj_ref o, const char *cls,
+                       const char *name, nj_s4 value)
+{
+    nj_field *f = nj_field_lookup(vm, cls, name, "I", 0);
+    if (f) nj_field_write_int(vm, o, f, value);
+}
+
+/* Upgrade the record Vector, not the RecordStore object. This is also valid
+ * for an old restored store: Records really is a Vector subclass, and the
+ * existing record arrays remain the same objects. Install only after success. */
+static nj_ref rs_metadata(nj_vm *vm, nj_ref rs, int create)
+{
+    nj_ref old = rs_get(vm, rs, NJ_F_RS_RECORDS, "Ljava/util/Vector;");
+    nj_ref state = NULL;
+    nj_u4 roots;
+    nj_s4 i, n;
+    if (rms_is(old, NJ_C_RMETA)) return old;
+    if (!create) return NULL;
+    roots = nj_root_mark(vm);
+    if (!rs_root(vm, rs) || !rs_root(vm, old)) goto fail;
+    state = nj_object_new(vm, NJ_C_RMETA);
+    if (!state || !rs_root(vm, state)) goto fail;
+    n = old ? vec_size(vm, old) : 0;
+    if (nj_has_exception(vm) || n < 0) goto fail;
+    for (i = 0; i < n; i++) {
+        nj_ref record = vec_at(vm, old, i);
+        if (nj_has_exception(vm) || !vec_add(vm, state, record)) goto fail;
+    }
+    rms_setint(vm, state, NJ_C_RMETA, "openCount", rs_is_open(vm, rs) ? 1 : 0);
+    rms_setref(vm, rs, NJ_C_RECORDSTORE, NJ_F_RS_RECORDS,
+               "Ljava/util/Vector;", state);
+    nj_root_release(vm, roots);
+    return state;
+fail:
+    nj_root_release(vm, roots);
+    if (!nj_has_exception(vm)) (void)nj_throw_oom(vm);
+    return NULL;
+}
+
+/* Open is infrequent. Query the arena without allocating or running Java so
+ * existing objects can be reused without a C side table or new static slots. */
+static nj_ref rs_find_open(nj_vm *vm, nj_ref name)
+{
+    nj_size at = 0u;
+    nj_u4 len = nj_string_len(name);
+    nj_field *nf = rsf(vm, NJ_F_RS_NAME, "Ljava/lang/String;");
+    nj_field *of = rsf(vm, NJ_F_RS_OPEN, "Z");
+    if (!nf || !of) return NULL;
+    while (at + NJ_BLOCK_HDR <= vm->heap.bump) {
+        nj_block *b = (nj_block *)(void *)(vm->heap.base + at);
+        nj_ref o;
+        if (b->size < NJ_BLOCK_HDR || b->size > vm->heap.bump - at) break;
+        o = (nj_ref)(void *)(vm->heap.base + at + NJ_BLOCK_HDR);
+        if (b->size >= NJ_BLOCK_HDR + sizeof(nj_object) &&
+            b->magic == NJ_BLOCK_MAGIC && o->kind == NJ_OBJ_PLAIN &&
+            rms_is(o, NJ_C_RECORDSTORE) && nj_field_read_int(vm, o, of)) {
+            nj_ref other = nj_field_read_ref(vm, o, nf);
+            if (other && nj_string_len(other) == len &&
+                memcmp(nj_string_chars(other), nj_string_chars(name),
+                       (size_t)len * sizeof(nj_u2)) == 0) return o;
+        }
+        at += b->size;
+    }
+    return NULL;
+}
+
+static nj_status re_refresh(nj_vm *vm, nj_ref self);
+static nj_status rs_notify_enumerations(nj_vm *vm, nj_ref rs);
 
 /* ------------------------------------------------------------------ */
 /* Persistence                                                         */
@@ -992,6 +1096,22 @@ static nj_ref rs_open_common_body(nj_vm *vm, nj_ref name, int create_if_missing)
     if (nj_string_to_utf8(name, nbuf, (int)sizeof(nbuf)) <= 0) {
         return NULL;
     }
+    rs = rs_find_open(vm, name);
+    if (rs) {
+        nj_ref state;
+        nj_s4 count;
+        if (!rs_root(vm, rs)) { (void)nj_throw_oom(vm); return NULL; }
+        state = rs_metadata(vm, rs, 1);
+        if (!state) return NULL;
+        count = rms_getint(vm, state, NJ_C_RMETA, "openCount");
+        if (count == 2147483647) {
+            (void)nj_throw(vm, "javax/microedition/rms/RecordStoreException",
+                           "too many opens");
+            return NULL;
+        }
+        rms_setint(vm, state, NJ_C_RMETA, "openCount", count + 1);
+        return rs;
+    }
     rs_path(vm, nbuf, path, (nj_u4)sizeof(path));
 
     if (vm->port && vm->port->file_exists) {
@@ -1172,6 +1292,10 @@ NJFN(rs_delete)
     if (nj_string_to_utf8(name, nbuf, (int)sizeof(nbuf)) <= 0) {
         return nj_throw(vm, "javax/microedition/rms/RecordStoreException", NULL);
     }
+    if (rs_find_open(vm, name)) {
+        return nj_throw(vm, "javax/microedition/rms/RecordStoreException",
+                        "record store is open");
+    }
     rs_delete_file(vm, nbuf);
     return NJ_OK;
 }
@@ -1183,8 +1307,19 @@ NJFN(rs_close)
         return nj_throw(vm, "javax/microedition/rms/RecordStoreNotOpenException",
                         NULL);
     }
-    if (rs_save(vm, rs, 0) != NJ_OK) {
-        return NJ_ERR;
+    {
+        nj_ref state = rs_metadata(vm, rs, 0);
+        nj_s4 count = state ? rms_getint(vm, state, NJ_C_RMETA, "openCount") : 1;
+        if (count > 1) {
+            rms_setint(vm, state, NJ_C_RMETA, "openCount", count - 1);
+            return NJ_OK;
+        }
+        if (rs_save(vm, rs, 0) != NJ_OK) return NJ_ERR;
+        if (state) {
+            rms_setint(vm, state, NJ_C_RMETA, "openCount", 0);
+            rms_setref(vm, state, NJ_C_RMETA, "enumerations",
+                       "Ljava/util/Vector;", NULL);
+        }
     }
     rs_seti(vm, rs, NJ_F_RS_OPEN, 0);
     return NJ_OK;
@@ -1317,6 +1452,7 @@ NJFN(rs_addRecord)
     nj_u4 roots = nj_root_mark(vm);
     nj_s4 id = rs_do_add(vm, NJ_THIS(args), NJ_ARG_REF(args, 0),
                          NJ_ARG_INT(args, 1), NJ_ARG_INT(args, 2));
+    if (id >= 0 && rs_notify_enumerations(vm, NJ_THIS(args)) != NJ_OK) id = NJ_ERR;
     nj_root_release(vm, roots);
     if (id < 0) {
         return NJ_ERR;
@@ -1454,7 +1590,8 @@ NJFN(rs_setRecord)
             return NJ_ERR;
         }
     }
-    return rs_save(vm, rs, 1);
+    if (rs_save(vm, rs, 1) != NJ_OK) return NJ_ERR;
+    return rs_notify_enumerations(vm, rs);
 }
 
 NJFN(rs_deleteRecord)
@@ -1476,7 +1613,8 @@ NJFN(rs_deleteRecord)
     if (!vec_del(vm, recs, idx) || !vec_del(vm, ids, idx)) {
         return NJ_ERR;
     }
-    return rs_save(vm, rs, 1);
+    if (rs_save(vm, rs, 1) != NJ_OK) return NJ_ERR;
+    return rs_notify_enumerations(vm, rs);
 }
 
 NJFN(rs_listNames)
@@ -1625,12 +1763,51 @@ NJFN(rs_listener_noop)
  * (五子棋) died on the missing enumerateRecords() before it could load its save
  * file.
  *
- * The enumeration SNAPSHOTS the matching ids when it is created.  MIDP allows a
- * live view through keepUpdated(true), and that is accepted here but does not
- * rebuild - a store small enough for a high-score table is rebuilt by the game
- * far more often than it changes underneath, and pretending to track it would
- * be worse than saying so.
+ * Ordinary enumerations snapshot the matching IDs. Kept enumerations subscribe
+ * to their store and rebuild after each successful mutation. Each rebuild uses
+ * a bounded ID snapshot before calling game code; its implementation object
+ * holds the filter/comparator as GC-visible, snapshot-visible references.
  */
+
+/* The store retains only kept enumerations, just as a RecordListener would.
+ * Removing one releases that retention even while the store stays open. */
+static nj_status re_subscribe(nj_vm *vm, nj_ref self, int keep)
+{
+    nj_u4 roots = nj_root_mark(vm);
+    nj_ref rs, state, list;
+    nj_s4 i, n;
+    nj_status st = NJ_OK;
+    if (!rs_root(vm, self)) return nj_throw_oom(vm);
+    rs = renum_get(vm, self, "reStore", "L" NJ_C_RECORDSTORE ";");
+    state = rs_metadata(vm, rs, keep);
+    if (!state) {
+        if (nj_has_exception(vm)) st = NJ_ERR;
+        else renum_seti(vm, self, "reKeep", 0);
+        goto done;
+    }
+    list = rms_getref(vm, state, NJ_C_RMETA, "enumerations", "Ljava/util/Vector;");
+    if (!list && keep) {
+        list = nj_object_new(vm, "java/util/Vector");
+        if (!list || !rs_root(vm, list)) { st = nj_throw_oom(vm); goto done; }
+        rms_setref(vm, state, NJ_C_RMETA, "enumerations", "Ljava/util/Vector;", list);
+    }
+    n = list ? vec_size(vm, list) : 0;
+    if (nj_has_exception(vm)) { st = NJ_ERR; goto done; }
+    for (i = 0; i < n; i++) {
+        nj_ref en = vec_at(vm, list, i);
+        if (nj_has_exception(vm)) { st = NJ_ERR; goto done; }
+        if (en == self) {
+            if (!keep && !vec_del(vm, list, i)) { st = NJ_ERR; goto done; }
+            renum_seti(vm, self, "reKeep", keep);
+            goto done;
+        }
+    }
+    if (keep && !vec_add(vm, list, self)) { st = NJ_ERR; goto done; }
+    renum_seti(vm, self, "reKeep", keep);
+done:
+    nj_root_release(vm, roots);
+    return st;
+}
 
 static nj_status re_require_live(nj_vm *vm, nj_ref self)
 {
@@ -1652,28 +1829,44 @@ NJFN(re_hasNext)
     nj_ref self = NJ_THIS(args), ids;
     if (re_require_live(vm, self) != NJ_OK) return NJ_ERR;
     ids = renum_get(vm, self, "reIds", "[I");
-    ret->i = rs_is_open(vm, renum_get(vm, self, "reStore", "L" NJ_C_RECORDSTORE ";")) &&
-        ids && renum_geti(vm, self, "rePos") < (nj_s4)ids->length;
+    {
+        nj_s4 pos = renum_geti(vm, self, "rePos");
+        nj_s4 n = ids ? (nj_s4)ids->length : 0;
+        int available = rms_is(self, NJ_C_RENUM_IMPL) ?
+            (n > 0 && (pos == -1 || pos < n - 1)) : pos < n;
+        ret->i = rs_is_open(vm, renum_get(vm, self, "reStore", "L" NJ_C_RECORDSTORE ";")) && available;
+    }
     return NJ_OK;
 }
 NJFN(re_hasPrev)
 {
     nj_ref self = NJ_THIS(args);
     if (re_require_live(vm, self) != NJ_OK) return NJ_ERR;
-    ret->i = rs_is_open(vm, renum_get(vm, self, "reStore", "L" NJ_C_RECORDSTORE ";")) &&
-        renum_geti(vm, self, "rePos") > 0;
+    {
+        nj_ref ids = renum_get(vm, self, "reIds", "[I");
+        nj_s4 pos = renum_geti(vm, self, "rePos");
+        int available = pos > 0 || (rms_is(self, NJ_C_RENUM_IMPL) &&
+                        pos == -1 && ids && ids->length > 0u);
+        ret->i = rs_is_open(vm, renum_get(vm, self, "reStore", "L" NJ_C_RECORDSTORE ";")) && available;
+    }
     return NJ_OK;
 }
 NJFN(re_reset)
 {
     if (re_require_live(vm, NJ_THIS(args)) != NJ_OK) return NJ_ERR;
-    renum_seti(vm, NJ_THIS(args), "rePos", 0);
+    renum_seti(vm, NJ_THIS(args), "rePos",
+               rms_is(NJ_THIS(args), NJ_C_RENUM_IMPL) ? -1 : 0);
     return NJ_OK;
 }
 NJFN(re_destroy)
 {
     nj_ref self = NJ_THIS(args);
     if (re_require_live(vm, self) != NJ_OK) return NJ_ERR;
+    if (rms_is(self, NJ_C_RENUM_IMPL)) {
+        if (re_subscribe(vm, self, 0) != NJ_OK) return NJ_ERR;
+        rms_setref(vm, self, NJ_C_RENUM_IMPL, "filter", "L" NJ_C_RFILTER ";", NULL);
+        rms_setref(vm, self, NJ_C_RENUM_IMPL, "comparator", "L" NJ_C_RCOMP ";", NULL);
+    }
     renum_seti(vm, self, "reDestroyed", 1);
     renum_setr(vm, self, "reIds", "[I", NULL);
     renum_setr(vm, self, "reStore", "L" NJ_C_RECORDSTORE ";", NULL);
@@ -1688,90 +1881,72 @@ NJFN(re_isKept)
 }
 NJFN(re_keepUpdated)
 {
-    if (re_require_live(vm, NJ_THIS(args)) != NJ_OK) return NJ_ERR;
-    renum_seti(vm, NJ_THIS(args), "reKeep", NJ_ARG_INT(args, 0) ? 1 : 0);
-    return NJ_OK;
+    nj_ref self = NJ_THIS(args);
+    int keep = NJ_ARG_INT(args, 0) != 0;
+    if (re_require_live(vm, self) != NJ_OK) return NJ_ERR;
+    if (!rms_is(self, NJ_C_RENUM_IMPL)) {
+        renum_seti(vm, self, "reKeep", keep); /* legacy snapshot */
+        return NJ_OK;
+    }
+    if (keep) {
+        if (re_refresh(vm, self) != NJ_OK) return NJ_ERR;
+        if (re_require_live(vm, self) != NJ_OK) return NJ_ERR;
+        if (rs_require_open(vm, renum_get(vm, self, "reStore",
+                                        "L" NJ_C_RECORDSTORE ";")) != NJ_OK) return NJ_ERR;
+    }
+    return re_subscribe(vm, self, keep);
 }
 
 NJFN(re_rebuild)
 {
     if (re_require_live(vm, NJ_THIS(args)) != NJ_OK) return NJ_ERR;
-    /* Accepted, and it does not re-run the filter: see the note above. */
-    renum_seti(vm, NJ_THIS(args), "rePos", 0);
+    return re_refresh(vm, NJ_THIS(args));
+}
+
+/* New enumerations store the last returned index; -1 means untouched, so
+ * either direction can be chosen initially. An exhausted backwards traversal
+ * stays at zero and cannot accidentally wrap to the last record again. */
+static nj_status re_take_id(nj_vm *vm, nj_ref self, int forward, nj_s4 *id)
+{
+    nj_ref ids;
+    nj_s4 pos, n, index;
+    int impl = rms_is(self, NJ_C_RENUM_IMPL);
+    if (re_require_live(vm, self) != NJ_OK) return NJ_ERR;
+    if (rs_require_open(vm, renum_get(vm, self, "reStore",
+                                    "L" NJ_C_RECORDSTORE ";")) != NJ_OK) return NJ_ERR;
+    ids = renum_get(vm, self, "reIds", "[I");
+    pos = renum_geti(vm, self, "rePos");
+    n = ids ? (nj_s4)ids->length : 0;
+    if (impl) index = pos == -1 ? (forward ? 0 : n - 1) : pos + (forward ? 1 : -1);
+    else index = forward ? pos : pos - 1; /* legacy snapshot cursor */
+    if (index < 0 || index >= n) {
+        return nj_throw(vm, "javax/microedition/rms/InvalidRecordIDException",
+                        forward ? "no next record" : "no previous record");
+    }
+    *id = ((nj_s4 *)ids->u.bytes)[index];
+    renum_seti(vm, self, "rePos", impl ? index : index + (forward ? 1 : 0));
     return NJ_OK;
 }
 
-/* The record at the cursor, moving it forward or back. */
 static nj_status re_step(nj_vm *vm, nj_value *args, nj_value *ret, int forward)
 {
     nj_ref self = NJ_THIS(args);
-    nj_ref ids = renum_get(vm, self, "reIds", "[I");
-    nj_ref rs = renum_get(vm, self, "reStore", "L" NJ_C_RECORDSTORE ";");
-    nj_s4 pos = renum_geti(vm, self, "rePos");
-    nj_s4 n = ids ? (nj_s4)ids->length : 0;
     nj_s4 id;
-    nj_value a[3];
-    nj_value r;
-
-    if (re_require_live(vm, self) != NJ_OK) return NJ_ERR;
-    if (rs_require_open(vm, rs) != NJ_OK) return NJ_ERR;
-    if (forward) {
-        if (pos >= n) {
-            return nj_throw(vm, "javax/microedition/rms/InvalidRecordIDException",
-                            "no next record");
-        }
-        id = ((nj_s4 *)ids->u.bytes)[pos];
-        renum_seti(vm, self, "rePos", pos + 1);
-    } else {
-        if (pos <= 0) {
-            return nj_throw(vm, "javax/microedition/rms/InvalidRecordIDException",
-                            "no previous record");
-        }
-        id = ((nj_s4 *)ids->u.bytes)[pos - 1];
-        renum_seti(vm, self, "rePos", pos - 1);
-    }
-    if (!rs) {
-        return nj_throw(vm, "javax/microedition/rms/RecordStoreNotOpenException",
-                        NULL);
-    }
+    nj_value a[1];
+    if (re_take_id(vm, self, forward, &id) != NJ_OK) return NJ_ERR;
     a[0].i = id;
-    r.r = NULL;
-    if (nj_call(vm, rs, NJ_C_RECORDSTORE, "getRecord", "(I)[B", a, &r) != NJ_OK) {
-        return NJ_ERR;
-    }
-    ret->r = r.r;
-    return NJ_OK;
+    return nj_call(vm, renum_get(vm, self, "reStore", "L" NJ_C_RECORDSTORE ";"),
+                   NJ_C_RECORDSTORE, "getRecord", "(I)[B", a, ret);
 }
 
 NJFN(re_nextRecord)     { return re_step(vm, args, ret, 1); }
 NJFN(re_previousRecord) { return re_step(vm, args, ret, 0); }
 
-/* The id at the cursor, without fetching the record. */
 static nj_status re_peek_id(nj_vm *vm, nj_value *args, nj_value *ret, int forward)
 {
-    nj_ref self = NJ_THIS(args);
-    if (re_require_live(vm, self) != NJ_OK) return NJ_ERR;
-    if (rs_require_open(vm, renum_get(vm, self, "reStore", "L" NJ_C_RECORDSTORE ";")) != NJ_OK)
-        return NJ_ERR;
-    nj_ref ids = renum_get(vm, self, "reIds", "[I");
-    nj_s4 pos = renum_geti(vm, self, "rePos");
-    nj_s4 n = ids ? (nj_s4)ids->length : 0;
-
-    if (forward) {
-        if (pos >= n) {
-            return nj_throw(vm, "javax/microedition/rms/InvalidRecordIDException",
-                            "no next record");
-        }
-        ret->i = ((nj_s4 *)ids->u.bytes)[pos];
-        renum_seti(vm, self, "rePos", pos + 1);
-    } else {
-        if (pos <= 0) {
-            return nj_throw(vm, "javax/microedition/rms/InvalidRecordIDException",
-                            "no previous record");
-        }
-        ret->i = ((nj_s4 *)ids->u.bytes)[pos - 1];
-        renum_seti(vm, self, "rePos", pos - 1);
-    }
+    nj_s4 id;
+    if (re_take_id(vm, NJ_THIS(args), forward, &id) != NJ_OK) return NJ_ERR;
+    ret->i = id;
     return NJ_OK;
 }
 
@@ -1785,13 +1960,10 @@ NJFN(re_previousId) { return re_peek_id(vm, args, ret, 0); }
  * game said it wanted, and a comparator that behaves differently depending on
  * order would otherwise see a different set.
  */
-static nj_status rs_enumerate_records(nj_vm *vm, nj_value *args, nj_value *ret)
+static nj_status re_build_ids(nj_vm *vm, nj_ref rs, nj_ref filter,
+                              nj_ref comp, nj_ref *result)
 {
-    nj_ref rs = NJ_THIS(args);
-    nj_ref filter = NJ_ARG_REF(args, 0);
-    nj_ref comp = NJ_ARG_REF(args, 1);
     nj_ref ids;
-    nj_ref out;
     nj_s4 n, i, keep = 0;
     nj_s4 *dst;
 
@@ -1899,19 +2071,93 @@ static nj_status rs_enumerate_records(nj_vm *vm, nj_value *args, nj_value *ret)
         }
     }
 
-    if (args[2].bits != 0u) {
-        keep = 1;
+    *result = ids;
+    return NJ_OK;
+}
+
+/* A bounded pass over an ID snapshot. User callbacks may reenter RMS, so a
+ * refresh in progress must not recursively refresh itself. Publish atomically. */
+static nj_status re_refresh(nj_vm *vm, nj_ref self)
+{
+    nj_u4 roots = nj_root_mark(vm);
+    nj_ref ids = NULL, rs, filter, comp;
+    nj_status st;
+    if (!rms_is(self, NJ_C_RENUM_IMPL)) {
+        /* Legacy snapshots never saved the callbacks. Preserve their frozen
+         * enumeration rather than silently replacing its filter with NULL. */
+        renum_seti(vm, self, "rePos", 0);
+        return NJ_OK;
     }
-    out = nj_object_new(vm, NJ_C_RENUM);
-    if (!out) {
+    if (rms_getint(vm, self, NJ_C_RENUM_IMPL, "busy")) return NJ_OK;
+    if (!rs_root(vm, self)) return nj_throw_oom(vm);
+    rs = renum_get(vm, self, "reStore", "L" NJ_C_RECORDSTORE ";");
+    filter = rms_getref(vm, self, NJ_C_RENUM_IMPL, "filter", "L" NJ_C_RFILTER ";");
+    comp = rms_getref(vm, self, NJ_C_RENUM_IMPL, "comparator", "L" NJ_C_RCOMP ";");
+    if (!rs_root(vm, rs) || !rs_root(vm, filter) || !rs_root(vm, comp)) {
+        nj_root_release(vm, roots);
         return nj_throw_oom(vm);
     }
-    /* renum_*, not rs_*: rs_* looks fields up on RecordStore, so writing the
-     * enumeration's fields through it would silently write nowhere. */
-    renum_setr(vm, out, "reIds", "[I", ids);
+    rms_setint(vm, self, NJ_C_RENUM_IMPL, "busy", 1);
+    st = re_build_ids(vm, rs, filter, comp, &ids);
+    rms_setint(vm, self, NJ_C_RENUM_IMPL, "busy", 0);
+    if (st == NJ_OK && !renum_geti(vm, self, "reDestroyed")) {
+        renum_setr(vm, self, "reIds", "[I", ids);
+        renum_seti(vm, self, "rePos", -1);
+    }
+    nj_root_release(vm, roots);
+    return st;
+}
+
+static nj_status rs_notify_enumerations(nj_vm *vm, nj_ref rs)
+{
+    nj_ref state = rs_metadata(vm, rs, 0);
+    nj_ref list, snapshot;
+    nj_s4 i, n;
+    nj_status st = NJ_OK;
+    nj_u4 roots;
+    if (!state) return NJ_OK;
+    list = rms_getref(vm, state, NJ_C_RMETA, "enumerations", "Ljava/util/Vector;");
+    if (!list) return NJ_OK;
+    roots = nj_root_mark(vm);
+    if (!rs_root(vm, rs) || !rs_root(vm, list)) goto oom;
+    n = vec_size(vm, list);
+    if (nj_has_exception(vm)) { st = NJ_ERR; goto done; }
+    snapshot = nj_array_new(vm, "Ljava/lang/Object;", (nj_u4)n);
+    if (!snapshot || !rs_root(vm, snapshot)) goto oom;
+    for (i = 0; i < n; i++) {
+        snapshot->u.refs[i] = vec_at(vm, list, i);
+        if (nj_has_exception(vm)) { st = NJ_ERR; goto done; }
+    }
+    /* The registry can change during a callback; the snapshot stays rooted. */
+    for (i = 0; i < n; i++) {
+        nj_ref en = snapshot->u.refs[i];
+        if (en && !renum_geti(vm, en, "reDestroyed") &&
+            renum_geti(vm, en, "reKeep") && rs_is_open(vm, rs) &&
+            renum_get(vm, en, "reStore", "L" NJ_C_RECORDSTORE ";") == rs) {
+            st = re_refresh(vm, en);
+            if (st != NJ_OK) goto done;
+        }
+    }
+    goto done;
+oom:
+    st = nj_throw_oom(vm);
+done:
+    nj_root_release(vm, roots);
+    return st;
+}
+
+static nj_status rs_enumerate_records(nj_vm *vm, nj_value *args, nj_value *ret)
+{
+    nj_ref rs = NJ_THIS(args), out;
+    if (rs_require_open(vm, rs) != NJ_OK) return NJ_ERR;
+    out = nj_object_new(vm, NJ_C_RENUM_IMPL);
+    if (!out || !rs_root(vm, out)) return nj_throw_oom(vm);
     renum_setr(vm, out, "reStore", "L" NJ_C_RECORDSTORE ";", rs);
-    renum_seti(vm, out, "reKeep", keep);
-    renum_seti(vm, out, "rePos", 0);
+    rms_setref(vm, out, NJ_C_RENUM_IMPL, "filter", "L" NJ_C_RFILTER ";", NJ_ARG_REF(args, 0));
+    rms_setref(vm, out, NJ_C_RENUM_IMPL, "comparator", "L" NJ_C_RCOMP ";", NJ_ARG_REF(args, 1));
+    if (re_refresh(vm, out) != NJ_OK) return NJ_ERR;
+    /* Initial callbacks may mutate the store. Only subscribe after they finish. */
+    if (NJ_ARG_INT(args, 2) && re_subscribe(vm, out, 1) != NJ_OK) return NJ_ERR;
     ret->r = out;
     return NJ_OK;
 }
@@ -1996,6 +2242,17 @@ static const nj_builtin_field renum_fields[] = {
     FLD("reDestroyed", "Z",                      0)
 };
 
+static const nj_builtin_field rmeta_fields[] = {
+    FLD("enumerations", "Ljava/util/Vector;", 0),
+    FLD("openCount", "I", 0)
+};
+
+static const nj_builtin_field renum_impl_fields[] = {
+    FLD("filter", "L" NJ_C_RFILTER ";", 0),
+    FLD("comparator", "L" NJ_C_RCOMP ";", 0),
+    FLD("busy", "I", 0)
+};
+
 static const nj_builtin_method renum_methods[] = {
     M("numRecords",       "()I",   0),
     M("nextRecord",       "()[B",  0),
@@ -2068,6 +2325,13 @@ const nj_builtin_class nj_lib_rms_classes[] = {
                "javax/microedition/rms/RecordStoreException")
     NJ_RMS_EXC("javax/microedition/rms/InvalidRecordIDException",
                "javax/microedition/rms/RecordStoreException")
+    { NJ_C_RMETA, "java/util/Vector", 0,
+      rmeta_fields, (nj_u2)(sizeof(rmeta_fields) / sizeof(rmeta_fields[0])),
+      NULL, 0u },
+    { NJ_C_RENUM_IMPL, NJ_C_RENUM, 0,
+      renum_impl_fields,
+      (nj_u2)(sizeof(renum_impl_fields) / sizeof(renum_impl_fields[0])),
+      NULL, 0u }
 };
 const int nj_lib_rms_class_count =
     (int)(sizeof(nj_lib_rms_classes) / sizeof(nj_lib_rms_classes[0]));

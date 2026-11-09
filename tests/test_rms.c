@@ -2038,11 +2038,32 @@ static void rms_finish_root_fault(nj_vm *vm, nj_u4 mark, nj_u4 padded)
     nj_root_release(vm, mark);
 }
 
+/* Arm the next root growth after one complete comparison. The temporary
+ * padding belongs to enumerateRecords' outer root scope and must be released
+ * when protecting the next operand fails. No production root indices exposed. */
+static int g_rms_fault_fetches;
+static nj_status rms_fault_later_operand(nj_vm *vm, nj_thread *th,
+                                         nj_value *args, nj_value *ret)
+{
+    nj_status st = g_rms_get_record(vm, th, args, ret);
+    if (++g_rms_fault_fetches == 3 && st == NJ_OK)
+        (void)rms_fail_root_after(vm, 0);
+    return st;
+}
+
+static nj_ref rms_records_ref(nj_vm *vm, nj_ref store)
+{
+    nj_field *f = nj_field_lookup(vm, RS, "rsRecords", "Ljava/util/Vector;", 0);
+    OK(f != NULL);
+    return f ? nj_field_read_ref(vm, store, f) : NULL;
+}
+
 static void test_root_allocation_failure(const nj_port *base, const char *dir)
 {
     nj_port port = make_port(base, dir, 0);
     nj_vm *vm;
     nj_ref store, bytes, name, comp;
+    nj_s4 enum_next_id, late_id;
     nj_u4 mark, roots, padded, i;
     nj_value a[3], r;
     nj_status st;
@@ -2066,23 +2087,76 @@ static void test_root_allocation_failure(const nj_port *base, const char *dir)
     if (!comp) goto done;
     OK(add_bytes(vm, store, "b", 1, "root OOM/seed one") == 1);
     OK(add_bytes(vm, store, "a", 1, "root OOM/seed two") == 2);
-    /* Three root sites in open, and the record / Integer roots in load. */
+    close_store(vm, store, "root OOM/close seed before cold loads");
+    /* A repeated open is shared, not another load. Use a fresh VM per fault so
+     * all five cases really enter cold open/load, and destroy it without close
+     * so a deliberately partial parse cannot overwrite the seeded disk file. */
     for (i = 0; i < 5; i++) {
+        nj_vm *cold = vm_new(&port);
+        nj_ref cold_name;
+        if (!cold) continue;
+        cold_name = nj_root(cold, nj_string_new(cold, "root-oom"));
+        OK(cold_name != NULL);
+        roots = rms_fail_root_after(cold, i);
+        padded = nj_root_mark(cold);
+        a[0] = vref(cold_name); a[1] = vint(0);
+        st = nj_call_static(cold, RS, "openRecordStore", RS_OPEN, a, &r);
+        if (i < 3) {
+            rms_expect_exception(cold, st, "OutOfMemoryError");
+        } else {
+            OK(st == NJ_OK && r.r != NULL && !nj_has_exception(cold));
+            if (st == NJ_OK && r.r)
+                OK(num_records(cold, r.r, "load root OOM preserves parsed prefix") == 0);
+        }
+        rms_finish_root_fault(cold, roots, padded);
+        clean(cold, "cold load root failure");
+        nj_vm_destroy(cold);
+    }
+    store = nj_root(vm, open_store(vm, "root-oom", 0, "root OOM/reopen after cold loads"));
+    if (!store) goto done;
+    OK(num_records(vm, store, "cold failures preserve disk records") == 2);
+    expect_record(vm, store, 1, "b", 1u, "cold failures preserve first record");
+    expect_record(vm, store, 2, "a", 1u, "cold failures preserve second record");
+    /* Lazy metadata attach must publish nothing on failure: the old Vector,
+     * data and next ID survive, and a failed shared open must not add a handle.
+     * Close exactly once after each failure to observe the latter publicly. */
+    for (i = 0; i < 4; i++) {
+        nj_ref old_records = rms_records_ref(vm, store);
         roots = rms_fail_root_after(vm, i);
         padded = nj_root_mark(vm);
         a[0] = vref(name); a[1] = vint(0);
         st = nj_call_static(vm, RS, "openRecordStore", RS_OPEN, a, &r);
-        if (i < 3) {
-            rms_expect_exception(vm, st, "OutOfMemoryError");
-        } else {
-            OK(st == NJ_OK && r.r != NULL && !nj_has_exception(vm));
-            if (st == NJ_OK && r.r) {
-                OK(num_records(vm, r.r, "load root OOM preserves parsed prefix") == 0);
-                /* Do not close: that would persist the deliberately partial load. */
-            }
-        }
+        rms_expect_exception(vm, st, "OutOfMemoryError");
         rms_finish_root_fault(vm, roots, padded);
+        OK(rms_records_ref(vm, store) == old_records);
+        OK(num_records(vm, store, "failed metadata attach preserves records") == 2);
+        OK(nj_call_int(vm, store, RS, "getNextRecordID", "()I", NULL) == 3);
+        expect_record(vm, store, 1, "b", 1u, "failed metadata attach preserves first record");
+        expect_record(vm, store, 2, "a", 1u, "failed metadata attach preserves second record");
+        close_store(vm, store, "close after failed shared open");
+        rms_expect_exception(vm, nj_call(vm, store, RS, "getNumRecords", "()I", NULL, &r),
+                             "RecordStoreNotOpenException");
+        store = nj_root(vm, open_store(vm, "root-oom", 0, "reopen for next metadata failure"));
+        if (!store) goto done;
     }
+    /* Once attached, the single shared-open root still must fail before the
+     * handle count changes. One close after that failed call must be final. */
+    a[0] = vref(name); a[1] = vint(0);
+    OK(nj_call_static(vm, RS, "openRecordStore", RS_OPEN, a, &r) == NJ_OK);
+    OK(r.r == store);
+    close_store(vm, store, "balance successful shared open");
+    roots = rms_fail_root_after(vm, 0);
+    padded = nj_root_mark(vm);
+    rms_expect_exception(vm, nj_call_static(vm, RS, "openRecordStore", RS_OPEN, a, &r),
+                         "OutOfMemoryError");
+    rms_finish_root_fault(vm, roots, padded);
+    OK(nj_call_int(vm, store, RS, "getNextRecordID", "()I", NULL) == 3);
+    expect_record(vm, store, 1, "b", 1u, "failed attached shared open preserves data");
+    close_store(vm, store, "final close after failed attached shared open");
+    rms_expect_exception(vm, nj_call(vm, store, RS, "getNumRecords", "()I", NULL, &r),
+                         "RecordStoreNotOpenException");
+    store = nj_root(vm, open_store(vm, "root-oom", 0, "reopen after shared count test"));
+    if (!store) goto done;
     /* A failed copy or boxed-ID root must not append a record. */
     for (i = 0; i < 2; i++) {
         roots = rms_fail_root_after(vm, i);
@@ -2093,8 +2167,12 @@ static void test_root_allocation_failure(const nj_port *base, const char *dir)
         rms_finish_root_fault(vm, roots, padded);
         OK(num_records(vm, store, "add root OOM leaves records") == 2);
     }
-    /* Fail the ID snapshot root, then the first comparator operand root. */
-    for (i = 0; i < 2; i++) {
+    /* Cover output, refresh receiver/store/comparator, ID snapshot and operand
+     * roots, rather than stopping at the two new outer roots. Keep the enum
+     * checks independent of whether the earlier failed add consumed an ID. */
+    enum_next_id = nj_call_int(vm, store, RS, "getNextRecordID", "()I", NULL);
+    clean(vm, "next ID before enum root faults");
+    for (i = 0; i < 6; i++) {
         roots = rms_fail_root_after(vm, i);
         padded = nj_root_mark(vm);
         a[0] = vref(NULL); a[1] = vref(comp); a[2] = vint(0);
@@ -2102,6 +2180,35 @@ static void test_root_allocation_failure(const nj_port *base, const char *dir)
             "(Ljavax/microedition/rms/RecordFilter;Ljavax/microedition/rms/RecordComparator;Z)L" RE ";", a, &r);
         rms_expect_exception(vm, st, "OutOfMemoryError");
         rms_finish_root_fault(vm, roots, padded);
+        OK(num_records(vm, store, "failed enum leaves record count") == 2);
+        OK(nj_call_int(vm, store, RS, "getNextRecordID", "()I", NULL) == enum_next_id);
+        expect_record(vm, store, 1, "b", 1u, "failed enum preserves record bytes");
+    }
+    {
+        nj_method *get;
+        /* Three candidates ensure a second insertion-sort step. Arm only when
+         * fetching its first operand, after a comparator call has succeeded. */
+        late_id = add_bytes(vm, store, "c", 1, "late operand root fault seed");
+        OK(late_id == enum_next_id);
+        a[0] = vint(1);
+        OK(nj_call(vm, store, RS, "getRecord", "(I)[B", a, &r) == NJ_OK);
+        get = nj_method_lookup(nj_class_resolve(vm, RS), "getRecord", "(I)[B");
+        OK(get && get->native);
+        if (get && get->native) {
+            g_rms_get_record = get->native;
+            get->native = rms_fault_later_operand;
+            g_rms_fault_fetches = g_rms_compare_calls = 0;
+            roots = nj_root_mark(vm);
+            a[0] = vref(NULL); a[1] = vref(comp); a[2] = vint(0);
+            st = nj_call(vm, store, RS, "enumerateRecords",
+                "(Ljavax/microedition/rms/RecordFilter;Ljavax/microedition/rms/RecordComparator;Z)L" RE ";", a, &r);
+            get->native = g_rms_get_record;
+            rms_expect_exception(vm, st, "OutOfMemoryError");
+            OK(g_rms_fault_fetches == 3 && g_rms_compare_calls > 0);
+            rms_finish_root_fault(vm, roots, roots);
+            OK(num_records(vm, store, "late enum fault leaves records") == 3);
+            expect_record(vm, store, late_id, "c", 1u, "late enum fault preserves appended record");
+        }
     }
     expect_record(vm, store, 1, "b", 1, "root OOM preserves record");
     close_store(vm, store, "root OOM/close");

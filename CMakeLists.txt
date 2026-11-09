@@ -1480,6 +1480,7 @@ nj_add_test(test_clip tests/test_clip.c)
   if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_save.c)
     nj_add_test(test_save tests/test_save.c)
     nj_add_test(test_save_m3g_depth tests/test_save_m3g_depth.c)
+    nj_add_test(test_save_rms_enumeration tests/test_save_rms_enumeration.c)
   endif()
 
   # The desktop client, headlessly: a JAR's name and icon, the settings file,
@@ -1537,7 +1538,8 @@ nj_add_test(test_clip tests/test_clip.c)
   endif()
 
   foreach(extra_test test_font_png test_jpeg test_lcdui test_game test_lib
-                      test_ioapi test_resolution test_sax test_rms test_run_archive
+                      test_ioapi test_resolution test_sax test_rms test_rms_enumeration
+                      test_run_archive
                       test_nokia_sound test_nokia_touch test_datagram)
     if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/${extra_test}.c)
       nj_add_test(${extra_test} tests/${extra_test}.c)
