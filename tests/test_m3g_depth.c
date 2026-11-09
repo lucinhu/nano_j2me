@@ -112,6 +112,84 @@ static nj_ref zbuf(nj_vm *vm, canvas *c)
 { return nj_rget(vm,c->g3,nj_field_lookup(vm,C("Graphics3D"),"_nj_zbuf","[I",0)); }
 static void release(nj_vm *vm,canvas *c)
 { call(vm,c->g3,C("Graphics3D"),"releaseTarget","()V",NULL,NULL); }
+static void default_clear(nj_vm *vm, canvas *c)
+{
+    nj_value a; a.r=0;
+    call(vm,c->g3,C("Graphics3D"),"clear","(L" C("Background") ";)V",&a,NULL);
+}
+static void test_default_clear(nj_vm *vm, canvas *c)
+{
+    nj_s4 saved[64*64];
+    nj_u4 colours[64*64];
+    nj_value a[2], r;
+    nj_ref bg=make(vm,C("Background")), world=make(vm,C("World"));
+    int i;
+    viewport(vm,c,0,0,64,64);
+    clear(vm,c,1,1); draw(vm,c,3,0xFFFF0000u,0);
+    default_clear(vm,c);
+    check(pixel(c,32,32)==0,"clear(null) clears color to black");
+    draw(vm,c,4,0xFF0000FFu,0);
+    check(pixel(c,32,32)==0x0000FFu,"clear(null) clears populated depth");
+
+    clear(vm,c,1,1); draw(vm,c,3,0xFFFF0000u,0);
+    a[0].r=bg;
+    call(vm,c->g3,C("Graphics3D"),"clear","(L" C("Background") ";)V",a,NULL);
+    memcpy(saved,nj_array_data(zbuf(vm,c)),sizeof(saved));
+    memcpy(colours,nj_array_data(c->pixels),sizeof(colours));
+    draw(vm,c,3,0xFFFF0000u,0); default_clear(vm,c);
+    check(memcmp(saved,nj_array_data(zbuf(vm,c)),sizeof(saved))==0,
+          "clear(null) depth matches a default Background");
+    check(memcmp(colours,nj_array_data(c->pixels),sizeof(colours))==0,
+          "clear(null) colors match a default Background");
+
+    clear(vm,c,1,1); draw(vm,c,3,0xFFFF0000u,0);
+    viewport(vm,c,0,0,32,64); default_clear(vm,c);
+    check(pixel(c,24,32)==0 && pixel(c,40,32)==0xFF0000u,
+          "clear(null) changes colors only inside the viewport");
+    viewport(vm,c,0,0,64,64); draw(vm,c,4,0xFF0000FFu,0);
+    check(pixel(c,24,32)==0x0000FFu && pixel(c,40,32)==0xFF0000u,
+          "clear(null) preserves populated depth outside the viewport");
+    memcpy(saved,nj_array_data(zbuf(vm,c)),sizeof(saved));
+    memcpy(colours,nj_array_data(c->pixels),sizeof(colours));
+    viewport(vm,c,80,80,8,8); default_clear(vm,c);
+    check(memcmp(saved,nj_array_data(zbuf(vm,c)),sizeof(saved))==0 &&
+          memcmp(colours,nj_array_data(c->pixels),sizeof(colours))==0,
+          "clear(null) with an invisible viewport preserves both buffers");
+    viewport(vm,c,0,0,64,64);
+
+    /* The World overload clears even without a Background. The Node overload
+     * treats that very same World as a Group and must preserve both buffers. */
+    a[0].r=0;
+    call(vm,c->g3,C("Graphics3D"),"getCamera","(L" C("Transform") ";)L" C("Camera") ";",a,&r);
+    a[0].r=r.r; call(vm,world,C("Group"),"addChild","(L" C("Node") ";)V",a,NULL);
+    call(vm,world,C("World"),"setActiveCamera","(L" C("Camera") ";)V",a,NULL);
+    for(i=0;i<2;++i) {
+        a[0].r=i?bg:0;
+        call(vm,world,C("World"),"setBackground","(L" C("Background") ";)V",a,NULL);
+        clear(vm,c,1,1); draw(vm,c,3,0xFFFF0000u,0);
+        memcpy(saved,nj_array_data(zbuf(vm,c)),sizeof(saved));
+        memcpy(colours,nj_array_data(c->pixels),sizeof(colours));
+        a[0].r=world; a[1].r=0;
+        call(vm,c->g3,C("Graphics3D"),"render","(L" C("Node") ";L" C("Transform") ";)V",a,NULL);
+        check(memcmp(saved,nj_array_data(zbuf(vm,c)),sizeof(saved))==0 &&
+              memcmp(colours,nj_array_data(c->pixels),sizeof(colours))==0,
+              "render(Node,Transform) never clears a World's buffers");
+        a[0].r=world;
+        call(vm,c->g3,C("Graphics3D"),"render","(L" C("World") ";)V",a,NULL);
+        check(pixel(c,32,32)==0,"render(World) clears color with null or default background");
+        draw(vm,c,4,0xFF0000FFu,0);
+        check(pixel(c,32,32)==0x0000FFu,"render(World) clears depth with null or default background");
+    }
+    release(vm,c);
+    for(i=0;i<2;++i) {
+        nj_status st;
+        a[0].r=i?bg:0;
+        st=nj_call(vm,c->g3,C("Graphics3D"),"clear","(L" C("Background") ";)V",a,NULL);
+        check(st!=NJ_OK && strstr(nj_exception_describe(vm),"IllegalStateException")!=NULL,
+              "clear requires a bound target even for null background");
+        nj_clear_exception(vm);
+    }
+}
 #endif
 int main(void)
 {
@@ -162,7 +240,7 @@ int main(void)
     check(nj_array_length(zbuf(vm,&c))==32u*48u,"resized target has matching depth allocation");
     release(vm,&c); bind_image(vm,&c,64,64); clear(vm,&c,0,1); draw(vm,&c,5,0xFF00FF00u,0);
     check(pixel(&c,32,32)==0x00FF00u,"explicit depth clear initializes rebound target before render");
-    release(vm,&c);
+    test_default_clear(vm,&c);
     nj_root_release(vm,0); nj_vm_destroy(vm); nj_port_shutdown(&port);
     printf("%d checks, %d failures\n",checks,failures);
     return failures?1:0;

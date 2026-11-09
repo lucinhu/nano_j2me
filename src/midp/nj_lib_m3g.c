@@ -4176,12 +4176,15 @@ NJFN(m3g_clear)
     nj_surface scratch, *surface;
     int x0, y0, x1, y1;
     nj_s4 vx, vy, vw, vh;
-    if (!bg) return NJ_OK;
     target = nj_rget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_target", "Ljava/lang/Object;"));
+    if (!target) {
+        NJ_THROW(vm, "java/lang/IllegalStateException", "clear requires a rendering target");
+    }
     surface = m3g_target_surface(vm, target, &scratch);
     if (!surface || !m3g_target_bounds(vm, self, surface, &x0, &y0, &x1, &y1))
         return NJ_OK;
-    if (nj_iget(vm, bg, m3g_fof(vm, NJ_C_BG, "_nj_dclear", "Z"))) {
+    /* Null means the default Background: clear both buffers to black/far. */
+    if (!bg || nj_iget(vm, bg, m3g_fof(vm, NJ_C_BG, "_nj_dclear", "Z"))) {
         nj_ref a = nj_rget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_zbuf", "[I"));
         int zw = nj_iget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_zw", "I"));
         int zh = nj_iget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_zh", "I"));
@@ -4202,10 +4205,10 @@ NJFN(m3g_clear)
             nj_iput(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_zframe", "I"), -1);
         }
     }
-    if (!nj_iget(vm, bg, m3g_fof(vm, NJ_C_BG, "_nj_cclear", "Z"))) return NJ_OK;
+    if (bg && !nj_iget(vm, bg, m3g_fof(vm, NJ_C_BG, "_nj_cclear", "Z"))) return NJ_OK;
     {
         nj_gfx g;
-        nj_u4 colour = (nj_u4)nj_iget(vm, bg, m3g_fof(vm, NJ_C_BG, "_nj_color", "I"));
+        nj_u4 colour = bg ? (nj_u4)nj_iget(vm, bg, m3g_fof(vm, NJ_C_BG, "_nj_color", "I")) : 0;
         nj_gfx_init(&g, surface);
         nj_gfx_set_color(&g, colour | 0xff000000u);
         nj_gfx_fill_rect(&g, x0, y0, x1 - x0, y1 - y0);
@@ -4214,7 +4217,7 @@ NJFN(m3g_clear)
     vy = nj_iget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_vy", "I"));
     vw = nj_iget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_vw", "I"));
     vh = nj_iget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_vh", "I"));
-    m3g_background_image(vm, self, bg, target, vx, vy, vw, vh);
+    if (bg) m3g_background_image(vm, self, bg, target, vx, vy, vw, vh);
     return NJ_OK;
 }
 
@@ -4735,24 +4738,18 @@ static nj_status m3g_render_scene(nj_vm *vm, nj_thread *th NJ_MAYBE_UNUSED,
             return NJ_OK;           /* no usable target, no pixels */
         }
     }
-    /*
-     * A World may carry its own Background, and a title that draws a World
-     * without calling Graphics3D.clear() expects the sky to be cleared to it.
-     * The clear is the same native the title would have called, so there is
-     * one implementation of "fill the viewport with the background colour"
-     * and the World path is not a second one.
-     */
-    if (nj_ref_class_name(root) &&
+    /* Only render(World) clears implicitly, including a null/default
+     * Background. render(Node, Transform) treats a World as an ordinary Group
+     * and must preserve the color and depth from earlier immediate draws. */
+    if (!node_render && nj_ref_class_name(root) &&
         strcmp(nj_ref_class_name(root), NJ_C_WORLD) == 0) {
         nj_ref bg = nj_rget(vm, root, m3g_fof(vm, NJ_C_WORLD, "_nj_bg",
                                               "L" NJ_C_BG ";"));
-
-        if (bg) {
-            nj_value ca[1], cn;
-
-            ca[0].r = bg;
-            (void)nj_call(vm, self, NJ_C_G3D, "clear", "(L" NJ_C_BG ";)V", ca, &cn);
-        }
+        nj_value ca[1];
+        nj_status st;
+        ca[0].r = bg;
+        st = nj_call(vm, self, NJ_C_G3D, "clear", "(L" NJ_C_BG ";)V", ca, NULL);
+        if (st != NJ_OK) return st;
     }
 
     /*
