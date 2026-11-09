@@ -47,6 +47,7 @@
  * Exit code 0 on PASS, non-zero otherwise.
  */
 #include "nj2me/nj.h"
+#include "nj_internal.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -1697,6 +1698,420 @@ static void test_store_name_is_a_file_name(const nj_port *base,
     nj_vm_destroy(vm);
 }
 
+/* Enumeration callbacks may allocate and explicitly run System.gc(). These
+ * native fixtures make that safe point deterministic without adding any
+ * production builtin fields/methods or generated Java fixture. */
+#define RE "javax/microedition/rms/RecordEnumeration"
+static int g_rms_filter_calls, g_rms_compare_calls, g_rms_callback_fail;
+static int g_rms_filter_add;
+static nj_ref g_rms_filter_store;
+static nj_native_fn g_rms_get_record, g_rms_vector_add, g_rms_int_init;
+
+static nj_status rms_gc_vector_add(nj_vm *vm, nj_thread *th,
+                                   nj_value *args, nj_value *ret)
+{
+    nj_gc_collect(vm);
+    return g_rms_vector_add(vm, th, args, ret);
+}
+
+static nj_status rms_gc_int_init(nj_vm *vm, nj_thread *th,
+                                 nj_value *args, nj_value *ret)
+{
+    nj_gc_collect(vm);
+    return g_rms_int_init(vm, th, args, ret);
+}
+
+static nj_status rms_gc_get_record(nj_vm *vm, nj_thread *th,
+                                   nj_value *args, nj_value *ret)
+{
+    /* In particular, collect the previous getRecord result while fetching the
+     * other comparator operand. It must remain live until compare is called. */
+    nj_gc_collect(vm);
+    return g_rms_get_record(vm, th, args, ret);
+}
+
+static nj_status rms_gc_filter(nj_vm *vm, nj_thread *th,
+                               nj_value *args, nj_value *ret)
+{
+    nj_ref bytes = args[0].r;
+    (void)th;
+    g_rms_filter_calls++;
+    nj_gc_collect(vm);
+    OK(bytes && bytes->length == 1u);
+    if (g_rms_callback_fail) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException", "filter failure");
+    }
+    if (g_rms_filter_add) {
+        const char value = 2;
+        g_rms_filter_add = 0;
+        OK(add_bytes(vm, g_rms_filter_store, &value, 1, "filter appends record") == 4);
+    }
+    ret->i = bytes && bytes->length == 1u && bytes->u.bytes[0] != 2;
+    return NJ_OK;
+}
+
+static nj_status rms_gc_compare(nj_vm *vm, nj_thread *th,
+                                nj_value *args, nj_value *ret)
+{
+    nj_ref a = args[0].r, b = args[1].r;
+    (void)th;
+    g_rms_compare_calls++;
+    nj_gc_collect(vm);
+    OK(a && b && a->length == 1u && b->length == 1u);
+    if (g_rms_callback_fail) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException", "compare failure");
+    }
+    ret->i = a && b ? (nj_s4)a->u.bytes[0] - b->u.bytes[0] : 0;
+    return NJ_OK;
+}
+
+static void rms_expect_exception(nj_vm *vm, nj_status status, const char *want)
+{
+    const char *got = nj_has_exception(vm) ? nj_exception_describe(vm) : NULL;
+    OK_MSG(status != NJ_OK && got && strstr(got, want),
+           "expected %s, got status %d, %s", want, (int)status,
+           got ? got : "no exception");
+    nj_clear_exception(vm);
+}
+
+static void test_record_boundaries(const nj_port *base, const char *dir)
+{
+    nj_port port = make_port(base, dir, 0);
+    nj_vm *vm;
+    nj_ref store, bytes, en;
+    nj_value a[4], r;
+    nj_u4 mark;
+    nj_s4 id;
+    unsigned i;
+    static const struct { const char *name, *desc; } queries[] = {
+        {"getName", "()Ljava/lang/String;"}, {"getMode", "()I"},
+        {"getNumRecords", "()I"}, {"getSize", "()I"},
+        {"getSizeAvailable", "()I"}, {"getNextRecordID", "()I"},
+        {"getVersion", "()I"}, {"getRecordSize", "(I)I"},
+        {"getRecord", "(I)[B"}, {"getRecord", "(I[BI)I"}
+    };
+    clock_reset();
+    vm = vm_new(&port);
+    if (!vm) return;
+    mark = nj_root_mark(vm);
+    delete_store(vm, "boundaries", "boundaries/delete");
+    store = nj_root(vm, open_store(vm, "boundaries", 1, "boundaries/open"));
+    bytes = nj_root(vm, nj_byte_array_new(vm, 4));
+    if (!store || !bytes) goto done;
+    id = add_bytes(vm, store, "abc", 3, "boundaries/add");
+    OK(add_bytes(vm, store, "x", 1, "boundaries/second") == id + 1);
+    a[0] = vref(bytes); a[1] = vint(2147483647); a[2] = vint(2147483647);
+    rms_expect_exception(vm, nj_call(vm, store, RS, "addRecord", "([BII)I", a, &r),
+                         "ArrayIndexOutOfBoundsException");
+    a[0] = vint(id); a[1] = vref(bytes);
+    a[2] = vint(2147483647); a[3] = vint(2147483647);
+    rms_expect_exception(vm, nj_call(vm, store, RS, "setRecord", "(I[BII)V", a, NULL),
+                         "ArrayIndexOutOfBoundsException");
+    rms_expect_exception(vm, nj_call(vm, store, RS, "getRecord", "(I[BI)I", a, &r),
+                         "ArrayIndexOutOfBoundsException");
+    OK(num_records(vm, store, "failed ranges") == 2);
+    expect_record(vm, store, id, "abc", 3u, "failed ranges preserve data");
+    a[0] = vint(id); a[1] = vref(bytes); a[2] = vint(1);
+    OK(nj_call(vm, store, RS, "getRecord", "(I[BI)I", a, &r) == NJ_OK);
+    OK(r.i == 3 && memcmp(bytes->u.bytes + 1, "abc", 3) == 0);
+    a[0] = vref(NULL); a[1] = vref(NULL); a[2] = vint(0);
+    en = nj_root(vm, nj_call_ref(vm, store, RS, "enumerateRecords",
+        "(Ljavax/microedition/rms/RecordFilter;Ljavax/microedition/rms/RecordComparator;Z)L" RE ";", a));
+    OK(en != NULL);
+    if (en) OK(nj_call_int(vm, en, RE, "nextRecordId", "()I", NULL) == id);
+    close_store(vm, store, "boundaries/close");
+    for (i = 0; i < sizeof(queries) / sizeof(queries[0]); i++) {
+        a[0] = vint(id); a[1] = vref(bytes); a[2] = vint(0);
+        rms_expect_exception(vm, nj_call(vm, store, RS, queries[i].name,
+                             queries[i].desc, a, &r), "RecordStoreNotOpenException");
+    }
+    a[0] = vint(1); a[1] = vint(1);
+    rms_expect_exception(vm, nj_call(vm, store, RS, "setMode", "(IZ)V", a, NULL),
+                         "RecordStoreNotOpenException");
+    if (en) {
+        OK(nj_call_int(vm, en, RE, "hasNextElement", "()Z", NULL) == 0);
+        clean(vm, "closed enumeration next availability");
+        OK(nj_call_int(vm, en, RE, "hasPreviousElement", "()Z", NULL) == 0);
+        clean(vm, "closed enumeration previous availability");
+        rms_expect_exception(vm, nj_call(vm, en, RE, "nextRecord", "()[B", NULL, &r),
+                             "RecordStoreNotOpenException");
+    }
+done:
+    clean(vm, "record boundaries");
+    nj_root_release(vm, mark);
+    nj_vm_destroy(vm);
+}
+
+static void test_enumeration_lifetime(const nj_port *base, const char *dir)
+{
+    static const nj_builtin_method filter_methods[] = {{"matches", "([B)Z", NJ_ACC_PUBLIC}};
+    static const nj_builtin_method compare_methods[] = {{"compare", "([B[B)I", NJ_ACC_PUBLIC}};
+    static const nj_builtin_class filter_class = {
+        "test/RmsFilter", "java/lang/Object", NJ_ACC_PUBLIC, NULL, 0, filter_methods, 1};
+    static const nj_builtin_class compare_class = {
+        "test/RmsComparator", "java/lang/Object", NJ_ACC_PUBLIC, NULL, 0, compare_methods, 1};
+    static const struct { const char *name, *desc; } destroyed[] = {
+        {"numRecords", "()I"}, {"nextRecord", "()[B"}, {"previousRecord", "()[B"},
+        {"nextRecordId", "()I"}, {"previousRecordId", "()I"},
+        {"hasNextElement", "()Z"}, {"hasPreviousElement", "()Z"},
+        {"reset", "()V"}, {"rebuild", "()V"}, {"isKeptUpdated", "()Z"},
+        {"keepUpdated", "(Z)V"}, {"destroy", "()V"}
+    };
+    nj_port port = make_port(base, dir, 0);
+    nj_vm *vm;
+    nj_ref store, filter, comp, en;
+    nj_value a[3], r;
+    nj_class *cls;
+    nj_method *get;
+    nj_u4 mark, roots;
+    unsigned i;
+    const char values[] = {3, 1, 2};
+    clock_reset();
+    vm = vm_new(&port);
+    if (!vm) return;
+    mark = nj_root_mark(vm);
+    cls = nj_class_create_builtin(vm, &filter_class);
+    OK(cls != NULL);
+    if (!cls) goto done;
+    cls->methods[0].native = rms_gc_filter;
+    cls = nj_class_create_builtin(vm, &compare_class);
+    OK(cls != NULL);
+    if (!cls) goto done;
+    cls->methods[0].native = rms_gc_compare;
+    delete_store(vm, "enumeration", "enumeration/delete");
+    store = nj_root(vm, open_store(vm, "enumeration", 1, "enumeration/open"));
+    filter = nj_root(vm, nj_object_new(vm, "test/RmsFilter"));
+    comp = nj_root(vm, nj_object_new(vm, "test/RmsComparator"));
+    if (!store || !filter || !comp) goto done;
+    for (i = 0; i < sizeof(values); i++) {
+        OK(add_bytes(vm, store, values + i, 1, "enumeration/add") == (nj_s4)i + 1);
+    }
+    a[0] = vint(1);
+    OK(nj_call(vm, store, RS, "getRecord", "(I)[B", a, &r) == NJ_OK);
+    get = nj_method_lookup(nj_class_resolve(vm, RS), "getRecord", "(I)[B");
+    OK(get && get->native);
+    if (!get || !get->native) goto done;
+    g_rms_get_record = get->native;
+    get->native = rms_gc_get_record;
+    a[0] = vref(filter); a[1] = vref(comp); a[2] = vint(0);
+    g_rms_filter_calls = g_rms_compare_calls = g_rms_callback_fail = 0;
+    roots = nj_root_mark(vm);
+    en = nj_call_ref(vm, store, RS, "enumerateRecords",
+        "(Ljavax/microedition/rms/RecordFilter;Ljavax/microedition/rms/RecordComparator;Z)L" RE ";", a);
+    get->native = g_rms_get_record;
+    OK(nj_root_mark(vm) == roots);
+    en = nj_root(vm, en);
+    clean(vm, "enumeration with GC callbacks");
+    OK(g_rms_filter_calls == 3 && g_rms_compare_calls > 0);
+    if (en) {
+        OK(nj_call_int(vm, en, RE, "numRecords", "()I", NULL) == 2);
+        OK(nj_call_int(vm, en, RE, "nextRecordId", "()I", NULL) == 2);
+        OK(nj_call_int(vm, en, RE, "nextRecordId", "()I", NULL) == 1);
+        clean(vm, "filtered sorted ids");
+        OK(nj_call(vm, en, RE, "destroy", "()V", NULL, NULL) == NJ_OK);
+        for (i = 0; i < sizeof(destroyed) / sizeof(destroyed[0]); i++) {
+            a[0] = vint(1);
+            rms_expect_exception(vm, nj_call(vm, en, RE, destroyed[i].name,
+                destroyed[i].desc, a, &r), "IllegalStateException");
+        }
+    }
+    g_rms_callback_fail = 1;
+    for (i = 0; i < 2; i++) {
+        a[0] = vref(i ? NULL : filter); a[1] = vref(i ? comp : NULL); a[2] = vint(0);
+        roots = nj_root_mark(vm);
+        rms_expect_exception(vm, nj_call(vm, store, RS, "enumerateRecords",
+            "(Ljavax/microedition/rms/RecordFilter;Ljavax/microedition/rms/RecordComparator;Z)L" RE ";", a, &r),
+            "IllegalArgumentException");
+        OK(nj_root_mark(vm) == roots);
+    }
+    g_rms_callback_fail = 0;
+    /* The initial ID snapshot is bounded even if the filter adds records. */
+    g_rms_filter_store = store;
+    g_rms_filter_add = 1;
+    g_rms_filter_calls = 0;
+    a[0] = vref(filter); a[1] = vref(NULL); a[2] = vint(0);
+    en = nj_root(vm, nj_call_ref(vm, store, RS, "enumerateRecords",
+        "(Ljavax/microedition/rms/RecordFilter;Ljavax/microedition/rms/RecordComparator;Z)L" RE ";", a));
+    clean(vm, "filter mutates record store");
+    OK(en != NULL && g_rms_filter_calls == 3);
+    OK(num_records(vm, store, "filter appended") == 4);
+    if (en) OK(nj_call_int(vm, en, RE, "numRecords", "()I", NULL) == 2);
+    g_rms_filter_store = NULL;
+    close_store(vm, store, "enumeration/close");
+done:
+    clean(vm, "enumeration lifetime");
+    nj_root_release(vm, mark);
+    nj_vm_destroy(vm);
+}
+
+static void test_record_gc_lifetime(const nj_port *base, const char *dir)
+{
+    nj_port port = make_port(base, dir, 0);
+    nj_vm *vm = vm_new(&port);
+    nj_method *add, *init;
+    nj_ref store;
+    nj_u4 roots, mark;
+    int i;
+    if (!vm) return;
+    mark = nj_root_mark(vm);
+    delete_store(vm, "gc-records", "gc records/delete");
+    store = nj_root(vm, open_store(vm, "gc-records", 1, "gc records/open"));
+    add = nj_method_lookup(nj_class_resolve(vm, "java/util/Vector"),
+                           "addElement", "(Ljava/lang/Object;)V");
+    init = nj_method_lookup(nj_class_resolve(vm, "java/lang/Integer"), "<init>", "(I)V");
+    OK(add && init && store);
+    if (!add || !init || !store) goto done;
+    g_rms_vector_add = nj_native_find(vm, "java/util/Vector", "addElement", "(Ljava/lang/Object;)V");
+    g_rms_int_init = nj_native_find(vm, "java/lang/Integer", "<init>", "(I)V");
+    OK(g_rms_vector_add && g_rms_int_init);
+    if (!g_rms_vector_add || !g_rms_int_init) goto done;
+    add->native = rms_gc_vector_add;
+    init->native = rms_gc_int_init;
+    for (i = 1; i <= 8; i++) {
+        char value = (char)i;
+        roots = nj_root_mark(vm);
+        OK(add_bytes(vm, store, &value, 1, "gc records/add") == i);
+        OK(nj_root_mark(vm) == roots);
+        expect_record(vm, store, i, &value, 1, "gc records/check added");
+    }
+    close_store(vm, store, "gc records/close");
+    roots = nj_root_mark(vm);
+    store = open_store(vm, "gc-records", 0, "gc records/reload");
+    OK(nj_root_mark(vm) == roots);
+    nj_root(vm, store);
+    if (store) {
+        for (i = 1; i <= 8; i++) {
+            char value = (char)i;
+            expect_record(vm, store, i, &value, 1, "gc records/check loaded");
+        }
+        close_store(vm, store, "gc records/close loaded");
+    }
+    add->native = g_rms_vector_add;
+    init->native = g_rms_int_init;
+done:
+    clean(vm, "record GC lifetime");
+    nj_root_release(vm, mark);
+    nj_vm_destroy(vm);
+}
+
+/* Fail just the root-table host allocation, after a selected number of
+ * successful temporary roots. Measure host overhead instead of duplicating
+ * nj_host_alloc's private header layout. */
+static void *(*g_rms_alloc)(void *, nj_size);
+static nj_size g_rms_last_alloc_size, g_rms_fail_alloc_size;
+static int g_rms_root_alloc_failed;
+
+static void *rms_root_fault_alloc(void *ud, nj_size size)
+{
+    g_rms_last_alloc_size = size;
+    if (size == g_rms_fail_alloc_size) {
+        g_rms_fail_alloc_size = 0;
+        g_rms_root_alloc_failed++;
+        return NULL;
+    }
+    return g_rms_alloc ? g_rms_alloc(ud, size) : malloc(size);
+}
+
+static nj_u4 rms_fail_root_after(nj_vm *vm, nj_u4 successful)
+{
+    nj_u4 mark = nj_root_mark(vm);
+    nj_size bytes;
+    void *probe;
+    while (vm->root_cap - vm->nroots < successful) nj_root(vm, NULL);
+    /* If the loop above filled a table, grow it before arming the fault. */
+    if (successful && vm->nroots == vm->root_cap) nj_root(vm, NULL);
+    while (vm->nroots < vm->root_cap - successful) nj_root(vm, NULL);
+    bytes = (nj_size)(vm->root_cap ? vm->root_cap * 2u : 32u) * sizeof(nj_ref);
+    probe = nj_host_alloc(vm, bytes);
+    OK(probe != NULL);
+    nj_host_free(vm, probe);
+    g_rms_fail_alloc_size = g_rms_last_alloc_size;
+    g_rms_root_alloc_failed = 0;
+    return mark;
+}
+
+static void rms_finish_root_fault(nj_vm *vm, nj_u4 mark, nj_u4 padded)
+{
+    g_rms_fail_alloc_size = 0;
+    OK(g_rms_root_alloc_failed == 1);
+    OK(nj_root_mark(vm) == padded);
+    nj_root_release(vm, mark);
+}
+
+static void test_root_allocation_failure(const nj_port *base, const char *dir)
+{
+    nj_port port = make_port(base, dir, 0);
+    nj_vm *vm;
+    nj_ref store, bytes, name, comp;
+    nj_u4 mark, roots, padded, i;
+    nj_value a[3], r;
+    nj_status st;
+    static const nj_builtin_method methods[] = {{"compare", "([B[B)I", NJ_ACC_PUBLIC}};
+    static const nj_builtin_class def = {
+        "test/RmsComparator", "java/lang/Object", NJ_ACC_PUBLIC, NULL, 0, methods, 1};
+    nj_class *cls;
+    g_rms_alloc = port.alloc;
+    port.alloc = rms_root_fault_alloc;
+    vm = vm_new(&port);
+    if (!vm) return;
+    mark = nj_root_mark(vm);
+    delete_store(vm, "root-oom", "root OOM/delete");
+    store = nj_root(vm, open_store(vm, "root-oom", 1, "root OOM/open"));
+    bytes = nj_root(vm, nj_byte_array_new(vm, 1));
+    name = nj_root(vm, nj_string_new(vm, "root-oom"));
+    cls = nj_class_create_builtin(vm, &def);
+    if (!store || !bytes || !name || !cls) goto done;
+    cls->methods[0].native = rms_gc_compare;
+    comp = nj_root(vm, nj_object_new(vm, "test/RmsComparator"));
+    if (!comp) goto done;
+    OK(add_bytes(vm, store, "b", 1, "root OOM/seed one") == 1);
+    OK(add_bytes(vm, store, "a", 1, "root OOM/seed two") == 2);
+    /* Three root sites in open, and the record / Integer roots in load. */
+    for (i = 0; i < 5; i++) {
+        roots = rms_fail_root_after(vm, i);
+        padded = nj_root_mark(vm);
+        a[0] = vref(name); a[1] = vint(0);
+        st = nj_call_static(vm, RS, "openRecordStore", RS_OPEN, a, &r);
+        if (i < 3) {
+            rms_expect_exception(vm, st, "OutOfMemoryError");
+        } else {
+            OK(st == NJ_OK && r.r != NULL && !nj_has_exception(vm));
+            if (st == NJ_OK && r.r) {
+                OK(num_records(vm, r.r, "load root OOM preserves parsed prefix") == 0);
+                /* Do not close: that would persist the deliberately partial load. */
+            }
+        }
+        rms_finish_root_fault(vm, roots, padded);
+    }
+    /* A failed copy or boxed-ID root must not append a record. */
+    for (i = 0; i < 2; i++) {
+        roots = rms_fail_root_after(vm, i);
+        padded = nj_root_mark(vm);
+        a[0] = vref(bytes); a[1] = vint(0); a[2] = vint(1);
+        st = nj_call(vm, store, RS, "addRecord", "([BII)I", a, &r);
+        rms_expect_exception(vm, st, "OutOfMemoryError");
+        rms_finish_root_fault(vm, roots, padded);
+        OK(num_records(vm, store, "add root OOM leaves records") == 2);
+    }
+    /* Fail the ID snapshot root, then the first comparator operand root. */
+    for (i = 0; i < 2; i++) {
+        roots = rms_fail_root_after(vm, i);
+        padded = nj_root_mark(vm);
+        a[0] = vref(NULL); a[1] = vref(comp); a[2] = vint(0);
+        st = nj_call(vm, store, RS, "enumerateRecords",
+            "(Ljavax/microedition/rms/RecordFilter;Ljavax/microedition/rms/RecordComparator;Z)L" RE ";", a, &r);
+        rms_expect_exception(vm, st, "OutOfMemoryError");
+        rms_finish_root_fault(vm, roots, padded);
+    }
+    expect_record(vm, store, 1, "b", 1, "root OOM preserves record");
+    close_store(vm, store, "root OOM/close");
+done:
+    g_rms_fail_alloc_size = 0;
+    clean(vm, "root allocation failure");
+    nj_root_release(vm, mark);
+    nj_vm_destroy(vm);
+}
+
 int main(void)
 {
     static const char *subdirs[] = {
@@ -1737,6 +2152,16 @@ int main(void)
     mkdir_p(dir);
     test_write_failure_keeps_timestamp(&base_port, dir);
     test_port_backend(&base_port, dir);
+    snprintf(dir, sizeof(dir), "%s/api-regression", base_dir);
+    mkdir_p(dir);
+    test_record_boundaries(&base_port, dir);
+    fflush(stdout);
+    fflush(stderr);
+    test_enumeration_lifetime(&base_port, dir);
+    fflush(stdout);
+    fflush(stderr);
+    test_record_gc_lifetime(&base_port, dir);
+    test_root_allocation_failure(&base_port, dir);
 
     nj_port_shutdown(&base_port);
 

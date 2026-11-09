@@ -1063,7 +1063,8 @@ NJFN(str_getChars)
     }
     if (src_begin < 0 || src_end > (nj_s4)nj_string_len(s) ||
         src_begin > src_end || dst_begin < 0 ||
-        (nj_u4)(dst_begin + (src_end - src_begin)) > dst->length) {
+        (nj_u4)dst_begin > dst->length ||
+        (nj_u4)(src_end - src_begin) > dst->length - (nj_u4)dst_begin) {
         return nj_throw(vm, "java/lang/IndexOutOfBoundsException", NULL);
     }
     memcpy((nj_u2 *)dst->u.bytes + dst_begin, nj_string_chars(s) + src_begin,
@@ -1801,30 +1802,39 @@ NJFN(sb_deleteCharAt)
     return NJ_OK;
 }
 
-/*
- * insert(int, char[]): the same operation as insert(int, String), reached by
- * way of a String, because that is where the bounds check and the shifting
- * already live and a second copy of them would be a second chance to get the
- * bounds wrong.  A title compiled against CLDC 1.0 uses this form.
- */
-/*
- * StringBuffer.getChars(ii[ci)v.
- *
- * The buffer already knows how to turn itself into a String, and String
- * already knows how to copy a range out of itself into a char array - both
- * are implemented and both are covered by tests.  Doing it any other way here
- * would be a second implementation of the same rule, which is how the two
- * drift apart.  合金弹头4(完美汉化版)_4053 calls this and stopped drawing
- * until it existed.
- */
+/* HUDs such as Metal Slug 4 copy characters each paint. Copy the requested
+ * window directly: toString() used to allocate and copy the entire buffer,
+ * even for an empty window. Keep range arithmetic safe for Integer.MAX_VALUE. */
 NJFN(sb_getChars)
 {
-    nj_ref str = nj_call_ref(vm, NJ_THIS(args), "java/lang/StringBuffer",
-                             "toString", "()Ljava/lang/String;", NULL);
-    if (!str) {
-        return NJ_ERR;
+    nj_ref sb = NJ_THIS(args);
+    nj_s4 begin = NJ_ARG_INT(args, 0);
+    nj_s4 end = NJ_ARG_INT(args, 1);
+    nj_ref dst = NJ_ARG_REF(args, 2);
+    nj_s4 off = NJ_ARG_INT(args, 3);
+    nj_field *fv = sb_value(vm);
+    nj_field *fc = sb_count(vm);
+    nj_ref arr;
+    nj_s4 count;
+
+    if (!dst) {
+        return nj_throw(vm, "java/lang/NullPointerException", NULL);
     }
-    return nj_call(vm, str, "java/lang/String", "getChars", "(II[CI)V", args, NULL);
+    if (!fv || !fc) {
+        return nj_throw(vm, "java/lang/InternalError", "StringBuffer layout");
+    }
+    count = nj_field_read_int(vm, sb, fc);
+    if (begin < 0 || end > count || begin > end || off < 0 ||
+        (nj_u4)off > dst->length ||
+        (nj_u4)(end - begin) > dst->length - (nj_u4)off) {
+        return nj_throw(vm, "java/lang/IndexOutOfBoundsException", NULL);
+    }
+    if (end > begin) {
+        arr = nj_field_read_ref(vm, sb, fv);
+        memmove((nj_u2 *)dst->u.bytes + off, (nj_u2 *)arr->u.bytes + begin,
+                (nj_size)(end - begin) * sizeof(nj_u2));
+    }
+    return NJ_OK;
 }
 
 static nj_status insert_chars(nj_vm *vm, nj_value *args, nj_value *ret,

@@ -352,8 +352,8 @@ static void trans_rect(int t, int fw, int fh, int x, int y, int w, int h,
  * nj_gfx_set_clip unchanged and a Graphics with translate (tx,ty) and clip
  * (cx,cy,cw,ch) clips at device (cx+tx, cy+ty, cw, ch) - consistent with the
  * LayerManager, which stores its narrowed clip back in the same convention.
- * A clip of exactly 0,0,0,0 means "never initialised", which would silently
- * draw nothing, so it is read as "the whole surface" instead.
+ * Graphics construction already seeds the full target clip.  Zero sizes are
+ * therefore explicit empty clips and must stay empty, just as in gfx_load.
  */
 typedef struct njg_bind {
     nj_surface  scratch;   /* storage when the target is an Image */
@@ -385,9 +385,7 @@ static int njg_bind(nj_vm *vm, nj_ref gobj, njg_gfx_bind *b, nj_gfx *g)
     cy = fgi(vm, gobj, NJ_C_GRAPHICS, NJ_F_G_CY, D_INT);
     cw = fgi(vm, gobj, NJ_C_GRAPHICS, NJ_F_G_CW, D_INT);
     ch = fgi(vm, gobj, NJ_C_GRAPHICS, NJ_F_G_CH, D_INT);
-    if (!(cx == 0 && cy == 0 && cw == 0 && ch == 0)) {
-        nj_gfx_set_clip(g, (int)cx, (int)cy, (int)cw, (int)ch);
-    }
+    nj_gfx_set_clip(g, (int)cx, (int)cy, (int)cw, (int)ch);
 
     g->color = (nj_u4)fgi(vm, gobj, NJ_C_GRAPHICS, NJ_F_G_COLOR, D_INT);
     {
@@ -576,8 +574,10 @@ static nj_status sprite_set_frames(nj_vm *vm, nj_ref s, nj_ref img, int fw,
         SPS(vm, s, NJ_F_SP_FRAME, D_INT, 0);
     } else {
         int idx = (int)SPG(vm, s, SP_SEQIDX, D_INT);
+        int len = seq ? (int)nj_array_length(seq) : frames;
         int raw;
-        if (idx < 0 || idx >= frames) {
+        /* Custom sequences can repeat raw frames and be longer than frames. */
+        if (idx < 0 || idx >= len) {
             idx = 0;
         }
         if (seq && (nj_u4)idx < nj_array_length(seq)) {
@@ -2368,15 +2368,11 @@ NJFN(lm_paint)
         nj_s8 wx0 = (nj_s8)x + otx, wy0 = (nj_s8)y + oty;
         nj_s8 wx1 = wx0 + vw, wy1 = wy0 + vh;
 
-        if (ocw > 0 && och > 0) {
-            x0 = (wx0 > x0) ? wx0 : x0;
-            y0 = (wy0 > y0) ? wy0 : y0;
-            x1 = (wx1 < x1) ? wx1 : x1;
-            y1 = (wy1 < y1) ? wy1 : y1;
-        } else {
-            /* No usable clip yet: the view window alone bounds the target. */
-            x0 = wx0; y0 = wy0; x1 = wx1; y1 = wy1;
-        }
+        /* Intersect even an empty caller clip; the view cannot enlarge it. */
+        x0 = (wx0 > x0) ? wx0 : x0;
+        y0 = (wy0 > y0) ? wy0 : y0;
+        x1 = (wx1 < x1) ? wx1 : x1;
+        y1 = (wy1 < y1) ? wy1 : y1;
         if (x1 < x0) { x1 = x0; }
         if (y1 < y0) { y1 = y0; }
 

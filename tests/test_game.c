@@ -800,6 +800,86 @@ static void test_sprite_frames(nj_vm *vm)
                  "NullPointerException", "Sprite((Sprite)null)");
 }
 
+/* setImage preserves a sequence INDEX even when it exceeds raw frame count. */
+static void test_sprite_setimage_sequence(nj_vm *vm)
+{
+    static const int sequence[] = { 0, 1, 1, 0, 0, 1 };
+    nj_u4 mark = nj_root_mark(vm);
+    nj_ref old = nj_root(vm, mk_image_fill(vm, 2, 1, C_RED));
+    nj_ref equal = nj_root(vm, mk_image_fill(vm, 2, 1, C_GREEN));
+    nj_ref larger = nj_root(vm, mk_image_fill(vm, 3, 1, C_GREEN));
+    nj_ref smaller = nj_root(vm, mk_image_fill(vm, 1, 1, C_RED));
+    nj_ref target = nj_root(vm, mk_image_fill(vm, 4, 4, C_SENT));
+    nj_ref g = nj_root(vm, mk_graphics(vm, target, 0, 0, 0, 0, 4, 4));
+    nj_ref s = nj_root(vm, mk_sprite_frames(vm, old, 1, 1));
+    nj_ref seq = nj_root(vm, nj_int_array_new(vm, 6u));
+    int stage, i;
+
+    CHECK(old && equal && larger && smaller && target && g && s && seq,
+          "setImage sequence fixtures");
+    if (!old || !equal || !larger || !smaller || !target || !g || !s || !seq) {
+        nj_root_release(vm, mark);
+        return;
+    }
+    px_set(vm, equal, 1, 0, C_BLUE);
+    px_set(vm, larger, 1, 0, C_BLUE);
+    for (i = 0; i < 6; i++) {
+        nj_array_set_int(seq, (nj_u4)i, sequence[i]);
+    }
+    CHECK(nj_call(vm, s, NJ_C_SPRITE, "setFrameSequence", "([I)V",
+                  &(nj_value){ .r = seq }, NULL) == NJ_OK, "set long sequence");
+    v2(vm, s, NJ_C_LAYER, "setPosition", "(II)V", 1, 1);
+    for (stage = 0; stage < 2; stage++) {
+        nj_ref replacement = stage ? larger : equal;
+        v1(vm, s, NJ_C_SPRITE, "setFrame", "(I)V", 5);
+        CHECK(nj_call(vm, s, NJ_C_SPRITE, "setImage", "(" D_IMAGE "II)V",
+                      (nj_value[]){ {.r = replacement}, {.i = 1}, {.i = 1} },
+                      NULL) == NJ_OK, "setImage stage %d", stage);
+        CHECK(i0(vm, s, NJ_C_SPRITE, "getFrame", "()I") == 5,
+              "setImage stage %d preserves sequence index 5", stage);
+        CHECK(i0(vm, s, NJ_C_SPRITE, "getRawFrameCount", "()I") == 2 + stage,
+              "setImage stage %d updates raw frame count", stage);
+        CHECK(i0(vm, s, NJ_C_SPRITE, "getFrameSequenceLength", "()I") == 6,
+              "setImage stage %d preserves custom sequence", stage);
+        img_wipe(vm, target, C_SENT);
+        sprite_paint(vm, s, g);
+        CHECK(px_at(vm, target, 1, 1) == C_BLUE,
+              "setImage stage %d paints sequence[5] from replacement", stage);
+        v0(vm, s, NJ_C_SPRITE, "nextFrame", "()V");
+        CHECK(i0(vm, s, NJ_C_SPRITE, "getFrame", "()I") == 0,
+              "setImage stage %d still wraps the custom sequence", stage);
+        for (i = 0; i < 6; i++) {
+            v1(vm, s, NJ_C_SPRITE, "setFrame", "(I)V", i);
+            CHECK(iget(vm, s, NJ_C_SPRITE, NJ_F_SP_FRAME, D_INT) == sequence[i],
+                  "setImage stage %d retains sequence entry %d", stage, i);
+        }
+    }
+
+    CHECK(nj_call(vm, s, NJ_C_SPRITE, "setImage", "(" D_IMAGE "II)V",
+                  (nj_value[]){ {.r = equal}, {.i = 1}, {.i = 1} }, NULL)
+          == NJ_OK, "setImage with fewer raw frames");
+    CHECK(i0(vm, s, NJ_C_SPRITE, "getFrame", "()I") == 0 &&
+          i0(vm, s, NJ_C_SPRITE, "getFrameSequenceLength", "()I") == 2,
+          "fewer raw frames reset index and discard custom sequence");
+    v1(vm, s, NJ_C_SPRITE, "setFrame", "(I)V", 1);
+    CHECK(nj_call(vm, s, NJ_C_SPRITE, "setImage", "(" D_IMAGE "II)V",
+                  (nj_value[]){ {.r = larger}, {.i = 1}, {.i = 1} }, NULL)
+          == NJ_OK, "grow default sequence");
+    CHECK(i0(vm, s, NJ_C_SPRITE, "getFrame", "()I") == 1 &&
+          i0(vm, s, NJ_C_SPRITE, "getFrameSequenceLength", "()I") == 3,
+          "default sequence grows without changing current frame");
+    v0(vm, s, NJ_C_SPRITE, "nextFrame", "()V");
+    CHECK(i0(vm, s, NJ_C_SPRITE, "getFrame", "()I") == 2,
+          "grown default sequence includes new raw frame");
+    CHECK(nj_call(vm, s, NJ_C_SPRITE, "setImage", "(" D_IMAGE "II)V",
+                  (nj_value[]){ {.r = smaller}, {.i = 1}, {.i = 1} }, NULL)
+          == NJ_OK, "shrink default sequence");
+    CHECK(i0(vm, s, NJ_C_SPRITE, "getFrame", "()I") == 0 &&
+          i0(vm, s, NJ_C_SPRITE, "getFrameSequenceLength", "()I") == 1,
+          "default sequence shrinks and resets current frame");
+    nj_root_release(vm, mark);
+}
+
 /* ------------------------------------------------------------------ */
 /* 2. Reference pixel arithmetic, all eight transforms                 */
 /* ------------------------------------------------------------------ */
@@ -1842,6 +1922,90 @@ static void test_gamecanvas_visibility(nj_vm *vm)
     nj_root_release(vm, mark);
 }
 
+/* Public Graphics calls must keep empty clips empty through every game path. */
+static void test_game_paint_clip(nj_vm *vm)
+{
+    static const char *state_methods[] = {
+        "getTranslateX", "getTranslateY", "getClipX", "getClipY",
+        "getClipWidth", "getClipHeight"
+    };
+    static const int sizes[][2] = {
+        { 0, 0 }, { 0, 8 }, { 8, 0 }, { -1, 8 }, { 8, -1 }
+    };
+    nj_u4 mark = nj_root_mark(vm);
+    nj_ref source = nj_root(vm, mk_image_fill(vm, 8, 8, C_RED));
+    nj_ref s = nj_root(vm, mk_sprite_frames(vm, source, 8, 8));
+    nj_ref tiled = nj_root(vm, mk_tiled(vm, 1, 1, source, 8, 8));
+    nj_ref manager = nj_root(vm, mk_manager(vm));
+    nj_ref target, g;
+    nj_value r = { .bits = 0u };
+    int translated, path, clip, k;
+
+    CHECK(nj_call(vm, NULL, NJ_C_IMAGE, "createImage", "(II)" D_IMAGE,
+                  (nj_value[]){ {.i = 16}, {.i = 16} }, &r) == NJ_OK,
+          "mutable clip target");
+    target = nj_root(vm, r.r);
+    r.bits = 0u;
+    CHECK(nj_call(vm, target, NJ_C_IMAGE, "getGraphics", "()" D_GFX, NULL, &r)
+          == NJ_OK, "public Image.getGraphics for game clipping");
+    g = nj_root(vm, r.r);
+    CHECK(source && s && tiled && manager && target && g, "game clip fixtures");
+    if (!source || !s || !tiled || !manager || !target || !g) {
+        nj_root_release(vm, mark);
+        return;
+    }
+    v3(vm, tiled, NJ_C_TILEDLAYER, "setCell", "(III)V", 0, 0, 1);
+    CHECK(nj_call(vm, manager, NJ_C_LAYERMANAGER, "append", "(" D_LAYER ")V",
+                  &(nj_value){ .r = s }, NULL) == NJ_OK, "append clipped sprite");
+    CHECK(nj_call(vm, manager, NJ_C_LAYERMANAGER, "append", "(" D_LAYER ")V",
+                  &(nj_value){ .r = tiled }, NULL) == NJ_OK, "append clipped tiles");
+    v4(vm, manager, NJ_C_LAYERMANAGER, "setViewWindow", "(IIII)V", 0, 0, 8, 8);
+    for (translated = 0; translated < 2; translated++) {
+        int tx = translated ? 3 : 0, ty = translated ? 2 : 0;
+        v2(vm, g, NJ_C_GRAPHICS, "translate", "(II)V", tx, ty);
+        for (path = 0; path < 3; path++) {
+            for (clip = 0; clip < 8; clip++) {
+                int before[6], expected = clip == 6 ? 1 : clip == 7 ? 64 : 0;
+                img_wipe(vm, target, C_SENT);
+                v4(vm, g, NJ_C_GRAPHICS, "setClip", "(IIII)V", 0, 0, 8, 8);
+                if (clip < 5) {
+                    v4(vm, g, NJ_C_GRAPHICS, "setClip", "(IIII)V", 0, 0,
+                       sizes[clip][0], sizes[clip][1]);
+                } else if (clip == 5) {
+                    v4(vm, g, NJ_C_GRAPHICS, "clipRect", "(IIII)V", 10, 10, 1, 1);
+                } else if (clip == 6) {
+                    v4(vm, g, NJ_C_GRAPHICS, "clipRect", "(IIII)V", 1, 1, 1, 1);
+                }
+                for (k = 0; k < 6; k++) {
+                    before[k] = i0(vm, g, NJ_C_GRAPHICS, state_methods[k], "()I");
+                }
+                if (path == 0) {
+                    sprite_paint(vm, s, g);
+                } else if (path == 1) {
+                    tiled_paint(vm, tiled, g);
+                } else {
+                    lm_paint_at(vm, manager, g, 0, 0);
+                }
+                CHECK(count_painted(vm, target) == expected,
+                      "game path %d translate %d clip %d: painted %d, expected %d",
+                      path, translated, clip, count_painted(vm, target), expected);
+                if (expected) {
+                    int offset = clip == 6 ? 1 : 0;
+                    CHECK(px_at(vm, target, tx + offset, ty + offset) == C_RED,
+                          "game path %d keeps translated clip position", path);
+                }
+                for (k = 0; k < 6; k++) {
+                    CHECK(i0(vm, g, NJ_C_GRAPHICS, state_methods[k], "()I")
+                          == before[k], "game path %d preserves %s for clip %d",
+                          path, state_methods[k], clip);
+                }
+            }
+        }
+        v2(vm, g, NJ_C_GRAPHICS, "translate", "(II)V", -tx, -ty);
+    }
+    nj_root_release(vm, mark);
+}
+
 /* ------------------------------------------------------------------ */
 /* The suite                                                           */
 /* ------------------------------------------------------------------ */
@@ -1849,11 +2013,13 @@ static void run_suite(nj_vm *vm)
 {
     test_field_lookup_memo(vm);
     test_sprite_frames(vm);
+    test_sprite_setimage_sequence(vm);
     test_reference_pixel(vm);
     test_sprite_paint(vm);
     test_collision(vm);
     test_tiledlayer(vm);
     test_layermanager(vm);
+    test_game_paint_clip(vm);
     test_gamecanvas(vm);
     test_gamecanvas_visibility(vm);
 }

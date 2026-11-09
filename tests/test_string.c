@@ -12,6 +12,10 @@
 #include "nj2me/nj.h"
 #include "nj2me/nj_port.h"
 #include "nj2me/nj_vm.h"
+#include "nj_internal.h"
+
+#include <limits.h>
+#include <string.h>
 
 #include <stdio.h>
 
@@ -32,6 +36,87 @@ static void check(int ok, const char *what)
 static nj_ref str(nj_vm *vm, const char *utf8)
 {
     return nj_string_new(vm, utf8);
+}
+
+/* Compare directly with a UTF-16 source, including NUL and surrogate units. */
+static void test_buffer_get_chars(nj_vm *vm)
+{
+    static const nj_u2 text[] = {'A', 0x4e2d, 0, 0xd83d, 0xde00, 'Z'};
+    static const char *classes[] = {
+        "java/lang/StringBuffer", "java/lang/StringBuilder", "java/lang/String"
+    };
+    static const int bad[][3] = {
+        {-1, 2, 0}, {0, 7, 0}, {3, 2, 0}, {0, 1, -1},
+        {0, 2, 7}, {0, 1, INT_MAX}, {0, 6, INT_MAX},
+        {INT_MAX, INT_MAX, 0}, {0, INT_MAX, 0}
+    };
+    nj_u4 mark = nj_root_mark(vm);
+    nj_ref chars = nj_root(vm, nj_array_new(vm, "C", 6));
+    nj_ref dst = nj_root(vm, nj_array_new(vm, "C", 8));
+    int k, begin, end, off;
+    memcpy(nj_array_data(chars), text, sizeof(text));
+    for (k = 0; k < 3; k++) {
+        nj_ref sb = nj_root(vm, nj_object_new(vm, classes[k]));
+        nj_value a[4];
+        nj_value r;
+        nj_vm_stats before, after;
+        char desc[64];
+        a[0].r = chars;
+        if (k == 2) {
+            check(nj_call(vm, sb, classes[k], "<init>", "([C)V", a, NULL) == NJ_OK,
+                  "getChars: initialize String");
+        } else {
+            check(nj_call(vm, sb, classes[k], "<init>", "()V", NULL, NULL) == NJ_OK,
+                  "getChars: initialize buffer");
+            snprintf(desc, sizeof(desc), "([C)L%s;", classes[k]);
+            check(nj_call(vm, sb, classes[k], "append", desc, a, &r) == NJ_OK,
+                  "getChars: populate buffer");
+        }
+        /* Warm lookup/binding before checking Java allocation counts. */
+        a[0].i = 0; a[1].i = 6; a[2].r = dst; a[3].i = 1;
+        check(nj_call(vm, sb, classes[k], "getChars", "(II[CI)V", a, NULL) == NJ_OK,
+              "getChars: warm full copy");
+        nj_vm_get_stats(vm, &before);
+        for (begin = 0; begin <= 6; begin++) {
+            for (end = begin; end <= 6; end++) {
+                for (off = 0; off <= 8 - (end - begin); off++) {
+                    nj_u2 expected[8];
+                    int i;
+                    for (i = 0; i < 8; i++) expected[i] = 0x55aa;
+                    memcpy(nj_array_data(dst), expected, sizeof(expected));
+                    memcpy(expected + off, text + begin,
+                           (size_t)(end - begin) * sizeof(nj_u2));
+                    a[0].i = begin; a[1].i = end; a[2].r = dst; a[3].i = off;
+                    check(nj_call(vm, sb, classes[k], "getChars", "(II[CI)V", a, NULL) == NJ_OK &&
+                          memcmp(nj_array_data(dst), expected, sizeof(expected)) == 0,
+                          "getChars: range and untouched destination match UTF-16 reference");
+                }
+            }
+        }
+        nj_vm_get_stats(vm, &after);
+        check(after.total_objects == before.total_objects,
+              "getChars: repeated valid copies allocate no Java objects");
+        for (begin = 0; begin < (int)(sizeof(bad) / sizeof(bad[0])); begin++) {
+            nj_u2 snapshot[8];
+            nj_ref ex;
+            memcpy(snapshot, nj_array_data(dst), sizeof(snapshot));
+            a[0].i = bad[begin][0]; a[1].i = bad[begin][1];
+            a[2].r = dst; a[3].i = bad[begin][2];
+            check(nj_call(vm, sb, classes[k], "getChars", "(II[CI)V", a, NULL) != NJ_OK,
+                  "getChars: invalid range throws");
+            ex = nj_take_exception(vm);
+            check(ex && nj_class_is_assignable(ex->cls,
+                  nj_class_find(vm, "java/lang/IndexOutOfBoundsException")),
+                  "getChars: range exception has expected type");
+            check(memcmp(snapshot, nj_array_data(dst), sizeof(snapshot)) == 0,
+                  "getChars: invalid range leaves destination unchanged");
+        }
+        a[0].i = 0; a[1].i = 0; a[2].r = NULL; a[3].i = 0;
+        check(nj_call(vm, sb, classes[k], "getChars", "(II[CI)V", a, NULL) != NJ_OK,
+              "getChars: null destination throws even for empty range");
+        (void)nj_take_exception(vm);
+    }
+    nj_root_release(vm, mark);
 }
 
 int main(void)
@@ -146,6 +231,8 @@ int main(void)
                   "append(char[]) preserves Unicode");
         }
     }
+
+    test_buffer_get_chars(vm);
 
     nj_vm_destroy(vm);
     nj_port_shutdown(&port);

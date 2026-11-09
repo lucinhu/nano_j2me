@@ -310,6 +310,22 @@ static int rs_is_open(nj_vm *vm, nj_ref rs)
     return (int)rs_geti(vm, rs, NJ_F_RS_OPEN);
 }
 
+static nj_status rs_require_open(nj_vm *vm, nj_ref rs)
+{
+    return rs_is_open(vm, rs) ? NJ_OK :
+        nj_throw(vm, "javax/microedition/rms/RecordStoreNotOpenException", NULL);
+}
+
+/* nj_root returns its input even if the host root table cannot grow. */
+static int rs_root(nj_vm *vm, nj_ref ref)
+{
+    nj_u4 roots;
+    if (!ref) return 1;  /* empty records are valid comparator operands */
+    roots = nj_root_mark(vm);
+    nj_root(vm, ref);
+    return nj_root_mark(vm) == roots + 1u;
+}
+
 /* ------------------------------------------------------------------ */
 /* Persistence                                                         */
 /* ------------------------------------------------------------------ */
@@ -621,16 +637,21 @@ static int r_trailer(rs_reader *r, const nj_u1 tag[4], nj_s8 *ts)
 static int rs_replace_record(nj_vm *vm, nj_ref recs, nj_ref ids, nj_s4 id,
                              nj_ref rec)
 {
-    nj_s4 n = vec_size(vm, ids), i;
-
+    nj_u4 roots = nj_root_mark(vm);
+    nj_s4 n, i;
+    int result = 0;
+    if (!rs_root(vm, rec)) return 0;
+    n = vec_size(vm, ids);
     for (i = 0; i < n; i++) {
         nj_ref ido = vec_at(vm, ids, i);
         if (ido && nj_call_int(vm, ido, "java/lang/Integer", "intValue",
                                "()I", NULL) == id) {
-            return vec_set(vm, recs, i, rec);
+            result = vec_set(vm, recs, i, rec);
+            break;
         }
     }
-    return 0;
+    nj_root_release(vm, roots);
+    return result;
 }
 
 /* The record-overflow body, after its 4-byte tag has been read. */
@@ -856,6 +877,7 @@ static void rs_load(nj_vm *vm, nj_ref rs)
     nj_u1 magic[4];
     nj_u4 version, next_id, count, i;
     nj_s8 last_modified = 0;
+    nj_u4 roots = nj_root_mark(vm);
     int parsed_all, has_trailer = 0;
 
     if (!name || !recs || !ids) {
@@ -903,14 +925,17 @@ static void rs_load(nj_vm *vm, nj_ref rs)
         if (len > 0u && r_bytes(&r, rec->u.bytes, len) != len) {
             break;
         }
+        if (!rs_root(vm, rec)) break;
         ido = rs_int_obj(vm, (nj_s4)id);
-        if (!ido) {
+        if (!ido || !rs_root(vm, ido)) {
             break;
         }
         if (!vec_add(vm, recs, rec) || !vec_add(vm, ids, ido)) {
             break;
         }
+        nj_root_release(vm, roots);
     }
+    nj_root_release(vm, roots);
     parsed_all = (i == count);
     if (parsed_all && r_sections(&r, vm, recs, ids, &last_modified)) {
         has_trailer = 1;
@@ -951,7 +976,7 @@ static void rs_delete_file(nj_vm *vm, const char *name)
 /* ------------------------------------------------------------------ */
 /* Lifecycle                                                           */
 /* ------------------------------------------------------------------ */
-static nj_ref rs_open_common(nj_vm *vm, nj_ref name, int create_if_missing)
+static nj_ref rs_open_common_body(nj_vm *vm, nj_ref name, int create_if_missing)
 {
     nj_ref rs;
     nj_ref recs;
@@ -990,9 +1015,18 @@ static nj_ref rs_open_common(nj_vm *vm, nj_ref name, int create_if_missing)
     if (!rs) {
         return NULL;
     }
+    if (!rs_root(vm, rs)) {
+        (void)nj_throw_oom(vm);
+        return NULL;
+    }
     recs = nj_object_new(vm, "java/util/Vector");
+    if (!recs || !rs_root(vm, recs)) {
+        (void)nj_throw_oom(vm);
+        return NULL;
+    }
     ids = nj_object_new(vm, "java/util/Vector");
-    if (!recs || !ids) {
+    if (!ids || !rs_root(vm, ids)) {
+        (void)nj_throw_oom(vm);
         return NULL;
     }
     f = rsf(vm, NJ_F_RS_NAME, "Ljava/lang/String;");
@@ -1017,6 +1051,14 @@ static nj_ref rs_open_common(nj_vm *vm, nj_ref name, int create_if_missing)
         (void)rs_save(vm, rs, 1); /* create the file eagerly, so it persists */
         nj_clear_exception(vm);
     }
+    return rs;
+}
+
+static nj_ref rs_open_common(nj_vm *vm, nj_ref name, int create_if_missing)
+{
+    nj_u4 roots = nj_root_mark(vm);
+    nj_ref rs = rs_open_common_body(vm, name, create_if_missing);
+    nj_root_release(vm, roots);
     return rs;
 }
 
@@ -1073,6 +1115,7 @@ NJFN(rs_open_auth)
  */
 NJFN(rs_setMode)
 {
+    if (rs_require_open(vm, NJ_THIS(args)) != NJ_OK) return NJ_ERR;
     nj_s4 mode = NJ_ARG_INT(args, 0);
 
     if (mode != 0 && mode != 1) {      /* AUTHMODE_PRIVATE / AUTHMODE_ANY */
@@ -1088,6 +1131,7 @@ NJFN(rs_setMode)
  * the older API still calls it. */
 NJFN(rs_getMode)
 {
+    if (rs_require_open(vm, NJ_THIS(args)) != NJ_OK) return NJ_ERR;
     ret->i = rs_geti(vm, NJ_THIS(args), "rsMode");
     return NJ_OK;
 }
@@ -1151,12 +1195,14 @@ NJFN(rs_close)
 /* ------------------------------------------------------------------ */
 NJFN(rs_getName)
 {
+    if (rs_require_open(vm, NJ_THIS(args)) != NJ_OK) return NJ_ERR;
     ret->r = rs_get(vm, NJ_THIS(args), NJ_F_RS_NAME, "Ljava/lang/String;");
     return NJ_OK;
 }
 
 NJFN(rs_getNumRecords)
 {
+    if (rs_require_open(vm, NJ_THIS(args)) != NJ_OK) return NJ_ERR;
     nj_ref recs = rs_get(vm, NJ_THIS(args), NJ_F_RS_RECORDS,
                          "Ljava/util/Vector;");
     ret->i = recs ? vec_size(vm, recs) : 0;
@@ -1165,12 +1211,14 @@ NJFN(rs_getNumRecords)
 
 NJFN(rs_getNextRecordID)
 {
+    if (rs_require_open(vm, NJ_THIS(args)) != NJ_OK) return NJ_ERR;
     ret->i = rs_geti(vm, NJ_THIS(args), NJ_F_RS_NEXTID);
     return NJ_OK;
 }
 
 NJFN(rs_getSize)
 {
+    if (rs_require_open(vm, NJ_THIS(args)) != NJ_OK) return NJ_ERR;
     nj_ref rs = NJ_THIS(args);
     nj_ref recs = rs_get(vm, rs, NJ_F_RS_RECORDS, "Ljava/util/Vector;");
     nj_s4 n, i, total = 0;
@@ -1192,6 +1240,7 @@ NJFN(rs_getSize)
 
 NJFN(rs_getSizeAvailable)
 {
+    if (rs_require_open(vm, NJ_THIS(args)) != NJ_OK) return NJ_ERR;
     /* Not a filesystem query: report a generous fixed budget so that games
      * which check before writing behave sensibly. */
     ret->i = 1024 * 1024;
@@ -1212,6 +1261,7 @@ NJFN(rs_getLastModified)
 
 NJFN(rs_getVersion)
 {
+    if (rs_require_open(vm, NJ_THIS(args)) != NJ_OK) return NJ_ERR;
     ret->i = 1;
     return NJ_OK;
 }
@@ -1231,28 +1281,15 @@ static nj_s4 rs_do_add(nj_vm *vm, nj_ref rs, nj_ref data, nj_s4 off, nj_s4 len)
         return nj_throw(vm, "javax/microedition/rms/RecordStoreNotOpenException",
                         NULL);
     }
-    /*
-     * A null array is tolerated ONLY when nothing is being read from it.
-     *
-     * MIDP says addRecord(null, ...) is a NullPointerException, and this
-     * implementation did exactly that - until a real GPL game built from source
-     * (Bubblet, tools/make_bubblet_jar.sh) called addRecord(null, 0, 0) to
-     * create its empty high-score record, and died on the first frame.  The
-     * game ran on Series 40 hardware, so the devices it was written for
-     * accepted this.
-     *
-     * The line drawn here is not "be permissive" but "null is harmless exactly
-     * when no bytes are read from it": len == 0 means an empty record either
-     * way, and len > 0 with a null array is still the error the spec says it
-     * is.  A game with a genuine null bug still finds out.
-     */
+    /* MIDP allows null data for an empty record. */
     if (!data && len == 0) {
         off = 0;
         len = 0;
     } else if (!data) {
         return nj_throw(vm, "java/lang/NullPointerException", NULL);
     }
-    if (off < 0 || len < 0 || (data && (nj_u4)(off + len) > data->length)) {
+    if (off < 0 || len < 0 || (data &&
+        ((nj_u4)off > data->length || (nj_u4)len > data->length - (nj_u4)off))) {
         return nj_throw(vm, "java/lang/ArrayIndexOutOfBoundsException", NULL);
     }
     copy = nj_byte_array_new(vm, (nj_u4)len);
@@ -1262,10 +1299,11 @@ static nj_s4 rs_do_add(nj_vm *vm, nj_ref rs, nj_ref data, nj_s4 off, nj_s4 len)
     if (data && len > 0) {
         memcpy(copy->u.bytes, data->u.bytes + off, (size_t)len);
     }
+    if (!rs_root(vm, copy)) return nj_throw_oom(vm);
     id = rs_geti(vm, rs, NJ_F_RS_NEXTID);
     rs_seti(vm, rs, NJ_F_RS_NEXTID, id + 1);
     ido = rs_int_obj(vm, id);
-    if (!ido || !vec_add(vm, recs, copy) || !vec_add(vm, ids, ido)) {
+    if (!ido || !rs_root(vm, ido) || !vec_add(vm, recs, copy) || !vec_add(vm, ids, ido)) {
         return nj_throw_oom(vm);
     }
     if (rs_save(vm, rs, 1) != NJ_OK) {
@@ -1276,8 +1314,10 @@ static nj_s4 rs_do_add(nj_vm *vm, nj_ref rs, nj_ref data, nj_s4 off, nj_s4 len)
 
 NJFN(rs_addRecord)
 {
+    nj_u4 roots = nj_root_mark(vm);
     nj_s4 id = rs_do_add(vm, NJ_THIS(args), NJ_ARG_REF(args, 0),
                          NJ_ARG_INT(args, 1), NJ_ARG_INT(args, 2));
+    nj_root_release(vm, roots);
     if (id < 0) {
         return NJ_ERR;
     }
@@ -1324,6 +1364,7 @@ NJFN(rs_getRecord)
 
 NJFN(rs_getRecordInto)
 {
+    if (rs_require_open(vm, NJ_THIS(args)) != NJ_OK) return NJ_ERR;
     nj_ref rs = NJ_THIS(args);
     nj_ref buf = NJ_ARG_REF(args, 1);
     nj_s4 off = NJ_ARG_INT(args, 2);
@@ -1343,7 +1384,8 @@ NJFN(rs_getRecordInto)
         return nj_throw(vm, "javax/microedition/rms/InvalidRecordIDException",
                         NULL);
     }
-    if (off < 0 || (nj_u4)(off + (nj_s4)rec->length) > buf->length) {
+    if (off < 0 || (nj_u4)off > buf->length ||
+        rec->length > buf->length - (nj_u4)off) {
         return nj_throw(vm, "java/lang/ArrayIndexOutOfBoundsException", NULL);
     }
     if (rec->length > 0u) {
@@ -1355,6 +1397,7 @@ NJFN(rs_getRecordInto)
 
 NJFN(rs_getRecordSize)
 {
+    if (rs_require_open(vm, NJ_THIS(args)) != NJ_OK) return NJ_ERR;
     nj_ref rs = NJ_THIS(args);
     nj_ref recs = rs_get(vm, rs, NJ_F_RS_RECORDS, "Ljava/util/Vector;");
     nj_s4 idx = rs_find(vm, rs, NJ_ARG_INT(args, 0));
@@ -1382,28 +1425,15 @@ NJFN(rs_setRecord)
         return nj_throw(vm, "javax/microedition/rms/RecordStoreNotOpenException",
                         NULL);
     }
-    /*
-     * A null array is tolerated ONLY when nothing is being read from it.
-     *
-     * MIDP says addRecord(null, ...) is a NullPointerException, and this
-     * implementation did exactly that - until a real GPL game built from source
-     * (Bubblet, tools/make_bubblet_jar.sh) called addRecord(null, 0, 0) to
-     * create its empty high-score record, and died on the first frame.  The
-     * game ran on Series 40 hardware, so the devices it was written for
-     * accepted this.
-     *
-     * The line drawn here is not "be permissive" but "null is harmless exactly
-     * when no bytes are read from it": len == 0 means an empty record either
-     * way, and len > 0 with a null array is still the error the spec says it
-     * is.  A game with a genuine null bug still finds out.
-     */
+    /* MIDP allows null data for an empty record. */
     if (!data && len == 0) {
         off = 0;
         len = 0;
     } else if (!data) {
         return nj_throw(vm, "java/lang/NullPointerException", NULL);
     }
-    if (off < 0 || len < 0 || (data && (nj_u4)(off + len) > data->length)) {
+    if (off < 0 || len < 0 || (data &&
+        ((nj_u4)off > data->length || (nj_u4)len > data->length - (nj_u4)off))) {
         return nj_throw(vm, "java/lang/ArrayIndexOutOfBoundsException", NULL);
     }
     recs = rs_get(vm, rs, NJ_F_RS_RECORDS, "Ljava/util/Vector;");
@@ -1602,26 +1632,70 @@ NJFN(rs_listener_noop)
  * be worse than saying so.
  */
 
+static nj_status re_require_live(nj_vm *vm, nj_ref self)
+{
+    return renum_geti(vm, self, "reDestroyed") ?
+        nj_throw(vm, "java/lang/IllegalStateException", "the enumeration was destroyed") : NJ_OK;
+}
+
 NJFN(re_numRecords)
 {
-    nj_ref ids = renum_get(vm, NJ_THIS(args), "reIds", "[I");
+    nj_ref ids;
+    if (re_require_live(vm, NJ_THIS(args)) != NJ_OK) return NJ_ERR;
+    ids = renum_get(vm, NJ_THIS(args), "reIds", "[I");
     ret->i = ids ? (nj_s4)ids->length : 0;
     return NJ_OK;
 }
 
-NJFN(re_hasNext)     { ret->i = (renum_geti(vm, NJ_THIS(args), "rePos") <
-                                 (nj_s4)(renum_get(vm, NJ_THIS(args), "reIds", "[I")
-                                          ? renum_get(vm, NJ_THIS(args), "reIds", "[I")->length : 0u))
-                               ? 1 : 0; return NJ_OK; }
-NJFN(re_hasPrev)     { ret->i = (renum_geti(vm, NJ_THIS(args), "rePos") > 0) ? 1 : 0; return NJ_OK; }
-NJFN(re_reset)       { renum_seti(vm, NJ_THIS(args), "rePos", 0); return NJ_OK; }
-NJFN(re_destroy)     { renum_seti(vm, NJ_THIS(args), "reDestroyed", 1); return NJ_OK; }
-NJFN(re_isKept)      { ret->i = renum_geti(vm, NJ_THIS(args), "reKeep"); return NJ_OK; }
-NJFN(re_keepUpdated) { renum_seti(vm, NJ_THIS(args), "reKeep",
-                             NJ_ARG_INT(args, 0) ? 1 : 0); return NJ_OK; }
+NJFN(re_hasNext)
+{
+    nj_ref self = NJ_THIS(args), ids;
+    if (re_require_live(vm, self) != NJ_OK) return NJ_ERR;
+    ids = renum_get(vm, self, "reIds", "[I");
+    ret->i = rs_is_open(vm, renum_get(vm, self, "reStore", "L" NJ_C_RECORDSTORE ";")) &&
+        ids && renum_geti(vm, self, "rePos") < (nj_s4)ids->length;
+    return NJ_OK;
+}
+NJFN(re_hasPrev)
+{
+    nj_ref self = NJ_THIS(args);
+    if (re_require_live(vm, self) != NJ_OK) return NJ_ERR;
+    ret->i = rs_is_open(vm, renum_get(vm, self, "reStore", "L" NJ_C_RECORDSTORE ";")) &&
+        renum_geti(vm, self, "rePos") > 0;
+    return NJ_OK;
+}
+NJFN(re_reset)
+{
+    if (re_require_live(vm, NJ_THIS(args)) != NJ_OK) return NJ_ERR;
+    renum_seti(vm, NJ_THIS(args), "rePos", 0);
+    return NJ_OK;
+}
+NJFN(re_destroy)
+{
+    nj_ref self = NJ_THIS(args);
+    if (re_require_live(vm, self) != NJ_OK) return NJ_ERR;
+    renum_seti(vm, self, "reDestroyed", 1);
+    renum_setr(vm, self, "reIds", "[I", NULL);
+    renum_setr(vm, self, "reStore", "L" NJ_C_RECORDSTORE ";", NULL);
+    renum_seti(vm, self, "reKeep", 0);
+    return NJ_OK;
+}
+NJFN(re_isKept)
+{
+    if (re_require_live(vm, NJ_THIS(args)) != NJ_OK) return NJ_ERR;
+    ret->i = renum_geti(vm, NJ_THIS(args), "reKeep");
+    return NJ_OK;
+}
+NJFN(re_keepUpdated)
+{
+    if (re_require_live(vm, NJ_THIS(args)) != NJ_OK) return NJ_ERR;
+    renum_seti(vm, NJ_THIS(args), "reKeep", NJ_ARG_INT(args, 0) ? 1 : 0);
+    return NJ_OK;
+}
 
 NJFN(re_rebuild)
 {
+    if (re_require_live(vm, NJ_THIS(args)) != NJ_OK) return NJ_ERR;
     /* Accepted, and it does not re-run the filter: see the note above. */
     renum_seti(vm, NJ_THIS(args), "rePos", 0);
     return NJ_OK;
@@ -1639,10 +1713,8 @@ static nj_status re_step(nj_vm *vm, nj_value *args, nj_value *ret, int forward)
     nj_value a[3];
     nj_value r;
 
-    if (renum_geti(vm, self, "reDestroyed")) {
-        return nj_throw(vm, "javax/microedition/rms/RecordStoreException",
-                        "the enumeration was destroyed");
-    }
+    if (re_require_live(vm, self) != NJ_OK) return NJ_ERR;
+    if (rs_require_open(vm, rs) != NJ_OK) return NJ_ERR;
     if (forward) {
         if (pos >= n) {
             return nj_throw(vm, "javax/microedition/rms/InvalidRecordIDException",
@@ -1678,6 +1750,9 @@ NJFN(re_previousRecord) { return re_step(vm, args, ret, 0); }
 static nj_status re_peek_id(nj_vm *vm, nj_value *args, nj_value *ret, int forward)
 {
     nj_ref self = NJ_THIS(args);
+    if (re_require_live(vm, self) != NJ_OK) return NJ_ERR;
+    if (rs_require_open(vm, renum_get(vm, self, "reStore", "L" NJ_C_RECORDSTORE ";")) != NJ_OK)
+        return NJ_ERR;
     nj_ref ids = renum_get(vm, self, "reIds", "[I");
     nj_s4 pos = renum_geti(vm, self, "rePos");
     nj_s4 n = ids ? (nj_s4)ids->length : 0;
@@ -1710,7 +1785,7 @@ NJFN(re_previousId) { return re_peek_id(vm, args, ret, 0); }
  * game said it wanted, and a comparator that behaves differently depending on
  * order would otherwise see a different set.
  */
-NJFN(rs_enumerateRecords)
+static nj_status rs_enumerate_records(nj_vm *vm, nj_value *args, nj_value *ret)
 {
     nj_ref rs = NJ_THIS(args);
     nj_ref filter = NJ_ARG_REF(args, 0);
@@ -1731,12 +1806,18 @@ NJFN(rs_enumerateRecords)
         if (!ids) {
             return nj_throw_oom(vm);
         }
+        if (!rs_root(vm, ids)) return nj_throw_oom(vm);
         dst = (nj_s4 *)ids->u.bytes;
-        n = 0;
-        for (i = 0; i < vec_size(vm, idv); i++) {
+        /* Snapshot before calling user code: filters can mutate the store.
+         * Iterating the live Vector can outgrow this fixed-size array. */
+        for (i = 0; i < n; i++) {
             nj_ref ido = vec_at(vm, idv, i);
-            nj_s4 id = ido ? nj_call_int(vm, ido, "java/lang/Integer",
-                                         "intValue", "()I", NULL) : 0;
+            dst[i] = ido ? nj_call_int(vm, ido, "java/lang/Integer",
+                                      "intValue", "()I", NULL) : 0;
+            if (nj_has_exception(vm)) return NJ_ERR;
+        }
+        for (i = 0; i < n; i++) {
+            nj_s4 id = dst[i];
             if (filter) {
                 nj_value a[3];
                 nj_value r;
@@ -1758,8 +1839,10 @@ NJFN(rs_enumerateRecords)
                     continue;   /* filtered out */
                 }
             }
-            dst[n++] = id;
+            dst[keep++] = id;
         }
+        n = keep;
+        keep = 0;
         ids->length = (nj_u4)n;
     }
 
@@ -1778,13 +1861,14 @@ NJFN(rs_enumerateRecords)
                 nj_value ga[2];
                 nj_value gr;
                 int c;
+                nj_u4 roots = nj_root_mark(vm);
                 ga[0].i = key;
                 gr.r = NULL;
                 if (nj_call(vm, rs, NJ_C_RECORDSTORE, "getRecord", "(I)[B",
                             ga, &gr) != NJ_OK) {
                     return NJ_ERR;
                 }
-                ga[0].i = dst[j];
+                if (!rs_root(vm, gr.r)) return nj_throw_oom(vm);
                 a[0].r = NULL;
                 {
                     nj_value gb[2];
@@ -1803,6 +1887,7 @@ NJFN(rs_enumerateRecords)
                             "compare", "([B[B)I", a, &r) != NJ_OK) {
                     return NJ_ERR;
                 }
+                nj_root_release(vm, roots);
                 c = r.i;
                 if (c <= 0) {
                     break;
@@ -1829,6 +1914,15 @@ NJFN(rs_enumerateRecords)
     renum_seti(vm, out, "rePos", 0);
     ret->r = out;
     return NJ_OK;
+}
+
+NJFN(rs_enumerateRecords)
+{
+    nj_u4 roots = nj_root_mark(vm);
+    nj_status st = rs_enumerate_records(vm, args, ret);
+    /* Also release comparison operands on every callback failure path. */
+    nj_root_release(vm, roots);
+    return st;
 }
 
 /* ------------------------------------------------------------------ */
