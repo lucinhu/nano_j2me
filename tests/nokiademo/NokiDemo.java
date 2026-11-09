@@ -31,6 +31,64 @@ public class NokiDemo extends MIDlet {
         }
     }
 
+    private void checkPackedAndShapes() {
+        Image image = DirectUtils.createImage(12, 12, 0xFFFFFFFF);
+        Graphics g = image.getGraphics();
+        DirectGraphics d = DirectUtils.getDirectGraphics(g);
+        int[] pixels = new int[144];
+        d.setARGBColor(0x000000FF);
+        g.fillRect(0, 0, 1, 1);
+        image.getRGB(pixels, 0, 12, 0, 0, 12, 12);
+        boolean clear = pixels[0] == 0xFFFFFFFF && d.getAlphaComponent() == 0;
+        d.setARGBColor(0x800000FF);
+        g.fillRect(1, 0, 1, 1);
+        image.getRGB(pixels, 0, 12, 0, 0, 12, 12);
+        boolean half = pixels[1] == 0xFF7F7FFF && d.getAlphaComponent() == 128;
+        g.setColor(0xFF0000);
+        d.fillTriangle(0, 2, 7, 2, 0, 9, 0xFF00FF00);
+        image.getRGB(pixels, 0, 12, 0, 0, 12, 12);
+        boolean triangle = pixels[3 * 12 + 1] == 0xFF00FF00;
+        boolean state = g.getColor() == 0xFF0000 && d.getAlphaComponent() == 255;
+        g.setColor(0xFFFFFF);
+        g.fillRect(0, 0, 12, 12);
+        d.setARGBColor(0x40112233);
+        int[] xs = {0, 8, 8, 6, 6, 2, 2, 0};
+        int[] ys = {0, 0, 6, 6, 2, 2, 6, 6};
+        d.fillPolygon(xs, 0, ys, 0, 8, 0xFF000000);
+        image.getRGB(pixels, 0, 12, 0, 0, 12, 12);
+        boolean concave = pixels[4 * 12 + 1] == 0xFF000000
+            && pixels[4 * 12 + 4] == 0xFFFFFFFF
+            && pixels[4 * 12 + 7] == 0xFF000000;
+        state = state && g.getColor() == 0x112233 && d.getAlphaComponent() == 64;
+        System.out.println("NOKIA shapes clear=" + clear + " half=" + half
+                           + " triangle=" + triangle + " concave=" + concave
+                           + " state=" + state);
+
+        g.setColor(0x00FF00);
+        g.fillRect(0, 0, 12, 12);
+        byte[] packed = {(byte) 0x1B}; // two-bit grey: white, aa, 55, black
+        byte[] mask = {(byte) 0xCF};   // hide the second pixel
+        d.drawPixels(packed, mask, 0, 4, 0, 0, 4, 1, 0,
+                     DirectGraphics.TYPE_BYTE_2_GRAY);
+        image.getRGB(pixels, 0, 12, 0, 0, 12, 12);
+        boolean masked = pixels[0] == 0xFFFFFFFF && pixels[1] == 0xFF00FF00
+            && pixels[2] == 0xFF555555 && pixels[3] == 0xFF000000;
+        byte[] vertical = {1, (byte) 0x80, 1, 0};
+        d.drawPixels(vertical, null, 0, 2, 4, 0, 2, 9, 0,
+                     DirectGraphics.TYPE_BYTE_1_GRAY_VERTICAL);
+        image.getRGB(pixels, 0, 12, 0, 0, 12, 12);
+        boolean columns = pixels[4] == 0xFF000000 && pixels[5] == 0xFFFFFFFF
+            && pixels[7 * 12 + 5] == 0xFF000000
+            && pixels[8 * 12 + 4] == 0xFF000000;
+        byte[] back = {(byte) 0xFE, (byte) 0xFE, (byte) 0xFE, (byte) 0xFE};
+        d.getPixels(back, null, 0, 2, 4, 0, 2, 9,
+                    DirectGraphics.TYPE_BYTE_1_GRAY_VERTICAL);
+        boolean roundtrip = (back[0] & 255) == 1 && (back[1] & 255) == 128
+            && (back[2] & 255) == 255 && (back[3] & 255) == 254;
+        System.out.println("NOKIA packed mask=" + masked + " vertical=" + columns
+                           + " roundtrip=" + roundtrip);
+    }
+
     public void startApp() {
         /* --- DirectUtils.createImage + DirectGraphics ------------------- */
         Image img = DirectUtils.createImage(16, 16, 0xFFFFFFFF);
@@ -107,6 +165,8 @@ public class NokiDemo extends MIDlet {
         } catch (Exception e) {
             System.out.println("NOKIA png=failed " + e);
         }
+
+        checkPackedAndShapes();
 
         /* --- Sound ------------------------------------------------------ */
         Sound s = new Sound(1, 1000);

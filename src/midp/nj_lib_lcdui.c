@@ -10379,12 +10379,9 @@ NJFN(dg_setARGBColor)
     if (!gfx_load(vm, self, &g, &sc)) {
         return NJ_ERR;
     }
-    /*
-     * The name says ARGB, but a zero alpha would draw nothing at all on a
-     * surface, and a game that writes 0x00FF0000 means red - the same trap
-     * setColor already documents.  Opaque it is.
-     */
-    nj_gfx_set_color(&g, (nj_u4)NJ_ARG_INT(args, 0) | 0xFF000000u);
+    /* Nokia explicitly defines zero alpha as transparent, including subsequent
+     * MIDP drawing. Graphics.setColor/setGrayScale restore opaque alpha. */
+    nj_gfx_set_color(&g, (nj_u4)NJ_ARG_INT(args, 0));
     gfx_store(vm, self, &g);
     return NJ_OK;
 }
@@ -10429,61 +10426,169 @@ NJFN(dg_drawImage)
     return g_drawRegion(vm, th, a + 1, ret);
 }
 
-NJFN(dg_fillTriangle)
+/* DG fills sample integer coordinates with half-open edges: top/left are
+ * included, bottom/right excluded. Sorted crossings implement even-odd parity,
+ * including concavities, retraced edges and self-intersections. */
+static int dg_cross_compare(const void *a, const void *b)
 {
-    nj_ref self = NJ_THIS(args);
-    nj_gfx g;
-    nj_surface sc;
+    nj_s8 x = *(const nj_s8 *)a, y = *(const nj_s8 *)b;
+    return (x > y) - (x < y);
+}
 
-    if (!gfx_load(vm, self, &g, &sc)) {
-        return NJ_ERR;
+/* ceil(x at y). Each coordinate difference is at most UINT32_MAX, so the
+ * unsigned product fits uint64_t even when its signed equivalent would not. */
+static nj_s8 dg_edge_ceil(nj_s4 x0, nj_s4 y0, nj_s4 x1, nj_s4 y1, nj_s8 y)
+{
+    nj_s8 dx;
+    nj_u8 dy, t, product;
+    if (y0 > y1) {
+        nj_s4 swap = x0; x0 = x1; x1 = swap;
+        swap = y0; y0 = y1; y1 = swap;
     }
-    nj_gfx_triangle(&g, NJ_ARG_INT(args, 0), NJ_ARG_INT(args, 1),
-                    NJ_ARG_INT(args, 2), NJ_ARG_INT(args, 3),
-                    NJ_ARG_INT(args, 4), NJ_ARG_INT(args, 5), 1);
-    gfx_store(vm, self, &g);
+    dx = (nj_s8)x1 - x0;
+    dy = (nj_u8)((nj_s8)y1 - y0);
+    t = (nj_u8)(y - y0);
+    product = (nj_u8)(dx < 0 ? -dx : dx) * t;
+    return dx < 0 ? (nj_s8)x0 - (nj_s8)(product / dy)
+                  : (nj_s8)x0 + (nj_s8)(product / dy) + (product % dy != 0);
+}
+
+static nj_status dg_fill_poly(nj_vm *vm, nj_gfx *g,
+                              const nj_s4 *xs, const nj_s4 *ys, nj_s4 n)
+{
+    nj_s8 ymin, ymax, y, *crossings;
+    nj_s4 i, j;
+    nj_u8 bytes = (nj_u8)(n > 0 ? n : 0) * sizeof(*crossings);
+    if (n < 3 || g->clip_w <= 0 || g->clip_h <= 0 || !(g->color >> 24))
+        return NJ_OK;
+    ymin = ymax = ys[0];
+    for (i = 1; i < n; ++i) {
+        if (ys[i] < ymin) ymin = ys[i];
+        if (ys[i] > ymax) ymax = ys[i];
+    }
+    ymin += g->translate_y; ymax += g->translate_y;
+    if (ymin < g->clip_y) ymin = g->clip_y;
+    if (ymax > (nj_s8)g->clip_y + g->clip_h) ymax = (nj_s8)g->clip_y + g->clip_h;
+    if (ymin >= ymax) return NJ_OK;
+    if (bytes > (nj_size)-1) return nj_throw_oom(vm);
+    crossings = (nj_s8 *)nj_host_alloc(vm, (nj_size)bytes);
+    if (!crossings) return nj_throw_oom(vm);
+    for (y = ymin; y < ymax; ++y) {
+        nj_s8 uy = y - g->translate_y;
+        nj_s4 count = 0;
+        for (i = 0, j = n - 1; i < n; j = i++) {
+            if (((nj_s8)ys[i] <= uy && (nj_s8)ys[j] > uy) ||
+                ((nj_s8)ys[j] <= uy && (nj_s8)ys[i] > uy))
+                crossings[count++] = dg_edge_ceil(xs[i], ys[i], xs[j], ys[j], uy)
+                                     + g->translate_x;
+        }
+        qsort(crossings, (size_t)count, sizeof(*crossings), dg_cross_compare);
+        for (i = 0; i + 1 < count; i += 2) {
+            nj_s8 left = crossings[i], right = crossings[i + 1];
+            nj_gfx row = *g;
+            if (left < g->clip_x) left = g->clip_x;
+            if (right > (nj_s8)g->clip_x + g->clip_w)
+                right = (nj_s8)g->clip_x + g->clip_w;
+            if (left >= right) continue;
+            row.translate_x = row.translate_y = 0;
+            row.blend = 1; row.use_xor = 0;
+            nj_gfx_fill_rect(&row, (int)left, (int)y, (int)(right - left), 1);
+        }
+    }
+    nj_host_free(vm, crossings);
     return NJ_OK;
 }
 
-/*
- * A polygon, filled a row at a time.
- *
- * nj_gfx has no polygon fill and does not need one: a scanline that calls
- * nj_gfx_line once per row inherits the existing clipping, colour and blend
- * rules instead of reimplementing them.  Slow and obvious is the right trade
- * for something a game calls a handful of times a frame.
- */
-static void dg_fill_poly(nj_gfx *g,
-                         const nj_s4 *xs, const nj_s4 *ys, nj_s4 n)
+/* A closed outline is one coverage operation: shared vertices, retraced edges
+ * and crossings must not blend a translucent source more than once. */
+static void dg_mark_edge(nj_u1 *mask, const nj_gfx *g,
+                          nj_s4 ux0, nj_s4 uy0, nj_s4 ux1, nj_s4 uy1)
 {
-    nj_s4 y, ymin, ymax;
+    nj_s8 x0 = (nj_s8)ux0 + g->translate_x, y0 = (nj_s8)uy0 + g->translate_y;
+    nj_s8 dx = (nj_s8)ux1 - ux0, dy = (nj_s8)uy1 - uy0;
+    nj_s8 sx = dx < 0 ? -1 : 1, sy = dy < 0 ? -1 : 1;
+    nj_s8 ax = dx < 0 ? -dx : dx, ay = dy < 0 ? -dy : dy;
+    int horizontal = ax >= ay;
+    nj_s8 major = horizontal ? ax : ay, minor = horizontal ? ay : ax;
+    nj_s8 start = horizontal ? x0 : y0, sign = horizontal ? sx : sy;
+    nj_s8 low = horizontal ? g->clip_x : g->clip_y;
+    nj_s8 high = low + (horizontal ? g->clip_w : g->clip_h) - 1;
+    nj_s8 first = sign > 0 ? low - start : start - high;
+    nj_s8 last = sign > 0 ? high - start : start - low, k;
+    if (first < 0) first = 0;
+    if (last > major) last = major;
+    for (k = first; k <= last; ++k) {
+        nj_s8 step = major ? (nj_s8)(((nj_u8)minor * (nj_u8)k + (nj_u8)major / 2)
+                                    / (nj_u8)major) : 0;
+        nj_s8 x = x0 + sx * (horizontal ? k : step);
+        nj_s8 y = y0 + sy * (horizontal ? step : k);
+        nj_u8 bit;
+        if (x < g->clip_x || x >= (nj_s8)g->clip_x + g->clip_w ||
+            y < g->clip_y || y >= (nj_s8)g->clip_y + g->clip_h ||
+            (g->stroke == NJ_STROKE_DOTTED && (k & 1))) continue;
+        bit = (nj_u8)(y - g->clip_y) * (nj_u8)g->clip_w + (nj_u8)(x - g->clip_x);
+        mask[bit >> 3] |= (nj_u1)(1u << (bit & 7));
+    }
+}
 
-    if (n < 3) {
-        return;
+static nj_status dg_draw_poly(nj_vm *vm, nj_gfx *g,
+                              const nj_s4 *xs, const nj_s4 *ys, nj_s4 n)
+{
+    nj_u1 *mask;
+    nj_u8 pixels, bytes, bit;
+    nj_s8 left, top, right, bottom;
+    nj_s4 i;
+    nj_gfx dev = *g;
+    if (n <= 0 || g->clip_w <= 0 || g->clip_h <= 0 || !(g->color >> 24))
+        return NJ_OK;
+    left = right = xs[0]; top = bottom = ys[0];
+    for (i = 1; i < n; ++i) {
+        if (xs[i] < left) left = xs[i];
+        if (xs[i] > right) right = xs[i];
+        if (ys[i] < top) top = ys[i];
+        if (ys[i] > bottom) bottom = ys[i];
     }
-    ymin = ymax = ys[0];
-    for (y = 1; y < n; y++) {
-        if (ys[y] < ymin) { ymin = ys[y]; }
-        if (ys[y] > ymax) { ymax = ys[y]; }
+    left += g->translate_x; right += (nj_s8)g->translate_x + 1;
+    top += g->translate_y; bottom += (nj_s8)g->translate_y + 1;
+    if (left < g->clip_x) left = g->clip_x;
+    if (top < g->clip_y) top = g->clip_y;
+    if (right > (nj_s8)g->clip_x + g->clip_w) right = (nj_s8)g->clip_x + g->clip_w;
+    if (bottom > (nj_s8)g->clip_y + g->clip_h) bottom = (nj_s8)g->clip_y + g->clip_h;
+    if (left >= right || top >= bottom) return NJ_OK;
+    dev.clip_x = (int)left; dev.clip_y = (int)top;
+    dev.clip_w = (int)(right - left); dev.clip_h = (int)(bottom - top);
+    pixels = (nj_u8)dev.clip_w * (nj_u8)dev.clip_h;
+    bytes = (pixels + 7) / 8;
+    if (bytes > (nj_size)-1) return nj_throw_oom(vm);
+    mask = (nj_u1 *)nj_host_alloc(vm, (nj_size)bytes);
+    if (!mask) return nj_throw_oom(vm);
+    memset(mask, 0, (size_t)bytes);
+    for (i = 0; i < n; ++i)
+        dg_mark_edge(mask, &dev, xs[i], ys[i], xs[i + 1 < n ? i + 1 : 0],
+                     ys[i + 1 < n ? i + 1 : 0]);
+    dev.translate_x = dev.translate_y = 0;
+    dev.blend = 1; dev.use_xor = 0;
+    for (bit = 0; bit < pixels; ++bit) {
+        if (mask[bit >> 3] & (1u << (bit & 7)))
+            nj_gfx_pixel(&dev, dev.clip_x + (int)(bit % (nj_u8)dev.clip_w),
+                          dev.clip_y + (int)(bit / (nj_u8)dev.clip_w));
     }
-    for (y = ymin; y <= ymax; y++) {
-        nj_s4 x0 = 0, x1 = 0;
-        int have = 0, i, j;
+    nj_host_free(vm, mask);
+    return NJ_OK;
+}
 
-        for (i = 0, j = n - 1; i < n; j = i++) {
-            nj_s4 ya = ys[j], yb = ys[i];
-            if ((ya <= y && yb > y) || (yb <= y && ya > y)) {
-                nj_s4 x = xs[j] + (nj_s4)(((nj_s8)(y - ya) *
-                                           (xs[i] - xs[j])) / (yb - ya));
-                if (!have) { x0 = x1 = x; have = 1; }
-                else if (x < x0) { x0 = x; }
-                else if (x > x1) { x1 = x; }
-            }
-        }
-        if (have && x1 >= x0) {
-            nj_gfx_line(g, x0, y, x1, y);
-        }
+NJFN(dg_fillTriangle)
+{
+    nj_gfx g;
+    nj_surface sc;
+    nj_s4 xs[3], ys[3];
+    int i;
+    if (!gfx_load(vm, NJ_THIS(args), &g, &sc)) return NJ_ERR;
+    for (i = 0; i < 3; ++i) {
+        xs[i] = NJ_ARG_INT(args, 2 * i); ys[i] = NJ_ARG_INT(args, 2 * i + 1);
     }
+    nj_gfx_set_color(&g, (nj_u4)NJ_ARG_INT(args, 6));
+    return dg_fill_poly(vm, &g, xs, ys, 3);
 }
 
 /* Shared argument marshalling for the two polygon calls. */
@@ -10501,7 +10606,8 @@ static int dg_poly_args(nj_vm *vm, nj_value *args, nj_gfx *g,
     if (!xa || !ya) {
         return nj_throw(vm, "java/lang/NullPointerException", NULL) == NJ_OK;
     }
-    if (xoff < 0 || yoff < 0 || n < 0 || xoff + n > xlen || yoff + n > ylen) {
+    if (xoff < 0 || yoff < 0 || n < 0 || xoff > xlen || yoff > ylen ||
+        n > xlen - xoff || n > ylen - yoff) {
         return nj_throw(vm, "java/lang/ArrayIndexOutOfBoundsException",
                         NULL) == NJ_OK;
     }
@@ -10525,10 +10631,8 @@ NJFN(dg_fillPolygon)
     if (!dg_poly_args(vm, args, &g, &xs, &ys, &n)) {
         return NJ_ERR;
     }
-    nj_gfx_set_color(&g, (nj_u4)NJ_ARG_INT(args, 5) | 0xFF000000u);
-    dg_fill_poly(&g, xs, ys, n);
-    gfx_store(vm, self, &g);
-    return NJ_OK;
+    nj_gfx_set_color(&g, (nj_u4)NJ_ARG_INT(args, 5));
+    return dg_fill_poly(vm, &g, xs, ys, n);
 }
 
 NJFN(dg_drawPolygon)
@@ -10537,7 +10641,6 @@ NJFN(dg_drawPolygon)
     nj_gfx g;
     nj_surface sc;
     nj_s4 *xs = NULL, *ys = NULL, n = 0;
-    nj_s4 i;
 
     if (!gfx_load(vm, self, &g, &sc)) {
         return NJ_ERR;
@@ -10545,13 +10648,8 @@ NJFN(dg_drawPolygon)
     if (!dg_poly_args(vm, args, &g, &xs, &ys, &n)) {
         return NJ_ERR;
     }
-    nj_gfx_set_color(&g, (nj_u4)NJ_ARG_INT(args, 5) | 0xFF000000u);
-    for (i = 0; i < n; i++) {
-        nj_s4 j = (i + 1 < n) ? i + 1 : 0;
-        nj_gfx_line(&g, xs[i], ys[i], xs[j], ys[j]);
-    }
-    gfx_store(vm, self, &g);
-    return NJ_OK;
+    nj_gfx_set_color(&g, (nj_u4)NJ_ARG_INT(args, 5));
+    return dg_draw_poly(vm, &g, xs, ys, n);
 }
 
 /* Nokia's formats are SDK literal values, not internal surface enums. */
@@ -10715,32 +10813,19 @@ NJFN(dg_getPixelsInt)
     return dg_get_pixels(vm, args, ret, 4);
 }
 
-/*
- * drawTriangle(x1, y1, x2, y2, x3, y3, argb): the outline of a triangle in the
- * direct colour.  Three lines, because that is what the picture is - the filled
- * form is fillTriangle() above.
- */
+/* Triangle and polygon outlines share the same single-coverage joins. */
 NJFN(dg_drawTriangle)
 {
-    nj_ref self = NJ_THIS(args);
-    nj_s4 x1 = NJ_ARG_INT(args, 0);
-    nj_s4 y1 = NJ_ARG_INT(args, 1);
-    nj_s4 x2 = NJ_ARG_INT(args, 2);
-    nj_s4 y2 = NJ_ARG_INT(args, 3);
-    nj_s4 x3 = NJ_ARG_INT(args, 4);
-    nj_s4 y3 = NJ_ARG_INT(args, 5);
     nj_gfx g;
     nj_surface sc;
-
-    if (!gfx_load(vm, self, &g, &sc)) {
-        return NJ_ERR;
+    nj_s4 xs[3], ys[3];
+    int i;
+    if (!gfx_load(vm, NJ_THIS(args), &g, &sc)) return NJ_ERR;
+    for (i = 0; i < 3; ++i) {
+        xs[i] = NJ_ARG_INT(args, 2 * i); ys[i] = NJ_ARG_INT(args, 2 * i + 1);
     }
     nj_gfx_set_color(&g, (nj_u4)NJ_ARG_INT(args, 6));
-    nj_gfx_line(&g, x1, y1, x2, y2);
-    nj_gfx_line(&g, x2, y2, x3, y3);
-    nj_gfx_line(&g, x3, y3, x1, y1);
-    gfx_store(vm, self, &g);
-    return NJ_OK;
+    return dg_draw_poly(vm, &g, xs, ys, 3);
 }
 
 NJFN(dg_drawPixelsInt)
@@ -10748,100 +10833,169 @@ NJFN(dg_drawPixelsInt)
     return dg_draw_pixels(vm, args, 4);
 }
 
-/*
- * drawPixels(byte[] pixels, byte[] transparency, offset, scanlength, x, y, w,
- * h, manipulation, format): the same call with one byte per pixel.  Nokia's
- * byte formats are grey scales and palettes, and this runtime keeps no palette
- * state, so a byte is drawn as the grey level of the same value: exact for the
- * grey formats, visibly wrong for a palette - the same trade the short[]
- * overload above makes, and better than an exception in the middle of a frame.
- */
+/* Byte formats use pixel offsets, including when several pixels share a byte.
+ * Vertical 1-bit pixels follow the Nokia UI 1.1 formula: pages of eight rows,
+ * left-to-right bytes, top pixel in the LSB. Its formula divides by scanlength;
+ * zero/negative vertical scanlength is deliberately rejected as unsupported. */
+static int dg_byte_bits(int fmt)
+{
+    if (fmt == -1) return 1;
+    if (fmt == 332) return 8;
+    return fmt == 1 || fmt == 2 || fmt == 4 || fmt == 8 ? fmt : 0;
+}
+
+static nj_status dg_byte_range(nj_vm *vm, nj_ref arr, nj_s4 off,
+                               nj_s4 scan, nj_s4 w, nj_s4 h, int fmt, int bits)
+{
+    nj_s8 lo, hi;
+    if (w == 0 || h == 0) return NJ_OK;
+    if (fmt == -1) {
+        lo = off;
+        hi = off < 0 ? -1 : (((nj_s8)off / scan + h - 1) / 8) * scan
+                            + off % scan + w - 1;
+        if (lo >= 0 && hi < (nj_s8)arr->length) return NJ_OK;
+    } else {
+        nj_s8 last = (nj_s8)off + (nj_s8)(h - 1) * scan;
+        lo = last < off ? last : off;
+        hi = (last > off ? last : off) + w - 1;
+        /* Compare in pixels, avoiding multiplication of huge indices by bits. */
+        if (lo >= 0 && hi < (nj_s8)arr->length * (8 / bits)) return NJ_OK;
+    }
+    return nj_throw(vm, "java/lang/ArrayIndexOutOfBoundsException", "byte pixel array range");
+}
+
+static nj_s8 dg_byte_index(nj_s4 off, nj_s4 scan, nj_s8 x, nj_s8 y,
+                           int fmt, int bits, int *shift)
+{
+    if (fmt == -1) {
+        nj_s8 row = (nj_s8)off / scan + y;
+        *shift = (int)(row % 8);
+        return (row / 8) * scan + off % scan + x;
+    } else {
+        nj_s8 at = (nj_s8)off + y * scan + x;
+        int per_byte = 8 / bits;
+        *shift = 8 - bits - (int)(at % per_byte) * bits;
+        return at / per_byte;
+    }
+}
+
+static nj_u4 dg_byte_read(nj_ref arr, nj_s8 at, int shift, nj_u4 mask)
+{
+    return ((const nj_u1 *)arr->u.bytes)[at] >> shift & mask;
+}
+
+static void dg_byte_write(nj_ref arr, nj_s8 at, int shift, nj_u4 mask, nj_u4 value)
+{
+    nj_u1 *bytes = (nj_u1 *)arr->u.bytes;
+    bytes[at] = (nj_u1)((bytes[at] & ~(mask << shift)) | (value << shift));
+}
+
+static nj_u4 dg_byte_color(nj_u4 value, int fmt, nj_u4 max)
+{
+    if (fmt == 332)
+        return 0xFF000000u | (((value >> 5) * 255u / 7u) << 16)
+             | ((((value >> 2) & 7u) * 255u / 7u) << 8) | ((value & 3u) * 85u);
+    /* Nokia gray values describe ink density: zero is white, max is black. */
+    value = 255u - value * 255u / max;
+    return 0xFF000000u | value << 16 | value << 8 | value;
+}
+
 NJFN(dg_drawPixelsBytes)
 {
-    nj_ref self = NJ_THIS(args);
-    nj_ref px = NJ_ARG_REF(args, 0);
-    nj_s4 off = NJ_ARG_INT(args, 2);
-    nj_s4 scan = NJ_ARG_INT(args, 3);
-    nj_s4 x = NJ_ARG_INT(args, 4);
-    nj_s4 y = NJ_ARG_INT(args, 5);
-    nj_s4 w = NJ_ARG_INT(args, 6);
-    nj_s4 h = NJ_ARG_INT(args, 7);
+    nj_ref px = NJ_ARG_REF(args, 0), mask = NJ_ARG_REF(args, 1);
+    nj_s4 off = NJ_ARG_INT(args, 2), scan = NJ_ARG_INT(args, 3);
+    nj_s4 x = NJ_ARG_INT(args, 4), y = NJ_ARG_INT(args, 5);
+    nj_s4 w = NJ_ARG_INT(args, 6), h = NJ_ARG_INT(args, 7);
+    nj_s4 op = NJ_ARG_INT(args, 8), fmt = NJ_ARG_INT(args, 9);
+    nj_s4 rot = op & ~0x6000, dw, dh;
+    int bits = dg_byte_bits(fmt);
+    nj_u4 max;
     nj_gfx g;
     nj_surface sc;
-    nj_s4 row, col;
-    const nj_u1 *pix;
-
-    if (!px) {
-        return nj_throw(vm, "java/lang/NullPointerException", NULL);
-    }
-    if (!gfx_load(vm, self, &g, &sc)) {
-        return NJ_ERR;
-    }
-    pix = (const nj_u1 *)px->u.bytes;
-    for (row = 0; row < h; row++) {
-        for (col = 0; col < w; col++) {
-            nj_s4 idx = off + row * scan + col;
-            nj_u1 v;
-            if (idx < 0 || (nj_u4)idx >= px->length) {
-                continue;
-            }
-            v = pix[idx];
-            nj_gfx_set_color(&g, 0xFF000000u | ((nj_u4)v << 16)
-                             | ((nj_u4)v << 8) | (nj_u4)v);
-            nj_gfx_pixel(&g, x + col, y + row);
+    nj_s8 left, top, x0, y0, x1, y1, dx, dy;
+    if (!px) return nj_throw(vm, "java/lang/NullPointerException", "pixels is null");
+    if (!bits || w < 0 || h < 0 || rot < 0 || rot > 270 || rot % 90 != 0
+        || (fmt == -1 && scan <= 0))
+        return nj_throw(vm, "java/lang/IllegalArgumentException", "byte pixel dimensions, manipulation or format");
+    if (dg_byte_range(vm, px, off, scan, w, h, fmt, bits) != NJ_OK) return NJ_ERR;
+    if (mask && dg_byte_range(vm, mask, off, scan, w, h, fmt, bits) != NJ_OK) return NJ_ERR;
+    if (w == 0 || h == 0) return NJ_OK;
+    if (!gfx_load(vm, NJ_THIS(args), &g, &sc)) return NJ_ERR;
+    max = (1u << bits) - 1u;
+    dw = rot == 90 || rot == 270 ? h : w;
+    dh = rot == 90 || rot == 270 ? w : h;
+    left = (nj_s8)x + g.translate_x; top = (nj_s8)y + g.translate_y;
+    x0 = left; y0 = top; x1 = left + dw; y1 = top + dh;
+    if (x0 < g.clip_x) x0 = g.clip_x;
+    if (y0 < g.clip_y) y0 = g.clip_y;
+    if (x1 > (nj_s8)g.clip_x + g.clip_w) x1 = (nj_s8)g.clip_x + g.clip_w;
+    if (y1 > (nj_s8)g.clip_y + g.clip_h) y1 = (nj_s8)g.clip_y + g.clip_h;
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
+    if (x1 > g.surf->width) x1 = g.surf->width;
+    if (y1 > g.surf->height) y1 = g.surf->height;
+    /* Only traverse visible destination pixels, even for huge or sparse input.
+     * All temporary state stays local; the Graphics current color is preserved. */
+    g.translate_x = g.translate_y = 0;
+    for (dy = y0; dy < y1; ++dy) for (dx = x0; dx < x1; ++dx) {
+        nj_s8 u = dx - left, v = dy - top, sx, sy, at;
+        nj_u4 color;
+        int shift;
+        if (op & 0x2000) u = dw - 1 - u;
+        if (op & 0x4000) v = dh - 1 - v;
+        switch (rot) {
+        case 90: sx = w - 1 - v; sy = u; break;
+        case 180: sx = w - 1 - u; sy = h - 1 - v; break;
+        case 270: sx = v; sy = h - 1 - u; break;
+        default: sx = u; sy = v; break;
         }
+        at = dg_byte_index(off, scan, sx, sy, fmt, bits, &shift);
+        color = dg_byte_color(dg_byte_read(px, at, shift, max), fmt, max);
+        if (mask) color = (color & 0xFFFFFFu) | (dg_byte_read(mask, at, shift, max) * 255u / max << 24);
+        nj_gfx_set_color(&g, color);
+        nj_gfx_pixel(&g, (int)dx, (int)dy);
     }
-    gfx_store(vm, self, &g);
     return NJ_OK;
 }
 
-/*
- * getPixels(byte[] pixels, byte[] transparency, offset, scanlength, x, y, w,
- * h, format): the read side of the byte overload, answering the grey level of
- * each pixel (Rec. 601 weights), which is what a byte-format title asked for.
- */
 static nj_status dg_get_pixels_bytes(nj_vm *vm, nj_value *args)
 {
-    nj_ref self = NJ_THIS(args);
-    nj_ref dest = NJ_ARG_REF(args, 0);
-    nj_s4 offset = NJ_ARG_INT(args, 2);
-    nj_s4 scan = NJ_ARG_INT(args, 3);
-    nj_s4 x = NJ_ARG_INT(args, 4);
-    nj_s4 y = NJ_ARG_INT(args, 5);
-    nj_s4 w = NJ_ARG_INT(args, 6);
-    nj_s4 h = NJ_ARG_INT(args, 7);
+    nj_ref dest = NJ_ARG_REF(args, 0), mask = NJ_ARG_REF(args, 1);
+    nj_s4 off = NJ_ARG_INT(args, 2), scan = NJ_ARG_INT(args, 3);
+    nj_s4 x = NJ_ARG_INT(args, 4), y = NJ_ARG_INT(args, 5);
+    nj_s4 w = NJ_ARG_INT(args, 6), h = NJ_ARG_INT(args, 7), fmt = NJ_ARG_INT(args, 8);
+    int bits = dg_byte_bits(fmt);
+    nj_u4 max;
     nj_gfx g;
     nj_surface sc;
-    nj_s4 j, i;
-
-    if (!gfx_load(vm, self, &g, &sc)) {
-        return NJ_ERR;
-    }
-    if (!dest) {
-        NJ_THROW(vm, "java/lang/NullPointerException",
-                 "the destination array is null");
-    }
-    if (w <= 0 || h <= 0) {
-        return NJ_OK;
-    }
-    if (offset < 0 || scan < w) {
-        NJ_THROW(vm, "java/lang/IllegalArgumentException",
-                 "offset and scanlength are too small for the pixels asked for");
-    }
-    if ((nj_s8)offset + (nj_s8)(h - 1) * scan + (w - 1)
-        >= (nj_s8)dest->length) {
-        NJ_THROW(vm, "java/lang/ArrayIndexOutOfBoundsException",
-                 "the destination array is too small for the pixels asked for");
-    }
-    for (j = 0; j < h; j++) {
-        for (i = 0; i < w; i++) {
-            nj_u4 argb = nj_surface_format_color(sc.format,
-                                                 nj_surface_get(&sc, x + i,
-                                                                y + j));
-            nj_u4 grey = ((argb >> 16) & 0xFFu) * 77u
-                       + ((argb >> 8) & 0xFFu) * 151u
-                       + (argb & 0xFFu) * 28u;
-            ((nj_u1 *)dest->u.bytes)[offset + j * scan + i] = (nj_u1)(grey >> 8);
+    nj_s8 left, top;
+    nj_s4 row, col;
+    if (!dest) return nj_throw(vm, "java/lang/NullPointerException", "pixels is null");
+    if (!bits || x < 0 || y < 0 || w < 0 || h < 0 || (fmt == -1 && scan <= 0))
+        return nj_throw(vm, "java/lang/IllegalArgumentException", "byte pixel rectangle or format");
+    if (dg_byte_range(vm, dest, off, scan, w, h, fmt, bits) != NJ_OK) return NJ_ERR;
+    if (mask && dg_byte_range(vm, mask, off, scan, w, h, fmt, bits) != NJ_OK) return NJ_ERR;
+    if (w == 0 || h == 0) return NJ_OK;
+    if (!gfx_load(vm, NJ_THIS(args), &g, &sc)) return NJ_ERR;
+    left = (nj_s8)x + g.translate_x; top = (nj_s8)y + g.translate_y;
+    if (left < 0 || top < 0 || left + w > g.surf->width || top + h > g.surf->height)
+        return nj_throw(vm, "java/lang/IllegalArgumentException", "pixel rectangle leaves surface");
+    max = (1u << bits) - 1u;
+    for (row = 0; row < h; ++row) for (col = 0; col < w; ++col) {
+        nj_u4 color = nj_surface_get(g.surf, (int)left + col, (int)top + row);
+        nj_u4 r = (color >> 16) & 255u, green = (color >> 8) & 255u, b = color & 255u;
+        nj_u4 value, a;
+        nj_s8 at;
+        int shift;
+        if (fmt == 332) value = (r & 0xE0u) | ((green >> 3) & 0x1Cu) | (b >> 6);
+        else value = (255u - ((r * 77u + green * 151u + b * 28u) >> 8)) >> (8 - bits);
+        at = dg_byte_index(off, scan, col, row, fmt, bits, &shift);
+        dg_byte_write(dest, at, shift, max, value);
+        if (mask) {
+            a = g.surf == &vm->screen ? 255u : color >> 24;
+            value = a * max / 255u;
+            if (a && !value) value = 1; /* Nonzero source alpha stays nonzero. */
+            dg_byte_write(mask, at, shift, max, value);
         }
     }
     return NJ_OK;

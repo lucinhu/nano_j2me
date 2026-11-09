@@ -1312,6 +1312,8 @@ add_test(NAME check_splash_budget
     set_tests_properties(test_loop_frames PROPERTIES TIMEOUT 120)
   endif()
   nj_add_test(test_directgraphics tests/test_directgraphics.c)
+  nj_add_test(test_directgraphics_bytes tests/test_directgraphics_bytes.c --bounded)
+  nj_add_test(test_directgraphics_shapes tests/test_directgraphics_shapes.c)
   nj_add_test(test_directutils tests/test_directutils.c)
 nj_add_test(test_clip tests/test_clip.c)
   nj_add_test(test_blocked_init tests/test_blocked_init.c ${NJ_FIXTURES})

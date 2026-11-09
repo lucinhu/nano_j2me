@@ -26,7 +26,7 @@ OUT=$(timeout 90 "$BIN" --port headless --heap 16 --size 176x208 --fps 0 \
 
 printf '%s\n' "$OUT" | grep -q 'NOKIA img=16x16 edge=ffff0000 outside=ffffffff alpha=255' \
     || fail "drawTriangle did not draw its top edge, or getAlphaComponent did not answer 255"
-printf '%s\n' "$OUT" | grep -q 'NOKIA bytes=ff808080 read=128' \
+printf '%s\n' "$OUT" | grep -q 'NOKIA bytes=ff7f7f7f read=128' \
     || fail "the byte[] drawPixels/getPixels pair did not round trip the grey 0x80"
 printf '%s\n' "$OUT" | grep -q 'NOKIA argb=ff112233' \
     || fail "the int[] drawPixels overload did not keep an ARGB colour"
@@ -36,6 +36,10 @@ printf '%s\n' "$OUT" | grep -q 'NOKIA initial=40123456' \
     || fail "DirectUtils.createImage(width,height,argb) did not preserve alpha"
 printf '%s\n' "$OUT" | grep -q 'NOKIA png=2x2 mutable=ff0000ff' \
     || fail "DirectUtils.createImage(byte[], int, int) did not return a drawable PNG"
+printf '%s\n' "$OUT" | grep -q 'NOKIA shapes clear=true half=true triangle=true concave=true state=true' \
+    || fail "ARGB alpha, explicit shape color, concavity or Graphics state is incorrect"
+printf '%s\n' "$OUT" | grep -q 'NOKIA packed mask=true vertical=true roundtrip=true' \
+    || fail "packed grey, transparency mask or vertical bit packing is incorrect"
 printf '%s\n' "$OUT" | grep -q 'NOKIA snd=0,50,0,2,1' \
     || fail "Sound did not report SOUND_PLAYING (0), keep gain 50, resume, list two formats and one channel"
 printf '%s\n' "$OUT" | grep -q 'NOKIA devctl=ok' \

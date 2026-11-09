@@ -285,7 +285,7 @@ static void test_drawing(nj_vm *vm)
     }
 
     /* --- setARGBColor + fillTriangle --- */
-    a[0] = iref(0x00FF0000);              /* red, alpha deliberately zero */
+    a[0] = iref((nj_s4)0xFFFF0000u);      /* opaque red (ARGB alpha is honored) */
     OK(nj_call(vm, g, NJ_C_GRAPHICS, "setARGBColor", "(I)V", a, NULL) == NJ_OK);
     a[0] = iref(0);
     a[1] = iref(0);
@@ -293,7 +293,7 @@ static void test_drawing(nj_vm *vm)
     a[3] = iref(0);
     a[4] = iref(0);
     a[5] = iref(23);
-    a[6] = iref(0x00FF0000);
+    a[6] = iref((nj_s4)0xFFFF0000u);
     OK(nj_call(vm, g, NJ_C_GRAPHICS, "fillTriangle", "(IIIIIII)V", a, NULL)
        == NJ_OK);
     OK_MSG(img_pixel(vm, img, 4, 4) == 0xFFFF0000u,
@@ -317,7 +317,7 @@ static void test_drawing(nj_vm *vm)
     a[2] = sref(ys);
     a[3] = iref(0);
     a[4] = iref(4);
-    a[5] = iref(0x000000FF);
+    a[5] = iref((nj_s4)0xFF0000FFu);
     OK(nj_call(vm, g, NJ_C_GRAPHICS, "fillPolygon", "([II[IIII)V", a, NULL)
        == NJ_OK);
     OK_MSG(img_pixel(vm, img, 12, 12) == 0xFF0000FFu,
@@ -336,7 +336,7 @@ static void test_drawing(nj_vm *vm)
         a[2] = sref(ys);
         a[3] = iref(0);
         a[4] = iref(4);
-        a[5] = iref(0x00FF00FF);
+        a[5] = iref((nj_s4)0xFFFF00FFu);
         OK(nj_call(vm, g2, NJ_C_GRAPHICS, "drawPolygon", "([II[IIII)V", a, NULL)
            == NJ_OK);
         OK_MSG(img_pixel(vm, img2, 8, 8) == 0xFFFF00FFu,
