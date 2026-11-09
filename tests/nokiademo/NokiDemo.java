@@ -56,19 +56,39 @@ public class NokiDemo extends MIDlet {
         grey[1] = (byte) 0x80;
         grey[2] = (byte) 0x80;
         grey[3] = (byte) 0x80;
-        dg.drawPixels(grey, null, 0, 2, 0, 0, 2, 2, 0, 1);
+        dg.drawPixels(grey, null, 0, 2, 0, 0, 2, 2, 0,
+                      DirectGraphics.TYPE_BYTE_8_GRAY);
         img.getRGB(rgb, 0, 16, 0, 0, 16, 16);
         byte[] back = new byte[4];
-        dg.getPixels(back, null, 0, 2, 0, 0, 2, 2, 1);
+        dg.getPixels(back, null, 0, 2, 0, 0, 2, 2,
+                     DirectGraphics.TYPE_BYTE_8_GRAY);
         System.out.println("NOKIA bytes=" + Integer.toHexString(rgb[0])
                            + " read=" + (back[0] & 0xFF));
 
         /* the int[] overload: ARGB comes back unchanged */
         int[] argb = new int[4];
         argb[0] = 0xFF112233;
-        dg.drawPixels(argb, false, 0, 2, 4, 4, 2, 2, 0, 12);
+        dg.drawPixels(argb, false, 0, 2, 4, 4, 2, 2, 0,
+                      DirectGraphics.TYPE_INT_8888_ARGB);
         img.getRGB(rgb, 0, 16, 0, 0, 16, 16);
         System.out.println("NOKIA argb=" + Integer.toHexString(rgb[4 * 16 + 4]));
+
+        short[] packed = {(short) 0xF800, (short) 0x07E0,
+                          (short) 0x001F, (short) 0xFFFF};
+        short[] packedBack = new short[4];
+        dg.drawPixels(packed, false, 0, 2, 8, 8, 2, 2, 0,
+                      DirectGraphics.TYPE_USHORT_565_RGB);
+        dg.getPixels(packedBack, 0, 2, 8, 8, 2, 2,
+                     DirectGraphics.TYPE_USHORT_565_RGB);
+        System.out.println("NOKIA native=" + dg.getNativePixelFormat()
+                           + " short=" + Integer.toHexString(packedBack[0] & 0xFFFF)
+                           + "," + Integer.toHexString(packedBack[1] & 0xFFFF)
+                           + "," + Integer.toHexString(packedBack[2] & 0xFFFF)
+                           + "," + Integer.toHexString(packedBack[3] & 0xFFFF));
+
+        Image translucent = DirectUtils.createImage(2, 1, 0x40123456);
+        translucent.getRGB(rgb, 0, 2, 0, 0, 2, 1);
+        System.out.println("NOKIA initial=" + Integer.toHexString(rgb[0]));
 
         /* --- DirectUtils.createImage(byte[], int, int) ------------------ */
         try {
@@ -78,7 +98,12 @@ public class NokiDemo extends MIDlet {
             int n = in.read(data);
             in.close();
             Image png = DirectUtils.createImage(data, 0, n);
-            System.out.println("NOKIA png=" + png.getWidth() + "x" + png.getHeight());
+            Graphics pg = png.getGraphics();
+            pg.setColor(0x0000FF);
+            pg.fillRect(0, 0, 1, 1);
+            png.getRGB(rgb, 0, 2, 0, 0, 2, 2);
+            System.out.println("NOKIA png=" + png.getWidth() + "x" + png.getHeight()
+                               + " mutable=" + Integer.toHexString(rgb[0]));
         } catch (Exception e) {
             System.out.println("NOKIA png=failed " + e);
         }

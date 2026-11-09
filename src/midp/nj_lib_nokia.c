@@ -385,17 +385,17 @@ nj_status nj_nokia_late_init(nj_vm *vm)
     nokia_const_int(vm, NJ_C_DGRAPHICS, "ROTATE_180", 180);
     nokia_const_int(vm, NJ_C_DGRAPHICS, "ROTATE_270", 270);
     nokia_const_int(vm, NJ_C_DGRAPHICS, "TYPE_BYTE_1_GRAY", 1);
-    nokia_const_int(vm, NJ_C_DGRAPHICS, "TYPE_BYTE_1_GRAY_VERTICAL", 2);
-    nokia_const_int(vm, NJ_C_DGRAPHICS, "TYPE_BYTE_2_GRAY", 3);
+    nokia_const_int(vm, NJ_C_DGRAPHICS, "TYPE_BYTE_1_GRAY_VERTICAL", -1);
+    nokia_const_int(vm, NJ_C_DGRAPHICS, "TYPE_BYTE_2_GRAY", 2);
     nokia_const_int(vm, NJ_C_DGRAPHICS, "TYPE_BYTE_4_GRAY", 4);
-    nokia_const_int(vm, NJ_C_DGRAPHICS, "TYPE_BYTE_8_GRAY", 5);
-    nokia_const_int(vm, NJ_C_DGRAPHICS, "TYPE_BYTE_332_RGB", 6);
-    nokia_const_int(vm, NJ_C_DGRAPHICS, "TYPE_USHORT_4444_ARGB", 7);
-    nokia_const_int(vm, NJ_C_DGRAPHICS, "TYPE_USHORT_444_RGB", 8);
-    nokia_const_int(vm, NJ_C_DGRAPHICS, "TYPE_USHORT_555_RGB", 9);
-    nokia_const_int(vm, NJ_C_DGRAPHICS, "TYPE_USHORT_565_RGB", 10);
-    nokia_const_int(vm, NJ_C_DGRAPHICS, "TYPE_INT_888_RGB", 11);
-    nokia_const_int(vm, NJ_C_DGRAPHICS, "TYPE_INT_8888_ARGB", 12);
+    nokia_const_int(vm, NJ_C_DGRAPHICS, "TYPE_BYTE_8_GRAY", 8);
+    nokia_const_int(vm, NJ_C_DGRAPHICS, "TYPE_BYTE_332_RGB", 332);
+    nokia_const_int(vm, NJ_C_DGRAPHICS, "TYPE_USHORT_4444_ARGB", 4444);
+    nokia_const_int(vm, NJ_C_DGRAPHICS, "TYPE_USHORT_444_RGB", 444);
+    nokia_const_int(vm, NJ_C_DGRAPHICS, "TYPE_USHORT_555_RGB", 555);
+    nokia_const_int(vm, NJ_C_DGRAPHICS, "TYPE_USHORT_565_RGB", 565);
+    nokia_const_int(vm, NJ_C_DGRAPHICS, "TYPE_INT_888_RGB", 888);
+    nokia_const_int(vm, NJ_C_DGRAPHICS, "TYPE_INT_8888_ARGB", 8888);
     nokia_const_int(vm, NJ_C_DGRAPHICS, "TYPE_USHORT_1555_ARGB", 1555);
 
     {
@@ -772,52 +772,69 @@ static const nj_builtin_method vkeyboard_methods[] = {
 #define NJ_DU_IMAGE_CLS "javax/microedition/lcdui/Image"
 #define NJ_DU_IMAGE_DESC "Ljavax/microedition/lcdui/Image;"
 
-/*
- * createImage(w, h, argb): a new image entirely of one colour.
- *
- * Built the long way round - create it, take its Graphics, paint the whole
- * rectangle - because that path already exists, is already tested, and cannot
- * disagree with what a game gets when it does the same three steps by hand.
- */
+/* The MIDP image helpers temporarily root both the Image and its int[].
+ * Reserve those slots before allocation: nj_root itself cannot report OOM.
+ * The dummy roots are released immediately, retaining the table capacity. */
+static nj_status nokia_du_reserve_image_roots(nj_vm *vm)
+{
+    nj_u4 mark = nj_root_mark(vm), i;
+    for (i = 0; i < 2u; ++i) {
+        nj_root(vm, NULL);
+        if (nj_root_mark(vm) != mark + i + 1u) {
+            nj_root_release(vm, mark);
+            return nj_throw(vm, "java/lang/OutOfMemoryError", NULL);
+        }
+    }
+    nj_root_release(vm, mark);
+    return NJ_OK;
+}
+
+/* Initialization copies all ARGB bits, including zero-alpha RGB. Painting
+ * through Graphics.setColor would discard alpha and force opaque pixels. */
 NJFN(nokia_du_createImage3)
 {
-    nj_value a[5];
+    int w = NJ_ARG_INT(args, 0), h = NJ_ARG_INT(args, 1);
+    nj_u4 color = (nj_u4)NJ_ARG_INT(args, 2), *pixels;
+    nj_size i, count;
     nj_ref img;
-    nj_ref gfx;
+    nj_field *mut;
 
-    a[0] = args[0];
-    a[1] = args[1];
-    img = nj_call_ref(vm, NULL, NJ_DU_IMAGE_CLS, "createImage",
-                      "(II)" NJ_DU_IMAGE_DESC, a);
+    if (w <= 0 || h <= 0) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException",
+                        "image dimensions must be positive");
+    }
+    mut = nj_field_lookup(vm, NJ_DU_IMAGE_CLS, NJ_F_IMG_MUTABLE, "Z", 0);
+    if (!mut || nokia_du_reserve_image_roots(vm) != NJ_OK) {
+        return NJ_ERR;
+    }
+    /* Skip MIDP's white initialization; every pixel is replaced below. */
+    img = nj_midp_image_new(vm, w, h, 0);
     if (!img) {
         return NJ_ERR;
     }
-    gfx = nj_call_ref(vm, img, NJ_DU_IMAGE_CLS, "getGraphics",
-                      "()Ljavax/microedition/lcdui/Graphics;", NULL);
-    if (!gfx) {
-        return NJ_ERR;
+    /* No Java allocation between returning the image and filling its store. */
+    pixels = nj_midp_image_pixels(vm, img);
+    count = (nj_size)w * (nj_size)h; /* image helper validated the extent */
+    for (i = 0; i < count; ++i) {
+        pixels[i] = color;
     }
-    a[0] = args[2];
-    if (nj_call(vm, gfx, NJ_C_GRAPHICS, "setColor", "(I)V", a, NULL)
-        != NJ_OK) {
-        return NJ_ERR;
-    }
-    a[0].i = 0;
-    a[1].i = 0;
-    a[2].i = NJ_ARG_INT(args, 0);
-    a[3].i = NJ_ARG_INT(args, 1);
-    if (nj_call(vm, gfx, NJ_C_GRAPHICS, "fillRect", "(IIII)V", a, NULL)
-        != NJ_OK) {
-        return NJ_ERR;
-    }
+    nj_field_write_int(vm, img, mut, 1);
     ret->r = img;
     return NJ_OK;
 }
 
 NJFN(nokia_du_createImage2)
 {
-    nj_value a[5];
+    nj_value a[2];
 
+    /* Retain this extension's MIDP white fill and dimension exceptions. */
+    if (NJ_ARG_INT(args, 0) <= 0 || NJ_ARG_INT(args, 1) <= 0) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException",
+                        "image dimensions must be positive");
+    }
+    if (nokia_du_reserve_image_roots(vm) != NJ_OK) {
+        return NJ_ERR;
+    }
     a[0] = args[0];
     a[1] = args[1];
     ret->r = nj_call_ref(vm, NULL, NJ_DU_IMAGE_CLS, "createImage",
@@ -825,22 +842,47 @@ NJFN(nokia_du_createImage2)
     return ret->r ? NJ_OK : NJ_ERR;
 }
 
-/*
- * createImage(byte[] data, int offset, int length): the vendor spelling of
- * Image.createImage(data, offset, length).  A title hands Nokia the same bytes
- * it would hand MIDP, so this goes straight to the MIDP path rather than
- * through a second decoder that could disagree with it.
- */
+/* Reuse MIDP decoding and its pixel store, but Nokia promises a mutable result.
+ * Validate the slice without signed offset+length overflow before delegating. */
 NJFN(nokia_du_createImage)
 {
-    nj_value a[3];
+    nj_ref data = NJ_ARG_REF(args, 0), img;
+    nj_s4 off = NJ_ARG_INT(args, 1), len = NJ_ARG_INT(args, 2);
+    nj_field *mut;
 
-    a[0] = args[0];
-    a[1] = args[1];
-    a[2] = args[2];
-    ret->r = nj_call_ref(vm, NULL, NJ_DU_IMAGE_CLS, "createImage",
-                         "([BII)" NJ_DU_IMAGE_DESC, a);
-    return ret->r ? NJ_OK : NJ_ERR;
+    if (!data) {
+        return nj_throw(vm, "java/lang/NullPointerException", "data is null");
+    }
+    if (off < 0 || len < 0 || (nj_u4)off > nj_array_length(data) ||
+        (nj_u4)len > nj_array_length(data) - (nj_u4)off) {
+        return nj_throw(vm, "java/lang/ArrayIndexOutOfBoundsException", NULL);
+    }
+    if (len == 0) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException", "no image data");
+    }
+    mut = nj_field_lookup(vm, NJ_DU_IMAGE_CLS, NJ_F_IMG_MUTABLE, "Z", 0);
+    if (!mut) {
+        return NJ_ERR;
+    }
+    if (nokia_du_reserve_image_roots(vm) != NJ_OK) {
+        return NJ_ERR;
+    }
+    img = nj_call_ref(vm, NULL, NJ_DU_IMAGE_CLS, "createImage",
+                      "([BII)" NJ_DU_IMAGE_DESC, args);
+    if (!img) {
+        nj_class *io = nj_class_find(vm, "java/io/IOException");
+        if (vm->exception && io &&
+            nj_class_is_assignable(vm->exception->cls, io)) {
+            nj_clear_exception(vm);
+            return nj_throw(vm, "java/lang/IllegalArgumentException",
+                            "cannot decode image");
+        }
+        return NJ_ERR;
+    }
+    /* A field write cannot collect; no extra image or pixel copy is needed. */
+    nj_field_write_int(vm, img, mut, 1);
+    ret->r = img;
+    return NJ_OK;
 }
 
 /*

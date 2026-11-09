@@ -13,12 +13,10 @@
  *   2. getDirectGraphics(g) hands back a Graphics that can draw;
  *   3. setARGBColor + fillTriangle fill the triangle and nothing else;
  *   4. fillPolygon / drawPolygon fill the inside but not the outline;
- *   5. getNativePixelFormat agrees with the pixel format the port was built
- *      with - if that ever stops being RGB565 the constant has to move;
- *   6. drawPixels puts the colours where they were asked for;
- *   7. getPixels is the one method that is deliberately not implemented yet,
- *      and this asserts the CURRENT behaviour (the array is left alone) so
- *      that whoever implements it cannot do so silently.
+ *   5. getNativePixelFormat describes the actual image or screen surface;
+ *   6. int/short drawPixels support Nokia SDK formats, alpha and manipulation;
+ *   7. int/short getPixels convert colors, apply translation, ignore clipping,
+ *      handle negative scanlength and validate the entire range before writing.
  *
  * Usage:  test_directgraphics [fixtures-dir]      (none needed)
  * Exit code 0 on PASS, non-zero otherwise.
@@ -32,11 +30,11 @@
 #define NJ_C_DUTILS "com/nokia/mid/ui/DirectUtils"
 
 /* Nokia's DirectGraphics.TYPE_USHORT_565_RGB. */
-#define NJ_DG_TYPE_USHORT_565_RGB 10
+#define NJ_DG_TYPE_USHORT_565_RGB 565
 
 /* The two int formats getPixels(int[], ...) can be asked for. */
-#define NJ_DG_TYPE_INT_888_RGB   11
-#define NJ_DG_TYPE_INT_8888_ARGB 12
+#define NJ_DG_TYPE_INT_888_RGB   888
+#define NJ_DG_TYPE_INT_8888_ARGB 8888
 
 /* ------------------------------------------------------------------ */
 /* Assertion machinery                                                 */
@@ -200,7 +198,7 @@ static void test_create_image(nj_vm *vm)
 
     a[0] = iref(w);
     a[1] = iref(h);
-    a[2] = iref(0x0000FF00);              /* opaque green, alpha zero on purpose */
+    a[2] = iref(0xFF00FF00);              /* opaque green */
     img = call_static_ref(vm, NJ_C_DUTILS, "createImage",
                           "(III)L" NJ_C_IMAGE ";", a, NULL);
 
@@ -213,11 +211,7 @@ static void test_create_image(nj_vm *vm)
            (int)img_width(vm, img), (int)w);
     OK_MSG(img_height(vm, img) == h, "height = %d, want %d",
            (int)img_height(vm, img), (int)h);
-    /*
-     * Every pixel, not just the corner.  The alpha the caller passed is zero,
-     * which would draw nothing at all; the runtime ORs it opaque, and this is
-     * the assertion that says so out loud.
-     */
+    /* Every pixel, including the explicitly supplied opaque alpha. */
     for (y = 0; y < (int)h; y++) {
         for (x = 0; x < (int)w; x++) {
             if (img_pixel(vm, img, x, y) != 0xFF00FF00u) {
@@ -374,9 +368,9 @@ static void test_drawing(nj_vm *vm)
         ret.bits = 0u;
         OK(nj_call(vm, g, NJ_C_GRAPHICS, "getNativePixelFormat", "()I", NULL,
                    &ret) == NJ_OK);
-        OK_MSG(ret.i == NJ_DG_TYPE_USHORT_565_RGB,
-               "getNativePixelFormat = %d, want %d (the format the port was "
-               "built with)", (int)ret.i, NJ_DG_TYPE_USHORT_565_RGB);
+        OK_MSG(ret.i == NJ_DG_TYPE_INT_8888_ARGB,
+               "getNativePixelFormat = %d, want image ARGB8888 %d",
+               (int)ret.i, NJ_DG_TYPE_INT_8888_ARGB);
     }
 
     /* --- drawPixels: two pixels of 565 red at (2,18) and (3,18) --- */
@@ -398,22 +392,16 @@ static void test_drawing(nj_vm *vm)
         a[9] = iref(NJ_DG_TYPE_USHORT_565_RGB);
         OK(nj_call(vm, g, NJ_C_GRAPHICS, "drawPixels", "([SZIIIIIIII)V", a, NULL)
            == NJ_OK);
-        /*
-         * 0xF800 is 565 red, and it comes back as 0xFFF80000, not 0xFFFF0000:
-         * the image stores RGB565, so five bits of red cannot survive a round
-         * trip through 888.  The expected value is what the FORMAT makes of
-         * the input, not what a reader assumes it means - the same trap that
-         * once made a correct tan background look like a bug.
-         */
-        OK_MSG(img_pixel(vm, img, 2, 18) == 0xFFF80000u,
-               "drawPixels(2,18) = 0x%08X, want 0xFFF80000 (565 red)",
+        /* Replicate the five source bits to the full eight-bit range. */
+        OK_MSG(img_pixel(vm, img, 2, 18) == 0xFFFF0000u,
+               "drawPixels(2,18) = 0x%08X, want 0xFFFF0000 (565 red)",
                img_pixel(vm, img, 2, 18));
-        OK_MSG(img_pixel(vm, img, 3, 18) == 0xFFF80000u,
-               "drawPixels(3,18) = 0x%08X, want 0xFFF80000 (565 red)",
+        OK_MSG(img_pixel(vm, img, 3, 18) == 0xFFFF0000u,
+               "drawPixels(3,18) = 0x%08X, want 0xFFFF0000 (565 red)",
                img_pixel(vm, img, 3, 18));
     }
 
-    /* --- getPixels: the documented gap, asserted so it cannot hide --- */
+    /* --- getPixels writes the selected rectangle and preserves row padding. --- */
     {
         /*
          * Eight elements with scanlength 4 and a 2x2 read: that touches
@@ -457,14 +445,9 @@ static void test_drawing(nj_vm *vm)
             a[7] = iref(NJ_DG_TYPE_INT_8888_ARGB);
             OK(nj_call(vm, g, NJ_C_GRAPHICS, "getPixels", "([IIIIIIII)V", a,
                        NULL) == NJ_OK);
-            /*
-             * 0xFFF80000, not 0xFF0000: the surface is RGB565, so red has
-             * already lost its low three bits before anyone reads it.  The
-             * expectation has to go through the pixel format too - the same
-             * trap as the "tan background" and the drawPixels checks above.
-             */
-            OK_MSG(q[0] == 0xFFF80000u,
-                   "getPixels(int[],8888) = 0x%08X, want 0xFFF80000 (565 red)",
+            /* Images store ARGB8888; RGB565 red expands to full red. */
+            OK_MSG(q[0] == 0xFFFF0000u,
+                   "getPixels(int[],8888) = 0x%08X, want 0xFFFF0000 (565 red)",
                    q[0]);
             OK_MSG(q[2] == 0x12345678,
                    "getPixels(int[]) wrote past the rectangle (0x%08X)", q[2]);
@@ -477,7 +460,7 @@ static void test_drawing(nj_vm *vm)
 static void test_image_manipulation(nj_vm *vm)
 {
     const nj_u4 colors[6] = {
-        0xFFF80000u, 0xFF00FC00u, 0xFF0000F8u,
+        0xFFFF0000u, 0xFF00FC00u, 0xFF0000F8u,
         0xFFF8FC00u, 0xFF00FCF8u, 0xFFF800F8u
     };
     nj_ref pixels = nj_int_array_new(vm, 6);
@@ -548,6 +531,282 @@ static void test_image_manipulation(nj_vm *vm)
     }
 }
 
+/* SDK literal formats, independent of the runtime's constant table. */
+static nj_status pixels_draw(nj_vm *vm, nj_ref g, nj_ref buf, int ints,
+                            int alpha, int off, int scan, int x, int y,
+                            int w, int h, int op, int fmt)
+{
+    nj_value a[10];
+    a[0] = sref(buf); a[1] = iref(alpha); a[2] = iref(off); a[3] = iref(scan);
+    a[4] = iref(x); a[5] = iref(y); a[6] = iref(w); a[7] = iref(h);
+    a[8] = iref(op); a[9] = iref(fmt);
+    return nj_call(vm, g, NJ_C_GRAPHICS, "drawPixels",
+                   ints ? "([IZIIIIIIII)V" : "([SZIIIIIIII)V", a, NULL);
+}
+
+static nj_status pixels_get(nj_vm *vm, nj_ref g, nj_ref buf, int ints,
+                           int off, int scan, int x, int y, int w, int h, int fmt)
+{
+    nj_value a[8];
+    a[0] = sref(buf); a[1] = iref(off); a[2] = iref(scan); a[3] = iref(x);
+    a[4] = iref(y); a[5] = iref(w); a[6] = iref(h); a[7] = iref(fmt);
+    return nj_call(vm, g, NJ_C_GRAPHICS, "getPixels",
+                   ints ? "([IIIIIIII)V" : "([SIIIIIII)V", a, NULL);
+}
+
+static void pixels_error(nj_vm *vm, nj_status status, const char *exception)
+{
+    OK(status != NJ_OK);
+    OK_MSG(exc_is(vm, exception), "wanted %s, got %s", exception,
+           pending_exc(vm) ? pending_exc(vm) : "nothing");
+    vm->exception = NULL;
+}
+
+static void test_pixel_formats(nj_vm *vm)
+{
+    static const struct {
+        int fmt, ints; nj_u4 packed, argb;
+    } cases[] = {
+        {888, 1, 0x12123456u, 0xFF123456u},
+        {8888, 1, 0x80123456u, 0x80123456u},
+        {444, 0, 0xF123u, 0xFF112233u},
+        {555, 0, 0xFC1Fu, 0xFFFF00FFu},
+        {565, 0, 0x07E0u, 0xFF00FF00u},
+        {4444, 0, 0x8123u, 0x88112233u},
+        {1555, 0, 0x7C1Fu, 0x00FF00FFu}
+    };
+    unsigned i; int alpha;
+    nj_u4 mark = nj_root_mark(vm);
+    nj_ref img = nj_root(vm, image_new(vm, 3, 2));
+    nj_ref g = nj_root(vm, image_graphics(vm, img));
+    nj_ref ints = nj_root(vm, nj_int_array_new(vm, 8));
+    nj_ref shorts = nj_root(vm, nj_short_array_new(vm, 8));
+    nj_u4 *raw;
+    raw = nj_midp_image_pixels(vm, img);
+    OK(raw != NULL);
+    for (i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+        nj_ref buf = cases[i].ints ? ints : shorts;
+        for (alpha = 0; alpha < 2; ++alpha) {
+            nj_u4 src = cases[i].argb, a, expected; nj_value color;
+            raw[0] = 0xFF000000u;
+            if (cases[i].ints) ((nj_u4 *)buf->u.bytes)[1] = cases[i].packed;
+            else ((nj_u2 *)buf->u.bytes)[1] = (nj_u2)cases[i].packed;
+            OK(pixels_draw(vm, g, buf, cases[i].ints, alpha, 1, 1,
+                           0, 0, 1, 1, 0, cases[i].fmt) == NJ_OK);
+            if (!alpha) src |= 0xFF000000u;
+            a = src >> 24;
+            expected = 0xFF000000u
+                | (((((src >> 16) & 255u) * a + 127u) / 255u) << 16)
+                | (((((src >> 8) & 255u) * a + 127u) / 255u) << 8)
+                | (((src & 255u) * a + 127u) / 255u);
+            OK_MSG(raw[0] == expected, "fmt=%d alpha=%d got=%08X want=%08X",
+                   cases[i].fmt, alpha, raw[0], expected);
+            OK(nj_call(vm, g, NJ_C_GRAPHICS, "getColor", "()I", NULL, &color) == NJ_OK);
+            OK(color.i == 0); /* Pixel operations must preserve current color. */
+        }
+        /* Read conversion from full ARGB, preserving every non-target slot. */
+        raw[0] = cases[i].argb;
+        memset(buf->u.bytes, 0x5A, cases[i].ints ? 32u : 16u);
+        OK(pixels_get(vm, g, buf, cases[i].ints, 3, -2, 0, 0, 1, 1,
+                      cases[i].fmt) == NJ_OK);
+        if (cases[i].ints) {
+            nj_u4 want = cases[i].fmt == 888 ? cases[i].argb & 0xFFFFFFu : cases[i].argb;
+            OK(((nj_u4 *)buf->u.bytes)[3] == want);
+            OK(((nj_u4 *)buf->u.bytes)[2] == 0x5A5A5A5Au);
+        } else {
+            /* 444/555 high unused bits are zero on export. */
+            nj_u4 want = cases[i].packed;
+            if (cases[i].fmt == 444) want &= 0xFFFu;
+            if (cases[i].fmt == 555) want &= 0x7FFFu;
+            OK_MSG(((nj_u2 *)buf->u.bytes)[3] == want, "get fmt=%d got=%04X want=%04X",
+                   cases[i].fmt, ((nj_u2 *)buf->u.bytes)[3], want);
+            OK(((nj_u2 *)buf->u.bytes)[2] == 0x5A5Au);
+        }
+    }
+    /* Both ARGB1555 alpha values, rather than only transparent input. */
+    ((nj_u2 *)shorts->u.bytes)[0] = 0xFC1Fu;
+    OK(pixels_draw(vm, g, shorts, 0, 1, 0, 1, 0, 0, 1, 1, 0, 1555) == NJ_OK);
+    OK(raw[0] == 0xFFFF00FFu);
+    nj_root_release(vm, mark);
+}
+
+static void test_pixel_manipulations(nj_vm *vm)
+{
+    static const nj_u4 colors[] = {0xFFFF0000u, 0xFF00FF00u, 0xFF0000FFu,
+                                  0xFFFFFF00u, 0xFFFF00FFu, 0xFF00FFFFu};
+    static const nj_u2 packed[] = {0xF800u, 0x07E0u, 0x001Fu, 0xFFE0u, 0xF81Fu, 0x07FFu};
+    int ints, rot, flip, negative, clipped;
+    nj_u4 mark = nj_root_mark(vm);
+    nj_ref img = nj_root(vm, image_new(vm, 8, 8));
+    nj_ref g = nj_root(vm, image_graphics(vm, img));
+    nj_ref ib = nj_root(vm, nj_int_array_new(vm, 12));
+    nj_ref sb = nj_root(vm, nj_short_array_new(vm, 12));
+    nj_u4 *raw; nj_value a[4];
+    raw = nj_midp_image_pixels(vm, img);
+    OK(raw != NULL);
+    a[0] = iref(1); a[1] = iref(2);
+    OK(nj_call(vm, g, NJ_C_GRAPHICS, "translate", "(II)V", a, NULL) == NJ_OK);
+    for (ints = 0; ints < 2; ++ints) for (rot = 0; rot < 4; ++rot)
+    for (flip = 0; flip < 4; ++flip) for (negative = 0; negative < 2; ++negative)
+    for (clipped = 0; clipped < 2; ++clipped) {
+        nj_u4 want[64]; int sx, sy, k, dw = rot & 1 ? 3 : 2, dh = rot & 1 ? 2 : 3;
+        int off = negative ? 9 : 1, scan = negative ? -4 : 4;
+        a[0] = iref(clipped ? 1 : -1); a[1] = iref(clipped ? 0 : -2);
+        a[2] = iref(clipped ? 2 : 8); a[3] = iref(clipped ? 3 : 8);
+        OK(nj_call(vm, g, NJ_C_GRAPHICS, "setClip", "(IIII)V", a, NULL) == NJ_OK);
+        for (k = 0; k < 64; ++k) raw[k] = want[k] = 0xFFFFFFFFu;
+        for (sy = 0; sy < 3; ++sy) for (sx = 0; sx < 2; ++sx) {
+            int dx, dy, idx = off + sy * scan + sx;
+            ((nj_u4 *)ib->u.bytes)[idx] = colors[sy * 2 + sx];
+            ((nj_u2 *)sb->u.bytes)[idx] = packed[sy * 2 + sx];
+            if (rot == 0) { dx = sx; dy = sy; }
+            else if (rot == 1) { dx = sy; dy = 1 - sx; }
+            else if (rot == 2) { dx = 1 - sx; dy = 2 - sy; }
+            else { dx = 2 - sy; dy = sx; }
+            if (flip & 1) dx = dw - 1 - dx;
+            if (flip & 2) dy = dh - 1 - dy;
+            dx += 1; dy += 2;
+            if (!clipped || (dx >= 2 && dx < 4 && dy >= 2 && dy < 5))
+                want[dy * 8 + dx] = colors[sy * 2 + sx];
+        }
+        OK(pixels_draw(vm, g, ints ? ib : sb, ints, 1, off, scan, 0, 0,
+                       2, 3, rot * 90 | (flip << 13), ints ? 8888 : 565) == NJ_OK);
+        OK_MSG(memcmp(raw, want, sizeof(want)) == 0,
+               "pixels ints=%d rot=%d flip=%d negative=%d", ints, rot, flip, negative);
+    }
+    /* Reads use translation, ignore clip, support negative scan and preserve holes. */
+    {
+        int ints2, k;
+        for (k = 0; k < 64; ++k) raw[k] = colors[k % 6];
+        for (ints2 = 0; ints2 < 2; ++ints2) {
+            nj_ref buf = ints2 ? ib : sb;
+            memset(buf->u.bytes, 0x5A, ints2 ? 48u : 24u);
+            OK(pixels_get(vm, g, buf, ints2, 9, -4, 0, 0, 2, 3, ints2 ? 8888 : 565) == NJ_OK);
+            for (k = 0; k < 12; ++k) {
+                int row = (9 - k + 1) / 4;
+                int selected = (k == 1 || k == 2 || k == 5 || k == 6 || k == 9 || k == 10);
+                nj_u4 want = ints2 ? 0x5A5A5A5Au : 0x5A5Au;
+                if (selected) {
+                    int col = k - (9 - row * 4);
+                    int ci = ((row + 2) * 8 + col + 1) % 6;
+                    want = ints2 ? colors[ci] : packed[ci];
+                }
+                OK((ints2 ? ((nj_u4 *)buf->u.bytes)[k] : ((nj_u2 *)buf->u.bytes)[k]) == want);
+            }
+        }
+    }
+    nj_root_release(vm, mark);
+}
+
+static void test_pixel_errors(nj_vm *vm)
+{
+    static const struct {int off, scan, x, y, w, h, op, fmt; const char *exc;} bad[] = {
+        {0,2,0,0,2,2,45,8888,"java/lang/IllegalArgumentException"},
+        {0,2,0,0,2,2,0,12,"java/lang/IllegalArgumentException"},
+        {0,2,0,0,-1,2,0,8888,"java/lang/IllegalArgumentException"},
+        {0,2,0,0,2,-1,0,8888,"java/lang/IllegalArgumentException"},
+        {-1,2,0,0,2,2,0,8888,"java/lang/ArrayIndexOutOfBoundsException"},
+        {1,2,0,0,2,2,0,8888,"java/lang/ArrayIndexOutOfBoundsException"},
+        {0,-2,0,0,2,2,0,8888,"java/lang/ArrayIndexOutOfBoundsException"},
+        {0,2147483647,0,0,2,2,0,8888,"java/lang/ArrayIndexOutOfBoundsException"},
+        {2147483647,2,0,0,2,2,0,8888,"java/lang/ArrayIndexOutOfBoundsException"},
+        {0,2,-1,0,2,2,0,8888,"java/lang/IllegalArgumentException"},
+        {0,2,0,-1,2,2,0,8888,"java/lang/IllegalArgumentException"},
+        {0,2,3,0,2,2,0,8888,"java/lang/IllegalArgumentException"}
+    };
+    int ints, i, k; nj_u4 mark = nj_root_mark(vm);
+    nj_ref img = nj_root(vm, image_new(vm, 4, 4)), g = nj_root(vm, image_graphics(vm, img));
+    nj_ref ib = nj_root(vm, nj_int_array_new(vm, 4)), sb = nj_root(vm, nj_short_array_new(vm, 4));
+    nj_u4 *raw;
+    raw = nj_midp_image_pixels(vm, img);
+    OK(raw != NULL);
+    for (ints = 0; ints < 2; ++ints) {
+        nj_ref buf = ints ? ib : sb;
+        pixels_error(vm, pixels_draw(vm,g,NULL,ints,0,0,2,0,0,2,2,0,ints?8888:565), "java/lang/NullPointerException");
+        pixels_error(vm, pixels_get(vm,g,NULL,ints,0,2,0,0,2,2,ints?8888:565), "java/lang/NullPointerException");
+        for (i = 0; i < (int)(sizeof(bad)/sizeof(bad[0])); ++i) {
+            int fmt = bad[i].fmt == 8888 ? (ints ? 8888 : 565) : bad[i].fmt;
+            for (k = 0; k < 16; ++k) raw[k] = 0xFF123456u;
+            memset(buf->u.bytes, 0x5A, ints ? 16u : 8u);
+            if (i < 9) {
+                pixels_error(vm, pixels_draw(vm,g,buf,ints,1,bad[i].off,bad[i].scan,bad[i].x,bad[i].y,
+                                              bad[i].w,bad[i].h,bad[i].op,fmt), bad[i].exc);
+                for (k = 0; k < 16; ++k) OK(raw[k] == 0xFF123456u);
+            }
+            if (i == 0) continue; /* getPixels has no manipulation argument. */
+            pixels_error(vm, pixels_get(vm,g,buf,ints,bad[i].off,bad[i].scan,bad[i].x,bad[i].y,
+                                         bad[i].w,bad[i].h,fmt), bad[i].exc);
+            for (k = 0; k < 4; ++k)
+                OK((ints ? ((nj_u4 *)buf->u.bytes)[k] : ((nj_u2 *)buf->u.bytes)[k]) == (ints ? 0x5A5A5A5Au : 0x5A5Au));
+        }
+        /* Large destination coordinates must clip without signed overflow. */
+        OK(pixels_draw(vm,g,buf,ints,0,0,2,2147483647,2147483647,2,2,0,ints?8888:565) == NJ_OK);
+        /* Zero dimensions do not access even an otherwise invalid offset. */
+        OK(pixels_draw(vm,g,buf,ints,0,-2147483647,0,0,0,0,2,0,ints?8888:565) == NJ_OK);
+        OK(pixels_get(vm,g,buf,ints,2147483647,0,0,0,0,2,ints?8888:565) == NJ_OK);
+        OK(pixels_draw(vm,g,buf,ints,0,2147483647,0,0,0,2,0,0,ints?8888:565) == NJ_OK);
+        OK(pixels_get(vm,g,buf,ints,-2147483647,0,0,0,2,0,ints?8888:565) == NJ_OK);
+        pixels_error(vm,pixels_draw(vm,g,buf,ints,0,0,2,0,0,2,2,(-2147483647-1),ints?8888:565),
+                     "java/lang/IllegalArgumentException");
+        pixels_error(vm,pixels_draw(vm,g,buf,ints,0,0,2,0,0,2,2,0,-8888),
+                     "java/lang/IllegalArgumentException");
+        pixels_error(vm,pixels_draw(vm,g,buf,ints,0,0,2,0,0,2,2,0,ints?565:8888),
+                     "java/lang/IllegalArgumentException");
+        pixels_error(vm,pixels_get(vm,g,buf,ints,0,2,0,0,2,2,ints?565:8888),
+                     "java/lang/IllegalArgumentException");
+        pixels_error(vm,pixels_draw(vm,g,buf,ints,0,0,2147483647,2147483647,0,2147483647,2147483647,0,ints?8888:565),
+                     "java/lang/ArrayIndexOutOfBoundsException");
+        pixels_error(vm,pixels_get(vm,g,buf,ints,0,(-2147483647-1),0,0,1,2,ints?8888:565),
+                     "java/lang/ArrayIndexOutOfBoundsException");
+        /* Repeated scanlines can describe huge but mostly clipped rectangles. */
+        if (ints) ((nj_u4 *)buf->u.bytes)[0] = 0xFFFF0000u;
+        else ((nj_u2 *)buf->u.bytes)[0] = 0xF800u;
+        OK(pixels_draw(vm,g,buf,ints,0,0,0,0,-2147483646,1,2147483647,0,ints?8888:565) == NJ_OK);
+        OK(raw[0] == 0xFFFF0000u);
+    }
+    {
+        nj_value a[2];
+        a[0] = iref(1); a[1] = iref(-1);
+        OK(nj_call(vm,g,NJ_C_GRAPHICS,"translate","(II)V",a,NULL) == NJ_OK);
+        memset(ib->u.bytes, 0x5A, 16);
+        pixels_error(vm,pixels_get(vm,g,ib,1,0,2,-1,1,2,2,8888), "java/lang/IllegalArgumentException");
+        pixels_error(vm,pixels_get(vm,g,ib,1,0,2,0,0,2,2,8888), "java/lang/IllegalArgumentException");
+        for (k = 0; k < 4; ++k) OK(((nj_u4 *)ib->u.bytes)[k] == 0x5A5A5A5Au);
+    }
+    nj_root_release(vm, mark);
+}
+
+static void test_pixel_screen(nj_vm *vm)
+{
+    nj_u4 mark = nj_root_mark(vm);
+    nj_ref img = nj_root(vm, image_new(vm, 2, 2));
+    nj_ref g = nj_root(vm, image_graphics(vm, img));
+    nj_ref buf = nj_root(vm, nj_int_array_new(vm, 4));
+    nj_surface saved = vm->screen;
+    nj_u2 saved_w = vm->screen_w, saved_h = vm->screen_h;
+    nj_u4 storage[4];
+    const int formats[] = {NJ_PIXFMT_RGB565, NJ_PIXFMT_RGB888, NJ_PIXFMT_ARGB8888};
+    const int native[] = {565, 888, 8888};
+    int f; nj_field *target = NJ_F(vm, NJ_C_GRAPHICS, NJ_F_G_TARGET, "L" NJ_C_IMAGE ";");
+    nj_field_write_ref(vm, g, target, NULL);
+    for (f = 0; f < 3; ++f) {
+        nj_value ret;
+        vm->screen_w = vm->screen_h = 2;
+        vm->screen.width = vm->screen.height = 2;
+        vm->screen.bpp = f == 0 ? 2 : f == 1 ? 3 : 4;
+        vm->screen.stride = 2 * vm->screen.bpp;
+        vm->screen.format = formats[f]; vm->screen.pixels = storage;
+        nj_surface_set(&vm->screen, 0, 0, 0xFF00FF00u);
+        OK(nj_call(vm,g,NJ_C_GRAPHICS,"getNativePixelFormat","()I",NULL,&ret) == NJ_OK);
+        OK(ret.i == native[f]);
+        OK(pixels_get(vm,g,buf,1,0,2,0,0,1,1,8888) == NJ_OK);
+        OK(((nj_u4 *)buf->u.bytes)[0] == 0xFF00FF00u);
+    }
+    vm->screen = saved;
+    vm->screen_w = saved_w; vm->screen_h = saved_h;
+    nj_root_release(vm, mark);
+}
+
 int main(void)
 {
     nj_port port;
@@ -569,6 +828,10 @@ int main(void)
     test_get_direct_graphics(vm);
     test_drawing(vm);
     test_image_manipulation(vm);
+    test_pixel_formats(vm);
+    test_pixel_manipulations(vm);
+    test_pixel_errors(vm);
+    test_pixel_screen(vm);
 
     nj_vm_destroy(vm);
     nj_port_shutdown(&port);

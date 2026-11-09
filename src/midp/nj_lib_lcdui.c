@@ -10367,10 +10367,8 @@ NJFN(alerttype_playSound)
  * hands back is the Graphics itself, and for the call to resolve the methods
  * have to be on Graphics.
  *
- * Only these seven exist, because only these seven are used anywhere in the
- * corpus.  Inventing the rest of Nokia's API would be guesswork.
+ * Pixel formats below use the Nokia SDK's public numeric constants.
  */
-#define NJ_DG_PIXFMT_RGB565 10   /* Nokia's TYPE_USHORT_565_RGB */
 
 NJFN(dg_setARGBColor)
 {
@@ -10393,7 +10391,11 @@ NJFN(dg_setARGBColor)
 
 NJFN(dg_getNativePixelFormat)
 {
-    ret->i = NJ_DG_PIXFMT_RGB565;
+    nj_gfx g;
+    nj_surface sc;
+    if (!gfx_load(vm, NJ_THIS(args), &g, &sc)) return NJ_ERR;
+    ret->i = g.surf->format == NJ_PIXFMT_RGB565 ? 565
+           : g.surf->format == NJ_PIXFMT_RGB888 ? 888 : 8888;
     return NJ_OK;
 }
 
@@ -10552,138 +10554,153 @@ NJFN(dg_drawPolygon)
     return NJ_OK;
 }
 
-/*
- * drawPixels(short[], transparency, offset, scanlength, x, y, w, h,
- *            manipulation, format).  One nj_gfx_pixel per pixel: a game that
- * gets a correct picture slowly beats one that gets an exception, and this is
- * not on the hot path for anything in the corpus.
- */
-NJFN(dg_drawPixels)
+/* Nokia's formats are SDK literal values, not internal surface enums. */
+static int dg_pixel_format(int elem, int fmt)
 {
-    nj_ref self = NJ_THIS(args);
-    nj_ref px = NJ_ARG_REF(args, 0);
-    nj_s4 off = NJ_ARG_INT(args, 2);
-    nj_s4 scan = NJ_ARG_INT(args, 3);
-    nj_s4 x = NJ_ARG_INT(args, 4);
-    nj_s4 y = NJ_ARG_INT(args, 5);
-    nj_s4 w = NJ_ARG_INT(args, 6);
-    nj_s4 h = NJ_ARG_INT(args, 7);
-    nj_gfx g;
-    nj_surface sc;
-    nj_s4 row, col;
-    const nj_u2 *pix;
+    if (elem == 4) return fmt == 888 || fmt == 8888;
+    return fmt == 444 || fmt == 555 || fmt == 565 || fmt == 4444 || fmt == 1555;
+}
 
-    if (!px) {
-        return nj_throw(vm, "java/lang/NullPointerException", NULL);
-    }
-    if (!gfx_load(vm, self, &g, &sc)) {
-        return NJ_ERR;
-    }
-    pix = (const nj_u2 *)px->u.bytes;
-    for (row = 0; row < h; row++) {
-        for (col = 0; col < w; col++) {
-            nj_s4 idx = off + row * scan + col;
-            nj_u4 v;
-            if (idx < 0 || (nj_u4)idx >= px->length) {
-                continue;
-            }
-            v = pix[idx];
-            /* 565 in, 888 out: the same expansion RGB565 images already use. */
-            nj_gfx_set_color(&g,
-                             0xFF000000u |
-                             (((v >> 11) & 0x1Fu) << 19) |
-                             (((v >> 5) & 0x3Fu) << 10) |
-                             ((v & 0x1Fu) << 3));
-            nj_gfx_pixel(&g, x + col, y + row);
-        }
-    }
-    gfx_store(vm, self, &g);
+/* Validate both ends before touching any pixels, including clipped draws.
+ * Row starts are monotonic even for negative or overlapping scanlines. */
+static nj_status dg_pixel_range(nj_vm *vm, nj_ref pixels, nj_s4 off,
+                                nj_s4 scan, nj_s4 w, nj_s4 h)
+{
+    nj_s8 last, lo, hi;
+    if (w == 0 || h == 0) return NJ_OK;
+    last = (nj_s8)off + (nj_s8)(h - 1) * scan;
+    lo = last < off ? last : off;
+    hi = (last > off ? last : off) + w - 1;
+    if (lo < 0 || hi >= (nj_s8)pixels->length)
+        return nj_throw(vm, "java/lang/ArrayIndexOutOfBoundsException", "pixel array range");
     return NJ_OK;
 }
 
-/*
- * getPixels is the one method here that CANNOT be honest yet: reading pixels
- * back needs a surface read primitive that nj_gfx does not expose.  Leaving
- * the caller's array untouched is better than throwing into a game's paint()
- * where it cannot be caught, but it is a real gap and it is written down here
- * rather than hidden.
- */
-/*
- * DirectGraphics.getPixels() - reading the target back.
- *
- * This used to be a deliberate no-op, because nj_gfx had no way to read a
- * surface.  nj_surface_get()/nj_surface_format_color() exist, so it is a
- * no-op no longer: a game that reads the framebuffer to detect a collision or
- * to fade out gets the pixels it drew.
- *
- * `format` follows Nokia: TYPE_INT_8888_ARGB (12) and TYPE_INT_888_RGB (11)
- * are honoured, TYPE_USHORT_565_RGB (10) and anything else get the packed
- * 565 value, which is what the surface holds anyway.
- */
-#define NJ_DG_TYPE_INT_888_RGB    11
-#define NJ_DG_TYPE_INT_8888_ARGB  12
+static nj_u4 dg_expand5(nj_u4 v) { return (v << 3) | (v >> 2); }
+static nj_u4 dg_expand6(nj_u4 v) { return (v << 2) | (v >> 4); }
 
-/* elem is 2 for the short[] overload and 4 for the int[] one. */
-static nj_status dg_get_pixels(nj_vm *vm, nj_value *args, nj_value *ret,
-                               int elem)
+static nj_u4 dg_pixel_decode(nj_u4 v, int fmt)
 {
-    nj_ref self = NJ_THIS(args);
-    nj_ref dest = NJ_ARG_REF(args, 0);
-    nj_s4 offset = NJ_ARG_INT(args, 1);
-    nj_s4 scan = NJ_ARG_INT(args, 2);
-    nj_s4 x = NJ_ARG_INT(args, 3);
-    nj_s4 y = NJ_ARG_INT(args, 4);
-    nj_s4 w = NJ_ARG_INT(args, 5);
-    nj_s4 h = NJ_ARG_INT(args, 6);
-    nj_s4 fmt = NJ_ARG_INT(args, 7);
+    switch (fmt) {
+    case 888: return v | 0xFF000000u;
+    case 8888: return v;
+    case 444: case 4444:
+        return (fmt == 444 ? 0xFF000000u : ((v >> 12) & 15u) * 17u << 24)
+             | (((v >> 8) & 15u) * 17u << 16)
+             | (((v >> 4) & 15u) * 17u << 8) | ((v & 15u) * 17u);
+    case 565:
+        return 0xFF000000u | (dg_expand5((v >> 11) & 31u) << 16)
+             | (dg_expand6((v >> 5) & 63u) << 8) | dg_expand5(v & 31u);
+    default: /* 555 / 1555 */
+        return (fmt == 555 || (v & 0x8000u) ? 0xFF000000u : 0u)
+             | (dg_expand5((v >> 10) & 31u) << 16)
+             | (dg_expand5((v >> 5) & 31u) << 8) | dg_expand5(v & 31u);
+    }
+}
+
+static nj_u4 dg_pixel_encode(nj_u4 v, int fmt)
+{
+    switch (fmt) {
+    case 888: return v & 0xFFFFFFu;
+    case 8888: return v;
+    case 444: case 4444:
+        return (fmt == 444 ? 0u : (v >> 16) & 0xF000u)
+             | ((v >> 12) & 0xF00u) | ((v >> 8) & 0xF0u) | ((v >> 4) & 15u);
+    case 565:
+        return ((v >> 8) & 0xF800u) | ((v >> 5) & 0x7E0u) | ((v >> 3) & 31u);
+    default:
+        return (fmt == 555 ? 0u : (v >> 16) & 0x8000u)
+             | ((v >> 9) & 0x7C00u) | ((v >> 6) & 0x3E0u) | ((v >> 3) & 31u);
+    }
+}
+
+static nj_status dg_draw_pixels(nj_vm *vm, nj_value *args, int elem)
+{
+    nj_ref px = NJ_ARG_REF(args, 0);
+    nj_s4 off = NJ_ARG_INT(args, 2), scan = NJ_ARG_INT(args, 3);
+    nj_s4 x = NJ_ARG_INT(args, 4), y = NJ_ARG_INT(args, 5);
+    nj_s4 w = NJ_ARG_INT(args, 6), h = NJ_ARG_INT(args, 7);
+    nj_s4 op = NJ_ARG_INT(args, 8), fmt = NJ_ARG_INT(args, 9);
+    nj_s4 rot = op & ~0x6000;
     nj_gfx g;
     nj_surface sc;
-    nj_s4 j, i;
-
-    (void)ret;
-    if (!gfx_load(vm, self, &g, &sc)) {
-        return NJ_ERR;
-    }
-    if (!dest) {
-        NJ_THROW(vm, "java/lang/NullPointerException",
-                 "the destination array is null");
-    }
-    if (w <= 0 || h <= 0) {
-        return NJ_OK;
-    }
-    if (offset < 0 || scan < w) {
-        NJ_THROW(vm, "java/lang/IllegalArgumentException",
-                 "offset and scanlength are too small for the pixels asked for");
-    }
-    /* The last element written is offset + (h-1)*scan + (w-1). */
-    if ((nj_s8)offset + (nj_s8)(h - 1) * scan + (w - 1)
-        >= (nj_s8)dest->length) {
-        NJ_THROW(vm, "java/lang/ArrayIndexOutOfBoundsException",
-                 "the destination array is too small for the pixels asked for");
-    }
-    for (j = 0; j < h; j++) {
-        for (i = 0; i < w; i++) {
-            nj_u4 argb = nj_surface_format_color(sc.format,
-                                                 nj_surface_get(&sc, x + i,
-                                                                y + j));
-            nj_s4 v;
-            nj_s4 at = offset + j * scan + i;
-
-            if (fmt == NJ_DG_TYPE_INT_8888_ARGB) {
-                v = (nj_s4)argb;
-            } else if (fmt == NJ_DG_TYPE_INT_888_RGB) {
-                v = (nj_s4)(argb & 0xFFFFFFu);
-            } else {
-                v = (nj_s4)(((argb >> 19) & 0x1Fu) << 11
-                            | ((argb >> 10) & 0x3Fu) << 5
-                            | ((argb >> 3) & 0x1Fu));
-            }
-            if (elem == 2) {
-                ((nj_u2 *)dest->u.bytes)[at] = (nj_u2)v;
-            } else {
-                ((nj_s4 *)dest->u.bytes)[at] = v;
-            }
+    nj_s8 x0, y0, x1, y1, left, top, dx, dy;
+    nj_s4 dw, dh;
+    int alpha = NJ_ARG_INT(args, 1) != 0;
+    if (!px) return nj_throw(vm, "java/lang/NullPointerException", "pixels is null");
+    if (w < 0 || h < 0 || rot < 0 || rot > 270 || rot % 90 != 0 || !dg_pixel_format(elem, fmt))
+        return nj_throw(vm, "java/lang/IllegalArgumentException", "pixel dimensions, manipulation or format");
+    if (dg_pixel_range(vm, px, off, scan, w, h) != NJ_OK) return NJ_ERR;
+    if (w == 0 || h == 0) return NJ_OK;
+    if (!gfx_load(vm, NJ_THIS(args), &g, &sc)) return NJ_ERR;
+    dw = rot == 90 || rot == 270 ? h : w;
+    dh = rot == 90 || rot == 270 ? w : h;
+    left = (nj_s8)x + g.translate_x; top = (nj_s8)y + g.translate_y;
+    x0 = left; y0 = top; x1 = left + dw; y1 = top + dh;
+    if (x0 < g.clip_x) x0 = g.clip_x;
+    if (y0 < g.clip_y) y0 = g.clip_y;
+    if (x1 > (nj_s8)g.clip_x + g.clip_w) x1 = (nj_s8)g.clip_x + g.clip_w;
+    if (y1 > (nj_s8)g.clip_y + g.clip_h) y1 = (nj_s8)g.clip_y + g.clip_h;
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
+    if (x1 > g.surf->width) x1 = g.surf->width;
+    if (y1 > g.surf->height) y1 = g.surf->height;
+    /* Device coordinates are now bounded; keep every Java Graphics field.
+     * Inverse-map only visible pixels, so huge clipped dimensions stay cheap. */
+    g.translate_x = g.translate_y = 0;
+    for (dy = y0; dy < y1; ++dy) for (dx = x0; dx < x1; ++dx) {
+        nj_s8 u = dx - left, v = dy - top, sx, sy, at;
+        nj_u4 color;
+        if (op & 0x2000) u = dw - 1 - u;
+        if (op & 0x4000) v = dh - 1 - v;
+        switch (rot) {
+        case 90: sx = w - 1 - v; sy = u; break;
+        case 180: sx = w - 1 - u; sy = h - 1 - v; break;
+        case 270: sx = v; sy = h - 1 - u; break;
+        default: sx = u; sy = v; break;
         }
+        at = (nj_s8)off + sy * scan + sx;
+        color = elem == 4 ? ((const nj_u4 *)px->u.bytes)[at] : ((const nj_u2 *)px->u.bytes)[at];
+        color = dg_pixel_decode(color, fmt);
+        if (!alpha) color |= 0xFF000000u;
+        nj_gfx_set_color(&g, color);
+        nj_gfx_pixel(&g, (int)dx, (int)dy);
+    }
+    return NJ_OK;
+}
+
+NJFN(dg_drawPixels)
+{
+    return dg_draw_pixels(vm, args, 2);
+}
+
+/* Reads apply translation but not the Graphics clip. Reject rectangles that
+ * leave the surface before writing anything: Nokia leaves that case unspecified. */
+static nj_status dg_get_pixels(nj_vm *vm, nj_value *args, nj_value *ret, int elem)
+{
+    nj_ref dest = NJ_ARG_REF(args, 0);
+    nj_s4 off = NJ_ARG_INT(args, 1), scan = NJ_ARG_INT(args, 2);
+    nj_s4 x = NJ_ARG_INT(args, 3), y = NJ_ARG_INT(args, 4);
+    nj_s4 w = NJ_ARG_INT(args, 5), h = NJ_ARG_INT(args, 6), fmt = NJ_ARG_INT(args, 7);
+    nj_gfx g;
+    nj_surface sc;
+    nj_s8 left, top;
+    nj_s4 row, col;
+    (void)ret;
+    if (!dest) return nj_throw(vm, "java/lang/NullPointerException", "pixels is null");
+    if (x < 0 || y < 0 || w < 0 || h < 0 || !dg_pixel_format(elem, fmt))
+        return nj_throw(vm, "java/lang/IllegalArgumentException", "pixel rectangle or format");
+    if (dg_pixel_range(vm, dest, off, scan, w, h) != NJ_OK) return NJ_ERR;
+    if (w == 0 || h == 0) return NJ_OK;
+    if (!gfx_load(vm, NJ_THIS(args), &g, &sc)) return NJ_ERR;
+    left = (nj_s8)x + g.translate_x; top = (nj_s8)y + g.translate_y;
+    if (left < 0 || top < 0 || left + w > g.surf->width || top + h > g.surf->height)
+        return nj_throw(vm, "java/lang/IllegalArgumentException", "pixel rectangle leaves surface");
+    for (row = 0; row < h; ++row) for (col = 0; col < w; ++col) {
+        nj_s8 at = (nj_s8)off + (nj_s8)row * scan + col;
+        nj_u4 v = dg_pixel_encode(nj_surface_get(g.surf, (int)left + col, (int)top + row), fmt);
+        if (elem == 4) ((nj_u4 *)dest->u.bytes)[at] = v;
+        else ((nj_u2 *)dest->u.bytes)[at] = (nj_u2)v;
     }
     return NJ_OK;
 }
@@ -10726,59 +10743,9 @@ NJFN(dg_drawTriangle)
     return NJ_OK;
 }
 
-/*
- * drawPixels(int[], boolean, offset, scanlength, x, y, w, h, manipulation,
- * format): the int[] overload of the call above.  The format says how to read
- * each int - 8888 is ARGB, 888 is RGB, anything else is a packed 565 value,
- * which is what the surface holds anyway.
- */
 NJFN(dg_drawPixelsInt)
 {
-    nj_ref self = NJ_THIS(args);
-    nj_ref px = NJ_ARG_REF(args, 0);
-    nj_s4 off = NJ_ARG_INT(args, 2);
-    nj_s4 scan = NJ_ARG_INT(args, 3);
-    nj_s4 x = NJ_ARG_INT(args, 4);
-    nj_s4 y = NJ_ARG_INT(args, 5);
-    nj_s4 w = NJ_ARG_INT(args, 6);
-    nj_s4 h = NJ_ARG_INT(args, 7);
-    nj_s4 fmt = NJ_ARG_INT(args, 9);
-    nj_gfx g;
-    nj_surface sc;
-    nj_s4 row, col;
-    const nj_s4 *pix;
-
-    if (!px) {
-        return nj_throw(vm, "java/lang/NullPointerException", NULL);
-    }
-    if (!gfx_load(vm, self, &g, &sc)) {
-        return NJ_ERR;
-    }
-    pix = (const nj_s4 *)px->u.bytes;
-    for (row = 0; row < h; row++) {
-        for (col = 0; col < w; col++) {
-            nj_s4 idx = off + row * scan + col;
-            nj_u4 v;
-            if (idx < 0 || (nj_u4)idx >= px->length) {
-                continue;
-            }
-            v = (nj_u4)pix[idx];
-            if (fmt == NJ_DG_TYPE_INT_8888_ARGB) {
-                /* as given */
-            } else if (fmt == NJ_DG_TYPE_INT_888_RGB) {
-                v |= 0xFF000000u;
-            } else {
-                v = 0xFF000000u
-                    | (((v >> 11) & 0x1Fu) << 19)
-                    | (((v >> 5) & 0x3Fu) << 10)
-                    | ((v & 0x1Fu) << 3);
-            }
-            nj_gfx_set_color(&g, v);
-            nj_gfx_pixel(&g, x + col, y + row);
-        }
-    }
-    gfx_store(vm, self, &g);
-    return NJ_OK;
+    return dg_draw_pixels(vm, args, 4);
 }
 
 /*
