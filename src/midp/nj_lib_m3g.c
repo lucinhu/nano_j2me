@@ -10922,6 +10922,8 @@ M3G_F_GET(m3g_g3d_getDepthRangeFar, NJ_C_G3D, "_nj_drfar")
  * nearer, and a freshly allocated array is all zero = "nothing drawn",
  * which is exactly the state a new buffer must be in. Binding a target starts
  * its depth-buffer lifetime; explicit clear() clears it during that binding.
+ * JSR 184 uses LEQUAL: in this reversed key domain, equal keys must pass,
+ * so the raster loops accept key >= stored (and reject only key < stored).
  */
 typedef struct {
     nj_surface *surf;
@@ -11914,7 +11916,7 @@ static nj_u4 sw_tri(m3g_sw *sw, const float xy[6], const float inv[3],
                 for (px = xl; px <= xr; px++, o++, drow += bpp, pg += dxg) {
                     nj_s4 key = (nj_s4)(pg * iz);
 
-                    if (key > 0 && (!dtest || key > z[o])) {
+                    if (key > 0 && (!dtest || key >= z[o])) {
                         if (dwrite) { z[o] = key; }
                         m3g_pixel_write(drow, format,
                                         fog_here == 2 ? fog_const :
@@ -11946,7 +11948,7 @@ static nj_u4 sw_tri(m3g_sw *sw, const float xy[6], const float inv[3],
                     float cp;
 
                     if (key <= 0) { continue; }
-                    if (dtest && key <= z[o]) { continue; }
+                    if (dtest && key < z[o]) { continue; }
                     cp = 1.0f / pg;
                     tp = sw_near_texel(sw, st_outer ? ph / pg : ph * cp,
                                        st_outer ? pk / pg : pk * cp);
@@ -12021,7 +12023,7 @@ static nj_u4 sw_tri(m3g_sw *sw, const float xy[6], const float inv[3],
                     float cp;
 
                     if (key <= 0) { continue; }
-                    if (key <= z[o]) { continue; }
+                    if (key < z[o]) { continue; }
                     cp = 1.0f / pg;
                     {
                         float fs = ph * cp;
@@ -12066,7 +12068,7 @@ static nj_u4 sw_tri(m3g_sw *sw, const float xy[6], const float inv[3],
                     float cp;
 
                     if (key <= 0) { continue; }
-                    if (dtest && key <= z[o]) { continue; }
+                    if (dtest && key < z[o]) { continue; }
                     cp = 1.0f / pg;
                     {
                         float fs = ph * cp;
@@ -12137,7 +12139,7 @@ static nj_u4 sw_tri(m3g_sw *sw, const float xy[6], const float inv[3],
                     float cp;
 
                     if (key <= 0) { continue; }
-                    if (dtest && key <= z[o]) { continue; }
+                    if (dtest && key < z[o]) { continue; }
                     cp = 1.0f / pg;
                     tp = sw_near_texel(sw, st_outer ? ph / pg : ph * cp,
                                        st_outer ? pk / pg : pk * cp);
@@ -12205,7 +12207,7 @@ static nj_u4 sw_tri(m3g_sw *sw, const float xy[6], const float inv[3],
                 if (key <= 0) {
                     continue;
                 }
-                if (dtest && key <= z[o]) {
+                if (dtest && key < z[o]) {
                     continue;
                 }
                 if (gouraud) {

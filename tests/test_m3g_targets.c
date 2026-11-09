@@ -366,11 +366,14 @@ static void init(target *t, int format)
     a[0].i = 0;
     a[1].r = tex;
     call(t, t->app, C("Appearance"), "setTexture", "(IL" C("Texture2D") ";)V", a);
-    a[0].f = 4;
+    /* At z=-2, perspective 90 degrees has the same four-unit coverage as
+     * the old parallel fixture. Perspective also distinguishes near/far keys;
+     * constant parallel w made the old far-occlusion check a strict-tie check. */
+    a[0].f = 90;
     a[1].f = 1;
     a[2].f = 1;
     a[3].f = 10;
-    call(t, camera, C("Camera"), "setParallel", "(FFFF)V", a);
+    call(t, camera, C("Camera"), "setPerspective", "(FFFF)V", a);
     a[0].r = camera;
     a[1].r = NULL;
     call(t, t->g3d, C("Graphics3D"), "setCamera", "(L" C("Camera") ";L" C("Transform") ";)V", a);

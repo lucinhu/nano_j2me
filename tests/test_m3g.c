@@ -7449,8 +7449,8 @@ int main(void)
                           "depth test and depth write independently control occlusion");
                 }
             }
-            /* Coplanar opaque triangles keep the first colour until depth
-               testing is disabled, for both ALPHA and REPLACE compositing. */
+            /* LEQUAL lets a later coplanar opaque triangle replace the first
+               colour, for both ALPHA and REPLACE compositing. */
             {
                 const int blends[2] = {64, 68};
                 int blend;
@@ -7473,15 +7473,17 @@ int main(void)
                     a[0].r = mesh; a[1].r = xf;
                     call(vm, g3d, CLS("Graphics3D"), "render",
                          "(L" CLS("Node") ";L" CLS("Transform") ";)V", a, NULL);
-                    check(p[9 * 16 + 6] == 0xFFFF0000u,
-                          "equal depth keeps the first opaque flat triangle");
+                    check(p[9 * 16 + 6] == 0xFF00FF00u,
+                          "LEQUAL lets the later opaque flat triangle replace red");
                     a[0].i = 0;
                     call(vm, cm, CLS("CompositingMode"), "setDepthTestEnable", "(Z)V", a, NULL);
+                    a[0].i = 2048; a[1].i = (nj_s4)0xFF0000FFu;
+                    call(vm, material, CLS("Material"), "setColor", "(II)V", a, NULL);
                     a[0].r = mesh; a[1].r = xf;
                     call(vm, g3d, CLS("Graphics3D"), "render",
                          "(L" CLS("Node") ";L" CLS("Transform") ";)V", a, NULL);
-                    check(p[9 * 16 + 6] == 0xFF00FF00u,
-                          "disabled depth test lets the coplanar green triangle replace red");
+                    check(p[9 * 16 + 6] == 0xFF0000FFu,
+                          "disabled depth test lets the coplanar blue triangle replace green");
                     a[0].i = 1;
                     call(vm, cm, CLS("CompositingMode"), "setDepthTestEnable", "(Z)V", a, NULL);
                 }
@@ -7495,6 +7497,8 @@ int main(void)
                 nj_u4 expected[256];
                 nj_s2 *d = (nj_s2 *)nj_array_data(data);
                 float *b = (float *)nj_array_data(bias);
+                a[0].i = 2048; a[1].i = (nj_s4)0xFF00FF00u;
+                call(vm, material, CLS("Material"), "setColor", "(II)V", a, NULL);
                 a[0].r = clear_bg;
                 call(vm, g3d, CLS("Graphics3D"), "clear",
                      "(L" CLS("Background") ";)V", a, NULL);
