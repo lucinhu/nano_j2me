@@ -2006,26 +2006,72 @@ static void nj_region_draw(nj_gfx *g, const nj_u1 *src, nj_s8 src_stride_bytes,
      * rotated column and a 21x19 mirrored sprite every frame, and every one of
      * those 54,000 pixels a frame went through nj_trans_inverse() plus two
      * format switches (nj_src_pixel and nj_dst_pixel) to be copied unchanged.
-     * Ask the inverse transform per pixel - it is a switch on a constant the
-     * caller fixed - and copy the pixel.
+     * Along a destination row, the source advances by one pixel or one row
+     * (possibly backwards).  Compute that byte step once, inverse-map only
+     * the first pixel of each clipped row, and use fixed-size copies so the
+     * compiler can inline the unaligned loads/stores for each pixel format.
      */
     if (mask == NULL && !xor_on && alpha == 255
         && src_format == g->surf->format && src_bpp == bpp
         && (src_format != NJ_PIXFMT_ARGB8888 || rop == NJ_ROP_SET)) {
         nj_u1 *dst = (nj_u1 *)g->surf->pixels;
+        nj_s8 step;
+        int first = (int)(cx0 - X0);
+        int n = (int)(cx1 - cx0 + 1);
 
+        /* Every Sprite transform is the identity for a 1x1 source region. */
+        if (sw == 1 && sh == 1) {
+            nj_u1 *dp = dst + cy0 * g->surf->stride + cx0 * bpp;
+            const nj_u1 *sp = src + (nj_s8)sy * src_stride_bytes
+                           + (nj_s8)sx * src_bpp;
+
+            if (bpp == 2) {
+                memcpy(dp, sp, 2);
+            } else if (bpp == 3) {
+                memcpy(dp, sp, 3);
+            } else {
+                memcpy(dp, sp, 4);
+            }
+            return;
+        }
+        switch (transform) {
+        case NJ_TRANS_MIRROR:
+        case NJ_TRANS_ROT180:
+            step = -src_bpp;
+            break;
+        case NJ_TRANS_MIRROR_ROT270:
+        case NJ_TRANS_ROT270:
+            step = src_stride_bytes;
+            break;
+        case NJ_TRANS_ROT90:
+        case NJ_TRANS_MIRROR_ROT90:
+            step = -src_stride_bytes;
+            break;
+        default:
+            step = src_bpp;
+            break;
+        }
         for (Y = cy0; Y <= cy1; Y++) {
-            int j = (int)(Y - Y0);
+            int u, v, i;
+            nj_s8 off;
+            nj_u1 *dp = dst + Y * g->surf->stride + cx0 * bpp;
 
-            for (X = cx0; X <= cx1; X++) {
-                int i = (int)(X - X0);
-                int u, v;
-
-                nj_trans_inverse(transform, i, j, sw, sh, &u, &v);
-                memcpy(dst + (nj_s8)Y * g->surf->stride + (nj_s8)X * bpp,
-                       src + (nj_s8)(sy + v) * src_stride_bytes
-                           + (nj_s8)(sx + u) * src_bpp,
-                       (size_t)src_bpp);
+            nj_trans_inverse(transform, first, (int)(Y - Y0), sw, sh, &u, &v);
+            off = (nj_s8)(sy + v) * src_stride_bytes + (nj_s8)(sx + u) * src_bpp;
+            /* Keep an integer offset: a backwards step after the final
+             * pixel must not form a pointer before the source buffer. */
+            if (bpp == 2) {
+                for (i = 0; i < n; i++, off += step, dp += 2) {
+                    memcpy(dp, src + off, 2);
+                }
+            } else if (bpp == 3) {
+                for (i = 0; i < n; i++, off += step, dp += 3) {
+                    memcpy(dp, src + off, 3);
+                }
+            } else {
+                for (i = 0; i < n; i++, off += step, dp += 4) {
+                    memcpy(dp, src + off, 4);
+                }
             }
         }
         return;
@@ -2424,10 +2470,13 @@ static int nj_image_region(const nj_image *img, int *sx, int *sy, int *sw,
     if (*sx >= img->width || *sy >= img->height) {
         return 0;
     }
-    if (*sx + *sw > img->width) {
+    /* Origins are now nonnegative and inside the image.  Compare with the
+     * remaining extent rather than adding an untrusted width/height, which
+     * can overflow even for a tiny image (e.g. sx=1, sw=INT_MAX). */
+    if (*sw > img->width - *sx) {
         *sw = img->width - *sx;
     }
-    if (*sy + *sh > img->height) {
+    if (*sh > img->height - *sy) {
         *sh = img->height - *sy;
     }
     return (*sw > 0 && *sh > 0) ? 1 : 0;

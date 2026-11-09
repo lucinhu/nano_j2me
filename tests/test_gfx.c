@@ -1625,6 +1625,198 @@ static void write_ppm_demo(tctx *t)
     ts_free(&ts);
 }
 
+/* Forward Sprite transform for a slow source-ordered reference raster.
+ * The production blitter traverses destination rows and inverse-maps. */
+static void ref_transform(int tr, int x, int y, int w, int h, int *dx, int *dy)
+{
+    switch (tr) {
+    case NJ_TRANS_MIRROR_ROT180: *dx = x; *dy = h - 1 - y; break;
+    case NJ_TRANS_MIRROR: *dx = w - 1 - x; *dy = y; break;
+    case NJ_TRANS_ROT180: *dx = w - 1 - x; *dy = h - 1 - y; break;
+    case NJ_TRANS_MIRROR_ROT270: *dx = y; *dy = x; break;
+    case NJ_TRANS_ROT90: *dx = h - 1 - y; *dy = x; break;
+    case NJ_TRANS_ROT270: *dx = y; *dy = w - 1 - x; break;
+    case NJ_TRANS_MIRROR_ROT90: *dx = h - 1 - y; *dy = w - 1 - x; break;
+    default: *dx = x; *dy = y; break;
+    }
+}
+
+static void test_transform_boundaries(tctx *t)
+{
+    static const int formats[] = {
+        NJ_PIXFMT_RGB565, NJ_PIXFMT_RGB888, NJ_PIXFMT_ARGB8888
+    };
+    static const int sizes[][2] = { {3, 2}, {1, 1}, {1, 4}, {4, 1}, {5, 3} };
+    static const struct {
+        int dx, dy, cx, cy, cw, ch;
+    } cases[] = {
+        {0, 3, 0, 0, 9, 8},       /* whole image */
+        {0, 3, 3, 3, 1, 1},       /* one pixel, or completely clipped */
+        {0, 3, 0, 3, 9, 1},       /* one destination row */
+        {0, 3, 3, 0, 1, 8},       /* one destination column */
+        {-3, 0, 0, 0, 9, 8},      /* top/left outside the surface */
+        {6, 7, 0, 0, 9, 8},       /* bottom/right outside the surface */
+        {0, 3, 0, 0, 0, 8}        /* empty clip */
+    };
+    static const nj_u4 alpha[] = {0u, 1u, 127u, 128u, 254u, 255u};
+    nj_u1 source[6 * (7 * 4 + 2) + 2], saved[sizeof source];
+    nj_u1 actual[8 * (9 * 4 + 5) + 2], expected[sizeof actual];
+    int f, entry, z, tr, paint, c;
+
+    printf("[15] transformed copies: formats, unaligned buffers, stride and clip\n");
+    for (f = 0; f < 3; f++) {
+        int fmt = formats[f], bpp = fmt_bpp_of(fmt);
+
+        /* drawRGB has a byte stride, which may include padding. */
+        for (entry = 0; entry < (fmt == NJ_PIXFMT_RGB888 ? 2 : 1); entry++) {
+            nj_surface src;
+            nj_image img;
+            int x, y;
+
+            memset(source, SENTINEL, sizeof source);
+            memset(&src, 0, sizeof src);
+            memset(&img, 0, sizeof img);
+            src.width = 7; src.height = 6; src.format = fmt;
+            src.stride = 7 * bpp + (entry ? 2 : 0);
+            src.pixels = source + 1;
+            for (y = 0; y < 6; y++) {
+                for (x = 0; x < 7; x++) {
+                    nj_u4 color = (alpha[(x + y * 7) % 6] << 24)
+                        | ((nj_u4)(19 + x * 31) << 16)
+                        | ((nj_u4)(7 + y * 43) << 8) | (nj_u4)(x + y * 7);
+                    nj_surface_set(&src, x, y, color);
+                }
+            }
+            memcpy(saved, source, sizeof source);
+            img.width = 7; img.height = 6; img.format = fmt;
+            img.pixels = (nj_u4 *)(void *)(source + 1);
+            img.has_alpha = 1;
+            for (z = 0; z < 5; z++) {
+                int w = sizes[z][0], h = sizes[z][1];
+                for (tr = 0; tr < 8; tr++) {
+                    for (paint = 0; paint < 2; paint++) {
+                        int rop = paint ? NJ_ROP_PAINT : NJ_ROP_SET;
+                        for (c = 0; c < (int)(sizeof cases / sizeof cases[0]); c++) {
+                            tsurf ts, ref;
+                            nj_gfx g;
+                            int same;
+
+                            memset(actual, SENTINEL, sizeof actual);
+                            memset(expected, SENTINEL, sizeof expected);
+                            memset(&ts, 0, sizeof ts);
+                            ts.buf = actual + 1; ts.bpp = bpp; ts.pad = 5;
+                            ts.s.width = 9; ts.s.height = 8; ts.s.format = fmt;
+                            ts.s.stride = 9 * bpp + ts.pad;
+                            ts.s.pixels = ts.buf;
+                            ref = ts; ref.buf = expected + 1;
+                            ref.s.pixels = ref.buf;
+                            nj_surface_fill(&ts.s, 0x7F476B9Du);
+                            nj_surface_fill(&ref.s, 0x7F476B9Du);
+                            nj_gfx_init(&g, &ts.s);
+                            nj_gfx_translate(&g, 2, -1);
+                            nj_gfx_set_clip(&g, cases[c].cx - 2, cases[c].cy + 1,
+                                            cases[c].cw, cases[c].ch);
+                            if (entry) {
+                                nj_gfx_draw_rgb(&g, source + 1, src.stride, 255,
+                                                cases[c].dx, cases[c].dy, 1, 1,
+                                                w, h, rop, TRANS_CASES[tr].transform);
+                            } else {
+                                nj_gfx_draw_region(&g, &img, 1, 1, w, h,
+                                                   TRANS_CASES[tr].transform,
+                                                   0, 0, NULL,
+                                                   cases[c].dx, cases[c].dy, rop);
+                            }
+                            for (y = 0; y < h; y++) {
+                                for (x = 0; x < w; x++) {
+                                    int dx, dy;
+                                    nj_u4 color = nj_surface_get(&src, 1 + x, 1 + y);
+
+                                    ref_transform(TRANS_CASES[tr].transform,
+                                                  x, y, w, h, &dx, &dy);
+                                    dx += cases[c].dx + 2;
+                                    dy += cases[c].dy - 1;
+                                    if (dx < cases[c].cx || dy < cases[c].cy
+                                        || dx >= cases[c].cx + cases[c].cw
+                                        || dy >= cases[c].cy + cases[c].ch
+                                        || dx < 0 || dy < 0 || dx >= 9 || dy >= 8) {
+                                        continue;
+                                    }
+                                    if (paint) {
+                                        nj_gfx_blend_pixel(&ref.s, dx, dy, color, 255);
+                                    } else {
+                                        nj_surface_set(&ref.s, dx, dy, color);
+                                    }
+                                }
+                            }
+                            same = memcmp(actual, expected, sizeof actual) == 0;
+                            if (!same) {
+                                printf("  fmt=%d entry=%d size=%dx%d tr=%s paint=%d clip=%d\n",
+                                       fmt, entry, w, h, trans_name(TRANS_CASES[tr].transform),
+                                       paint, c);
+                            }
+                            CHECK(t, same);
+                            CHECK(t, ts_pad_ok(&ts));
+                        }
+                    }
+                }
+            }
+            CHECK(t, memcmp(source, saved, sizeof source) == 0);
+        }
+    }
+}
+
+static void test_image_region_limits(tctx *t)
+{
+    static const int extents[][4] = {
+        {1, 1, INT_MAX, 2},
+        {1, 1, 2, INT_MAX},
+        {1, 1, INT_MAX, INT_MAX},
+        {INT_MIN, 1, INT_MAX, INT_MAX},
+        {1, INT_MIN, INT_MAX, INT_MAX},
+        {INT_MAX, 1, INT_MAX, INT_MAX},
+        {1, INT_MAX, INT_MAX, INT_MAX}
+    };
+    nj_u4 pixels[9] = {
+        0xFF010203u, 0xFF112233u, 0xFF445566u,
+        0xFF778899u, 0x00123456u, 0x7F89ABCDu,
+        0xFF102030u, 0xFE765432u, 0xFFABCDEFu
+    };
+    nj_image img;
+    tsurf actual, expected;
+    nj_gfx g, ref;
+    int tr, c;
+
+    printf("[16] source region limits: overflowing extents and extreme origins\n");
+    memset(&img, 0, sizeof img);
+    img.width = 3; img.height = 3; img.format = NJ_PIXFMT_ARGB8888;
+    img.pixels = pixels; img.has_alpha = 1;
+    ts_init(&actual, 8, 8, NJ_PIXFMT_ARGB8888, 5, C_WHITE);
+    ts_init(&expected, 8, 8, NJ_PIXFMT_ARGB8888, 5, C_WHITE);
+    nj_gfx_init(&g, &actual.s);
+    nj_gfx_init(&ref, &expected.s);
+    for (tr = 0; tr < 8; tr++) {
+        for (c = 0; c < (int)(sizeof extents / sizeof extents[0]); c++) {
+            ts_clear(&actual, C_WHITE);
+            ts_clear(&expected, C_WHITE);
+            /* Positive source origins leave exactly a 2x2 subregion.  The
+             * INT_MIN/INT_MAX origin cases have no source pixels left. */
+            if (c < 3) {
+                nj_gfx_draw_image_rop(&ref, &img, 1, 1, 1, 1, 2, 2,
+                                      NJ_ROP_SET, TRANS_CASES[tr].transform);
+            }
+            nj_gfx_draw_image_rop(&g, &img, 1, 1,
+                                  extents[c][0], extents[c][1],
+                                  extents[c][2], extents[c][3],
+                                  NJ_ROP_SET, TRANS_CASES[tr].transform);
+            CHECK(t, memcmp(actual.buf, expected.buf,
+                             (size_t)actual.s.stride * actual.s.height) == 0);
+            CHECK(t, ts_pad_ok(&actual));
+        }
+    }
+    ts_free(&actual);
+    ts_free(&expected);
+}
+
 /* ================================================================== */
 int main(void)
 {
@@ -1647,6 +1839,8 @@ int main(void)
     test_guard_band(&t);
     test_text_anchors(&t);
     write_ppm_demo(&t);
+    test_transform_boundaries(&t);
+    test_image_region_limits(&t);
 
     printf("\ntest_gfx: %u assertions, %u failures -> %s\n",
            t.checks, t.fails, t.fails == 0u ? "PASS" : "FAIL");

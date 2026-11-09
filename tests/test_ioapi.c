@@ -1037,6 +1037,258 @@ static void test_ioapi_java(nj_vm *vm)
                                / sizeof(ioapi_read_cases[0])));
 }
 
+/* Native subclasses isolate virtual dispatch and exception identity without
+ * changing the production builtin tables or the saved-class ABI. */
+#define DOS "java/io/DataOutputStream"
+#define IO_SOURCE "test/IoBulkSource"
+#define IO_SINK "test/IoBulkSink"
+static int io_reads, io_singles, io_pos, io_limit, io_fail, io_flushes, io_closes;
+static int io_writes, io_filter_flushes, io_close_fail;
+static nj_ref io_array, io_replacement, io_closed;
+static nj_s4 io_off, io_len;
+
+static nj_status io_single(nj_vm *vm, nj_thread *th, nj_value *a, nj_value *r)
+{
+    (void)vm; (void)th; (void)a;
+    io_singles++;
+    r->i = -1;
+    return NJ_OK;
+}
+
+static nj_status io_bulk(nj_vm *vm, nj_thread *th, nj_value *a, nj_value *r)
+{
+    nj_s4 n = a[2].i, i;
+    (void)th;
+    io_reads++;
+    if (io_fail) return nj_throw(vm, "java/io/IOException", "bulk failure");
+    if (io_pos == io_limit) { r->i = -1; return NJ_OK; }
+    if (n > 2) n = 2; /* Force readFully to complete several short reads. */
+    if (n > io_limit - io_pos) n = io_limit - io_pos;
+    for (i = 0; i < n; i++) nj_array_set_int(a[0].r, a[1].i + i, 128 + io_pos++);
+    r->i = n;
+    return NJ_OK;
+}
+
+static nj_status io_write(nj_vm *vm, nj_thread *th, nj_value *a, nj_value *r)
+{
+    (void)th; (void)r;
+    io_writes++;
+    io_array = a[0].r; io_off = a[1].i; io_len = a[2].i;
+    return io_fail ? nj_throw(vm, "java/io/IOException", "write failure") : NJ_OK;
+}
+
+static nj_status io_write_one(nj_vm *vm, nj_thread *th, nj_value *a, nj_value *r)
+{
+    (void)th; (void)a; (void)r;
+    io_singles++;
+    return io_fail ? nj_throw(vm, "java/io/IOException", "write failure") : NJ_OK;
+}
+
+static nj_status io_flush(nj_vm *vm, nj_thread *th, nj_value *a, nj_value *r)
+{
+    (void)th; (void)a; (void)r;
+    io_flushes++;
+    return io_fail ? nj_throw(vm, "java/io/IOException", "flush failure") : NJ_OK;
+}
+
+static nj_status io_close(nj_vm *vm, nj_thread *th, nj_value *a, nj_value *r)
+{
+    (void)vm; (void)th; (void)a; (void)r;
+    io_closes++;
+    io_closed = NJ_THIS(a);
+    return io_close_fail ? nj_throw(vm, "java/io/EOFException", "close failure") : NJ_OK;
+}
+
+static nj_status io_filter_flush(nj_vm *vm, nj_thread *th, nj_value *a, nj_value *r)
+{
+    (void)th; (void)r;
+    io_filter_flushes++;
+    if (io_replacement) {
+        nj_field_write_ref(vm, NJ_THIS(a),
+                           nj_field_lookup(vm, DOS, "out", "Ljava/io/OutputStream;", 0),
+                           io_replacement);
+        nj_gc_collect(vm);
+    }
+    return nj_call_special(vm, NJ_THIS(a), DOS, "flush", "()V", NULL, NULL);
+}
+
+static void expect_io_exception(nj_vm *vm, const char *name)
+{
+    OK_MSG(vm->exception && strcmp(nj_ref_class_name(vm->exception), name) == 0,
+           "want %s, got %s", name, nj_exception_describe(vm));
+    nj_clear_exception(vm);
+}
+
+static void test_data_streams(nj_vm *vm)
+{
+    static const nj_builtin_method im[] = {
+        {"read", "()I", NJ_ACC_PUBLIC}, {"read", "([BII)I", NJ_ACC_PUBLIC},
+        {"close", "()V", NJ_ACC_PUBLIC}
+    };
+    static const nj_builtin_method om[] = {
+        {"write", "(I)V", NJ_ACC_PUBLIC}, {"write", "([BII)V", NJ_ACC_PUBLIC},
+        {"flush", "()V", NJ_ACC_PUBLIC}, {"close", "()V", NJ_ACC_PUBLIC}
+    };
+    static const nj_builtin_method fm[] = {{"flush", "()V", NJ_ACC_PUBLIC}};
+    static const nj_builtin_class ic = {IO_SOURCE, IS, NJ_ACC_PUBLIC, NULL, 0, im, 3};
+    static const nj_builtin_class oc = {IO_SINK, "java/io/OutputStream", NJ_ACC_PUBLIC, NULL, 0, om, 4};
+    static const nj_builtin_class fc = {"test/IoFilter", DOS, NJ_ACC_PUBLIC, NULL, 0, fm, 1};
+    nj_class *ci = nj_class_create_builtin(vm, &ic), *co = nj_class_create_builtin(vm, &oc);
+    nj_class *cf = nj_class_create_builtin(vm, &fc);
+    nj_ref in, out, dis, dos, bytes, filter, baos;
+    nj_value a[3];
+    nj_field *written;
+    nj_u4 roots = nj_root_mark(vm);
+    OK(ci && co && cf);
+    if (!ci || !co || !cf) return;
+    cf->methods[0].native = io_filter_flush;
+    ci->methods[0].native = io_single; ci->methods[1].native = io_bulk;
+    ci->methods[2].native = io_close;
+    co->methods[0].native = io_write_one; co->methods[1].native = io_write;
+    co->methods[2].native = io_flush; co->methods[3].native = io_close;
+    in = nj_root(vm, nj_object_new(vm, IO_SOURCE));
+    out = nj_root(vm, nj_object_new(vm, IO_SINK));
+    bytes = nj_root(vm, nj_byte_array_new(vm, 8));
+    memset(nj_array_data(bytes), 85, 8);
+    a[0] = vref(in);
+    dis = nj_root(vm, construct(vm, DIS, "(Ljava/io/InputStream;)V", a, "bulk data input"));
+    a[0] = vref(out);
+    dos = nj_root(vm, construct(vm, DOS, "(Ljava/io/OutputStream;)V", a, "bulk data output"));
+    io_reads = io_singles = io_pos = io_fail = 0; io_limit = 5;
+    a[0] = vref(bytes); a[1] = vint(1); a[2] = vint(5);
+    OK(nj_call(vm, dis, DIS, "readFully", "([BII)V", a, NULL) == NJ_OK);
+    clean(vm, "readFully short bulk reads");
+    OK(io_reads == 3 && io_singles == 0 && io_pos == 5);
+    OK(nj_array_get_int(bytes, 0) == 85 && nj_array_get_int(bytes, 6) == 85);
+    OK((nj_array_get_int(bytes, 1) & 255) == 128 && (nj_array_get_int(bytes, 5) & 255) == 132);
+    io_pos = io_reads = 0; io_limit = 3;
+    OK(nj_call(vm, dis, DIS, "readFully", "([BII)V", a, NULL) != NJ_OK);
+    expect_io_exception(vm, "java/io/EOFException");
+    OK(io_pos == 3 && io_reads == 3 && io_singles == 0);
+    io_fail = 1;
+    OK(nj_call(vm, dis, DIS, "readFully", "([BII)V", a, NULL) != NJ_OK);
+    expect_io_exception(vm, "java/io/IOException");
+    io_fail = 0;
+    a[1] = vint(8); a[2] = vint(0); io_reads = 0;
+    OK(nj_call(vm, dis, DIS, "readFully", "([BII)V", a, NULL) == NJ_OK);
+    OK(io_reads == 0);
+    a[1] = vint(0x7fffffff); a[2] = vint(0x7fffffff);
+    OK(nj_call(vm, dis, DIS, "readFully", "([BII)V", a, NULL) != NJ_OK);
+    expect_io_exception(vm, "java/lang/ArrayIndexOutOfBoundsException");
+
+    a[1] = vint(2); a[2] = vint(4); io_array = NULL;
+    OK(nj_call(vm, dos, DOS, "write", "([BII)V", a, NULL) == NJ_OK);
+    OK(io_array == bytes && io_off == 2 && io_len == 4);
+    OK(nj_call_int(vm, dos, DOS, "size", "()I", NULL) == 4);
+    a[1] = vint(8); a[2] = vint(0); io_array = NULL;
+    OK(nj_call(vm, dos, DOS, "write", "([BII)V", a, NULL) == NJ_OK);
+    OK(io_array == bytes && io_off == 8 && io_len == 0);
+    a[0] = vint(257); io_singles = 0;
+    OK(nj_call(vm, dos, DOS, "write", "(I)V", a, NULL) == NJ_OK);
+    OK(io_singles == 1);
+    a[0] = vint(0x12345678);
+    OK(nj_call(vm, dos, DOS, "writeInt", "(I)V", a, NULL) == NJ_OK);
+    OK(nj_call_int(vm, dos, DOS, "size", "()I", NULL) == 9);
+    io_fail = 1;
+    OK(nj_call(vm, dos, DOS, "writeInt", "(I)V", a, NULL) != NJ_OK);
+    expect_io_exception(vm, "java/io/IOException");
+    OK(nj_call_int(vm, dos, DOS, "size", "()I", NULL) == 9);
+    io_fail = 0;
+    {
+        static const nj_u2 chars[] = {65, 0, 0x800, 0xd800};
+        nj_ref text = nj_root(vm, nj_new_string_utf16(vm, chars, 4));
+        a[0] = vref(text); io_writes = 0;
+        OK(nj_call(vm, dos, DOS, "writeUTF", "(Ljava/lang/String;)V", a, NULL) == NJ_OK);
+        OK(io_writes == 1 && io_off == 0 && io_len == 11);
+        OK(nj_array_get_int(io_array, 0) == 0 && nj_array_get_int(io_array, 1) == 9);
+        OK(nj_call_int(vm, dos, DOS, "size", "()I", NULL) == 20);
+    }
+    a[0] = vref(bytes); a[1] = vint(0x7fffffff); a[2] = vint(0x7fffffff);
+    OK(nj_call(vm, dos, DOS, "write", "([BII)V", a, NULL) != NJ_OK);
+    expect_io_exception(vm, "java/lang/ArrayIndexOutOfBoundsException");
+    OK(nj_call_special(vm, out, "java/io/OutputStream", "write", "([BII)V", a, NULL) != NJ_OK);
+    expect_io_exception(vm, "java/lang/ArrayIndexOutOfBoundsException");
+    baos = nj_root(vm, construct(vm, BAOS, "()V", NULL, "output bounds"));
+    OK(nj_call(vm, baos, BAOS, "write", "([BII)V", a, NULL) != NJ_OK);
+    expect_io_exception(vm, "java/lang/ArrayIndexOutOfBoundsException");
+    a[0] = vint(0x12345678);
+    written = nj_field_lookup(vm, DOS, "written", "I", 0);
+    nj_field_write_int(vm, dos, written, 0x7ffffffe);
+    OK(nj_call(vm, dos, DOS, "writeInt", "(I)V", a, NULL) == NJ_OK);
+    OK(nj_call_int(vm, dos, DOS, "size", "()I", NULL) == 0x7fffffff);
+    OK(nj_call(vm, dos, DOS, "writeInt", "(I)V", a, NULL) == NJ_OK);
+    OK(nj_call_int(vm, dos, DOS, "size", "()I", NULL) == 0x7fffffff);
+    io_flushes = io_closes = 0;
+    OK(nj_call(vm, dis, DIS, "close", "()V", NULL, NULL) == NJ_OK);
+    OK(io_closes == 1);
+    OK(nj_call(vm, dos, DOS, "close", "()V", NULL, NULL) == NJ_OK);
+    OK(io_closes == 2 && io_flushes == 1);
+    io_fail = 1;
+    OK(nj_call(vm, dos, DOS, "close", "()V", NULL, NULL) != NJ_OK);
+    expect_io_exception(vm, "java/io/IOException");
+    OK(io_closes == 3 && io_flushes == 2);
+    io_close_fail = 1;
+    OK(nj_call(vm, dos, DOS, "close", "()V", NULL, NULL) != NJ_OK);
+    expect_io_exception(vm, "java/io/EOFException");
+    OK(io_closes == 4 && io_flushes == 3);
+    io_close_fail = io_fail = 0;
+    filter = nj_root(vm, nj_object_new(vm, "test/IoFilter"));
+    a[0] = vref(out);
+    OK(nj_call_special(vm, filter, DOS, "<init>", "(Ljava/io/OutputStream;)V", a, NULL) == NJ_OK);
+    io_filter_flushes = 0;
+    OK(nj_call(vm, filter, DOS, "close", "()V", NULL, NULL) == NJ_OK);
+    OK(io_filter_flushes == 1 && io_closes == 5 && io_flushes == 4);
+    io_replacement = nj_root(vm, nj_object_new(vm, IO_SINK));
+    io_closed = NULL;
+    OK(nj_call(vm, filter, DOS, "close", "()V", NULL, NULL) == NJ_OK);
+    OK(io_closed == io_replacement && io_filter_flushes == 2 && io_closes == 6);
+    io_replacement = NULL;
+    /* Both wrapper overloads must reject null streams as a dereference. */
+    a[0] = vref(NULL);
+    OK(nj_call_special(vm, dos, DOS, "<init>", "(Ljava/io/OutputStream;)V", a, NULL) == NJ_OK);
+    a[0] = vint(1);
+    OK(nj_call(vm, dos, DOS, "write", "(I)V", a, NULL) != NJ_OK);
+    expect_io_exception(vm, "java/lang/NullPointerException");
+    clean(vm, "data stream virtual dispatch");
+    nj_root_release(vm, roots);
+}
+
+static void test_modified_utf(nj_vm *vm)
+{
+    static const struct {
+        nj_u1 data[8]; nj_u4 n; const char *error; nj_u4 left;
+    } cases[] = {
+        {{0,1,0xc2,42}, 4, "java/io/UTFDataFormatException", 1},
+        {{0,2,0xc2,65,42}, 5, "java/io/UTFDataFormatException", 1},
+        {{0,2,0xe1,0x80,42}, 5, "java/io/UTFDataFormatException", 1},
+        {{0,3,0xe1,0x80,65,42}, 6, "java/io/UTFDataFormatException", 1},
+        {{0,1,0x80,42}, 4, "java/io/UTFDataFormatException", 1},
+        {{0,4,0xf0,0x90,0x80,0x80,42}, 7, "java/io/UTFDataFormatException", 1},
+        {{0,3,0xff,65}, 4, "java/io/EOFException", 0}
+    };
+    unsigned mode, i;
+    for (mode = 0; mode < 2; mode++) {
+        for (i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+            nj_u4 roots = nj_root_mark(vm);
+            nj_ref bytes = nj_root(vm, nj_byte_array_new(vm, cases[i].n));
+            nj_ref in, dis;
+            nj_value a[1], r;
+            memcpy(nj_array_data(bytes), cases[i].data, cases[i].n);
+            a[0] = vref(bytes);
+            in = nj_root(vm, construct(vm, BAIS, "([B)V", a, "UTF bytes"));
+            a[0] = vref(in);
+            dis = nj_root(vm, construct(vm, DIS, "(Ljava/io/InputStream;)V", a, "UTF input"));
+            a[0] = vref(dis);
+            OK((mode ? nj_call_static(vm, DIS, "readUTF", "(Ljava/io/DataInput;)Ljava/lang/String;", a, &r)
+                     : nj_call(vm, dis, DIS, "readUTF", "()Ljava/lang/String;", NULL, &r)) != NJ_OK);
+            expect_io_exception(vm, cases[i].error);
+            OK(nj_call_int(vm, in, BAIS, "available", "()I", NULL) == (nj_s4)cases[i].left);
+            if (cases[i].left) OK(nj_call_int(vm, in, BAIS, "read", "()I", NULL) == 42);
+            nj_root_release(vm, roots);
+        }
+    }
+}
+
 int main(void)
 {
     nj_port port;
@@ -1067,6 +1319,8 @@ int main(void)
     test_writer(vm);
     test_writer_base(vm);
     test_datainput_mark_reset(vm);
+    test_data_streams(vm);
+    test_modified_utf(vm);
     test_ioapi_java(vm);
 
     nj_vm_destroy(vm);

@@ -1022,19 +1022,37 @@ static nj_s4 ht_probe(nj_vm *vm, nj_ref h, nj_ref key, nj_s4 hash,
 
 static nj_status ht_alloc_arrays(nj_vm *vm, nj_ref h, nj_u4 cap)
 {
-    nj_ref keys = nj_object_array_new(vm, "java/lang/Object", cap);
-    nj_ref vals = nj_object_array_new(vm, "java/lang/Object", cap);
-    nj_ref hh = nj_int_array_new(vm, cap);
-    nj_ref stt = nj_int_array_new(vm, cap);
+    nj_u4 mark = nj_root_mark(vm);
+    nj_ref keys, vals, hh, stt;
 
-    if (!keys || !vals || !hh || !stt) {
-        return nj_throw_oom(vm);
-    }
+    /* A later allocation may collect.  Keep the new arrays rooted until all
+     * four are ready; replacing fields one at a time would lose the old table
+     * if an allocation fails during growth. */
+    keys = nj_object_array_new(vm, "java/lang/Object", cap);
+    if (!keys) goto oom;
+    nj_root(vm, keys);
+    if (vm->nroots != mark + 1u) goto oom;
+    vals = nj_object_array_new(vm, "java/lang/Object", cap);
+    if (!vals) goto oom;
+    nj_root(vm, vals);
+    if (vm->nroots != mark + 2u) goto oom;
+    hh = nj_int_array_new(vm, cap);
+    if (!hh) goto oom;
+    nj_root(vm, hh);
+    if (vm->nroots != mark + 3u) goto oom;
+    stt = nj_int_array_new(vm, cap);
+    if (!stt) goto oom;
+
     nj_field_write_ref(vm, h, ht_fkeys(vm), keys);
     nj_field_write_ref(vm, h, ht_fvals(vm), vals);
     nj_field_write_ref(vm, h, ht_fhash(vm), hh);
     nj_field_write_ref(vm, h, ht_fstate(vm), stt);
+    nj_root_release(vm, mark);
     return NJ_OK;
+
+oom:
+    nj_root_release(vm, mark);
+    return nj_throw_oom(vm);
 }
 
 static nj_status ht_grow(nj_vm *vm, nj_ref h, nj_u4 want)
@@ -1055,26 +1073,27 @@ static nj_status ht_grow(nj_vm *vm, nj_ref h, nj_u4 want)
         return st;
     }
     if (oldk && oldv && oldh && olds) {
+        nj_ref keys = ht_key_arr(vm, h);
+        nj_ref vals = ht_val_arr(vm, h);
+        nj_ref hashes = rget(vm, h, ht_fhash(vm));
+        nj_ref states = rget(vm, h, ht_fstate(vm));
+
+        /* Entries are already distinct: relocation only needs an empty slot.
+         * Calling equals() here wastes Java calls on collisions and lets user
+         * code throw, mutate the half-built table or collect the old arrays
+         * after they have been detached from h.  No allocations or callbacks
+         * occur between replacing the fields and finishing this copy. */
         for (i = 0u; i < oldk->length; i++) {
             if (nj_array_get_int(olds, i) == HT_LIVE) {
-                nj_s4 slot = -1;
-                int err = 0;
-                (void)ht_probe(vm, h, nj_array_get_ref(oldk, i),
-                               nj_array_get_int(oldh, i), &slot, &err);
-                if (err) {
-                    return NJ_ERR;
+                nj_s4 hash = nj_array_get_int(oldh, i);
+                nj_u4 slot = (nj_u4)hash % cap;
+                while (nj_array_get_int(states, slot) == HT_LIVE) {
+                    if (++slot == cap) slot = 0u;
                 }
-                if (slot < 0) {
-                    return nj_throw(vm, "java/lang/InternalError",
-                                    "Hashtable rehash");
-                }
-                nj_array_set_ref(ht_key_arr(vm, h), (nj_u4)slot,
-                                 nj_array_get_ref(oldk, i));
-                nj_array_set_ref(ht_val_arr(vm, h), (nj_u4)slot,
-                                 nj_array_get_ref(oldv, i));
-                nj_array_set_int(rget(vm, h, ht_fhash(vm)), (nj_u4)slot,
-                                 nj_array_get_int(oldh, i));
-                nj_array_set_int(rget(vm, h, ht_fstate(vm)), (nj_u4)slot, HT_LIVE);
+                nj_array_set_ref(keys, slot, nj_array_get_ref(oldk, i));
+                nj_array_set_ref(vals, slot, nj_array_get_ref(oldv, i));
+                nj_array_set_int(hashes, slot, hash);
+                nj_array_set_int(states, slot, HT_LIVE);
             }
         }
     }
@@ -1373,9 +1392,17 @@ static nj_ref ht_snapshot(nj_vm *vm, nj_ref h, int want_values)
 
 static nj_status ht_new_enumerator(nj_vm *vm, nj_ref snap, nj_value *ret)
 {
-    nj_ref e = nj_object_new(vm, "java/util/HashtableEnumerator");
+    nj_u4 mark = nj_root_mark(vm);
+    nj_ref e;
     nj_field *f;
 
+    /* The snapshot is not attached to a Java object until e exists. */
+    nj_root(vm, snap);
+    if (vm->nroots != mark + 1u) {
+        return nj_throw_oom(vm);
+    }
+    e = nj_object_new(vm, "java/util/HashtableEnumerator");
+    nj_root_release(vm, mark);
     if (!e) {
         return NJ_ERR;
     }

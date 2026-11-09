@@ -229,7 +229,8 @@ NJFN(os_write_bytes_range)
     if (!buf) {
         return nj_throw(vm, "java/lang/NullPointerException", NULL);
     }
-    if (off < 0 || len < 0 || (nj_u4)(off + len) > buf->length) {
+    if (off < 0 || len < 0 || (nj_u4)off > buf->length ||
+        (nj_u4)len > buf->length - (nj_u4)off) {
         return nj_throw(vm, "java/lang/ArrayIndexOutOfBoundsException", NULL);
     }
     for (i = 0; i < len; i++) {
@@ -526,7 +527,8 @@ NJFN(baos_write_range)
     if (!src) {
         return nj_throw(vm, "java/lang/NullPointerException", NULL);
     }
-    if (off < 0 || len < 0 || (nj_u4)(off + len) > src->length) {
+    if (off < 0 || len < 0 || (nj_u4)off > src->length ||
+        (nj_u4)len > src->length - (nj_u4)off) {
         return nj_throw(vm, "java/lang/ArrayIndexOutOfBoundsException", NULL);
     }
     if (baos_ensure(vm, self, len) != NJ_OK) {
@@ -607,30 +609,49 @@ static nj_ref dos_out(nj_vm *vm, nj_ref self)
                                           "Ljava/io/OutputStream;"));
 }
 
-/* Write raw bytes through the wrapped stream. */
-static nj_status dos_raw(nj_vm *vm, nj_ref out, const nj_u1 *p, nj_s4 n)
+/* Count completed writes, saturating as required by DataOutputStream.size(). */
+static void dos_count(nj_vm *vm, nj_ref self, nj_s4 n)
 {
-    nj_value a3[4];
-    nj_ref tmp;
+    nj_field *f = nj_hot_field(vm, NJ_HF_DOS_WRITTEN, DOS, "written", "I");
+    nj_s4 old = nj_field_read_int(vm, self, f);
+    nj_field_write_int(vm, self, f, n > 0x7fffffff - old ? 0x7fffffff : old + n);
+}
 
-    if (n <= 0) {
-        return NJ_OK;
-    }
+/* Primitive encoders have native bytes; array writes below can forward their
+ * original Java buffer directly, including a zero-length write. */
+static nj_status dos_raw(nj_vm *vm, nj_ref self, const nj_u1 *p, nj_s4 n)
+{
+    nj_value a3[3];
+    nj_ref tmp, out = dos_out(vm, self);
+    nj_status st;
+
+    if (!out) return nj_throw(vm, "java/lang/NullPointerException", NULL);
     tmp = nj_byte_array_new(vm, (nj_u4)n);
-    if (!tmp) {
-        return nj_throw_oom(vm);
-    }
+    if (!tmp) return nj_throw_oom(vm);
     memcpy(tmp->u.bytes, p, (nj_size)n);
     a3[0].r = tmp;
     a3[1].i = 0;
     a3[2].i = n;
-    return nj_call(vm, out, NJ_C_OSTREAM, "write", "([BII)V", a3, NULL);
+    st = nj_call(vm, out, NJ_C_OSTREAM, "write", "([BII)V", a3, NULL);
+    if (st == NJ_OK) dos_count(vm, self, n);
+    return st;
+}
+
+static nj_status dos_one(nj_vm *vm, nj_ref self, nj_s4 value)
+{
+    nj_value a;
+    nj_ref out = dos_out(vm, self);
+    nj_status st;
+    if (!out) return nj_throw(vm, "java/lang/NullPointerException", NULL);
+    a.i = value;
+    st = nj_call(vm, out, NJ_C_OSTREAM, "write", "(I)V", &a, NULL);
+    if (st == NJ_OK) dos_count(vm, self, 1);
+    return st;
 }
 
 NJFN(dos_write)
 {
-    nj_u1 b = (nj_u1)NJ_ARG_INT(args, 0);
-    return dos_raw(vm, dos_out(vm, NJ_THIS(args)), &b, 1);
+    return dos_one(vm, NJ_THIS(args), NJ_ARG_INT(args, 0));
 }
 
 NJFN(dos_write_range)
@@ -642,10 +663,18 @@ NJFN(dos_write_range)
     if (!src) {
         return nj_throw(vm, "java/lang/NullPointerException", NULL);
     }
-    if (off < 0 || len < 0 || (nj_u4)(off + len) > src->length) {
+    if (off < 0 || len < 0 || (nj_u4)off > src->length ||
+        (nj_u4)len > src->length - (nj_u4)off) {
         return nj_throw(vm, "java/lang/ArrayIndexOutOfBoundsException", NULL);
     }
-    return dos_raw(vm, dos_out(vm, NJ_THIS(args)), src->u.bytes + off, len);
+    {
+        nj_ref self = NJ_THIS(args), out = dos_out(vm, self);
+        nj_status st;
+        if (!out) return nj_throw(vm, "java/lang/NullPointerException", NULL);
+        st = nj_call(vm, out, NJ_C_OSTREAM, "write", "([BII)V", args, NULL);
+        if (st == NJ_OK) dos_count(vm, self, len);
+        return st;
+    }
 }
 
 NJFN(dos_write_short)
@@ -654,7 +683,7 @@ NJFN(dos_write_short)
     nj_s4 v = NJ_ARG_INT(args, 0);
     b[0] = (nj_u1)((v >> 8) & 0xFF);
     b[1] = (nj_u1)(v & 0xFF);
-    return dos_raw(vm, dos_out(vm, NJ_THIS(args)), b, 2);
+    return dos_raw(vm, NJ_THIS(args), b, 2);
 }
 
 NJFN(dos_write_int)
@@ -663,7 +692,7 @@ NJFN(dos_write_int)
     nj_u4 v = (nj_u4)NJ_ARG_INT(args, 0);
     b[0] = (nj_u1)(v >> 24); b[1] = (nj_u1)(v >> 16);
     b[2] = (nj_u1)(v >> 8);  b[3] = (nj_u1)v;
-    return dos_raw(vm, dos_out(vm, NJ_THIS(args)), b, 4);
+    return dos_raw(vm, NJ_THIS(args), b, 4);
 }
 
 NJFN(dos_write_long)
@@ -674,7 +703,7 @@ NJFN(dos_write_long)
     for (i = 0; i < 8; i++) {
         b[i] = (nj_u1)(v >> (56 - i * 8));
     }
-    return dos_raw(vm, dos_out(vm, NJ_THIS(args)), b, 8);
+    return dos_raw(vm, NJ_THIS(args), b, 8);
 }
 
 /*
@@ -700,7 +729,7 @@ NJFN(dos_write_float)
     memcpy(&v, &f, sizeof(v));
     b[0] = (nj_u1)(v >> 24); b[1] = (nj_u1)(v >> 16);
     b[2] = (nj_u1)(v >> 8);  b[3] = (nj_u1)v;
-    return dos_raw(vm, dos_out(vm, NJ_THIS(args)), b, 4);
+    return dos_raw(vm, NJ_THIS(args), b, 4);
 }
 
 NJFN(dos_write_double)
@@ -713,13 +742,12 @@ NJFN(dos_write_double)
     for (i = 0; i < 8; i++) {
         b[i] = (nj_u1)(v >> (56 - i * 8));
     }
-    return dos_raw(vm, dos_out(vm, NJ_THIS(args)), b, 8);
+    return dos_raw(vm, NJ_THIS(args), b, 8);
 }
 
 NJFN(dos_write_boolean)
 {
-    nj_u1 b = (nj_u1)(NJ_ARG_INT(args, 0) ? 1 : 0);
-    return dos_raw(vm, dos_out(vm, NJ_THIS(args)), &b, 1);
+    return dos_one(vm, NJ_THIS(args), NJ_ARG_INT(args, 0) ? 1 : 0);
 }
 
 NJFN(dos_write_char)
@@ -728,7 +756,7 @@ NJFN(dos_write_char)
     nj_s4 v = NJ_ARG_INT(args, 0);
     b[0] = (nj_u1)((v >> 8) & 0xFF);
     b[1] = (nj_u1)(v & 0xFF);
-    return dos_raw(vm, dos_out(vm, NJ_THIS(args)), b, 2);
+    return dos_raw(vm, NJ_THIS(args), b, 2);
 }
 
 /*
@@ -744,7 +772,6 @@ NJFN(dos_write_char)
 NJFN(dos_writeChars)
 {
     nj_ref s = NJ_ARG_REF(args, 0);
-    nj_ref out;
     nj_u1 *tmp;
     nj_u4 i;
     nj_status st;
@@ -752,7 +779,6 @@ NJFN(dos_writeChars)
     if (!s) {
         return nj_throw(vm, "java/lang/NullPointerException", NULL);
     }
-    out = dos_out(vm, NJ_THIS(args));
     if (s->length == 0u) {
         return NJ_OK;
     }
@@ -765,7 +791,7 @@ NJFN(dos_writeChars)
         tmp[i * 2u] = (nj_u1)((c >> 8) & 0xFFu);
         tmp[i * 2u + 1u] = (nj_u1)(c & 0xFFu);
     }
-    st = dos_raw(vm, out, tmp, (nj_s4)(s->length * 2u));
+    st = dos_raw(vm, NJ_THIS(args), tmp, (nj_s4)(s->length * 2u));
     nj_host_free(vm, tmp);
     return st;
 }
@@ -781,45 +807,41 @@ NJFN(dos_writeUTF)
 {
     nj_ref s = NJ_ARG_REF(args, 0);
     nj_u1 *tmp;
-    nj_u4 n = 0u;
+    nj_u4 n = 0u, pos = 2u;
     nj_u4 i;
     nj_status st;
 
     if (!s) {
         return nj_throw(vm, "java/lang/NullPointerException", NULL);
     }
-    /* Worst case three bytes per UTF-16 unit, plus the two length bytes. */
-    tmp = (nj_u1 *)nj_host_alloc(vm, (nj_size)s->length * 3u + 2u);
-    if (!tmp) {
-        return nj_throw_oom(vm);
+    /* Validate the length before allocating, then send header and body in one
+     * write.  A long invalid string must not require a huge temporary buffer. */
+    for (i = 0u; i < s->length; i++) {
+        nj_u4 c = nj_string_chars(s)[i];
+        n += c >= 1u && c <= 0x7Fu ? 1u : c <= 0x7FFu ? 2u : 3u;
+        if (n > 0xFFFFu) {
+            return nj_throw(vm, "java/io/UTFDataFormatException",
+                            "encoded string too long");
+        }
     }
+    tmp = (nj_u1 *)nj_host_alloc(vm, (nj_size)n + 2u);
+    if (!tmp) return nj_throw_oom(vm);
+    tmp[0] = (nj_u1)(n >> 8);
+    tmp[1] = (nj_u1)n;
     for (i = 0u; i < s->length; i++) {
         nj_u4 c = nj_string_chars(s)[i];
         if (c >= 1u && c <= 0x7Fu) {
-            tmp[n++] = (nj_u1)c;
-        } else if (c == 0u || c <= 0x7FFu) {
-            tmp[n++] = (nj_u1)(0xC0u | (c >> 6));
-            tmp[n++] = (nj_u1)(0x80u | (c & 0x3Fu));
+            tmp[pos++] = (nj_u1)c;
+        } else if (c <= 0x7FFu) {
+            tmp[pos++] = (nj_u1)(0xC0u | (c >> 6));
+            tmp[pos++] = (nj_u1)(0x80u | (c & 0x3Fu));
         } else {
-            tmp[n++] = (nj_u1)(0xE0u | (c >> 12));
-            tmp[n++] = (nj_u1)(0x80u | ((c >> 6) & 0x3Fu));
-            tmp[n++] = (nj_u1)(0x80u | (c & 0x3Fu));
+            tmp[pos++] = (nj_u1)(0xE0u | (c >> 12));
+            tmp[pos++] = (nj_u1)(0x80u | ((c >> 6) & 0x3Fu));
+            tmp[pos++] = (nj_u1)(0x80u | (c & 0x3Fu));
         }
     }
-    if (n > 0xFFFFu) {
-        nj_host_free(vm, tmp);
-        return nj_throw(vm, "java/io/UTFDataFormatException",
-                        "encoded string too long");
-    }
-    {
-        nj_u1 hdr[2];
-        hdr[0] = (nj_u1)((n >> 8) & 0xFF);
-        hdr[1] = (nj_u1)(n & 0xFF);
-        st = dos_raw(vm, dos_out(vm, NJ_THIS(args)), hdr, 2);
-        if (st == NJ_OK) {
-            st = dos_raw(vm, dos_out(vm, NJ_THIS(args)), tmp, (nj_s4)n);
-        }
-    }
+    st = dos_raw(vm, NJ_THIS(args), tmp, (nj_s4)pos);
     nj_host_free(vm, tmp);
     return st;
 }
@@ -827,13 +849,45 @@ NJFN(dos_writeUTF)
 NJFN(dos_flush)
 {
     nj_ref out = dos_out(vm, NJ_THIS(args));
-    return out ? nj_call(vm, out, NJ_C_OSTREAM, "flush", "()V", NULL, NULL)
-               : NJ_OK;
+    if (!out) return nj_throw(vm, "java/lang/NullPointerException", NULL);
+    return nj_call(vm, out, NJ_C_OSTREAM, "flush", "()V", NULL, NULL);
+}
+
+NJFN(dos_close)
+{
+    nj_ref out, pending;
+    nj_status st;
+    nj_method *method;
+    nj_u4 pc, roots = nj_root_mark(vm);
+    nj_u1 resolve_fail;
+    st = nj_call(vm, NJ_THIS(args), DOS, "flush", "()V", NULL, NULL);
+    method = vm->exception_method;
+    pc = vm->exception_pc;
+    resolve_fail = vm->resolve_fail;
+    /* FilterOutputStream closes even when flushing fails.  Keep that exception
+     * rooted across the second virtual call, and restore it if close succeeds. */
+    pending = nj_root(vm, vm->exception);
+    nj_clear_exception(vm);
+    /* An overridden flush may replace out and collect the previous stream. */
+    out = dos_out(vm, NJ_THIS(args));
+    if (!out) {
+        st = nj_throw(vm, "java/lang/NullPointerException", NULL);
+    } else if (nj_call(vm, out, NJ_C_OSTREAM, "close", "()V", NULL, NULL) != NJ_OK) {
+        st = NJ_ERR;
+    } else if (pending) {
+        vm->exception = pending;
+        vm->exception_method = method;
+        vm->exception_pc = pc;
+        vm->resolve_fail = resolve_fail;
+    }
+    nj_root_release(vm, roots);
+    return st;
 }
 
 NJFN(dos_size)
 {
-    ret->i = 0;
+    ret->i = nj_field_read_int(vm, NJ_THIS(args),
+                             nj_hot_field(vm, NJ_HF_DOS_WRITTEN, DOS, "written", "I"));
     return NJ_OK;
 }
 
@@ -920,6 +974,13 @@ NJFN(dis_read_unsigned_byte)
     return NJ_OK;
 }
 
+NJFN(dis_close)
+{
+    nj_ref in = dis_in(vm, NJ_THIS(args));
+    if (!in) return nj_throw(vm, "java/lang/NullPointerException", NULL);
+    return nj_call(vm, in, NJ_C_ISTREAM, "close", "()V", NULL, NULL);
+}
+
 NJFN(dis_read)
 {
     nj_ref in = dis_in(vm, NJ_THIS(args));
@@ -960,37 +1021,48 @@ NJFN(dis_read_range)
     return nj_call(vm, in, NJ_C_ISTREAM, "read", "([BII)I", a3, ret);
 }
 
-/* The body of both readFully overloads.  Takes the receiver explicitly rather
- * than going through an NJFN, whose arguments are addressed as args[-1] for
- * `this` - a synthetic argument block would make that read a garbage slot. */
-static nj_status dis_readFully_run(nj_vm *vm, nj_ref self, nj_ref buf,
-                                   nj_s4 off, nj_s4 len)
+/* Shared bulk loop for readFully and the declared body of readUTF.  Preserve
+ * virtual read(byte[],int,int) dispatch and repeat only after a short read. */
+static nj_status stream_readFully_run(nj_vm *vm, nj_ref in, nj_ref buf,
+                                      nj_s4 off, nj_s4 len)
 {
-    nj_ref in = dis_in(vm, self);
-    nj_s4 i;
+    nj_s4 done = 0;
+    nj_value a[3], r;
 
-    if (!in) {
-        return nj_throw(vm, "java/io/IOException", "no underlying stream");
-    }
     if (!buf) {
         return nj_throw(vm, "java/lang/NullPointerException", NULL);
     }
-    if (off < 0 || len < 0 || (nj_u4)(off + len) > buf->length) {
+    if (off < 0 || len < 0 || (nj_u4)off > buf->length ||
+        (nj_u4)len > buf->length - (nj_u4)off) {
         return nj_throw(vm, "java/lang/ArrayIndexOutOfBoundsException", NULL);
     }
-    for (i = 0; i < len; i++) {
-        nj_s4 c = dis_one(vm, in);
-        if (c < 0) {
+    if (len && !in) return nj_throw(vm, "java/lang/NullPointerException", NULL);
+    a[0].r = buf;
+    while (done < len) {
+        a[1].i = off + done;
+        a[2].i = len - done;
+        if (nj_call(vm, in, NJ_C_ISTREAM, "read", "([BII)I", a, &r) != NJ_OK) {
             return NJ_ERR;
         }
-        buf->u.bytes[off + i] = (nj_u1)c;
+        if (r.i < 0) return nj_throw(vm, "java/io/EOFException", NULL);
+        if (r.i == 0) {
+            /* A nonconforming stream must not trap the VM in a busy loop. */
+            nj_s4 c = dis_one(vm, in);
+            if (c < 0) return NJ_ERR;
+            buf->u.bytes[off + done++] = (nj_u1)c;
+        } else {
+            if (r.i > len - done) {
+                return nj_throw(vm, "java/io/IOException", "invalid read count");
+            }
+            done += r.i;
+        }
     }
     return NJ_OK;
 }
 
 NJFN(dis_readFully)
 {
-    return dis_readFully_run(vm, NJ_THIS(args), NJ_ARG_REF(args, 0),
+    return stream_readFully_run(vm, dis_in(vm, NJ_THIS(args)), NJ_ARG_REF(args, 0),
                              NJ_ARG_INT(args, 1), NJ_ARG_INT(args, 2));
 }
 
@@ -1001,7 +1073,7 @@ NJFN(dis_readFully_all)
 {
     nj_ref buf = NJ_ARG_REF(args, 0);
 
-    return dis_readFully_run(vm, NJ_THIS(args), buf, 0,
+    return stream_readFully_run(vm, dis_in(vm, NJ_THIS(args)), buf, 0,
                              buf ? (nj_s4)buf->length : 0);
 }
 
@@ -1218,82 +1290,70 @@ NJFN(dis_read_char)
     return NJ_CALL(dis_read_unsigned_short, vm, th, args, ret);
 }
 
-/*
- * One byte of a modified-UTF-8 string, from either kind of source.
- *
- * The instance form reads through dis_one(); the static form is handed any
- * DataInput at all and has to go through that object's own readByte().  That is
- * the ONLY difference between the two, so it lives here and the length
- * handling, the continuation counting and the four allocation-failure paths
- * are shared below instead of copied.  A negative return means the byte could
- * not be read and an exception is pending: readByte() throws EOFException at
- * the end, dis_one() returns -1.
- */
-static nj_s4 utf_next(nj_vm *vm, nj_ref src, int via_interface)
-{
-    nj_value r;
-
-    if (!via_interface) {
-        return dis_one(vm, src);
-    }
-    if (nj_call(vm, src, "java/io/DataInput", "readByte", "()B", NULL, &r) != NJ_OK) {
-        return -1;
-    }
-    return r.i & 0xff;
-}
-
-/* Decode `len` modified-UTF-8 bytes from `src` into a new String. */
+/* Read the whole declared body before decoding, as DataInput.readUTF does.
+ * This bounds continuations to the field, preserves a following record, and
+ * gives a short body EOFException even if its first byte is malformed. */
 static nj_status read_utf_body(nj_vm *vm, nj_ref src, int via_interface,
                                nj_s4 len, nj_value *ret)
 {
     nj_u2 *tmp;
-    nj_s4 i, n = 0;
-    nj_ref out;
+    nj_s4 i = 0, n = 0;
+    nj_ref bytes, out;
+    nj_value a[3];
+    nj_status st;
+    nj_u4 roots = nj_root_mark(vm);
 
+    bytes = nj_root(vm, nj_byte_array_new(vm, (nj_u4)len));
+    if (!bytes) return nj_throw_oom(vm);
+    if (via_interface) {
+        a[0].r = bytes; a[1].i = 0; a[2].i = len;
+        st = nj_call(vm, src, "java/io/DataInput", "readFully", "([BII)V", a, NULL);
+    } else {
+        st = stream_readFully_run(vm, src, bytes, 0, len);
+    }
+    if (st != NJ_OK) {
+        nj_root_release(vm, roots);
+        return st;
+    }
     tmp = (nj_u2 *)nj_host_alloc(vm, ((nj_size)len + 1u) * sizeof(nj_u2));
     if (!tmp) {
+        nj_root_release(vm, roots);
         return nj_throw_oom(vm);
     }
-    for (i = 0; i < len; i++) {
-        nj_s4 c = utf_next(vm, src, via_interface);
-        if (c < 0) {
-            nj_host_free(vm, tmp);
-            return NJ_ERR;
-        }
-        if (c < 0x80) {
+    while (i < len) {
+        nj_u4 c = bytes->u.bytes[i++];
+        if (c < 0x80u) {
             tmp[n++] = (nj_u2)c;
-        } else if ((c & 0xE0) == 0xC0) {
-            nj_s4 c2 = utf_next(vm, src, via_interface);
-            if (c2 < 0) {
-                nj_host_free(vm, tmp);
-                return NJ_ERR;
-            }
-            tmp[n++] = (nj_u2)(((c & 0x1F) << 6) | (c2 & 0x3F));
-            i++;
+        } else if ((c & 0xE0u) == 0xC0u) {
+            nj_u4 c2;
+            if (i >= len) goto malformed;
+            c2 = bytes->u.bytes[i++];
+            if ((c2 & 0xC0u) != 0x80u) goto malformed;
+            tmp[n++] = (nj_u2)(((c & 0x1Fu) << 6) | (c2 & 0x3Fu));
+        } else if ((c & 0xF0u) == 0xE0u) {
+            nj_u4 c2, c3;
+            if (len - i < 2) goto malformed;
+            c2 = bytes->u.bytes[i++];
+            c3 = bytes->u.bytes[i++];
+            if ((c2 & 0xC0u) != 0x80u || (c3 & 0xC0u) != 0x80u) goto malformed;
+            tmp[n++] = (nj_u2)(((c & 0x0Fu) << 12) | ((c2 & 0x3Fu) << 6) |
+                               (c3 & 0x3Fu));
         } else {
-            nj_s4 c2 = utf_next(vm, src, via_interface);
-            nj_s4 c3;
-            if (c2 < 0) {
-                nj_host_free(vm, tmp);
-                return NJ_ERR;
-            }
-            c3 = utf_next(vm, src, via_interface);
-            if (c3 < 0) {
-                nj_host_free(vm, tmp);
-                return NJ_ERR;
-            }
-            tmp[n++] = (nj_u2)(((c & 0x0F) << 12) | ((c2 & 0x3F) << 6) |
-                               (c3 & 0x3F));
-            i += 2;
+            goto malformed;
         }
     }
-    out = nj_new_string_utf16(vm, tmp, n);
+    /* Modified UTF-8 intentionally accepts encoded UTF-16 surrogates, NUL and
+     * overlong sequences accepted by Java DataInputStream, unlike strict UTF-8. */
+    out = nj_new_string_utf16(vm, tmp, (nj_u4)n);
     nj_host_free(vm, tmp);
-    if (!out) {
-        return nj_throw_oom(vm);
-    }
+    nj_root_release(vm, roots);
+    if (!out) return nj_throw_oom(vm);
     ret->r = out;
     return NJ_OK;
+malformed:
+    nj_host_free(vm, tmp);
+    nj_root_release(vm, roots);
+    return nj_throw(vm, "java/io/UTFDataFormatException", "malformed modified UTF-8");
 }
 
 NJFN(dis_readUTF)
@@ -1329,6 +1389,7 @@ NJFN(dis_readUTF_static)
     nj_value r;
     nj_s4 len;
 
+    if (!in) return nj_throw(vm, "java/lang/NullPointerException", NULL);
     if (nj_call(vm, in, "java/io/DataInput", "readUnsignedShort", "()I",
                 NULL, &r) != NJ_OK) {
         return NJ_ERR;
@@ -2980,7 +3041,7 @@ const nj_native_entry nj_lib_io_table[] = {
     { "java/io/DataInputStream", "mark",             "(I)V", dis_mark },
     { "java/io/DataInputStream", "reset",            "()V", dis_reset },
     { "java/io/DataInputStream", "markSupported",    "()Z", dis_mark_supported },
-    { "java/io/DataInputStream", "close",            "()V", is_close },
+    { "java/io/DataInputStream", "close",            "()V", dis_close },
 
     { "java/io/DataOutputStream", "<init>",       "(Ljava/io/OutputStream;)V", dos_init },
     { "java/io/DataOutputStream", "write",        "(I)V", dos_write },
@@ -2996,7 +3057,7 @@ const nj_native_entry nj_lib_io_table[] = {
     { "java/io/DataOutputStream", "writeDouble",  "(D)V", dos_write_double },
     { "java/io/DataOutputStream", "writeUTF",     "(Ljava/lang/String;)V", dos_writeUTF },
     { "java/io/DataOutputStream", "flush",        "()V", dos_flush },
-    { "java/io/DataOutputStream", "close",        "()V", dos_flush },
+    { "java/io/DataOutputStream", "close",        "()V", dos_close },
     { "java/io/DataOutputStream", "size",         "()I", dos_size },
 
     { NJ_C_ISR, "<init>", "(L" NJ_C_ISTREAM ";)V", isr_init },
