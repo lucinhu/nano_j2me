@@ -373,13 +373,24 @@ if(NJ_SANITIZE)
   target_link_options(nj2me PUBLIC -fsanitize=address,undefined)
 endif()
 
-# The interpreter is one function with a ~1200-case switch.  At -O3 GCC 16 has
-# been observed to die with an internal compiler error on it under parallel
-# build memory pressure, and the generated code is not measurably faster than
-# -O2 anyway - the dispatch is a jump table either way.  Pin this one file so a
-# release build is reproducible rather than occasionally flaky.
-set_source_files_properties(src/core/nj_interp.c PROPERTIES
-  COMPILE_OPTIONS "-O2")
+# Follow the selected build type and toolchain flags by default.  Leaving
+# Release at -O3 cut Minecraft generation time ~19% on GCC 16.2.1; the forced
+# -O2 also overrode Debug/MinSizeRel/user flags.  Older GCC 16 builds have hit an
+# internal compiler error at -O3 under parallel memory pressure; retain an
+# explicit per-file workaround rather than slowing every Release build.
+set(NJ_INTERP_OPT_LEVEL "" CACHE STRING
+  "Override interpreter optimization (empty = build flags; 0, 1, 2, 3, s, g)")
+set_property(CACHE NJ_INTERP_OPT_LEVEL PROPERTY STRINGS "" 0 1 2 3 s g)
+if(NOT NJ_INTERP_OPT_LEVEL STREQUAL "")
+  if(NOT NJ_INTERP_OPT_LEVEL MATCHES "^[0123sg]$")
+    message(FATAL_ERROR "NJ_INTERP_OPT_LEVEL must be empty, 0, 1, 2, 3, s, or g")
+  endif()
+  if(NOT CMAKE_C_COMPILER_ID MATCHES "^(GNU|Clang|AppleClang)$" OR MSVC)
+    message(FATAL_ERROR "NJ_INTERP_OPT_LEVEL requires a GCC-compatible compiler")
+  endif()
+  set_source_files_properties(src/core/nj_interp.c PROPERTIES
+    COMPILE_OPTIONS "-O${NJ_INTERP_OPT_LEVEL}")
+endif()
 
 if(UNIX)
   target_link_libraries(nj2me PUBLIC m)
@@ -808,6 +819,7 @@ if(NJ_BUILD_TESTS)
   nj_add_test(test_natives   tests/test_natives.c)
   nj_add_test(test_m3g       tests/test_m3g.c)
   nj_add_test(test_m3g_targets tests/test_m3g_targets.c)
+  nj_add_test(test_m3g_depth tests/test_m3g_depth.c)
   nj_add_test(test_m3g_references tests/test_m3g_references.c)
   nj_add_test(test_mascot    tests/test_mascot.c)
   nj_add_test(test_mascot_scene tests/test_mascot_scene.c)

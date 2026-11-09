@@ -4048,9 +4048,9 @@ NJFN(m3g_bindTarget)
         nj_iput(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_vw", "I"), w);
         nj_iput(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_vh", "I"), h);
     }
-    /* The depth buffer belongs to the target as much as the viewport does:
-       binding a new one starts from a clean buffer.  The next render clears
-       it (an impossible frame number is what "needs clearing" looks like). */
+    /* Depth is valid only within this binding. Reuse the serialized zframe
+       slot as a validity marker: negative needs initialization, nonnegative
+       is valid. Host presents can occur between draws on the same target. */
     nj_iput(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_zframe", "I"), -1);
     return NJ_OK;
 }
@@ -4185,18 +4185,19 @@ NJFN(m3g_clear)
         nj_ref a = nj_rget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_zbuf", "[I"));
         int zw = nj_iget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_zw", "I"));
         int zh = nj_iget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_zh", "I"));
-        nj_s4 frame = nj_iget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_zframe", "I"));
+        nj_s4 valid = nj_iget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_zframe", "I"));
         if (a && zw == surface->width && zh == surface->height &&
             (nj_size)zw * zh <= nj_array_length(a)) {
             nj_s4 *z = (nj_s4 *)nj_array_data(a);
             int y;
-            if (frame != (nj_s4)vm->frames) {
-                /* Preserve the existing once-per-frame initialisation. */
+            if (valid < 0) {
+                /* A newly bound target has no defined depth outside this
+                   clear's viewport either. Initialize the whole allocation. */
                 memset(z, 0, (size_t)zw * zh * sizeof(*z));
             } else for (y = y0; y < y1; ++y) {
                 memset(z + (nj_size)y * zw + x0, 0, (size_t)(x1 - x0) * sizeof(*z));
             }
-            nj_iput(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_zframe", "I"), (nj_s4)vm->frames);
+            nj_iput(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_zframe", "I"), 0);
         } else {
             nj_iput(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_zframe", "I"), -1);
         }
@@ -11000,12 +11001,12 @@ static int sw_depth(nj_vm *vm, nj_ref self, m3g_sw *sw)
         nj_root_release(vm, mark);
         zf = -1;                       /* a fresh array is already "far" */
     }
-    if (zf != (nj_s4)vm->frames) {     /* one clear per frame */
+    if (zf < 0) {                     /* first render after bind or resize */
         p = (nj_s4 *)nj_array_data(a);
         if (p) {
             memset(p, 0, (size_t)n * sizeof(nj_s4));
         }
-        nj_iput(vm, self, fr, (nj_s4)vm->frames);
+        nj_iput(vm, self, fr, 0);
     }
     sw->z = (nj_s4 *)nj_array_data(a);
     return sw->z != NULL;
