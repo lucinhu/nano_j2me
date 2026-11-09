@@ -454,7 +454,7 @@ public class M3GDemo extends MIDlet {
 
                 Appearance app = new Appearance();
                 Material mat = new Material();
-                mat.setColor(Material.DIFFUSE, 0x0000FF00);
+                mat.setColor(Material.DIFFUSE, 0xFF00FF00);
                 app.setMaterial(mat);
 
                 g3d.bindTarget(g);
@@ -493,7 +493,7 @@ public class M3GDemo extends MIDlet {
 
                 Appearance app = new Appearance();
                 Material mat = new Material();
-                mat.setColor(Material.DIFFUSE, 0x00FFFF00);
+                mat.setColor(Material.DIFFUSE, 0xFFFFFF00);
                 app.setMaterial(mat);
 
                 g3d.bindTarget(g);
@@ -528,7 +528,7 @@ public class M3GDemo extends MIDlet {
 
                 Appearance app = new Appearance();
                 Material mat = new Material();
-                mat.setColor(Material.DIFFUSE, 0x00FF0000);
+                mat.setColor(Material.DIFFUSE, 0xFFFF0000);
                 app.setMaterial(mat);
 
                 g3d.bindTarget(g);
@@ -656,7 +656,7 @@ public class M3GDemo extends MIDlet {
                     0, 0, (byte) 255,  (byte) 255, (byte) 255, (byte) 255 });
                 Appearance app = new Appearance();
                 Material mat = new Material();
-                mat.setColor(Material.DIFFUSE, 0x00FFFFFF);
+                mat.setColor(Material.DIFFUSE, 0xFFFFFFFF);
                 app.setMaterial(mat);
                 app.setTexture(0, new Texture2D(image));
 
@@ -720,7 +720,7 @@ public class M3GDemo extends MIDlet {
                 Appearance app = new Appearance();
                 Material mat = new Material();
                 mat.setColor(Material.AMBIENT, 0x00404040);
-                mat.setColor(Material.DIFFUSE, 0x00FF0000);
+                mat.setColor(Material.DIFFUSE, 0xFFFF0000);
                 app.setMaterial(mat);
 
                 Light amb = new Light();
@@ -786,7 +786,7 @@ public class M3GDemo extends MIDlet {
 
                 Appearance app = new Appearance();
                 Material mat = new Material();
-                mat.setColor(Material.DIFFUSE, 0x0000FF00);
+                mat.setColor(Material.DIFFUSE, 0xFF00FF00);
                 app.setMaterial(mat);
 
                 g3d.bindTarget(g);
@@ -1109,7 +1109,7 @@ public class M3GDemo extends MIDlet {
 
                 Appearance app = new Appearance();
                 Material mat = new Material();
-                mat.setColor(Material.DIFFUSE, 0x00FFFFFF);
+                mat.setColor(Material.DIFFUSE, 0xFFFFFFFF);
                 app.setMaterial(mat);
                 Texture2D tex = new Texture2D(image);
                 tex.setFiltering(Texture2D.FILTER_NEAREST,
@@ -1181,7 +1181,7 @@ public class M3GDemo extends MIDlet {
 
                     Appearance app = new Appearance();
                     Material mat = new Material();
-                    mat.setColor(Material.DIFFUSE, 0x00FFFFFF);
+                    mat.setColor(Material.DIFFUSE, 0xFFFFFFFF);
                     app.setMaterial(mat);
                     Texture2D tex = new Texture2D(image);
                     tex.setBlending(Texture2D.FUNC_REPLACE);
@@ -1219,7 +1219,8 @@ public class M3GDemo extends MIDlet {
     private static Appearance flat(int rgb) {
         Appearance app = new Appearance();
         Material mat = new Material();
-        mat.setColor(Material.DIFFUSE, rgb);
+        // DIFFUSE is ARGB; these geometry checks take an opaque RGB input.
+        mat.setColor(Material.DIFFUSE, 0xFF000000 | rgb);
         app.setMaterial(mat);
         return app;
     }
@@ -1258,7 +1259,7 @@ public class M3GDemo extends MIDlet {
             r, g, b, (byte) alpha, r, g, b, (byte) alpha });
         Appearance app = new Appearance();
         Material mat = new Material();
-        mat.setColor(Material.DIFFUSE, 0x00FFFFFF);
+        mat.setColor(Material.DIFFUSE, 0xFFFFFFFF);
         app.setMaterial(mat);
         Texture2D tex = new Texture2D(image);
         if (func >= 0) {

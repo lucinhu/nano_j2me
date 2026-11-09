@@ -10920,8 +10920,8 @@ M3G_F_GET(m3g_g3d_getDepthRangeFar, NJ_C_G3D, "_nj_drfar")
  * would have to be owned by someone, and the only lifetime the collector
  * understands is a Java one).  Entries hold 1/w scaled by 65536: larger is
  * nearer, and a freshly allocated array is all zero = "nothing drawn",
- * which is exactly the state a new buffer must be in.  It is cleared once
- * per frame so a title that never calls clear() still renders.
+ * which is exactly the state a new buffer must be in. Binding a target starts
+ * its depth-buffer lifetime; explicit clear() clears it during that binding.
  */
 typedef struct {
     nj_surface *surf;
@@ -10929,6 +10929,7 @@ typedef struct {
     int vx, vy, vw, vh;
     const nj_u1 *tex;
     int tex_w, tex_h, tex_bpp;
+    int tex_no_alpha;           /* source RGB/LUMINANCE, including RGBA mips */
     int wrap_s, wrap_t;
     int cull;                  /* 160 CULL_BACK, 161 CULL_FRONT, 162 none */
     int winding;               /* 168 CCW, 169 CW */
@@ -11296,6 +11297,21 @@ static nj_u4 sw_texel_pack(const m3g_sw *sw, int u, int v)
 }
 #endif
 
+/* Texture2D's alpha equation is independent of its RGB equation. Keep the
+ * source format even when a conversion or mip level supplies RGBA bytes. */
+static inline nj_u4 sw_tex_alpha(const m3g_sw *sw, nj_u4 ta, nj_u4 argb)
+{
+    nj_u4 a = argb >> 24;
+
+    if (a == 255u && sw->texfunc != 226) { return ta; }
+    if (sw->texfunc == 226 ||
+        (sw->texfunc == 228 && (sw->tex_no_alpha || sw->tex_bpp == 3))) {
+        return a;                 /* DECAL, or REPLACE without texture alpha */
+    }
+    if (sw->texfunc == 228) { return ta; }
+    return (a * ta + 127u) / 255u; /* MODULATE, ADD and BLEND */
+}
+
 static nj_u4 sw_texel(const m3g_sw *sw, float s, float t, nj_u4 argb)
 {
     float fs, ft;
@@ -11417,6 +11433,7 @@ static nj_u4 sw_texel(const m3g_sw *sw, float s, float t, nj_u4 argb)
        light or the vertex colour produced.  FUNC_ADD and FUNC_BLEND need a
        second texture unit, which this rasteriser does not have; MODULATE is
        the stand-in and docs/COMPATIBILITY.md says so. */
+    ta = sw_tex_alpha(sw, ta, argb);
     if (sw->texfunc == 228 || sw->texfunc == 226) {
         return (ta << 24) | (tr << 16) | (tg << 8) | tb;
     }
@@ -11607,14 +11624,19 @@ static nj_u4 sw_tri(m3g_sw *sw, const float xy[6], const float inv[3],
     nj_u4 flat;
     float cr = 0.0f, cg = 0.0f, cb = 0.0f;
     float dxr = 0.0f, dyr = 0.0f, dxgc = 0.0f, dygc = 0.0f, dxb = 0.0f, dyb = 0.0f;
+    float ca_row = 0.0f, dxa = 0.0f, dya = 0.0f;
+    int alpha_ramp;
+    int tex_near = 0;
     float r0f = 0.0f, g0f = 0.0f, b0f = 0.0f;
     float r1f = 0.0f, g1f = 0.0f, b1f = 0.0f;
     float r2f = 0.0f, g2f = 0.0f, b2f = 0.0f;
 #if NJ_M3G_FAST_PATHS
     int flat_opaque;
-    int flat_tex, flat_tex565, flat_texargb, tex_near;
+    int flat_tex, flat_tex565, flat_texargb;
 #endif
+#if NJ_M3G_FAST_PATHS
     int fog_state = 0;   /* 0 per pixel, 1 no fog, 2 fully fogged */
+#endif
     int st_outer;        /* a texture coordinate range that a reciprocal
                           * cannot be trusted with: see the sampler note */
 
@@ -11645,16 +11667,20 @@ static nj_u4 sw_tri(m3g_sw *sw, const float xy[6], const float inv[3],
     if (twosided && back && rgb2 != NULL) {
         rgb = rgb2;
     }
-    gouraud = (rgb[0] != rgb[1] || rgb[1] != rgb[2]);
-    flat = 0xFF000000u | (rgb[0] & 0x00FFFFFFu);
+    gouraud = ((rgb[0] & 0x00FFFFFFu) != (rgb[1] & 0x00FFFFFFu) ||
+               (rgb[1] & 0x00FFFFFFu) != (rgb[2] & 0x00FFFFFFu));
+    alpha_ramp = ((rgb[0] >> 24) != (rgb[1] >> 24) ||
+                  (rgb[1] >> 24) != (rgb[2] >> 24));
+    flat = rgb[0];
 #if NJ_M3G_FAST_PATHS
     /* Hoist flat/nearest texture dispatch out of the pixel loop. Clamp,
      * replace/decal and non-default compositing are common in real scenes;
      * none needs the general Gouraud/sprite/filter branch tree. Alpha testing
      * still precedes depth writes and all blend modes use sw_blend unchanged. */
-    flat_opaque = !has_tex && !gouraud && !sw->sprite && sw->awrite &&
+    flat_opaque = !has_tex && !gouraud && !alpha_ramp &&
+                  (flat >> 24) == 255u && !sw->sprite && sw->awrite &&
                   sw->athresh <= 255 && (sw->blend == 64 || sw->blend == 68);
-    flat_tex = has_tex && !gouraud && !sw->sprite &&
+    flat_tex = has_tex && !gouraud && !alpha_ramp && !sw->sprite &&
                sw->tex != NULL && sw->tex_bpp >= 3 &&
                sw->tex_w > 0 && sw->tex_h > 0 &&
                sw->filt_image != 209 && sw->filt_image != 129;
@@ -11677,6 +11703,7 @@ static nj_u4 sw_tri(m3g_sw *sw, const float xy[6], const float inv[3],
        comparisons sw_fog() makes per pixel are made once here.  "none" means
        every pixel is nearer than near (the fog leaves the colour alone) and
        "full" means every pixel is past far (the fog replaces its RGB). */
+#if NJ_M3G_FAST_PATHS
     if (sw->fog && sw->fog_mode == 81 && sw->fog_inv_near > 0.0f &&
         sw->fog_inv_far > 0.0f) {
         if (inv[0] >= sw->fog_inv_near && inv[1] >= sw->fog_inv_near &&
@@ -11687,6 +11714,7 @@ static nj_u4 sw_tri(m3g_sw *sw, const float xy[6], const float inv[3],
             fog_state = 2;
         }
     }
+#endif
     /* Interpolating s/w and 1/w and dividing once per pixel is not bit-exact
        with dividing each coordinate.  That is harmless under WRAP_CLAMP -
        the clamp lands both roundings on the same texel edge - but a repeat
@@ -11753,6 +11781,15 @@ static nj_u4 sw_tri(m3g_sw *sw, const float xy[6], const float inv[3],
     dyh = dye1 * st[0] * inv[0] + dye2 * st[2] * inv[1] + dye0 * st[4] * inv[2];
     dxk = dxe1 * st[1] * inv[0] + dxe2 * st[3] * inv[1] + dxe0 * st[5] * inv[2];
     dyk = dye1 * st[1] * inv[0] + dye2 * st[3] * inv[1] + dye0 * st[5] * inv[2];
+    if (alpha_ramp) {
+        float a0 = (float)(rgb[0] >> 24);
+        float a1 = (float)(rgb[1] >> 24);
+        float a2 = (float)(rgb[2] >> 24);
+
+        ca_row = e1 * a0 + e2 * a1 + e0 * a2;
+        dxa = dxe1 * a0 + dxe2 * a1 + dxe0 * a2;
+        dya = dye1 * a0 + dye2 * a1 + dye0 * a2;
+    }
     if (gouraud) {
         /* e1 carries vertex 0, e2 vertex 1 and e0 vertex 2 - the pairing the
            texture coordinates and 1/w already use.  The colours are
@@ -11804,7 +11841,7 @@ static nj_u4 sw_tri(m3g_sw *sw, const float xy[6], const float inv[3],
 
     for (py = miny; py <= maxy; py++) {
         float rg = g, rh = h, rk = k;
-        float rr = cr, rgc = cg, rbc = cb;
+        float rr = cr, rgc = cg, rbc = cb, ra = ca_row;
         float lo = fminx, hi = fmaxx;
         int xl, xr;
         nj_size o;
@@ -11863,6 +11900,7 @@ static nj_u4 sw_tri(m3g_sw *sw, const float xy[6], const float inv[3],
             rr += dxr * skip;
             rgc += dxgc * skip;
             rbc += dxb * skip;
+            ra += dxa * skip;
             o = (nj_size)py * (nj_size)sw->surf->width + (nj_size)xl;
             drow = dst + (nj_size)py * (nj_size)sw->surf->stride + (nj_size)xl * bpp;
 #if NJ_M3G_FAST_PATHS
@@ -11912,14 +11950,7 @@ static nj_u4 sw_tri(m3g_sw *sw, const float xy[6], const float inv[3],
                     cp = 1.0f / pg;
                     tp = sw_near_texel(sw, st_outer ? ph / pg : ph * cp,
                                        st_outer ? pk / pg : pk * cp);
-                    ta = bpp4 ? (nj_u4)tp[3] : 255u;
-                    if (blend_alpha && ta <= 1u) {
-                        /* A 1/255 source alpha moves the destination by at
-                         * most one unit, but the depth write still has to
-                         * happen: later geometry tests against it. */
-                        if (dwrite) { z[o] = key; }
-                        continue;
-                    }
+                    ta = sw_tex_alpha(sw, bpp4 ? (nj_u4)tp[3] : 255u, flat);
                     if (sw->athresh > 0 && (nj_s4)ta < sw->athresh) { continue; }
                     tr = tp[0]; tg = tp[1]; tb = tp[2];
                     if (tint) {
@@ -12015,7 +12046,7 @@ static nj_u4 sw_tri(m3g_sw *sw, const float xy[6], const float inv[3],
                              ((nj_size)vv * (nj_size)texw + (nj_size)uu) *
                                  (nj_size)texbpp;
                     }
-                    ta = (nj_u4)tp[3];
+                    ta = sw_tex_alpha(sw, (nj_u4)tp[3], flat);
                     if (athresh > 0 && (nj_s4)ta < athresh) { continue; }
                     tr = tp[0]; tg = tp[1]; tb = tp[2];
                     tr = (tr * fr) / 255u;
@@ -12060,14 +12091,7 @@ static nj_u4 sw_tri(m3g_sw *sw, const float xy[6], const float inv[3],
                              ((nj_size)vv * (nj_size)texw + (nj_size)uu) *
                                  (nj_size)texbpp;
                     }
-                    ta = bpp4 ? (nj_u4)tp[3] : 255u;
-                    if (blend_alpha && ta <= 1u) {
-                        /* A 1/255 source alpha moves the destination by at
-                         * most one unit, but the depth write still has to
-                         * happen: later geometry tests against it. */
-                        if (dwrite) { z[o] = key; }
-                        continue;
-                    }
+                    ta = sw_tex_alpha(sw, bpp4 ? (nj_u4)tp[3] : 255u, flat);
                     if (athresh > 0 && (nj_s4)ta < athresh) { continue; }
                     tr = tp[0]; tg = tp[1]; tb = tp[2];
                     if (tint) {
@@ -12117,14 +12141,7 @@ static nj_u4 sw_tri(m3g_sw *sw, const float xy[6], const float inv[3],
                     cp = 1.0f / pg;
                     tp = sw_near_texel(sw, st_outer ? ph / pg : ph * cp,
                                        st_outer ? pk / pg : pk * cp);
-                    ta = bpp4 ? (nj_u4)tp[3] : 255u;
-                    if (blend_alpha && ta <= 1u) {
-                        /* A 1/255 source alpha moves the destination by at
-                         * most one unit, but the depth write still has to
-                         * happen: later geometry tests against it. */
-                        if (dwrite) { z[o] = key; }
-                        continue;
-                    }
+                    ta = sw_tex_alpha(sw, bpp4 ? (nj_u4)tp[3] : 255u, flat);
                     if (sw->athresh > 0 && (nj_s4)ta < sw->athresh) { continue; }
                     tr = tp[0]; tg = tp[1]; tb = tp[2];
                     if (tint) {
@@ -12164,7 +12181,7 @@ static nj_u4 sw_tri(m3g_sw *sw, const float xy[6], const float inv[3],
             } else
 #endif
             for (px = xl; px <= xr; px++, o++, drow += bpp, pg += dxg, ph += dxh,
-                     pk += dxk, rr += dxr, rgc += dxgc, rbc += dxb) {
+                     pk += dxk, rr += dxr, rgc += dxgc, rbc += dxb, ra += dxa) {
                 nj_s4 key = (nj_s4)(pg * iz);
                 nj_u4 c, ca;
 
@@ -12192,12 +12209,18 @@ static nj_u4 sw_tri(m3g_sw *sw, const float xy[6], const float inv[3],
                     continue;
                 }
                 if (gouraud) {
-                    c = 0xFF000000u |
+                    c = (flat & 0xFF000000u) |
                         ((nj_u4)(rr * ia + 0.5f) << 16) |
                         ((nj_u4)(rgc * ia + 0.5f) << 8) |
                         (nj_u4)(rbc * ia + 0.5f);
                 } else {
                     c = flat;
+                }
+                if (alpha_ramp) {
+                    float a = ra * ia + 0.5f;
+                    nj_u4 alpha = a < 0.0f ? 0u : a > 255.0f ? 255u : (nj_u4)a;
+
+                    c = (c & 0x00FFFFFFu) | (alpha << 24);
                 }
                 if (has_tex) {
                     float rcp = 1.0f / pg;
@@ -12211,7 +12234,8 @@ static nj_u4 sw_tri(m3g_sw *sw, const float xy[6], const float inv[3],
                             st_outer ? ph / pg : ph * rcp,
                             st_outer ? pk / pg : pk * rcp);
                         nj_u4 tr = tp[0], tg = tp[1], tb = tp[2];
-                        nj_u4 ta = (sw->tex_bpp == 4) ? (nj_u4)tp[3] : 255u;
+                        nj_u4 ta = sw_tex_alpha(sw,
+                            (sw->tex_bpp == 4) ? (nj_u4)tp[3] : 255u, c);
 
                         if (sw->texfunc == 228 || sw->texfunc == 226) {
                             c = (ta << 24) | (tr << 16) | (tg << 8) | tb;
@@ -12269,6 +12293,7 @@ static nj_u4 sw_tri(m3g_sw *sw, const float xy[6], const float inv[3],
         w0 += sw0; w1 += sw1; w2 += sw2;
         g += dyg; h += dyh; k += dyk;
         cr += dyr; cg += dygc; cb += dyb;
+        ca_row += dya;
     }
     return drawn;
 }
@@ -12362,6 +12387,7 @@ typedef struct {
     float lspot_exp[NJ_M3G_LIGHTS];
     int lit;
     int twosided;                 /* PolygonMode asked for two-sided lighting */
+    int material, flat_alpha;     /* alpha source and pre-clip provoking vertex */
     nj_u4 emi, amb, spc;          /* the material's other colours */
     float shin;
     int vcolor;
@@ -12544,23 +12570,19 @@ static int jr_vertex(m3g_jr *r, nj_u4 v, float xy[2], float *inv, float st[2],
  * million of them over a 1200-frame in-world run).  The identity is exact:
  * the summed values are 3*x with
  * 0 <= x <= 255 after the mask, and 3*x/3 == x in integer arithmetic, so the
- * RGB this returns is bit-identical.  Only the RGB is needed - jr_fetch()
- * keeps no alpha for an unlit vertex - so the alpha term of the old average
- * is not computed either.
+ * RGB this returns is bit-identical. jr_fetch() now also retains the alpha;
+ * an RGB array supplies implicit 255, while RGBA supplies its fourth byte.
  */
-static nj_u4 jr_colour1(m3g_jr *r, nj_u4 v)
+static nj_u4 jr_vertex_colour(m3g_jr *r, nj_u4 v)
 {
     const nj_s2 *s;
 
-    if (r->dif != 0xFFFFFFFFu) {
-        return r->dif | 0xFF000000u;   /* a material colour is opaque */
-    }
     if (!r->col || r->ccomp < 3 || v >= (nj_u4)r->ccount) {
         return r->default_colour;
     }
-    /* VertexArray colours are RGB or RGBA; both start with the RGB. */
     s = r->col + ((nj_size)r->cfirst + (nj_size)v) * (nj_size)r->ccomp;
-    return ((nj_u4)(nj_u1)(s[0] & 0xFF) << 16) |
+    return ((r->ccomp >= 4 ? (nj_u4)(nj_u1)(s[3] & 0xFF) : 255u) << 24) |
+           ((nj_u4)(nj_u1)(s[0] & 0xFF) << 16) |
            ((nj_u4)(nj_u1)(s[1] & 0xFF) << 8) |
            (nj_u4)(nj_u1)(s[2] & 0xFF);
 }
@@ -12787,7 +12809,7 @@ typedef struct {
 static int jr_fetch(m3g_jr *r, nj_u4 v, jr_vtx *o)
 {
     float col[3];
-    nj_u4 argb;
+    nj_u4 argb, alpha, vc;
 
     o->xy[0] = o->xy[1] = 0.0f;
     o->inv = 0.0f;
@@ -12799,17 +12821,9 @@ static int jr_fetch(m3g_jr *r, nj_u4 v, jr_vtx *o)
     if (!jr_vertex(r, v, o->xy, &o->inv, o->st, o->pe, o->ne)) {
         return 0;
     }
+    vc = jr_vertex_colour(r, v);
+    alpha = (r->material && !r->vcolor ? r->dif : vc) & 0xFF000000u;
     if (r->lit) {
-        nj_u4 vc = r->default_colour;
-
-        if (r->col && r->ccomp >= 3 && v < (nj_u4)r->ccount) {
-            const nj_s2 *s = r->col +
-                ((nj_size)r->cfirst + (nj_size)v) * (nj_size)r->ccomp;
-
-            vc = ((nj_u4)(nj_u1)(s[0] & 0xFF) << 16) |
-                 ((nj_u4)(nj_u1)(s[1] & 0xFF) << 8) |
-                 (nj_u4)(nj_u1)(s[2] & 0xFF);
-        }
         jr_lit(r, o->pe, o->ne, vc, col);
         /*
          * Two-sided lighting: a back-facing polygon is lit by the same lights
@@ -12824,19 +12838,21 @@ static int jr_fetch(m3g_jr *r, nj_u4 v, jr_vtx *o)
             back[1] = -o->ne[1];
             back[2] = -o->ne[2];
             jr_lit(r, o->pe, back, vc, col2);
-            o->rgb2 = ((nj_u4)(col2[0] + 0.5f) << 16) |
+            o->rgb2 = alpha | ((nj_u4)(col2[0] + 0.5f) << 16) |
                       ((nj_u4)(col2[1] + 0.5f) << 8) |
                       (nj_u4)(col2[2] + 0.5f);
         }
     } else {
-        argb = jr_colour1(r, v);
+        /* Retain the historical RGB material selection independently of alpha. */
+        argb = r->dif != 0xFFFFFFFFu ? r->dif : vc;
         col[0] = (float)((argb >> 16) & 0xFFu);
         col[1] = (float)((argb >> 8) & 0xFFu);
         col[2] = (float)(argb & 0xFFu);
     }
-    o->rgb = ((nj_u4)(col[0] + 0.5f) << 16) |
+    o->rgb = alpha | ((nj_u4)(col[0] + 0.5f) << 16) |
              ((nj_u4)(col[1] + 0.5f) << 8) |
              (nj_u4)(col[2] + 0.5f);
+    o->rgb2 = (o->rgb2 & 0x00FFFFFFu) | alpha;
     return 1;
 }
 
@@ -12865,7 +12881,9 @@ static void jr_blend(m3g_jr *r, const jr_vtx *a, const jr_vtx *b, float t,
     c1[0] = (float)((b->rgb >> 16) & 0xFFu);
     c1[1] = (float)((b->rgb >> 8) & 0xFFu);
     c1[2] = (float)(b->rgb & 0xFFu);
-    o->rgb = ((nj_u4)(c0[0] + (c1[0] - c0[0]) * t + 0.5f) << 16) |
+    o->rgb = ((nj_u4)((float)(a->rgb >> 24) +
+                  ((float)(b->rgb >> 24) - (float)(a->rgb >> 24)) * t + 0.5f) << 24) |
+             ((nj_u4)(c0[0] + (c1[0] - c0[0]) * t + 0.5f) << 16) |
              ((nj_u4)(c0[1] + (c1[1] - c0[1]) * t + 0.5f) << 8) |
              (nj_u4)(c0[2] + (c1[2] - c0[2]) * t + 0.5f);
     if (r->twosided) {
@@ -12875,7 +12893,8 @@ static void jr_blend(m3g_jr *r, const jr_vtx *a, const jr_vtx *b, float t,
         c1[0] = (float)((b->rgb2 >> 16) & 0xFFu);
         c1[1] = (float)((b->rgb2 >> 8) & 0xFFu);
         c1[2] = (float)(b->rgb2 & 0xFFu);
-        o->rgb2 = ((nj_u4)(c0[0] + (c1[0] - c0[0]) * t + 0.5f) << 16) |
+        o->rgb2 = (o->rgb & 0xFF000000u) |
+                  ((nj_u4)(c0[0] + (c1[0] - c0[0]) * t + 0.5f) << 16) |
                   ((nj_u4)(c0[1] + (c1[1] - c0[1]) * t + 0.5f) << 8) |
                   (nj_u4)(c0[2] + (c1[2] - c0[2]) * t + 0.5f);
     } else {
@@ -12976,8 +12995,21 @@ static float jr_clip_distance(const float m[16], const jr_vtx *v, int plane)
 static void jr_triangle_v(m3g_jr *r, const jr_vtx *v0, const jr_vtx *v1,
                           const jr_vtx *v2)
 {
-    jr_vtx poly[2][5];
+    jr_vtx poly[2][5], flat[3];
     int n = 3, plane, k;
+
+    /* FLAT uses the original third vertex, even if clipping replaces it.
+     * Keep the existing RGB shading unchanged; this fixes alpha only. */
+    if (r->flat_alpha) {
+        nj_u4 a = v2->rgb & 0xFF000000u;
+
+        flat[0] = *v0; flat[1] = *v1; flat[2] = *v2;
+        for (k = 0; k < 3; k++) {
+            flat[k].rgb = (flat[k].rgb & 0x00FFFFFFu) | a;
+            flat[k].rgb2 = (flat[k].rgb2 & 0x00FFFFFFu) | a;
+        }
+        v0 = &flat[0]; v1 = &flat[1]; v2 = &flat[2];
+    }
 
 #if NJ_M3G_FAST_PATHS
     /* Most submitted triangles are already inside both depth planes. The
@@ -13552,6 +13584,7 @@ static int jr_setup(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref ib, nj_ref app,
         r.dif = 0xFFFFFFFFu;
         mat = app ? nj_rget(vm, app, m3g_fof(vm, NJ_C_APPEAR, "_nj_mat",
                                              "L" NJ_C_MAT ";")) : 0;
+        r.material = mat != NULL;
         if (mat) {
             r.dif = (nj_u4)nj_iget(vm, mat, m3g_fof(vm, NJ_C_MAT, "_nj_c_dif", "I"));
         }
@@ -13640,6 +13673,8 @@ static int jr_setup(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref ib, nj_ref app,
                                              "L" NJ_C_POLY ";"));
 
         if (vb && pm) {
+            r.flat_alpha = nj_iget(vm, pm,
+                m3g_fof(vm, NJ_C_POLY, "_nj_shading", "I")) == 164;
             r.sw.cull = (int)nj_iget(vm, pm,
                           m3g_fof(vm, NJ_C_POLY, "_nj_culling", "I"));
             r.sw.winding = (int)nj_iget(vm, pm,
@@ -13688,6 +13723,8 @@ static int jr_setup(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref ib, nj_ref app,
                     nj_ref px;
                     nj_ref mipref;
                     nj_s4 fmt = m3g_image_format(vm, im2);
+
+                    r.sw.tex_no_alpha = fmt == 97 || fmt == 99;
 
                     r.sw.tex_w = (int)nj_iget(vm, im2, m3g_fof(vm, NJ_C_IMAGE2D,
                                                                "_nj_w", "I"));
@@ -14134,7 +14171,7 @@ static nj_u4 jr_sprite(nj_vm *vm, nj_ref self, nj_ref sprite, nj_ref world,
         v[k].st[0] = (float)(u0 + (u1-u0) * ((x-x0)/(x1-x0)));
         v[k].st[1] = (float)(t0 + (t1-t0) * ((y-y0)/(y1-y0)));
         memcpy(v[k].pe, origin, sizeof(origin));
-        v[k].rgb = 0xFFFFFFu;
+        v[k].rgb = 0xFFFFFFFFu;
     }
     jr_triangle_v(&r, &v[0], &v[1], &v[2]);
     jr_triangle_v(&r, &v[0], &v[2], &v[3]);
