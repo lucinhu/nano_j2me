@@ -4400,6 +4400,171 @@ done:
     nj_vm_destroy(vm);
 }
 
+/* Expected text comes from desktop Java IntegerRadixOracle.java, not a copy
+ * of the C formatter. Source/commands/JDK version are archived under
+ * .local-tools/debug-runs/boxing-radix-20261110-tests/.
+ * expected-literals.inc SHA256:
+ * c209d2647b46debe1939f02c6870b94af5362eae5bc1446a6016aaa9f0f3543e
+ * MIN_VALUE's old radix magnitude had signed-negation UB even on hosts where
+ * every ordinary output below was already correct; UBSan is a separate check. */
+/* BEGIN desktop Java IntegerRadixOracle literals. */
+static const nj_s4 radix_values[] = { (-2147483647 - 1), -2147483647, 2147483646, 2147483647, -1, 0, 1 };
+static const char *const radix_decimal[] = { "-2147483648", "-2147483647", "2147483646", "2147483647", "-1", "0", "1" };
+static const char *const radix_edges[][4] = {
+    { "-10000000000000000000000000000000", "-1111111111111111111111111111111", "1111111111111111111111111111110", "1111111111111111111111111111111" }, /* radix 2 */
+    { "-12112122212110202102", "-12112122212110202101", "12112122212110202100", "12112122212110202101" }, /* radix 3 */
+    { "-2000000000000000", "-1333333333333333", "1333333333333332", "1333333333333333" }, /* radix 4 */
+    { "-13344223434043", "-13344223434042", "13344223434041", "13344223434042" }, /* radix 5 */
+    { "-553032005532", "-553032005531", "553032005530", "553032005531" }, /* radix 6 */
+    { "-104134211162", "-104134211161", "104134211160", "104134211161" }, /* radix 7 */
+    { "-20000000000", "-17777777777", "17777777776", "17777777777" }, /* radix 8 */
+    { "-5478773672", "-5478773671", "5478773670", "5478773671" }, /* radix 9 */
+    { "-2147483648", "-2147483647", "2147483646", "2147483647" }, /* radix 10 */
+    { "-a02220282", "-a02220281", "a02220280", "a02220281" }, /* radix 11 */
+    { "-4bb2308a8", "-4bb2308a7", "4bb2308a6", "4bb2308a7" }, /* radix 12 */
+    { "-282ba4aab", "-282ba4aaa", "282ba4aa9", "282ba4aaa" }, /* radix 13 */
+    { "-1652ca932", "-1652ca931", "1652ca930", "1652ca931" }, /* radix 14 */
+    { "-c87e66b8", "-c87e66b7", "c87e66b6", "c87e66b7" }, /* radix 15 */
+    { "-80000000", "-7fffffff", "7ffffffe", "7fffffff" }, /* radix 16 */
+    { "-53g7f549", "-53g7f548", "53g7f547", "53g7f548" }, /* radix 17 */
+    { "-3928g3h2", "-3928g3h1", "3928g3h0", "3928g3h1" }, /* radix 18 */
+    { "-27c57h33", "-27c57h32", "27c57h31", "27c57h32" }, /* radix 19 */
+    { "-1db1f928", "-1db1f927", "1db1f926", "1db1f927" }, /* radix 20 */
+    { "-140h2d92", "-140h2d91", "140h2d90", "140h2d91" }, /* radix 21 */
+    { "-ikf5bf2", "-ikf5bf1", "ikf5bf0", "ikf5bf1" }, /* radix 22 */
+    { "-ebelf96", "-ebelf95", "ebelf94", "ebelf95" }, /* radix 23 */
+    { "-b5gge58", "-b5gge57", "b5gge56", "b5gge57" }, /* radix 24 */
+    { "-8jmdnkn", "-8jmdnkm", "8jmdnkl", "8jmdnkm" }, /* radix 25 */
+    { "-6oj8ioo", "-6oj8ion", "6oj8iom", "6oj8ion" }, /* radix 26 */
+    { "-5ehnckb", "-5ehncka", "5ehnck9", "5ehncka" }, /* radix 27 */
+    { "-4clm98g", "-4clm98f", "4clm98e", "4clm98f" }, /* radix 28 */
+    { "-3hk7988", "-3hk7987", "3hk7986", "3hk7987" }, /* radix 29 */
+    { "-2sb6cs8", "-2sb6cs7", "2sb6cs6", "2sb6cs7" }, /* radix 30 */
+    { "-2d09uc2", "-2d09uc1", "2d09uc0", "2d09uc1" }, /* radix 31 */
+    { "-2000000", "-1vvvvvv", "1vvvvvu", "1vvvvvv" }, /* radix 32 */
+    { "-1lsqtl2", "-1lsqtl1", "1lsqtl0", "1lsqtl1" }, /* radix 33 */
+    { "-1d8xqrq", "-1d8xqrp", "1d8xqro", "1d8xqrp" }, /* radix 34 */
+    { "-15v22un", "-15v22um", "15v22ul", "15v22um" }, /* radix 35 */
+    { "-zik0zk", "-zik0zj", "zik0zi", "zik0zj" }, /* radix 36 */
+};
+static const struct { nj_s4 value; nj_s4 radix; const char *expected; }
+radix_powers[] = {
+    { 7, 2, "111" },
+    { -7, 2, "-111" },
+    { 8, 2, "1000" },
+    { -8, 2, "-1000" },
+    { 9, 2, "1001" },
+    { -9, 2, "-1001" },
+    { 26, 3, "222" },
+    { -26, 3, "-222" },
+    { 27, 3, "1000" },
+    { -27, 3, "-1000" },
+    { 28, 3, "1001" },
+    { -28, 3, "-1001" },
+    { 511, 8, "777" },
+    { -511, 8, "-777" },
+    { 512, 8, "1000" },
+    { -512, 8, "-1000" },
+    { 513, 8, "1001" },
+    { -513, 8, "-1001" },
+    { 999, 10, "999" },
+    { -999, 10, "-999" },
+    { 1000, 10, "1000" },
+    { -1000, 10, "-1000" },
+    { 1001, 10, "1001" },
+    { -1001, 10, "-1001" },
+    { 4095, 16, "fff" },
+    { -4095, 16, "-fff" },
+    { 4096, 16, "1000" },
+    { -4096, 16, "-1000" },
+    { 4097, 16, "1001" },
+    { -4097, 16, "-1001" },
+    { 46655, 36, "zzz" },
+    { -46655, 36, "-zzz" },
+    { 46656, 36, "1000" },
+    { -46656, 36, "-1000" },
+    { 46657, 36, "1001" },
+    { -46657, 36, "-1001" },
+};
+/* Columns: hexadecimal, octal, binary unsigned int output. */
+static const char *const radix_unsigned[][3] = {
+    { "80000000", "20000000000", "10000000000000000000000000000000" },
+    { "80000001", "20000000001", "10000000000000000000000000000001" },
+    { "7ffffffe", "17777777776", "1111111111111111111111111111110" },
+    { "7fffffff", "17777777777", "1111111111111111111111111111111" },
+    { "ffffffff", "37777777777", "11111111111111111111111111111111" },
+    { "0", "0", "0" },
+    { "1", "1", "1" },
+};
+/* END desktop Java IntegerRadixOracle literals. */
+
+static void check_integer_text(nj_vm *vm, const char *cls, const char *method,
+                               const char *desc, nj_s4 value, nj_s4 radix,
+                               const char *expected)
+{
+    nj_value a[2], ret;
+    nj_status status;
+    a[0] = vint(value);
+    a[1] = vint(radix);
+    ret.bits = 0u;
+    status = nj_call_static(vm, cls, method, desc, a, &ret);
+    /* Consume the returned String before any further Java allocation; no
+     * retained Java references or additional host roots are needed. */
+    OK_MSG(status == NJ_OK && !nj_has_exception(vm) && ret.r != NULL &&
+           nj_string_length(ret.r) == (nj_u4)strlen(expected) &&
+           nj_string_equals_utf8(ret.r, expected),
+           "%s.%s(%ld, radix %ld) should be \"%s\"",
+           cls, method, (long)value, (long)radix, expected);
+    if (nj_has_exception(vm)) {
+        const char *message = nj_exception_describe(vm);
+        fprintf(stderr, "Integer text case exception: %s\n",
+                message ? message : "(no description)");
+        nj_clear_exception(vm); /* The failure was already recorded above. */
+    }
+}
+
+static void test_integer_radix(nj_vm *vm)
+{
+    static const nj_s4 invalid[] = {
+        (-2147483647 - 1), -1, 0, 1, 37, 2147483647
+    };
+    static const char *const unsigned_methods[] = {
+        "toHexString", "toOctalString", "toBinaryString"
+    };
+    unsigned i, j;
+    /* 35 radices * 7 values, including both extremes and their neighbours. */
+    for (i = 0u; i < sizeof(radix_edges) / sizeof(radix_edges[0]); ++i) {
+        for (j = 0u; j < sizeof(radix_values) / sizeof(radix_values[0]); ++j) {
+            const char *expected = j < 4u ? radix_edges[i][j] : radix_decimal[j];
+            check_integer_text(vm, INTEGER, "toString", "(II)Ljava/lang/String;",
+                               radix_values[j], (nj_s4)i + 2, expected);
+        }
+    }
+    for (i = 0u; i < sizeof(invalid) / sizeof(invalid[0]); ++i) {
+        for (j = 0u; j < sizeof(radix_values) / sizeof(radix_values[0]); ++j) {
+            check_integer_text(vm, INTEGER, "toString", "(II)Ljava/lang/String;",
+                               radix_values[j], invalid[i], radix_decimal[j]);
+        }
+    }
+    for (i = 0u; i < sizeof(radix_powers) / sizeof(radix_powers[0]); ++i) {
+        check_integer_text(vm, INTEGER, "toString", "(II)Ljava/lang/String;",
+                           radix_powers[i].value, radix_powers[i].radix,
+                           radix_powers[i].expected);
+    }
+    for (i = 0u; i < sizeof(radix_values) / sizeof(radix_values[0]); ++i) {
+        for (j = 0u; j < sizeof(unsigned_methods) / sizeof(unsigned_methods[0]); ++j) {
+            check_integer_text(vm, INTEGER, unsigned_methods[j],
+                               "(I)Ljava/lang/String;", radix_values[i], 0,
+                               radix_unsigned[i][j]);
+        }
+        check_integer_text(vm, INTEGER, "toString", "(I)Ljava/lang/String;",
+                           radix_values[i], 0, radix_decimal[i]);
+        check_integer_text(vm, "java/lang/String", "valueOf",
+                           "(I)Ljava/lang/String;", radix_values[i], 0,
+                           radix_decimal[i]);
+    }
+}
+
 /* UC Browser's bundled page parser calls Integer.shortValue().  Narrowing
  * keeps the low 16 bits and sign-extends them, including out-of-range ints. */
 static void test_integer_short_value(nj_vm *vm)
@@ -5551,6 +5716,8 @@ int main(void)
      * test above expects the heap to be where it left it. */
     test_bais_range(vm);
     test_write_utf_length(vm);
+    /* Keep the allocating radix matrix after all prior heap-pressure cases. */
+    test_integer_radix(vm);
 
     nj_vm_destroy(vm);
     nj_port_shutdown(&port);
