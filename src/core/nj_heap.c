@@ -360,12 +360,17 @@ static nj_block *nj_free_find(nj_vm *vm, nj_size total)
 
 void *nj_alloc(nj_vm *vm, nj_size bytes)
 {
-    vm->heap.allocs_since_gc++;
     nj_block *b;
     nj_size total;
     int collected = 0;
 
     if (!vm) {
+        return NULL;
+    }
+    vm->heap.allocs_since_gc++;
+    /* nj_size is 32-bit even on 64-bit hosts. Check both the block header
+     * and alignment padding before either addition can wrap. */
+    if (bytes > (nj_size)-1 - NJ_BLOCK_HDR - (NJ_OBJ_ALIGN - 1u)) {
         return NULL;
     }
     total = nj_align_up(bytes + NJ_BLOCK_HDR, NJ_OBJ_ALIGN);
@@ -391,7 +396,8 @@ void *nj_alloc(nj_vm *vm, nj_size bytes)
         }
 
         /* Bump allocation. */
-        if (vm->heap.bump + total <= vm->heap.size) {
+        if (vm->heap.bump <= vm->heap.size &&
+            total <= vm->heap.size - vm->heap.bump) {
             b = (nj_block *)(vm->heap.base + vm->heap.bump);
             b->size = total;
             b->magic = NJ_BLOCK_MAGIC;

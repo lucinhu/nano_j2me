@@ -158,6 +158,12 @@ nj_ref nj_new_string_utf16(nj_vm *vm, const nj_u2 *s, int len)
     if (len < 0) {
         len = 0;
     }
+    /* Include the UTF-16 terminator and object header in the 32-bit extent.
+     * A wrapped extent would allocate a tiny object and write the terminator
+     * at the original, very large index. nj_alloc checks block padding next. */
+    if ((nj_size)len > ((nj_size)-1 - sizeof(nj_object)) / sizeof(nj_u2) - 1u) {
+        return NULL;
+    }
     bytes = ((nj_size)len + 1u) * sizeof(nj_u2);
     o = (nj_object *)nj_alloc(vm, sizeof(nj_object) + bytes);
     if (!o) {
