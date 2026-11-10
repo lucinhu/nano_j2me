@@ -180,3 +180,46 @@ cover the four original attempts and the separate 3D recovery. The earlier
 baseline images and measurements above remain unchanged. These measurements
 precede the upstream Form scrolling/layout changes and do not describe that
 later runtime.
+
+## Upstream Form runtime and separate diagnosis
+
+The upstream Form merge is `b184dba01e0ed67180bff6ee631c6c305430690f`, with
+ordinary CLI SHA-256
+`5bb6b36f6356c6340aff14bf2905cab8d6b8245455af838be83cb8a80f511893`.
+The JBenchmark 1/2 observations above were not rerun or relabeled after this
+merge. A separate uninstrumented 3D run uses the same CPU 3, canvas, heap,
+software SDL settings, one verified Start and 300-second observation bound.
+It ends after 300.303 seconds without observed final Results: all four score
+fields remain unavailable. The supervisor records a timeout; process teardown
+returns zero. Its captured window still shows Welcome, while scene-loading
+messages show some execution and no uncaught exception. These observations do
+not establish the worker's final state or a Java hang.
+
+A separate diagnostic executable (`23d08341…ed2be44`) links one observed runner
+against the merged runtime archive. Its synchronous five-second samples show
+Java progressing through triangle, texel, LQ and HQ phases and reaching stage 8
+by the 95.780-second sample. The worker reference is null and the current Form
+contains 69 items. Actual late-window captures show all four Results values:
+HQ 12761, LQ 36057, Triangles/s 4939498 and KTexels/s 1986920. These are
+**diagnostic values, not official benchmark scores**. The instrumented run also
+uses CPU 2 and an explicit `--run-frames 2147483647` loop, whereas the ordinary
+run uses CPU 3 and the default loop. Both loops call the same frame function in
+normal operation; their budget, scripted-input/save support and error handling
+differ. The runs do not isolate a causal fix from the observer, loop, or Form
+merge. The diagnostic's early window captures remain Welcome while its worker
+and native pixels progress; the cause of that discrepancy is unresolved.
+
+The new-runtime HD run finishes normally after 507.339 seconds, including
+Results inspection. Its seven observed fields are Bilinear **Failure (88%)**,
+Trilinear **Failed/Not supported**, Perspective **Success (99%)**, Z-buffer
+**Failure (7 bit)**, Smooth **8,263,722 triangles/s**, Textured **6,578,422
+triangles/s**, and Fill rate **Failed**. Gaming, the displayed version and six
+screen-dimension fields remain unavailable after 25 individual Down presses
+and one PageDown. The visible Failed Fill result has no observed numeric value;
+it must not be interpreted as a guessed sentinel. These are single desktop
+observations, with no controlled speed comparison against the older cohort.
+Both ordinary runs have ended and their managed jobs are collected. Ordinary-run
+evidence is under `.local-tools/debug-runs/jbenchmark-fixed-20261110/form-b184/`;
+the diagnostic source, logs and frozen report remain under
+`.local-tools/debug-runs/jbenchmark3d-20261110-diagnostic/` and its Lead-owned
+`../form-upstream-20261110-main/3d-state-session/`.

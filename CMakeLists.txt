@@ -1498,6 +1498,7 @@ nj_add_test(test_clip tests/test_clip.c)
     nj_add_test(test_save tests/test_save.c)
     nj_add_test(test_save_m3g_depth tests/test_save_m3g_depth.c)
     nj_add_test(test_save_rms_enumeration tests/test_save_rms_enumeration.c)
+    nj_add_test(test_save_form_scroll tests/test_save_form_scroll.c)
   endif()
 
   # The desktop client, headlessly: a JAR's name and icon, the settings file,

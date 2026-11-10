@@ -29,6 +29,26 @@ repeated unless the code changed the path the verification used.
   (frames, logs and stitched screenshots are bulk); the row names the
   directory, and the commit carries the text that quotes it.
 
+## 2026-11-10 upstream Form integration
+
+Merge `b184dba01e0ed67180bff6ee631c6c305430690f` retains the callback,
+Bluetooth and skin repairs below and integrates upstream Form scrolling.
+Its independently built CLI is
+`5bb6b36f6356c6340aff14bf2905cab8d6b8245455af838be83cb8a80f511893`.
+The preceding CLI1733 measurements remain historical records.
+
+| area | verdict and evidence | detailed record |
+| --- | --- | --- |
+| Regression suite | VERIFIED across 168 registered tests: Save first, remaining 165, the unchanged parallel executable with the private anonymous-file adapter, then the added Form snapshot fixture. This is combined verification, not one clean 168-test invocation. | [Form integration](notes/2026-11-10-form-integration.md); `.local-tools/debug-runs/form-upstream-20261110-main/` |
+| Form snapshot and references | VERIFIED: 752 roundtrip checks preserve nonzero scroll, title, listener, items and owners, Image pixels and cached buffer across two VMs, GC, painting, key and pointer input. A separate 585-check invocation rejects an older whole-VM snapshot before arena installation, preserves the current graph and permits fresh MIDlet startup. The upstream `Screen.fmScroll` field changes the snapshot layout; strict rejection remains required. | [Form integration](notes/2026-11-10-form-integration.md) |
+| Original Minecraft | VERIFIED on the merged CLI: 1600 paced SDL frames and genuine new-snapshot resume for 300 frames, without uncaught exception or startup fallback. Actual terrain/HUD/held-block images match; caught UDP receives after restoration remain open. Paced FPS is not a speed comparison. | [Form integration](notes/2026-11-10-form-integration.md) |
+| JBenchmark HD | PARTIAL actual Results: Bilinear Failure (88%), Trilinear Failed/Not supported, Perspective Success (99%), Z-buffer Failure (7 bit), Smooth 8,263,722 tri/s, Textured 6,578,422 tri/s, Fill rate Failed. Gaming, displayed version and six screen dimensions remain unavailable. No cross-version gain claim. | [Versioned benchmark measurements](notes/2026-11-10-jbenchmark-baseline.md); `.local-tools/debug-runs/jbenchmark-fixed-20261110/form-b184/` |
+| JBenchmark3D | OPEN: ordinary CLI reaches the 300-second observation boundary without final Results. A separate instrumented CPU2/explicit-loop diagnosis reaches stage 8 and shows Results; those values do not substitute for ordinary CPU3/default-loop scores. | [Versioned benchmark measurements](notes/2026-11-10-jbenchmark-baseline.md) |
+
+Original game JARs, RMS and world inputs remain unchanged. The targeted
+sanitizer coverage and the separately discovered null-ImageItem-altText gap
+are recorded in the Form integration note.
+
 ## 2026-11-10 callback, Bluetooth and skin compatibility
 
 The measured runtime is based on `6a135819c026183cf8409e9d79948c735ad54dd6`
