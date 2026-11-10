@@ -6216,7 +6216,7 @@ static void display_drain_queue(nj_vm *vm)
 static void item_init_on(nj_vm *vm, nj_ref self)
 {
     rput(vm, self, NJ_C_ITEM, "itLabel", D_STR, NULL);
-    fput(vm, self, NJ_C_ITEM, "itLayout", D_INT, -1);
+    fput(vm, self, NJ_C_ITEM, "itLayout", D_INT, 0);
     fput(vm, self, NJ_C_ITEM, "itPrefW", D_INT, -1);
     fput(vm, self, NJ_C_ITEM, "itPrefH", D_INT, -1);
     fput(vm, self, NJ_C_ITEM, "itCmdType", D_INT, -1);
@@ -6250,12 +6250,20 @@ NJFN(item_getLayout)
     return NJ_OK;
 }
 
+/* Item alignment occupies bits 0..1 and 4..5; MIDP 2.0 directives occupy
+ * bits 8..14. In particular CENTER | NEWLINE_AFTER is the legal 0x203
+ * used by JBenchmark 2's ChoiceGroup, ImageItem and Gauge. */
+static int item_layout_valid(nj_s4 layout)
+{
+    return (layout & ~(nj_s4)0x7F33) == 0;
+}
+
 NJFN(item_setLayout)
 {
     nj_ref self = NJ_THIS(args);
     nj_s4 l = NJ_ARG_INT(args, 0);
 
-    if (l != -1 && (l & ~(nj_s4)0xFF) != 0) {
+    if (!item_layout_valid(l)) {
         return nj_throw(vm, "java/lang/IllegalArgumentException",
                         "unknown layout directives");
     }
@@ -7002,6 +7010,9 @@ NJFN(ii_init)
     nj_ref alt = NJ_ARG_REF(args, 3);
 
     (void)item_init(vm, th, args, ret);
+    if (!item_layout_valid(layout)) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException", "unknown layout directives");
+    }
     if (!alt) {
         return nj_throw(vm, "java/lang/NullPointerException",
                         "altText is null");
@@ -7010,6 +7021,7 @@ NJFN(ii_init)
     rput(vm, self, NJ_C_IMAGEITEM, "iiImage", D_IMAGE, img);
     rput(vm, self, NJ_C_IMAGEITEM, "iiAlt", D_STR, alt);
     fput(vm, self, NJ_C_IMAGEITEM, "iiLayout", D_INT, layout);
+    fput(vm, self, NJ_C_ITEM, "itLayout", D_INT, layout);
     rput(vm, self, NJ_C_IMAGEITEM, "iiAlt2", D_STR, NULL);
     /* -1: no explicit appearance mode, so getAppearanceMode() derives it from
      * the layout directives the way it always has. */
@@ -7034,6 +7046,9 @@ NJFN(ii_init_app)
     nj_s4 mode = NJ_ARG_INT(args, 4);
 
     (void)item_init(vm, th, args, ret);
+    if (!item_layout_valid(layout)) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException", "unknown layout directives");
+    }
     if (!alt) {
         return nj_throw(vm, "java/lang/NullPointerException",
                         "altText is null");
@@ -7046,6 +7061,7 @@ NJFN(ii_init_app)
     rput(vm, self, NJ_C_IMAGEITEM, "iiImage", D_IMAGE, img);
     rput(vm, self, NJ_C_IMAGEITEM, "iiAlt", D_STR, alt);
     fput(vm, self, NJ_C_IMAGEITEM, "iiLayout", D_INT, layout);
+    fput(vm, self, NJ_C_ITEM, "itLayout", D_INT, layout);
     rput(vm, self, NJ_C_IMAGEITEM, "iiAlt2", D_STR, NULL);
     fput(vm, self, NJ_C_IMAGEITEM, "iiAppearance", D_INT, mode);
     rput(vm, self, NJ_C_ITEM, "itImage", D_IMAGE, img);
@@ -7088,7 +7104,7 @@ NJFN(ii_setLayout)
 {
     nj_ref self = NJ_THIS(args);
     nj_s4 l = NJ_ARG_INT(args, 0);
-    if (l == -1 || (l & ~(nj_s4)0xFF) != 0) {
+    if (!item_layout_valid(l)) {
         return nj_throw(vm, "java/lang/IllegalArgumentException",
                         "unknown layout directives");
     }
@@ -12748,8 +12764,8 @@ nj_status nj_lcdui_late_init(nj_vm *vm)
     lcdui_const_int(vm, NJ_C_ITEM, "LAYOUT_NEWLINE_BEFORE",  256);
     lcdui_const_int(vm, NJ_C_ITEM, "LAYOUT_NEWLINE_AFTER",   512);
     lcdui_const_int(vm, NJ_C_ITEM, "LAYOUT_SHRINK",          1024);
-    lcdui_const_int(vm, NJ_C_ITEM, "LAYOUT_VSHRINK",         2048);
-    lcdui_const_int(vm, NJ_C_ITEM, "LAYOUT_EXPAND",          4096);
+    lcdui_const_int(vm, NJ_C_ITEM, "LAYOUT_VSHRINK",         4096);
+    lcdui_const_int(vm, NJ_C_ITEM, "LAYOUT_EXPAND",          2048);
     lcdui_const_int(vm, NJ_C_ITEM, "LAYOUT_VEXPAND",         8192);
     lcdui_const_int(vm, NJ_C_ITEM, "LAYOUT_2",               16384);
 

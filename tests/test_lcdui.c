@@ -1615,6 +1615,11 @@ static void test_constants(nj_vm *vm)
         { "javax/microedition/lcdui/Gauge",    "INDEFINITE", -1 },
         { "javax/microedition/lcdui/Item",     "LAYOUT_CENTER", 3 },
         { "javax/microedition/lcdui/Item",     "LAYOUT_NEWLINE_BEFORE", 256 },
+        { "javax/microedition/lcdui/Item",     "LAYOUT_NEWLINE_AFTER", 512 },
+        { "javax/microedition/lcdui/Item",     "LAYOUT_SHRINK", 1024 },
+        { "javax/microedition/lcdui/Item",     "LAYOUT_EXPAND", 2048 },
+        { "javax/microedition/lcdui/Item",     "LAYOUT_VSHRINK", 4096 },
+        { "javax/microedition/lcdui/Item",     "LAYOUT_VEXPAND", 8192 },
         { "javax/microedition/lcdui/Display",  "LIST_ELEMENT", 0 }
     };
     unsigned i;
@@ -1634,6 +1639,56 @@ static void test_constants(nj_vm *vm)
 /* ------------------------------------------------------------------ */
 /* Font                                                                */
 /* ------------------------------------------------------------------ */
+static void test_item_layout(nj_vm *vm)
+{
+    static const nj_s4 valid[] = {0, 3, 0x203, 0x133, 0x800, 0x1000, 0x7f33};
+    static const nj_s4 invalid[] = {-1, 4, 8, 0x40, 0x80, 0x8000, 0x10000};
+    nj_u4 mark = nj_root_mark(vm);
+    nj_ref label = nj_root(vm, str(vm, "layout"));
+    nj_value a[5];
+    nj_ref items[2];
+    const char *classes[] = {NJ_C_GAUGE, NJ_C_IMAGEITEM};
+    int i, j, ok;
+    a[0] = sref(label); a[1] = iref(0); a[2] = iref(100); a[3] = iref(0);
+    items[0] = nj_root(vm, construct(vm, NJ_C_GAUGE, "(Ljava/lang/String;ZII)V", a));
+    OK(items[0] != NULL);
+    if (items[0]) OK(call_int(vm, items[0], NJ_C_ITEM, "getLayout", "()I", NULL, &ok) == 0 && ok);
+    a[0] = sref(label); a[1] = sref(NULL); a[2] = iref(0x203); a[3] = sref(label);
+    items[1] = nj_root(vm, construct(vm, NJ_C_IMAGEITEM,
+        "(Ljava/lang/String;Ljavax/microedition/lcdui/Image;ILjava/lang/String;)V", a));
+    OK(items[1] != NULL);
+    if (items[1]) OK(call_int(vm, items[1], NJ_C_ITEM, "getLayout", "()I", NULL, &ok) == 0x203 && ok);
+    for (i = 0; i < 2; ++i) if (items[i]) {
+        for (j = 0; j < (int)(sizeof valid / sizeof valid[0]); ++j) {
+            a[0] = iref(valid[j]);
+            OK(nj_call(vm, items[i], classes[i], "setLayout", "(I)V", a, NULL) == NJ_OK);
+            OK(call_int(vm, items[i], NJ_C_ITEM, "getLayout", "()I", NULL, &ok) == valid[j] && ok);
+        }
+        for (j = 0; j < (int)(sizeof invalid / sizeof invalid[0]); ++j) {
+            a[0] = iref(invalid[j]);
+            OK(nj_call(vm, items[i], classes[i], "setLayout", "(I)V", a, NULL) == NJ_ERR);
+            OK(exc_is(vm, "java/lang/IllegalArgumentException"));
+            OK(call_int(vm, items[i], NJ_C_ITEM, "getLayout", "()I", NULL, &ok) == 0x7f33 && ok);
+        }
+    }
+    /* Both ImageItem constructors apply the same validation and publish the
+     * constructor layout through the inherited Item.getLayout(). */
+    a[0] = sref(label); a[1] = sref(NULL); a[2] = iref(0x203); a[3] = sref(label); a[4] = iref(0);
+    {
+        nj_ref image = nj_root(vm, construct(vm, NJ_C_IMAGEITEM,
+            "(Ljava/lang/String;Ljavax/microedition/lcdui/Image;ILjava/lang/String;I)V", a));
+        OK(image != NULL);
+        if (image) OK(call_int(vm, image, NJ_C_ITEM, "getLayout", "()I", NULL, &ok) == 0x203 && ok);
+    }
+    a[2] = iref(0x80);
+    OK(construct(vm, NJ_C_IMAGEITEM,
+        "(Ljava/lang/String;Ljavax/microedition/lcdui/Image;ILjava/lang/String;)V", a) == NULL);
+    OK(exc_is(vm, "java/lang/IllegalArgumentException"));
+    OK(construct(vm, NJ_C_IMAGEITEM,
+        "(Ljava/lang/String;Ljavax/microedition/lcdui/Image;ILjava/lang/String;I)V", a) == NULL);
+    OK(exc_is(vm, "java/lang/IllegalArgumentException"));
+    nj_root_release(vm, mark);
+}
 static void test_font(nj_vm *vm)
 {
     nj_value a[3];
@@ -3660,6 +3715,7 @@ static int round_full(const blob *jar, const blob *png, const blob *png_alpha,
 
     test_all_methods_bound(vm);
     test_constants(vm);
+    test_item_layout(vm);
     test_image(vm, png, png_alpha);
     test_drawrgb_views(vm);
     test_graphics(vm);
