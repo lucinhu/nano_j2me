@@ -20,28 +20,36 @@
 NJFN(math_abs_i)
 {
     nj_s4 v = NJ_ARG_INT(args, 0);
-    ret->i = (v < 0) ? -v : v;
+    /* Java keeps MIN_VALUE unchanged; negating it in signed C is undefined. */
+    ret->i = (v < 0 && v != (-2147483647 - 1)) ? -v : v;
     return NJ_OK;
 }
 
 NJFN(math_abs_l)
 {
     nj_s8 v = NJ_ARG_LONG(args, 0);
-    ret->j = (v < 0) ? -v : v;
+    ret->j = (v < 0 && v != (-9223372036854775807LL - 1LL)) ? -v : v;
     return NJ_OK;
 }
 
 NJFN(math_abs_f)
 {
     float v = NJ_ARG_FLOAT(args, 0);
-    ret->f = (v < 0.0f) ? -v : v;
+    nj_u4 bits;
+    /* Clear the IEEE sign bit without adding a bare-port libm dependency. */
+    memcpy(&bits, &v, sizeof(bits));
+    bits &= 0x7FFFFFFFu;
+    memcpy(&ret->f, &bits, sizeof(bits));
     return NJ_OK;
 }
 
 NJFN(math_abs_d)
 {
     double v = NJ_ARG_DOUBLE(args, 0);
-    ret->d = (v < 0.0) ? -v : v;
+    nj_u8 bits;
+    memcpy(&bits, &v, sizeof(bits));
+    bits &= 0x7FFFFFFFFFFFFFFFULL;
+    memcpy(&ret->d, &bits, sizeof(bits));
     return NJ_OK;
 }
 
@@ -53,14 +61,40 @@ NJFN(math_max_l)  { nj_s8 a = NJ_ARG_LONG(args,0), b = NJ_ARG_LONG(args,2);
                     ret->j = (a >= b) ? a : b; return NJ_OK; }
 NJFN(math_min_l)  { nj_s8 a = NJ_ARG_LONG(args,0), b = NJ_ARG_LONG(args,2);
                     ret->j = (a <= b) ? a : b; return NJ_OK; }
-NJFN(math_max_f)  { float a = NJ_ARG_FLOAT(args,0), b = NJ_ARG_FLOAT(args,1);
-                    ret->f = (a >= b) ? a : b; return NJ_OK; }
-NJFN(math_min_f)  { float a = NJ_ARG_FLOAT(args,0), b = NJ_ARG_FLOAT(args,1);
-                    ret->f = (a <= b) ? a : b; return NJ_OK; }
-NJFN(math_max_d)  { double a = NJ_ARG_DOUBLE(args,0), b = NJ_ARG_DOUBLE(args,2);
-                    ret->d = (a >= b) ? a : b; return NJ_OK; }
-NJFN(math_min_d)  { double a = NJ_ARG_DOUBLE(args,0), b = NJ_ARG_DOUBLE(args,2);
-                    ret->d = (a <= b) ? a : b; return NJ_OK; }
+/* Java propagates either NaN and orders -0 below +0. C fmin/fmax may
+ * discard a NaN, and ordinary comparisons treat the two zeros as equal. */
+NJFN(math_max_f)
+{
+    float a = NJ_ARG_FLOAT(args,0), b = NJ_ARG_FLOAT(args,1);
+    ret->f = a != a ? a : b != b ? b :
+             (a == 0.0f && b == 0.0f) ? (signbit(a) ? b : a) :
+             (a >= b ? a : b);
+    return NJ_OK;
+}
+NJFN(math_min_f)
+{
+    float a = NJ_ARG_FLOAT(args,0), b = NJ_ARG_FLOAT(args,1);
+    ret->f = a != a ? a : b != b ? b :
+             (a == 0.0f && b == 0.0f) ? (signbit(a) ? a : b) :
+             (a <= b ? a : b);
+    return NJ_OK;
+}
+NJFN(math_max_d)
+{
+    double a = NJ_ARG_DOUBLE(args,0), b = NJ_ARG_DOUBLE(args,2);
+    ret->d = a != a ? a : b != b ? b :
+             (a == 0.0 && b == 0.0) ? (signbit(a) ? b : a) :
+             (a >= b ? a : b);
+    return NJ_OK;
+}
+NJFN(math_min_d)
+{
+    double a = NJ_ARG_DOUBLE(args,0), b = NJ_ARG_DOUBLE(args,2);
+    ret->d = a != a ? a : b != b ? b :
+             (a == 0.0 && b == 0.0) ? (signbit(a) ? a : b) :
+             (a <= b ? a : b);
+    return NJ_OK;
+}
 
 /*
  * THE TRANSCENDENTALS ARE OPTIONAL, AND THIS SWITCH REALLY REMOVES THEM.
@@ -157,12 +191,18 @@ NJFN(math_round_d)
         ret->j = 0;
         return NJ_OK;
     }
-    r = floor(x + 0.5);
-    if (r > 9223372036854775807.0) {
-        ret->j = (nj_s8)0x7FFFFFFFFFFFFFFFLL;
-    } else if (r < -9223372036854775808.0) {
-        ret->j = (nj_s8)0x8000000000000000LL;
+    /* 2^63 is exact in double; LONG_MAX is not. Clamp before any cast. */
+    if (x >= 9223372036854775808.0) {
+        ret->j = 9223372036854775807LL;
+    } else if (x <= -9223372036854775808.0) {
+        ret->j = (-9223372036854775807LL - 1LL);
     } else {
+        /* Adding 0.5 first can round a value just below a tie up to the tie,
+         * or change an already integral odd value at 2^52. Split instead. */
+        r = floor(x);
+        if (x - r >= 0.5) {
+            r += 1.0;
+        }
         ret->j = (nj_s8)r;
     }
     return NJ_OK;
