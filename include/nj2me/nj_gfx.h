@@ -402,9 +402,11 @@ nj_u4 nj_surface_format_color(int format, nj_u4 argb);
 #define NJ_ANCHOR_TOP     16
 #define NJ_ANCHOR_BOTTOM  32
 
-/* ROP constants, mirroring Graphics SET/PAINT. */
+/* ROP constants. OPAQUE paints as if every source alpha were 255, while
+ * retaining the global alpha, clip, mask and XOR rules of PAINT. */
 #define NJ_ROP_SET   0
 #define NJ_ROP_PAINT 1
+#define NJ_ROP_OPAQUE 2
 
 /* Sprite transforms, mirroring javax.microedition.lcdui.game.Sprite. */
 #define NJ_TRANS_NONE 0

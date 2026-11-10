@@ -569,6 +569,154 @@ static nj_u4 img_pixel(nj_vm *vm, nj_ref img, int x, int y)
     return v;
 }
 
+/* Compare borrowed drawRGB views with the old packed, opaque-if-requested
+ * snapshot on each destination format, including unusual legal row layouts. */
+static void test_drawrgb_views(nj_vm *vm)
+{
+    static const int formats[] = { NJ_PIXFMT_RGB565, NJ_PIXFMT_RGB888, NJ_PIXFMT_ARGB8888 };
+    static const int strides[] = { 5, -5, 1, 0 };
+    static const nj_u4 colors[] = { 0x00ff00ffu, 0x01000000u, 0x7f123456u,
+                                   0x80123456u, 0xfeffffffu, 0xff315397u };
+    nj_surface saved;
+    nj_u4 mark = nj_root_mark(vm);
+    nj_ref rgb = nj_root(vm, nj_int_array_new(vm, 13));
+    nj_ref graphics;
+    nj_u4 original[13];
+    unsigned char actual[8 * 36], expected[8 * 36];
+    nj_value ra[8], a[4];
+    int fi, si, alpha, xor_on, clipped, i;
+
+    OK(rgb != NULL);
+    if (!rgb || !nj_midp_screen(vm)) {
+        nj_root_release(vm, mark);
+        return;
+    }
+    saved = vm->screen;
+    vm->screen = (nj_surface){ .pixels = actual, .width = 8, .height = 8,
+                               .stride = 36, .format = NJ_PIXFMT_ARGB8888, .bpp = 4 };
+    graphics = nj_root(vm, construct(vm, NJ_C_GRAPHICS, "()V", NULL));
+    OK(graphics != NULL);
+    if (!graphics) {
+        vm->screen = saved;
+        nj_root_release(vm, mark);
+        return;
+    }
+    for (i = 0; i < 13; ++i) {
+        original[i] = colors[i % 6];
+        nj_array_set_int(rgb, i, (nj_s4)original[i]);
+    }
+    a[0] = iref(1); a[1] = iref(1);
+    OK(nj_call(vm, graphics, NJ_C_GRAPHICS, "translate", "(II)V", a, NULL) == NJ_OK);
+    for (fi = 0; fi < 3; ++fi)
+    for (si = 0; si < 4; ++si)
+    for (alpha = 0; alpha <= 1; ++alpha)
+    for (xor_on = 0; xor_on <= 1; ++xor_on)
+    for (clipped = 0; clipped <= 1; ++clipped) {
+        int offset = strides[si] < 0 ? 10 : 0;
+        nj_u4 packed[9];
+        nj_image image = { .width = 3, .height = 3, .format = NJ_PIXFMT_ARGB8888,
+                           .pixels = packed, .has_alpha = alpha };
+        nj_surface reference;
+        nj_gfx ref_gfx;
+        vm->screen.format = formats[fi];
+        vm->screen.bpp = fi + 2;
+        vm->screen.stride = 8 * vm->screen.bpp + 4;
+        reference = vm->screen;
+        reference.pixels = expected;
+        memset(actual, 0x5a, sizeof(actual));
+        memset(expected, 0x5a, sizeof(expected));
+        for (i = 0; i < 9; ++i) {
+            nj_u4 pixel = original[offset + (i / 3) * strides[si] + i % 3];
+            packed[i] = alpha ? pixel : pixel | 0xff000000u;
+        }
+        nj_gfx_init(&ref_gfx, &reference);
+        ref_gfx.translate_x = ref_gfx.translate_y = 1;
+        ref_gfx.use_xor = xor_on;
+        ref_gfx.xor_color = 0x00ffffffu;
+        a[0] = iref(xor_on);
+        OK(nj_call(vm, graphics, NJ_C_GRAPHICS, "setXORMode", "(Z)V", a, NULL) == NJ_OK);
+        a[0] = iref(clipped ? 2 : -1); a[1] = iref(clipped ? 2 : -1);
+        a[2] = iref(clipped ? 1 : 8); a[3] = iref(clipped ? 1 : 8);
+        OK(nj_call(vm, graphics, NJ_C_GRAPHICS, "setClip", "(IIII)V", a, NULL) == NJ_OK);
+        nj_gfx_set_clip(&ref_gfx, a[0].i, a[1].i, a[2].i, a[3].i);
+        nj_gfx_draw_region(&ref_gfx, &image, 0, 0, 3, 3, NJ_TRANS_NONE,
+                           0, 0, NULL, 1, 1, NJ_ROP_PAINT);
+        ra[0] = sref(rgb); ra[1] = iref(offset); ra[2] = iref(strides[si]);
+        ra[3] = iref(1); ra[4] = iref(1); ra[5] = iref(3); ra[6] = iref(3); ra[7] = iref(alpha);
+        OK(nj_call(vm, graphics, NJ_C_GRAPHICS, "drawRGB", "([IIIIIIIZ)V", ra, NULL) == NJ_OK);
+        OK_MSG(memcmp(actual, expected, sizeof(actual)) == 0,
+               "drawRGB format=%d stride=%d alpha=%d xor=%d clip=%d",
+               formats[fi], strides[si], alpha, xor_on, clipped);
+        for (i = 0; i < 13; ++i)
+            OK((nj_u4)nj_array_get_int(rgb, i) == original[i]);
+    }
+    /* Native callers can supply coordinates beyond translate()'s public
+     * clamp. Combine translation before narrowing each row's destination. */
+    {
+        nj_ref edge_g = nj_root(vm, construct(vm, NJ_C_GRAPHICS, "()V", NULL));
+        static const struct { const char *name; nj_s4 value; } fields[] = {
+            { NJ_F_G_TY, -2147483647 }, { NJ_F_G_CY, 2147483647 },
+            { NJ_F_G_CW, 1 }, { NJ_F_G_CH, 2 }
+        };
+        OK(edge_g != NULL);
+        if (edge_g) {
+            for (i = 0; i < 4; ++i) {
+                nj_field *field = nj_field_lookup(vm, NJ_C_GRAPHICS, fields[i].name, "I", 0);
+                OK(field != NULL);
+                if (field) nj_field_write_int(vm, edge_g, field, fields[i].value);
+            }
+            nj_array_set_int(rgb, 0, (nj_s4)0xff445566u);
+            nj_array_set_int(rgb, 1, (nj_s4)0xff112233u);
+            memset(actual, 0, sizeof(actual));
+            ra[0] = sref(rgb); ra[1] = iref(1); ra[2] = iref(-1);
+            ra[3] = iref(0); ra[4] = iref(2147483647);
+            ra[5] = iref(1); ra[6] = iref(2); ra[7] = iref(1);
+            OK(nj_call(vm, edge_g, NJ_C_GRAPHICS, "drawRGB", "([IIIIIIIZ)V", ra, NULL) == NJ_OK);
+            OK(nj_surface_get(&vm->screen, 0, 0) == 0xff112233u);
+            OK(nj_surface_get(&vm->screen, 0, 1) == 0xff445566u);
+        }
+    }
+    /* A native port may expose the array itself as its display. The copy must
+     * preserve a snapshot when destination rows overwrite later source rows. */
+    {
+        nj_ref alias = nj_root(vm, nj_int_array_new(vm, 16));
+        int fail_copy;
+        OK(alias != NULL);
+        if (alias) {
+            vm->screen = (nj_surface){ .pixels = alias->u.bytes, .width = 4, .height = 4,
+                                       .stride = 16, .format = NJ_PIXFMT_ARGB8888, .bpp = 4 };
+            a[0] = iref(-1); a[1] = iref(-1);
+            OK(nj_call(vm, graphics, NJ_C_GRAPHICS, "translate", "(II)V", a, NULL) == NJ_OK);
+            a[0] = iref(0);
+            OK(nj_call(vm, graphics, NJ_C_GRAPHICS, "setXORMode", "(Z)V", a, NULL) == NJ_OK);
+            a[0] = iref(0); a[1] = iref(0); a[2] = iref(4); a[3] = iref(4);
+            OK(nj_call(vm, graphics, NJ_C_GRAPHICS, "setClip", "(IIII)V", a, NULL) == NJ_OK);
+            ra[0] = sref(alias); ra[1] = iref(0); ra[2] = iref(4);
+            ra[3] = iref(0); ra[4] = iref(1); ra[5] = iref(4); ra[6] = iref(4); ra[7] = iref(1);
+            for (fail_copy = 0; fail_copy <= 1; ++fail_copy) {
+                nj_status status;
+                for (i = 0; i < 16; ++i)
+                    nj_array_set_int(alias, i, (nj_s4)(0xff102030u + i));
+                refused_blocks = 0; fragment_heap = fail_copy;
+                status = nj_call(vm, graphics, NJ_C_GRAPHICS, "drawRGB", "([IIIIIIIZ)V", ra, NULL);
+                fragment_heap = 0;
+                if (fail_copy) {
+                    OK(status != NJ_OK && refused_blocks > 0);
+                    OK(exc_is(vm, "java/lang/OutOfMemoryError"));
+                } else {
+                    OK(status == NJ_OK);
+                }
+                for (i = 0; i < 16; ++i) {
+                    unsigned from = fail_copy || i < 4 ? (unsigned)i : (unsigned)i - 4;
+                    OK((nj_u4)nj_array_get_int(alias, i) == 0xff102030u + from);
+                }
+            }
+        }
+    }
+    vm->screen = saved;
+    nj_root_release(vm, mark);
+}
+
 static void test_graphics(nj_vm *vm)
 {
     nj_ref img = image_new(vm, 24, 16);
@@ -1275,11 +1423,17 @@ static void test_graphics(nj_vm *vm)
         refused_blocks = 0; fragment_heap = 1;
         OK(nj_call(vm, graphics, NJ_C_GRAPHICS, "drawRGB", "([IIIIIIIZ)V", ra, NULL) == NJ_OK);
         fragment_heap = 0;
-        OK_MSG(refused_blocks > 0, "drawRGB test must refuse the full-image allocation");
+        OK_MSG(refused_blocks == 0, "borrowed drawRGB must not attempt a full-image allocation");
+        /* Ignoring alpha must also avoid staging on an ARGB Image. */
+        ra[7] = iref(0);
+        refused_blocks = 0; fragment_heap = 1;
+        OK(nj_call(vm, graphics, NJ_C_GRAPHICS, "drawRGB", "([IIIIIIIZ)V", ra, NULL) == NJ_OK);
+        fragment_heap = 0;
+        OK_MSG(refused_blocks == 0, "opaque drawRGB must not attempt a full-image allocation");
         for (row = 0; row < 4; ++row)
             for (col = 0; col < 4; ++col)
                 OK_MSG(img_pixel(vm, target, 1 + col, 2 + row) == 0xff102030u + (3 - row) * 4 + col,
-                       "drawRGB scanline fallback preserves negative stride and destination rows");
+                       "drawRGB borrowed view preserves negative stride and destination rows");
     }
 
     /* ---- XOR mode ---- */
@@ -3507,6 +3661,7 @@ static int round_full(const blob *jar, const blob *png, const blob *png_alpha,
     test_all_methods_bound(vm);
     test_constants(vm);
     test_image(vm, png, png_alpha);
+    test_drawrgb_views(vm);
     test_graphics(vm);
     test_font(vm);
     test_command(vm);

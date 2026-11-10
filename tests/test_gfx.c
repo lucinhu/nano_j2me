@@ -1275,6 +1275,90 @@ static void test_images(tctx *t)
     ts_free(&ts);
 }
 
+/* OPAQUE must match a source-alpha-forced copy followed by PAINT, including
+ * the general transform/mask/XOR loop and unaligned destination rows. */
+static void test_opaque_rop(tctx *t)
+{
+    static const int formats[] = { NJ_PIXFMT_RGB565, NJ_PIXFMT_RGB888, NJ_PIXFMT_ARGB8888 };
+    static const nj_u4 alphas[] = { 0, 1, 127, 128, 254, 255 };
+    nj_u4 source[20], opaque[20], original[20], masks[16];
+    nj_image image = { .width = 5, .height = 4, .format = NJ_PIXFMT_ARGB8888,
+                       .pixels = source, .has_alpha = 1 };
+    nj_image reference_image = image;
+    nj_image mask = { .width = 4, .height = 4, .format = NJ_PIXFMT_ARGB8888,
+                      .pixels = masks, .has_alpha = 1 };
+    int fi, transform, xor_mode, masked, clipped, i;
+
+    printf("[10a] opaque source ROP\n");
+    reference_image.pixels = opaque;
+    for (i = 0; i < 20; ++i) {
+        source[i] = (alphas[i % 6] << 24) | ((0x132547u * (nj_u4)(i + 1)) & 0x00ffffffu);
+        opaque[i] = source[i] | 0xff000000u;
+    }
+    memcpy(original, source, sizeof source);
+    for (i = 0; i < 16; ++i) masks[i] = i % 3 ? 0x80010203u : 0x00010203u;
+
+    for (fi = 0; fi < 3; ++fi)
+    for (transform = 0; transform < 8; ++transform)
+    for (xor_mode = 0; xor_mode < 3; ++xor_mode)
+    for (masked = 0; masked < 2; ++masked)
+    for (clipped = 0; clipped < 2; ++clipped) {
+        tsurf actual, expected;
+        nj_gfx g, reference;
+        ts_init(&actual, 8, 8, formats[fi], 3, 0x7f385a7cu);
+        ts_init(&expected, 8, 8, formats[fi], 3, 0x7f385a7cu);
+        nj_gfx_init(&g, &actual.s);
+        nj_gfx_init(&reference, &expected.s);
+        g.translate_x = reference.translate_x = 1;
+        g.translate_y = reference.translate_y = 1;
+        g.use_xor = reference.use_xor = xor_mode == 2;
+        g.xor_color = reference.xor_color = 0x80204010u;
+        nj_gfx_set_clip(&g, clipped ? 1 : -1, clipped ? 1 : -1,
+                        clipped ? 2 : 8, clipped ? 2 : 8);
+        nj_gfx_set_clip(&reference, clipped ? 1 : -1, clipped ? 1 : -1,
+                        clipped ? 2 : 8, clipped ? 2 : 8);
+        nj_gfx_draw_region(&g, &image, 1, 0, 3, 4, transform,
+                           xor_mode == 1, 0x40201008u, masked ? &mask : NULL,
+                           0, 0, NJ_ROP_OPAQUE);
+        nj_gfx_draw_region(&reference, &reference_image, 1, 0, 3, 4, transform,
+                           xor_mode == 1, 0x40201008u, masked ? &mask : NULL,
+                           0, 0, NJ_ROP_PAINT);
+        CHECK(t, memcmp(actual.buf, expected.buf, (size_t)actual.s.stride * actual.s.height) == 0);
+        CHECK(t, ts_pad_ok(&actual));
+        CHECK(t, memcmp(source, original, sizeof source) == 0);
+        ts_free(&actual);
+        ts_free(&expected);
+    }
+
+    /* RGB has no stored alpha: OPAQUE still honors draw_rgb's global alpha,
+     * just as PAINT does, instead of accidentally turning it into SET. */
+    {
+        static const int weights[] = { 0, 1, 128, 255 };
+        const nj_u1 rgb[] = { 0x13, 0x57, 0x9b, 0xe1, 0x82, 0x24 };
+        int weight;
+        for (fi = 0; fi < 3; ++fi)
+        for (weight = 0; weight < 4; ++weight)
+        for (xor_mode = 0; xor_mode < 2; ++xor_mode) {
+            tsurf actual, expected;
+            nj_gfx g, reference;
+            ts_init(&actual, 3, 2, formats[fi], 1, 0x7f385a7cu);
+            ts_init(&expected, 3, 2, formats[fi], 1, 0x7f385a7cu);
+            nj_gfx_init(&g, &actual.s);
+            nj_gfx_init(&reference, &expected.s);
+            g.use_xor = reference.use_xor = xor_mode;
+            g.xor_color = reference.xor_color = 0x80204010u;
+            nj_gfx_draw_rgb(&g, rgb, 6, weights[weight], 0, 0, 0, 0, 2, 1,
+                            NJ_ROP_OPAQUE, NJ_TRANS_NONE);
+            nj_gfx_draw_rgb(&reference, rgb, 6, weights[weight], 0, 0, 0, 0, 2, 1,
+                            NJ_ROP_PAINT, NJ_TRANS_NONE);
+            CHECK(t, memcmp(actual.buf, expected.buf, (size_t)actual.s.stride * actual.s.height) == 0);
+            CHECK(t, ts_pad_ok(&actual));
+            ts_free(&actual);
+            ts_free(&expected);
+        }
+    }
+}
+
 /* ================================================================== */
 /* 11. Clipping leaves everything outside untouched                    */
 /* ================================================================== */
@@ -2011,6 +2095,7 @@ int main(void)
     test_transforms(&t);
     test_blend_xor(&t);
     test_images(&t);
+    test_opaque_rop(&t);
     test_clip_isolation(&t);
     test_guard_band(&t);
     test_text_anchors(&t);
