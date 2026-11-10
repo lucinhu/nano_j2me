@@ -781,7 +781,9 @@ NJFN(int_toString_radix)
     if (r < 2 || r > 36) {
         r = 10;
     }
-    ret->r = to_radix_string(vm, (nj_u4)(v < 0 ? -v : v), v < 0, (nj_u4)r);
+    /* The unsigned magnitude also represents Integer.MIN_VALUE. */
+    nj_u4 mag = v < 0 ? 0u - (nj_u4)v : (nj_u4)v;
+    ret->r = to_radix_string(vm, mag, v < 0, (nj_u4)r);
     return ret->r ? NJ_OK : nj_throw_oom(vm);
 }
 
