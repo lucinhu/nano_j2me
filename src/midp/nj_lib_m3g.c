@@ -6750,6 +6750,30 @@ static nj_status m3g_external_image(nj_vm *vm, const char *base,
     return st;
 }
 
+/*
+ * A file's Node or Texture2D record may carry a 40-byte component transform,
+ * which the decoder keeps as raw bytes.  Length alone cannot identify it: a
+ * VertexArray record whose components fill exactly 40 bytes has the same
+ * data_len (the stranded2 containers carry two), and writing the transform
+ * through Transformable's field offsets onto such an array put references in
+ * its numVerts/numComp/compSize/data/first slots.  The loader repaired the
+ * first four, the stale `first' reference survived into the renderer and sent
+ * the texcoord fetch to a wild address.  The record must be a type that can
+ * carry a transform, and the object must actually be a Transformable: Camera
+ * and Light are nodes in the file's type table but not Transformables, so
+ * they have no such fields to write.
+ */
+static int m3g_obj_is_transformable(nj_vm *vm, nj_ref o)
+{
+    nj_class *c;
+
+    if (!o || !o->cls) {
+        return 0;
+    }
+    c = nj_class_resolve(vm, NJ_C_XABLE);
+    return nj_class_is_subclass_of(o->cls, c);
+}
+
 static nj_status m3g_build_objects(nj_vm *vm, const nj_u1 *data, nj_u4 len,
                                    const char *base, nj_value *ret)
 {
@@ -6841,7 +6865,10 @@ static nj_status m3g_build_objects(nj_vm *vm, const nj_u1 *data, nj_u4 len,
             o = nj_root(vm, o);
             nj_iput(vm, o, nj_field_lookup(vm, NJ_C_O3D, "_nj_userID", "I", 0),
                     (nj_s4)objs[i].fields.user_id);
-            if (objs[i].fields.data_len == 40u && objs[i].fields.data) {
+            if (objs[i].fields.data_len == 40u && objs[i].fields.data &&
+                (m3g_type_is_node(objs[i].type) ||
+                 objs[i].type == NJ_M3G_T_TEXTURE2D) &&
+                m3g_obj_is_transformable(vm, o)) {
                 /*
                  * The transform the file gives this Node.  Without it every
                  * object of a loaded scene sits at the origin, which is what a
@@ -13852,6 +13879,39 @@ static int jr_frame_resolve(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref world,
 }
 
 /*
+ * The draw reaches a vertex attribute through (first + vertex) * components.
+ * set_values() validates that range for a VertexArray built through the Java
+ * API, but one the file loader builds keeps its first/count/numVerts words
+ * from the container.  A corrupt or unexpected record used to make the
+ * texcoord fetch read from an address the stored first index spelled out -
+ * the stranded2 dinosaur scene crashed exactly there - so a draw only accepts
+ * an attribute whose whole range fits its data array, the same way the
+ * sampler below checks that an Image2D's pixels cover the image.  A file
+ * reference can also name an object that is not a VertexArray at all, which
+ * is refused first for the reason the VertexBuffer check above gives.
+ */
+static int jr_attr_is_varr(nj_ref o)
+{
+    const char *cn = o ? nj_ref_class_name(o) : NULL;
+
+    return cn != NULL && strcmp(cn, NJ_C_VARR) == 0;
+}
+
+static int jr_attr_fits(nj_ref data, nj_s4 first, nj_s4 nverts, nj_s4 comp)
+{
+    nj_u8 need;
+
+    if (!data || first < 0 || nverts < 0 || comp < 1 || comp > 4) {
+        return 0;
+    }
+    /* nj_size is 32 bits, and a corrupt first may be near Integer.MAX_VALUE:
+       the range has to be measured in 64 bits or the product wraps and a wild
+       attribute passes for one that fits. */
+    need = ((nj_u8)(nj_u4)first + (nj_u8)(nj_u4)nverts) * (nj_u8)(nj_u4)comp;
+    return need <= (nj_u8)nj_array_length(data);
+}
+
+/*
  * Everything the software pipeline needs, gathered from the Graphics3D (the
  * target, the viewport, the camera and the lights), the VertexBuffer, the
  * index buffer, the Appearance and the model matrix.  The World path and the
@@ -13958,7 +14018,7 @@ static int jr_setup(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref ib, nj_ref app,
     if (vb) {
         d = nj_rget(vm, vb, m3g_fof(vm, NJ_C_VBUF, "_nj_positions",
                                     "L" NJ_C_VARR ";"));
-        if (!d) {
+        if (!d || !jr_attr_is_varr(d)) {
             return 0;
         }
         arr = nj_rget(vm, d, m3g_fof(vm, NJ_C_VARR, "_nj_data", "[S"));
@@ -13971,7 +14031,8 @@ static int jr_setup(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref ib, nj_ref app,
         r.ptype  = nj_iget(vm, d, m3g_fof(vm, NJ_C_VARR, "_nj_ctype", "I"));
         r.pcount = nj_iget(vm, d, m3g_fof(vm, NJ_C_VARR, "_nj_count", "I"));
         nverts   = nj_iget(vm, d, m3g_fof(vm, NJ_C_VARR, "_nj_numVerts", "I"));
-        if (!r.pos || r.pcomp < 2 || nverts <= 0) {
+        if (!r.pos || r.pcomp < 2 || nverts <= 0 ||
+            !jr_attr_fits(arr, r.pfirst, nverts, r.pcomp)) {
             return 0;
         }
         if (r.pcount <= 0 || r.pcount > nverts) { r.pcount = nverts; }
@@ -13991,13 +14052,17 @@ static int jr_setup(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref ib, nj_ref app,
         r.col = NULL;
         r.ccomp = r.cfirst = r.ccount = 0;
         d = nj_rget(vm, vb, m3g_fof(vm, NJ_C_VBUF, "_nj_colors", "L" NJ_C_VARR ";"));
-        if (d) {
+        if (d && jr_attr_is_varr(d)) {
             nj_ref cd = nj_rget(vm, d, m3g_fof(vm, NJ_C_VARR, "_nj_data", "[S"));
-            if (cd) {
+            nj_s4 ccomp = nj_iget(vm, d, m3g_fof(vm, NJ_C_VARR, "_nj_numComp", "I"));
+            nj_s4 cfirst = nj_iget(vm, d, m3g_fof(vm, NJ_C_VARR, "_nj_first", "I"));
+            nj_s4 ccount = nj_iget(vm, d, m3g_fof(vm, NJ_C_VARR, "_nj_numVerts", "I"));
+
+            if (cd && jr_attr_fits(cd, cfirst, ccount, ccomp)) {
                 r.col    = (const nj_s2 *)nj_array_data(cd);
-                r.ccomp  = nj_iget(vm, d, m3g_fof(vm, NJ_C_VARR, "_nj_numComp", "I"));
-                r.cfirst = nj_iget(vm, d, m3g_fof(vm, NJ_C_VARR, "_nj_first", "I"));
-                r.ccount = nj_iget(vm, d, m3g_fof(vm, NJ_C_VARR, "_nj_numVerts", "I"));
+                r.ccomp  = ccomp;
+                r.cfirst = cfirst;
+                r.ccount = ccount;
             }
         }
         r.default_colour = (nj_u4)nj_iget(vm, vb,
@@ -14028,14 +14093,17 @@ static int jr_setup(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref ib, nj_ref app,
         r.nrm = NULL;
         r.ncomp = r.nfirst = r.ncount = r.ntype = 0;
         d = nj_rget(vm, vb, m3g_fof(vm, NJ_C_VBUF, "_nj_normals", "L" NJ_C_VARR ";"));
-        if (d) {
+        if (d && jr_attr_is_varr(d)) {
             nj_ref nd = nj_rget(vm, d, m3g_fof(vm, NJ_C_VARR, "_nj_data", "[S"));
+            nj_s4 ncomp = nj_iget(vm, d, m3g_fof(vm, NJ_C_VARR, "_nj_numComp", "I"));
+            nj_s4 nfirst = nj_iget(vm, d, m3g_fof(vm, NJ_C_VARR, "_nj_first", "I"));
+            nj_s4 ncount = nj_iget(vm, d, m3g_fof(vm, NJ_C_VARR, "_nj_numVerts", "I"));
 
-            if (nd) {
+            if (nd && jr_attr_fits(nd, nfirst, ncount, ncomp)) {
                 r.nrm    = (const nj_s2 *)nj_array_data(nd);
-                r.ncomp  = nj_iget(vm, d, m3g_fof(vm, NJ_C_VARR, "_nj_numComp", "I"));
-                r.nfirst = nj_iget(vm, d, m3g_fof(vm, NJ_C_VARR, "_nj_first", "I"));
-                r.ncount = nj_iget(vm, d, m3g_fof(vm, NJ_C_VARR, "_nj_numVerts", "I"));
+                r.ncomp  = ncomp;
+                r.nfirst = nfirst;
+                r.ncount = ncount;
                 r.ntype  = nj_iget(vm, d, m3g_fof(vm, NJ_C_VARR, "_nj_ctype", "I"));
             }
         }
@@ -14208,14 +14276,17 @@ static int jr_setup(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref ib, nj_ref app,
     r.tbias[0] = r.tbias[1] = r.tbias[2] = 0.0f;
     if (vb) {
         d = nj_rget(vm, vb, m3g_fof(vm, NJ_C_VBUF, "_nj_tex0", "L" NJ_C_VARR ";"));
-        if (d) {
+        if (d && jr_attr_is_varr(d)) {
             nj_ref td = nj_rget(vm, d, m3g_fof(vm, NJ_C_VARR, "_nj_data", "[S"));
+            nj_s4 tcomp = nj_iget(vm, d, m3g_fof(vm, NJ_C_VARR, "_nj_numComp", "I"));
+            nj_s4 tfirst = nj_iget(vm, d, m3g_fof(vm, NJ_C_VARR, "_nj_first", "I"));
+            nj_s4 tcount = nj_iget(vm, d, m3g_fof(vm, NJ_C_VARR, "_nj_numVerts", "I"));
 
-            if (td) {
+            if (td && jr_attr_fits(td, tfirst, tcount, tcomp)) {
                 r.tpos   = (const nj_s2 *)nj_array_data(td);
-                r.tcomp  = nj_iget(vm, d, m3g_fof(vm, NJ_C_VARR, "_nj_numComp", "I"));
-                r.tfirst = nj_iget(vm, d, m3g_fof(vm, NJ_C_VARR, "_nj_first", "I"));
-                r.tcount = nj_iget(vm, d, m3g_fof(vm, NJ_C_VARR, "_nj_numVerts", "I"));
+                r.tcomp  = tcomp;
+                r.tfirst = tfirst;
+                r.tcount = tcount;
                 r.ttype  = nj_iget(vm, d, m3g_fof(vm, NJ_C_VARR, "_nj_ctype", "I"));
             }
         }

@@ -5212,6 +5212,60 @@ static nj_u4 build_group_cycle_file(nj_u1 *b, nj_u4 cap)
     return total;
 }
 
+/*
+ * A VertexArray record whose component bytes fill exactly 40 bytes has the
+ * same length as a Node's component transform, and m3g_build_objects() used
+ * to read that length alone as "this object carries a transform".  Loading
+ * this file wrote the transform through Transformable's field offsets onto
+ * the array: the references landed in numVerts/numComp/compSize/data/first,
+ * load_geometry repaired the first four and left a stale reference in
+ * `first', and the renderer's texcoord fetch then read from a wild address
+ * (stranded2, 2026-11-10).  The container below is the smallest shape that
+ * reproduces it: one VertexArray, 20 vertices of two byte components.
+ */
+static nj_u4 build_varr_40_file(nj_u1 *b, nj_u4 cap)
+{
+    static const nj_u1 ident[12] = {
+        0xAB, 0x4A, 0x53, 0x52, 0x31, 0x38, 0x34,
+        0xBB, 0x0D, 0x0A, 0x1A, 0x0A
+    };
+    nj_u4 hdr_sec = 30u, vlen = 12u + 5u + 40u, body, sec, total, k;
+    nj_u1 *p;
+
+    body = 5u + vlen;
+    sec = 9u + body + 4u;
+    total = 12u + hdr_sec + sec;
+    if (cap < total) {
+        return 0u;
+    }
+    memset(b, 0, cap);
+    memcpy(b, ident, 12u);
+    /* the file header section, exactly as build_anim_file() writes it */
+    b[12] = 0u;
+    put_le32(b + 13, hdr_sec);
+    put_le32(b + 17, 17u);
+    put_le32(b + 22, 12u);
+    b[26] = 1u;
+    put_le32(b + 29, total);
+    put_le32(b + 33, total);
+    /* the object section: one VertexArray */
+    b[42] = 0u;
+    put_le32(b + 43, sec);
+    put_le32(b + 47, body);
+    p = b + 51;
+    p[0] = 20u;                        /* VertexArray */
+    put_le32(p + 1, vlen);
+    p += 5;
+    p[12] = 1u;                        /* componentSize */
+    p[13] = 2u;                        /* componentCount */
+    p[14] = 0u;                        /* BYTE */
+    p[15] = 20u; p[16] = 0u;           /* 20 vertices, u16 */
+    for (k = 0u; k < 40u; k++) {
+        p[17u + k] = (nj_u1)(k + 1u);  /* components 1..40 */
+    }
+    return total;
+}
+
 static nj_ref new_vector(nj_vm *vm)
 {
     nj_ref v = nj_object_new(vm, "java/util/Vector");
@@ -5278,6 +5332,106 @@ static int probe_loader_cyclic_roots(nj_vm *vm)
     return groups == 2u;
 }
 
+/*
+ * The regression for the transform/length mix-up: a file-loaded VertexArray
+ * must come back holding its own components, with the Java API's empty first
+ * index.  Before the guard it came back with a stale Transformable [F
+ * reference in `first' and the renderer read texcoords from an address that
+ * reference spelled out.
+ */
+static int probe_loader_varr_40_data(nj_vm *vm)
+{
+    nj_u1 buf[256];
+    nj_u4 n = build_varr_40_file(buf, (nj_u4)sizeof buf);
+    nj_ref bytes, arr, va, data;
+    nj_field *num_v, *num_c, *csize, *first, *count;
+    const nj_s2 *d;
+    nj_value a[2], r;
+    nj_status st;
+
+    if (n == 0u) {
+        return 0;
+    }
+    bytes = nj_array_new(vm, "B", n);
+    if (!bytes) {
+        return 0;
+    }
+    memcpy(nj_array_data(bytes), buf, n);
+    a[0].r = bytes;
+    a[1].i = 0;
+    r.r = 0;
+    nj_clear_exception(vm);
+    st = nj_call(vm, 0, CLS("Loader"), "load",
+                 "([BI)[L" CLS("Object3D") ";", a, &r);
+    if (st != NJ_OK || !r.r) {
+        nj_clear_exception(vm);
+        return 0;
+    }
+    arr = r.r;
+    va = nj_array_length(arr) > 0u ? nj_array_get_ref(arr, 0) : 0;
+    if (!va || !nj_ref_class_name(va) ||
+        strcmp(nj_ref_class_name(va), CLS("VertexArray")) != 0) {
+        return 0;
+    }
+    num_v = nj_field_lookup(vm, CLS("VertexArray"), "_nj_numVerts", "I", 0);
+    num_c = nj_field_lookup(vm, CLS("VertexArray"), "_nj_numComp", "I", 0);
+    csize = nj_field_lookup(vm, CLS("VertexArray"), "_nj_compSize", "I", 0);
+    first = nj_field_lookup(vm, CLS("VertexArray"), "_nj_first", "I", 0);
+    count = nj_field_lookup(vm, CLS("VertexArray"), "_nj_count", "I", 0);
+    data = nj_rget(vm, va, nj_field_lookup(vm, CLS("VertexArray"),
+                                           "_nj_data", "[S", 0));
+    if (!num_v || !num_c || !csize || !first || !count ||
+        !data || nj_array_length(data) != 40u) {
+        return 0;
+    }
+    d = (const nj_s2 *)nj_array_data(data);
+    nj_clear_exception(vm);
+    return nj_iget(vm, va, num_v) == 20 &&
+           nj_iget(vm, va, num_c) == 2 &&
+           nj_iget(vm, va, csize) == 1 &&
+           nj_iget(vm, va, first) == 0 &&
+           nj_iget(vm, va, count) == 0 &&
+           d[0] == 1 && d[39] == 40;
+}
+
+/*
+ * A garbage first index is what the transform mix-up left on the loaded
+ * texcoord array.  set_values() cannot produce one, so the state is written
+ * the way the loader's fields can: straight into `_nj_first'.  The draw must
+ * drop the attribute whose range misses its array instead of following the
+ * index; the forked probe turns a fault into a failed check.
+ */
+static int probe_texcoord_extreme_first(nj_vm *vm)
+{
+    i2d_canvas canvas;
+    nj_ref va;
+    nj_value a[5];
+
+    if (!i2d_canvas_init(vm, &canvas)) {
+        return 0;
+    }
+    va = nj_rget(vm, canvas.vb,
+                 nj_field_lookup(vm, CLS("VertexBuffer"), "_nj_tex0",
+                                 "L" CLS("VertexArray") ";", 0));
+    if (!va) {
+        return 0;
+    }
+    nj_iput(vm, va, nj_field_lookup(vm, CLS("VertexArray"), "_nj_first",
+                                    "I", 0), 0x7FFFFFFF);
+    a[0].r = canvas.bg;
+    if (nj_call(vm, canvas.g3d, CLS("Graphics3D"), "clear",
+                "(L" CLS("Background") ";)V", a, NULL) != NJ_OK) {
+        return 0;
+    }
+    a[0].r = canvas.vb; a[1].r = canvas.ib; a[2].r = canvas.app;
+    a[3].r = canvas.xf; a[4].i = 0;
+    nj_clear_exception(vm);
+    return nj_call(vm, canvas.g3d, CLS("Graphics3D"), "render",
+                   "(L" CLS("VertexBuffer") ";L" CLS("IndexBuffer") ";L"
+                   CLS("Appearance") ";L" CLS("Transform") ";I)V",
+                   a, NULL) == NJ_OK && !nj_has_exception(vm);
+}
+
 static int probe_group_cycle_animate(nj_vm *vm)
 {
     nj_ref a_node = make(vm, CLS("Group"));
@@ -5326,6 +5480,22 @@ static void test_loader_group_cycle_animate(nj_vm *vm)
     /* Forked: before the fix the child dies of a stack overflow. */
     check(m3g_probe_ok(probe_group_cycle_animate, vm),
           "animate() on a cyclic group graph terminates");
+    nj_clear_exception(vm);
+}
+
+static void test_loader_varr_40_data(nj_vm *vm)
+{
+    printf("== a 40-byte VertexArray is not a component transform ==\n");
+    check(m3g_probe_ok(probe_loader_varr_40_data, vm),
+          "a file-loaded VertexArray keeps its data and an empty first index");
+    nj_clear_exception(vm);
+}
+
+static void test_texcoord_extreme_first(nj_vm *vm)
+{
+    printf("== an attribute range that misses its array draws nothing ==\n");
+    check(m3g_probe_ok(probe_texcoord_extreme_first, vm),
+          "a wild texcoord first index does not fault the draw");
     nj_clear_exception(vm);
 }
 
@@ -8190,6 +8360,8 @@ int main(void)
     test_jr_strip_implicit_extreme_first(vm);
     test_loader_cyclic_roots(vm);
     test_loader_group_cycle_animate(vm);
+    test_loader_varr_40_data(vm);
+    test_texcoord_extreme_first(vm);
     test_mesh_foreign_vertex_buffer(vm);
     test_mesh_submesh_bounds(vm);
     test_constant_seeds(vm);
