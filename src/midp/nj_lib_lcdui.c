@@ -4771,6 +4771,10 @@ static void displayable_render(nj_vm *vm, nj_gfx *g, nj_ref d)
     nj_ref title = rget(vm, d, NJ_C_DISPLAYABLE, F_D_TITLE, D_STR);
     nj_ref ticker = rget(vm, d, NJ_C_DISPLAYABLE, F_D_TICKER, D_TICKER);
 
+    if (vm->port) {
+        g->fill_rect = vm->port->gfx_fill_rect;
+        g->fill_ud = vm->port->ud;
+    }
     ui_setup(vm, g, d, &uf);
     nj_gfx_set_color(g, UI_BG);
     nj_gfx_fill_rect(g, 0, 0, g->surf->width, g->surf->height);

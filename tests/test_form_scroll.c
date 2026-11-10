@@ -11,6 +11,16 @@
 #define IMG "javax/microedition/lcdui/Image"
 #define G "javax/microedition/lcdui/Graphics"
 #define CHECK(x) do { if (!(x)) { fprintf(stderr,"FAIL %d: %s\n",__LINE__,#x); exit(1); } } while(0)
+static unsigned fill_calls;
+static int fill(void *ud,const nj_surface *s,int x,int y,int w,int h,nj_u4 color)
+{
+    (void)ud;
+    CHECK(x>=0 && y>=0 && x+w<=s->width && y+h<=s->height);
+    if(s->bpp!=2 && s->bpp!=4) return 0;
+    for(int row=y;row<y+h;++row) for(int col=x;col<x+w;++col)
+        memcpy((char*)s->pixels+row*s->stride+col*s->bpp,&color,s->bpp);
+    ++fill_calls;return 1;
+}
 static nj_value call(nj_vm *vm, nj_ref o, const char *c, const char *n, const char *d, nj_value *a)
 { nj_value r = {0}; CHECK(nj_call(vm,o,c,n,d,a,&r)==NJ_OK); return r; }
 static nj_ref form(nj_vm *vm, const char *title)
@@ -44,7 +54,9 @@ static void exercise(nj_vm *vm)
         a[0].i=i;nj_ref item=call(vm,f,F,"get","(I)L" I ";",a).r;
         a[0].i=-1;a[1].i=32;call(vm,item,I,"setPreferredSize","(II)V",a);
     }
+    unsigned fill_before=fill_calls;
     CHECK(nj_midp_set_current(vm,f)==NJ_OK && nj_midp_paint(vm)==NJ_OK);
+    CHECK(fill_calls>fill_before);
     nj_surface *s=nj_midp_screen(vm);
     CHECK(!find(s,0xffff0000u,&x,&y));
     for(int i=0;i<45;++i) key(vm,NJ_KEY_DOWN);
@@ -94,6 +106,7 @@ int main(void)
     unsigned released=0;
     for(int round=0;round<3;++round) {
         nj_port port;CHECK(nj_port_headless(&port)==NJ_OK);
+        port.gfx_fill_rect=fill;
         nj_vm *vm=nj_vm_create(&port,4*1024*1024);CHECK(vm);exercise(vm);
         unsigned n=nj_vm_destroy(vm);CHECK(n>0 && (!round || n==released));released=n;
         nj_port_shutdown(&port);

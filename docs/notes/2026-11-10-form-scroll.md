@@ -16,3 +16,7 @@ scrolled pointer focus, unchanged screen chrome, end-of-content clamping and
 progress Gauge navigation over three create/destroy cycles with identical host
 release counts. The regression fails on `6a13581`; it and `test_lcdui` pass with
 ASan/UBSan after the fix. Hardware UI/benchmark records live in the Korvo parent.
+
+Built-in Form/List/TextBox/Alert chrome and backgrounds also inherit the optional
+port fill callback. The regression installs a pixel-exact callback and checks
+that widget painting actually invokes it. Ports without it keep CPU drawing.
