@@ -376,7 +376,8 @@ nj_status nj_frame_push(nj_vm *vm, nj_thread *th, nj_method *m,
     f->is_native = (m->code == NULL) ? 1u : 0u;
 
     for (i = total_slots; i < m->max_locals; i++) {
-        argbase[i].bits = 0u;
+        /* GC scans the whole slot, including native padding on 64-bit hosts. */
+        argbase[i].j = 0;
     }
     th->top = stk + m->max_stack;
     return NJ_OK;

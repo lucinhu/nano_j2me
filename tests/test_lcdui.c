@@ -3051,9 +3051,9 @@ static void test_paint_graphics_reused(nj_vm *vm)
  * 僵尸危机2_4349's pump (i.run) draws, waits out its own 40ms frame
  * interval, then Display.callSerially(this) to do it again.  A drain that
  * picked up runnables queued *during* the drain executed the whole chain in
- * one paint - 64 x 40ms = 2.56s per frame, 0.4fps, corpus timeout.  MIDP says
- * callSerially runs "before the NEXT paint", so each frame must run the
- * queued runnable exactly once and leave its re-queue for the next frame.
+ * one paint - 64 x 40ms = 2.56s per frame, 0.4fps, corpus timeout. MIDP
+ * serializes callSerially after the repaint cycle: each event-loop turn
+ * delivers the queued prefix and leaves re-queues for a later turn.
  */
 static int cl_runs;
 
@@ -3106,8 +3106,8 @@ static void test_callserially_once_per_frame(nj_vm *vm)
     OK_MSG(cl_runs == 0, "callSerially does not run the runnable inline");
 
     for (i = 1; i <= 3; i++) {
-        OK_MSG(nj_midp_paint(vm) == NJ_OK,
-               "frame %d with a queued runnable paints", i);
+        OK_MSG(nj_midp_frame(vm) == NJ_OK,
+               "frame %d dispatches its queued UI events", i);
         OK_MSG(cl_runs == i,
                "frame %d: self-requeuing runnable ran %d time(s), want %d",
                i, cl_runs, i);
@@ -3125,6 +3125,8 @@ static void test_paint_idle_saturation(nj_vm *vm)
     int was_running = vm->running;
     OK(form != NULL);
     OK(nj_midp_set_current(vm, form) == NJ_OK);
+    /* Consume setCurrent's explicit request before isolating adaptive cadence. */
+    OK(nj_midp_paint(vm) == NJ_OK);
     vm->app_painted = 1u;
     vm->app_painted_frame = 0u;
     vm->painted_in_frame = 0u;

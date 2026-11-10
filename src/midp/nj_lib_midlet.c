@@ -428,6 +428,7 @@ nj_status nj_midp_frame(nj_vm *vm)
 {
     nj_event ev;
     nj_s8 frame_start;
+    int serially_pending;
 
     if (!vm) {
         return NJ_ERR;
@@ -574,10 +575,17 @@ nj_status nj_midp_frame(nj_vm *vm)
      * the only thing that draws it at all (炸弹人_10311 never calls repaint()
      * from its loop).
      */
+    /* Freeze the eligible callback prefix before paint: a callback queued
+     * inside paint() must wait for its own pending repaint cycle. */
+    serially_pending = nj_midp_serially_pending(vm);
     if (!vm->paint_active &&
-        !vm->painted_in_frame &&
-        (!vm->app_painted || vm->app_paint_idle > vm->app_paint_period ||
-         vm->app_paint_idle == 255u)) {
+        ((vm->repaint_pending &&
+          (!vm->painted_in_frame ||
+           vm->repaint_pending != NJ_MIDP_REPAINT_COALESCED ||
+           serially_pending > 0)) ||
+         (!vm->painted_in_frame &&
+          (!vm->app_painted || vm->app_paint_idle > vm->app_paint_period ||
+           vm->app_paint_idle == 255u)))) {
         (void)nj_midp_paint(vm);
     }
     /*
@@ -609,9 +617,11 @@ nj_status nj_midp_frame(nj_vm *vm)
     }
     vm->app_painted_frame = 0u;
     nj_midp_present(vm);
-    vm->repaint_pending = 0u;
     vm->frames_presented++;
     vm->painted_in_frame = 0u;
+    /* No paint is required to dispatch UI events. A pending repaint was
+     * consumed by paint itself, not by this frame (which may be nested). */
+    nj_midp_dispatch_serially(vm, serially_pending);
 
     if (vm->state != NJ_VM_STOPPING) {
         frame_pace(vm, frame_start);

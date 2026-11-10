@@ -1832,6 +1832,16 @@ nj_class *nj_class_create_builtin(nj_vm *vm, const nj_builtin_class *bc)
             m->max_locals = m->arg_slots;
             if ((m->flags & NJ_ACC_STATIC) == 0u) {
                 m->max_locals = (nj_u2)(m->max_locals + 1u);
+            } else if ((m->flags & NJ_ACC_NATIVE) != 0u &&
+                       strcmp(c->name, "javax/bluetooth/LocalDevice") == 0 &&
+                       strcmp(m->name, "getProperty") == 0 &&
+                       strcmp(m->desc,
+                              "(Ljava/lang/String;)Ljava/lang/String;") == 0) {
+                /* This native was formerly declared as an instance method.
+                 * Keep its two-local snapshot ABI after correcting STATIC:
+                 * local 0 is the String argument, local 1 is unused padding.
+                 * Invocation still consumes only the one static argument. */
+                m->max_locals = 2u;
             }
             c->method_count++;
         }

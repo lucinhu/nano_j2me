@@ -305,8 +305,18 @@ int nj_midp_pointer(nj_vm *vm, int x, int y, int kind);
  */
 void nj_nokia_mpt_pointer(nj_vm *vm, int x, int y, int kind);
 
+/* Internal repaint states. The byte is preserved verbatim by save/load. */
+enum {
+    NJ_MIDP_REPAINT_FRESH = 1,
+    NJ_MIDP_REPAINT_COALESCED = 2
+};
+
 /* Paint the current Displayable into the screen surface. */
 nj_status nj_midp_paint(nj_vm *vm);
+
+/* Capture the eligible UI-event prefix before paint, deliver after present. */
+int nj_midp_serially_pending(nj_vm *vm);
+void nj_midp_dispatch_serially(nj_vm *vm, int pending);
 
 /* The MIDlet lifecycle, called by the runner. */
 nj_status nj_midp_run(nj_vm *vm);

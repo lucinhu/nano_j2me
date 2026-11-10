@@ -1554,10 +1554,10 @@ nj_add_test(test_clip tests/test_clip.c)
       ${CMAKE_CURRENT_SOURCE_DIR}/tests)
   endif()
 
-  foreach(extra_test test_font_png test_jpeg test_lcdui test_game test_lib
+  foreach(extra_test test_font_png test_jpeg test_lcdui test_display_serially test_game test_lib
                       test_ioapi test_resolution test_sax test_rms test_rms_enumeration
                       test_rms_lookup test_run_archive
-                      test_nokia_sound test_nokia_touch test_datagram)
+                      test_nokia_sound test_nokia_touch test_datagram test_bluetooth_property)
     if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/${extra_test}.c)
       nj_add_test(${extra_test} tests/${extra_test}.c)
     endif()
@@ -1565,6 +1565,7 @@ nj_add_test(test_clip tests/test_clip.c)
 
   if(NJ_ENABLE_M3G)
     nj_add_test(test_m3g_load_memory tests/test_m3g_load_memory.c)
+    nj_add_test(test_m3g_skin_refs tests/test_m3g_skin_refs.c)
   endif()
 
   # The MIDI test drives the built-in renderer directly, so it needs that

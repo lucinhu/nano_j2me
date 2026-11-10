@@ -1730,6 +1730,7 @@ static void test_gamecanvas(nj_vm *vm)
     }
 
     nj_surface_fill(scr, C_SENT);
+    vm->repaint_pending = 0u;
     v0(vm, c, NJ_C_GAMECANVAS, "flushGraphics", "()V");
     CHECK(nj_surface_get(scr, 2, 3) == q_green,
           "flushGraphics() copies the buffer to the display");
@@ -1737,8 +1738,12 @@ static void test_gamecanvas(nj_vm *vm)
           "flushGraphics() copies all of it");
     CHECK(px_at(vm, buf, 2, 3) == C_GREEN,
           "flushing does not clear the buffer");
+    CHECK(vm->repaint_pending == 0u,
+          "flushGraphics() publishes pixels without requesting Canvas.paint");
+    nj_midp_repaint(vm);
+    v0(vm, c, NJ_C_GAMECANVAS, "flushGraphics", "()V");
     CHECK(vm->repaint_pending != 0u,
-          "flushGraphics() asks the runner for a frame");
+          "flushGraphics() preserves an explicit repaint request");
 
     /* The sub-rectangle form. */
     nj_surface_fill(scr, C_SENT);

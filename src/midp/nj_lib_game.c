@@ -2773,7 +2773,8 @@ static void gc_flush_region(nj_vm *vm, nj_ref self, nj_ref gobj,
         vm->app_painted = 1u;
         vm->app_painted_frame = 1u;
     }
-    vm->repaint_pending = 1u;
+    /* Publishing pixels is not a Canvas.repaint() request. The frame pump
+     * presents unconditionally; preserve any explicit repaint already queued. */
 }
 
 NJFN(gc_flushGraphics)

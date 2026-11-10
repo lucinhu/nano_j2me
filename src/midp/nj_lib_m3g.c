@@ -998,7 +998,8 @@ nj_status nj_m3g_decode_object(const nj_u1 *data, nj_u4 len, nj_u1 type,
                 vb = le32(data + base + 6u);
                 nsub = le32(data + base + 10u);
                 if (vb != 0u && nsub >= 1u &&
-                    nsub <= (nj_u4)(NJ_M3G_MAX_REFS / 2u)) {
+                    nsub <= (nj_u4)(NJ_M3G_MAX_REFS / 2u) &&
+                    nsub <= (len - base - 14u) / 8u) {
                     nj_u4 at = base + 14u + 8u * nsub;
                     nj_u4 k;
                     int usable = 1;
@@ -1020,12 +1021,19 @@ nj_status nj_m3g_decode_object(const nj_u1 *data, nj_u4 len, nj_u1 type,
                         out->nrefs = 2u * nsub;
                         if (len == at) {
                             out->decoded = 1u;   /* bind pose only */
-                        } else if (at + 8u <= len) {
+                        } else if (len - at >= 8u) {
                             nj_u4 skel = le32(data + at);
                             nj_u4 ntr = le32(data + at + 4u);
+                            nj_u4 bytes = len - at - 8u;
 
-                            if (skel != 0u && ntr >= 1u && ntr <= 64u &&
-                                len == at + 8u + 16u * ntr) {
+                            /* Records may name the same bone over disjoint
+                             * ranges. Their count is bounded by the payload,
+                             * not by the bone roster or influences per vertex.
+                             * Divide before multiplying: a forged UInt32 count
+                             * must not wrap into a short, apparently valid tail.
+                             * Zero records still retain the skeleton edge. */
+                            if (skel != 0u && bytes % 16u == 0u &&
+                                ntr == bytes / 16u) {
                                 out->c = skel;
                                 out->d = ntr;
                                 out->decoded = 1u;
@@ -1412,26 +1420,40 @@ nj_status nj_m3g_scan_objects(nj_vm *vm, const nj_u1 *p, nj_u4 n,
                         f->b > 0u && f->d > 0u && f->nrefs_total == 0u) {
                         const nj_u1 *sd = body + at + 5u;
                         nj_u4 sh = m3g_object_header_size(sd, olen);
-                        nj_u4 base = 0x10u;
+                        nj_u4 base = 0x10u, slen;
 
-                        if (sh == 0u || sh > olen) {
+                        if (sh < NJ_M3G_OBJECT_HEADER || sh > olen) {
                             M3G_SCAN_FAIL("truncated SkinnedMesh header");
                         }
                         sd += sh - NJ_M3G_OBJECT_HEADER;
+                        slen = olen - (sh - NJ_M3G_OBJECT_HEADER);
+                        if (slen <= 12u) {
+                            M3G_SCAN_FAIL("truncated SkinnedMesh node");
+                        }
                         if ((sd[12] & 0x01u) != 0u) {
                             base += 40u;
                         }
+                        if (base > slen || slen - base < 14u ||
+                            f->b > (slen - base - 14u) / 8u) {
+                            M3G_SCAN_FAIL("truncated SkinnedMesh submeshes");
+                        }
                         {
                             nj_u4 sat = base + 14u + 8u * f->b;
-                            nj_u4 ntr = le32(sd + sat + 4u);
-                            nj_u4 k;
+                            nj_u4 ntr, bytes, k;
                             nj_u4 *rec;
 
-                            if (ntr != f->d) {
+                            if (slen - sat < 8u) {
+                                M3G_SCAN_FAIL("truncated SkinnedMesh tail");
+                            }
+                            ntr = le32(sd + sat + 4u);
+                            bytes = slen - sat - 8u;
+                            if (ntr != f->d || bytes % 16u != 0u ||
+                                ntr != bytes / 16u) {
                                 M3G_SCAN_FAIL("SkinnedMesh record count changed");
                             }
-                            rec = (nj_u4 *)nj_host_alloc(
-                                vm, (nj_size)ntr * 4u * sizeof(nj_u4));
+                            /* bytes == 16*ntr == 4*ntr*sizeof(nj_u4), proven
+                             * without a product in the 32-bit allocation size. */
+                            rec = (nj_u4 *)nj_host_alloc(vm, bytes);
                             if (!rec) {
                                 M3G_SCAN_FAIL("out of host memory for a skin");
                             }
@@ -10049,9 +10071,10 @@ NJFN(m3g_skin_addTransform)
                  "addTransform needs a positive weight and vertex count");
         return NJ_ERR;
     }
-    if (NJ_ARG_INT(args, 2) < 0) {
+    if (NJ_ARG_INT(args, 2) < 0 || NJ_ARG_INT(args, 2) > 65535 ||
+        NJ_ARG_INT(args, 3) > 65535 - NJ_ARG_INT(args, 2)) {
         NJ_THROW(vm, "java/lang/IndexOutOfBoundsException",
-                 "negative first vertex");
+                 "bone vertex range exceeds 65535");
         return NJ_ERR;
     }
     if (!bones) {
@@ -10073,8 +10096,10 @@ NJFN(m3g_skin_addTransform)
         nj_ref grown;
         nj_u4 i;
 
-        if (want <= cap || want > 0x7fffffffu) {
-            return nj_throw_oom(vm);    /* doubling would overflow */
+        if (want <= cap || want > 0x7fffffffu / 16u) {
+            /* The bind array needs sixteen floats per record; its Java
+             * length and the pose path's signed n*16 must remain valid. */
+            return nj_throw_oom(vm);
         }
         grown = nj_object_array_new(vm, "javax/microedition/m3g/Node", want);
         if (!grown) {
@@ -10195,6 +10220,11 @@ NJFN(m3g_skin_getBoneVertices)
 
             if (count <= 0) {
                 continue;
+            }
+            /* A long roster can repeat ranges. Do not let the accumulated
+             * output length wrap before checking the destination arrays. */
+            if (out > 0x7fffffff - count) {
+                return nj_throw_oom(vm);
             }
             /* The JSR normalizes: weights are relative to every bone that
                owns the same vertex, so the sum over one vertex is one. */

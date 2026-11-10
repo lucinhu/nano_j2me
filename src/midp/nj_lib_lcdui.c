@@ -140,7 +140,6 @@
 #define F_AL_INDEF   NJ_F_AL_INDEF
 
 /* Defined with the Display natives, used by the frame hook above them. */
-static void display_drain_queue(nj_vm *vm);
 
 /* Defined with the Alert natives, called from every frame boundary: the
  * frame-pump equivalent of the reference Alert timeout thread. */
@@ -625,7 +624,7 @@ screen_ready:
 void nj_midp_repaint(nj_vm *vm)
 {
     if (vm) {
-        vm->repaint_pending = 1u;
+        vm->repaint_pending = NJ_MIDP_REPAINT_FRESH;
     }
 }
 
@@ -4126,10 +4125,17 @@ NJFN(c_serviceRepaints)
      * waits for the frame-driven paint).  repaint_pending stays set for the
      * next frame's paint instead of being burned here.
      */
-    if (vm->repaint_pending && !vm->in_paint && !vm->painted_in_frame) {
-        vm->in_paint = 1u;
-        (void)nj_midp_paint(vm);
-        vm->in_paint = 0u;
+    if (vm->repaint_pending && !vm->in_paint) {
+        if (!vm->painted_in_frame) {
+            vm->in_paint = 1u;
+            (void)nj_midp_paint(vm);
+            vm->in_paint = 0u;
+        } else {
+            /* Keep the request, but do not overwrite the application's later
+             * drawing at this frame's end. A queued UI event still requires
+             * its repaint before presentation and callback delivery. */
+            vm->repaint_pending = NJ_MIDP_REPAINT_COALESCED;
+        }
     }
     return NJ_OK;
 }
@@ -5632,17 +5638,15 @@ static nj_status nj_midp_paint_body(nj_vm *vm)
         vm->app_painted_frame = 1u;
     }
     vm->painted_in_frame = 1u;
+    /* Consume this request before callbacks: repaint() from paint/showNotify
+     * belongs to a later cycle and must survive this paint's return. */
+    vm->repaint_pending = 0u;
     nj_ref d;
     nj_surface *scr;
     nj_ref buf = NULL;
     nj_surface buf_surf;
     int w, h;
 
-    /*
-     * MIDP's callSerially() contract is "run before the next paint", so the
-     * queue is drained here, at the top of the frame.
-     */
-    display_drain_queue(vm);
     /* An Alert timeout that came due since the last frame is the frame-pump
      * equivalent of the reference timer thread waking up on the event
      * thread: dismiss before this frame paints, so the restored screen is
@@ -5655,7 +5659,6 @@ static nj_status nj_midp_paint_body(nj_vm *vm)
     d = nj_midp_current(vm);
     if (!d) {
         nj_surface_fill(scr, 0xFF000000u);
-        vm->repaint_pending = 0u;
         return NJ_OK;
     }
     w = scr->width;
@@ -5794,7 +5797,6 @@ static nj_status nj_midp_paint_body(nj_vm *vm)
             }
         }
     }
-    vm->repaint_pending = 0u;
     return NJ_OK;
 }
 
@@ -5871,6 +5873,12 @@ nj_status nj_midp_set_current(nj_vm *vm, nj_ref d)
         nj_ref old = nj_midp_current(vm);
         if (old && old != d) {
             displayable_hide(vm, old);
+        }
+        if (old != d) {
+            /* A new screen must not inherit the previous game's flush rate. */
+            vm->app_painted = 0u;
+            vm->app_paint_idle = 0u;
+            vm->app_paint_period = 0u;
         }
     }
     rput(vm, disp, NJ_C_DISPLAY, F_DISP_CUR, D_DISPLAY, d);
@@ -6121,16 +6129,16 @@ NJFN(disp_getBorderStyle)
     return NJ_OK;
 }
 
-/*
- * callSerially(Runnable): the runnable is queued in a Java Vector and executed
- * at the start of the next frame, which is exactly the guarantee MIDP gives -
- * "after the current event has been processed, before the next paint".
- */
+/* MIDP serializes these callbacks after the pending repaint cycle, including
+ * its buffer switch. The frame pump captures a prefix before painting and
+ * delivers it after present; painting itself is not the event queue driver. */
 NJFN(disp_callSerially)
 {
     nj_ref self = NJ_THIS(args);
     nj_ref r = NJ_ARG_REF(args, 0);
     nj_ref q;
+    nj_u4 roots = vm->nroots;
+    nj_status st;
     nj_value a[1];
 
     if (!r) {
@@ -6142,75 +6150,97 @@ NJFN(disp_callSerially)
         if (!q) {
             return nj_throw_oom(vm);
         }
-        if (nj_call_special(vm, q, "java/util/Vector", "<init>", "()V", NULL,
-                            NULL) != NJ_OK) {
-            return NJ_ERR;
+        (void)nj_root(vm, q);
+        if (vm->nroots != roots + 1u) {
+            return nj_throw_oom(vm);
+        }
+        st = nj_call_special(vm, q, "java/util/Vector", "<init>", "()V",
+                             NULL, NULL);
+        if (st != NJ_OK) {
+            vm->nroots = roots;
+            return st;
         }
         rput(vm, self, NJ_C_DISPLAY, "dpQueue", D_VECTOR, q);
     }
     a[0].r = r;
-    (void)nj_call(vm, q, "java/util/Vector", "addElement",
-                  "(Ljava/lang/Object;)V", a, NULL);
-    return vm->exception ? NJ_ERR : NJ_OK;
+    st = nj_call(vm, q, "java/util/Vector", "addElement",
+                 "(Ljava/lang/Object;)V", a, NULL);
+    vm->nroots = roots;
+    return vm->exception ? NJ_ERR : st;
 }
 
-/* Run the pending callSerially queue.  Called once per frame by the frame
- * pump; harmless when empty. */
-static void display_drain_queue(nj_vm *vm)
+int nj_midp_serially_pending(nj_vm *vm)
 {
-    nj_ref disp = nj_midp_display(vm);
     nj_ref q;
-    int guard = 0;
-    nj_s4 pending;
-    nj_s4 done = 0;
+    nj_s4 count;
+    if (!vm || vm->paint_active || vm->in_paint || vm->in_callback ||
+        vm->exception || !vm->display) {
+        return 0;
+    }
+    q = rget(vm, vm->display, NJ_C_DISPLAY, "dpQueue", D_VECTOR);
+    if (!q) {
+        return 0;
+    }
+    /* dpQueue is our private Vector, so querying its length needs no Java
+     * callback, allocation or scheduler turn at the pre-paint boundary. */
+    count = fget(vm, q, "java/util/Vector", "elementCount", D_INT);
+    return count > 64 ? 64 : count > 0 ? (int)count : 0;
+}
 
-    if (!disp) {
+void nj_midp_dispatch_serially(nj_vm *vm, int pending)
+{
+    nj_ref q;
+    nj_u4 roots;
+    nj_u1 prev;
+    int done;
+
+    if (!vm || pending <= 0 || vm->paint_active || vm->in_paint ||
+        vm->in_callback || vm->exception || !vm->display) {
         return;
     }
-    q = rget(vm, disp, NJ_C_DISPLAY, "dpQueue", D_VECTOR);
+    q = rget(vm, vm->display, NJ_C_DISPLAY, "dpQueue", D_VECTOR);
     if (!q) {
         return;
     }
-    /*
-     * Snapshot the queue length: only runnables queued BEFORE this drain run
-     * now.  A runnable that re-queues itself must wait for the next frame -
-     * callSerially is "after the current event has been processed, before the
-     * next paint", and a re-queue happens during the current event.
-     *
-     * Running it in the same drain instead turned the queue into a chain: the
-     * classic per-frame pump (僵尸危机2_4349's i.run() does repaint, draws,
-     * spins out its own 40ms frame interval in Thread.yield, then
-     * callSerially(this)) executed all 64 guarded passes inside ONE paint,
-     * and one frame took 64 x 40ms = 2.56s while the harness managed 0.4fps
-     * and never reached its frame budget before the corpus timed out.
-     * Element 0 stays the oldest entry, so the first `pending` removals take
-     * exactly the pre-drain runnables; anything appended lands after them.
-     */
-    pending = nj_call_int(vm, q, "java/util/Vector", "size", "()I", NULL);
-    while (done < pending && guard++ < 64) {
-        nj_ref r;
-        r = nj_call_ref(vm, q, "java/util/Vector", "elementAt",
-                        "(I)Ljava/lang/Object;", &(nj_value){ .i = 0 });
-        if (vm->exception) {
-            nj_clear_exception(vm);
+    roots = vm->nroots;
+    (void)nj_root(vm, q);
+    if (vm->nroots != roots + 1u) {
+        return; /* Keep every queued entry for a later frame. */
+    }
+    prev = vm->paint_active;
+    vm->paint_active = 1u;
+    /* Nested frames may pump workers and present pixels, but must not deliver
+     * another UI event while this callback is still executing. Only the prefix
+     * captured BEFORE painting is eligible: paint/present/self re-queues wait
+     * for the next cycle, even when this cycle had no paint at all. */
+    for (done = 0; done < pending && done < 64; done++) {
+        nj_ref r = nj_call_ref(vm, q, "java/util/Vector", "elementAt",
+                              "(I)Ljava/lang/Object;",
+                              &(nj_value){ .i = 0 });
+        if (vm->exception || !r) {
             break;
+        }
+        (void)nj_root(vm, r);
+        if (vm->nroots != roots + 2u) {
+            break; /* Root before removal; a failed registration loses nothing. */
         }
         (void)nj_call(vm, q, "java/util/Vector", "removeElementAt", "(I)V",
                       &(nj_value){ .i = 0 }, NULL);
+        if (!vm->exception) {
+            (void)nj_call(vm, r, "java/lang/Runnable", "run", "()V", NULL, NULL);
+        }
+        vm->nroots = roots + 1u;
         if (vm->exception) {
-            nj_clear_exception(vm);
             break;
         }
-        if (!r) {
-            break;
-        }
-        (void)nj_call(vm, r, "java/lang/Runnable", "run", "()V", NULL, NULL);
-        if (vm->exception) {
-            nj_clear_exception(vm);
-            break;
-        }
-        done++;
     }
+    /* As before, an application callback failure ends this batch; the queued
+     * remainder stays available on the next event-loop turn. */
+    if (vm->exception) {
+        nj_clear_exception(vm);
+    }
+    vm->paint_active = prev;
+    vm->nroots = roots;
 }
 
 /* ================================================================== */

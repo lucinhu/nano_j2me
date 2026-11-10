@@ -26,6 +26,8 @@
 
 static int checks;
 static int fails;
+static char *keep[4096];
+static unsigned stable_n;
 
 /*
  * nj_field_lookup() caches its hits by POINTER - it is called 1.4 million times
@@ -38,11 +40,9 @@ static int fails;
  */
 static char *stable(const char *s)
 {
-    static char *keep[4096];
-    static unsigned n;
     char *p;
 
-    if (n >= 4096u) {
+    if (stable_n >= 4096u) {
         return (char *)s;
     }
     p = (char *)malloc(strlen(s) + 1u);
@@ -50,7 +50,7 @@ static char *stable(const char *s)
         return (char *)s;
     }
     strcpy(p, s);
-    keep[n++] = p;
+    keep[stable_n++] = p;
     return p;
 }
 
@@ -198,6 +198,10 @@ int main(int argc, char **argv)
     ok(mism == 0, "every constant the stubs declare has the runtime's value");
 
     nj_vm_destroy(vm);
+    /* Cached lookup keys stay stable until the VM releases its caches. */
+    while (stable_n) {
+        free(keep[--stable_n]);
+    }
     printf("\n%d checks, %d failures\n%s\n", checks, fails,
            fails == 0 ? "PASS" : "FAIL");
     return fails == 0 ? 0 : 1;

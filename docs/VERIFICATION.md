@@ -29,6 +29,31 @@ repeated unless the code changed the path the verification used.
   (frames, logs and stitched screenshots are bulk); the row names the
   directory, and the commit carries the text that quotes it.
 
+## 2026-11-10 callback, Bluetooth and skin compatibility
+
+The measured runtime is based on `6a135819c026183cf8409e9d79948c735ad54dd6`
+plus the repairs in this commit. Its CLI SHA-256 is
+`1733fc812bbfaf0031df891d25d7c656fb921fe2a666f18c86d162cee1a985d1`.
+Earlier corpus sweeps and benchmark versions below remain historical records.
+
+| area | verdict and evidence | detailed record |
+| --- | --- | --- |
+| Regression suite | VERIFIED across 166 tests: 165 pass in the initial final-runtime run; the remaining parallel-render test passes with its **unchanged executable** after redirecting anonymous capture files to a private filesystem. The original failure is actual `/tmp` user-quota exhaustion (`EDQUOT`, errno 122), not a pixel mismatch. The recheck retains 234 forks and comparison of 117,504,000 color/depth bytes. This is combined verification, **not one clean 166-test invocation**. | [Display scheduling](notes/2026-11-10-display-serially.md); `.local-tools/debug-runs/display-serially-20261110-main/` |
+| Display scheduling | VERIFIED: 1050 fixture checks; FIFO, post-present ordering, queue roots, nested frames and fresh/coalesced repaint behavior. Original Java pixel tests retain their thresholds: RepaintDemo red 33600; SavedGfx red 1600 and blue 64. | [Display scheduling](notes/2026-11-10-display-serially.md) |
+| Bluetooth and native slots | VERIFIED: 64 Java property queries and 296 checks. Targeted strict ASan/UBSan/float-cast-overflow/LSan checks also pass for Save (2521), Lifecycle (2301), Bluetooth (296) and three VM create/run/destroy cycles. The corrected static call retains the original two-local snapshot ABI; unused local slots are fully cleared. SDK compilation independently rejects the old instance declaration and emits `invokestatic` with the corrected stub. | [Bluetooth property](notes/2026-11-10-bluetooth-property.md) |
+| M3G skin records | VERIFIED: 18 public Loader fixtures, 2798 checks; the old runtime fails 15 checks. The real HD resource has 482 transform-reference records for 42 bones. This verifies bounded record loading and skeleton references, not new texture capabilities. | [Skin records](notes/2026-11-10-m3g-skin-records.md) |
+| Original Minecraft | VERIFIED on this CLI: SDL2 1600 frames plus genuine old-2a and newly-created snapshot resumes of 300 frames each. No cold-start fallback or uncaught exception; captured terrain/HUD pixels match. Caught UDP receives after snapshot restoration remain a known native-handle limitation. | [Display scheduling](notes/2026-11-10-display-serially.md); `.local-tools/debug-runs/mc-20261110-screen-depth-main/display-serially-compat-*` |
+| JBenchmark 1 and 2 | VERIFIED original Results pages: JBenchmark 1.1.1 **10769**; JBenchmark2 2.1.1 **7428**, at Java 240×320 / 16 MiB / uncapped software SDL2 / 100% speed. These single desktop measurements do not establish a percentage speed gain or Android performance. | [Versioned benchmark measurements](notes/2026-11-10-jbenchmark-baseline.md); `.local-tools/debug-runs/jbenchmark-fixed-20261110/compat/` |
+| JBenchmark HD | PARTIAL actual Results: Bilinear 91%, Trilinear Failed/Not supported, Perspective 99%, Z-buffer Failure (7 bit), Smooth 7,669,405 tri/s, Textured 6,637,914 tri/s. Fill/Gaming remain unavailable below the old Form viewport. The quality test's 7 bit does not establish buffer storage width. | [Versioned benchmark measurements](notes/2026-11-10-jbenchmark-baseline.md) |
+| JBenchmark3D | OPEN: first attempt interrupted by supervisor SIGTERM; separately authorized recovery reaches the 300-second boundary without observed final Results. Four fields remain unavailable; no inferred Java hang or successful completion. | [Versioned benchmark measurements](notes/2026-11-10-jbenchmark-baseline.md) |
+
+The earlier, separate fixed-work Minecraft GEN sample is documented in
+[the native profile](notes/2026-11-10-minecraft-gen-profile.md): source `a154302`,
+9582 samples, unchanged world hashes and byte-identical Release interpreter code.
+It is a diagnostic profile, not a before/after timing comparison or Java-opcode
+heat map. The targeted sanitizer runs above are not a claim that all 166 tests
+ran under sanitizers. Original JARs and user saves are preserved.
+
 ## Corpus snapshot
 
 The gate over all collected titles, most recent full sweep:

@@ -72,8 +72,7 @@ static int forname(nj_vm *vm, const char *name)
 
 /* LocalDevice.getProperty(key): the Java string as UTF-8, or NULL when the
  * stack answered null (its word for "unknown") or threw. */
-static const char *prop(nj_vm *vm, nj_ref dev, const char *key, char *buf,
-                        int cap)
+static const char *prop(nj_vm *vm, const char *key, char *buf, int cap)
 {
     nj_value a[1];
     nj_value rv;
@@ -81,8 +80,8 @@ static const char *prop(nj_vm *vm, nj_ref dev, const char *key, char *buf,
     buf[0] = 0;
     a[0].r = nj_string_new(vm, key);
     rv.r = NULL;
-    (void)nj_call(vm, dev, "javax/bluetooth/LocalDevice", "getProperty",
-                  "(Ljava/lang/String;)Ljava/lang/String;", a, &rv);
+    (void)nj_call_static(vm, "javax/bluetooth/LocalDevice", "getProperty",
+                         "(Ljava/lang/String;)Ljava/lang/String;", a, &rv);
     if (!rv.r || pending_exc(vm)) {
         (void)nj_take_exception(vm);
         return NULL;
@@ -259,8 +258,7 @@ int main(void)
     nj_port_shutdown(&port);
 
     /*
-     * The property table, and why this needs a radio at all: without one
-     * getLocalDevice() throws above and the table is unreachable.  The three
+     * The static property table with a successful radio hook.  The three
      * names are the specification's own; the first one is 33 characters long,
      * which is one more than the 32-byte buffer this code used to copy it
      * into.  The truncated copy could never match, so that property was
@@ -290,22 +288,22 @@ int main(void)
         ok(dev != NULL && pending_exc(vm) == NULL,
            "a fake radio makes getLocalDevice() succeed");
         ok(dev != NULL &&
-               prop(vm, dev, "bluetooth.sd.attr.retrievable.max", buf,
+               prop(vm, "bluetooth.sd.attr.retrievable.max", buf,
                     (int)sizeof(buf)) != NULL &&
                strcmp(buf, "64") == 0,
            "getProperty(\"bluetooth.sd.attr.retrievable.max\") is \"64\"");
         ok(dev != NULL &&
-               prop(vm, dev, "bluetooth.connected.devices.max", buf,
+               prop(vm, "bluetooth.connected.devices.max", buf,
                     (int)sizeof(buf)) != NULL &&
                strcmp(buf, "7") == 0,
            "getProperty(\"bluetooth.connected.devices.max\") is \"7\"");
         ok(dev != NULL &&
-               prop(vm, dev, "bluetooth.sd.trans.max", buf,
+               prop(vm, "bluetooth.sd.trans.max", buf,
                     (int)sizeof(buf)) != NULL &&
                strcmp(buf, "1") == 0,
            "getProperty(\"bluetooth.sd.trans.max\") is \"1\"");
         ok(dev != NULL &&
-               prop(vm, dev, "bluetooth.no.such.property", buf,
+               prop(vm, "bluetooth.no.such.property", buf,
                     (int)sizeof(buf)) == NULL,
            "control: an undefined property is null, not invented");
     }

@@ -1279,30 +1279,20 @@ NJFN(local_set_discoverable)
 NJFN(local_get_property)
 {
     nj_bt_local l;
-    /*
-     * Long enough for every property name below.  32 was not: the longest,
-     * "bluetooth.sd.attr.retrievable.max", is 33 characters, so the copy
-     * truncated it and the strcmp could never match - the property was
-     * silently always null.  A trimmed build under -Werror says so
-     * (-Wstring-compare); an ordinary build did not.
-     */
-    char key[64];
-    if (!bt_local_fill(vm, &l))
-        return bt_state(vm, "this device has no Bluetooth radio");
-    if (!btext(NJ_ARG_REF(args, 0), key, sizeof key)) {
-        ret->r = NULL;
-        return NJ_OK;
-    }
-    /* The three properties the specification defines that have an answer here.
-     * Everything else is honestly unknown, which is what NULL means. */
-    if (strcmp(key, "bluetooth.sd.attr.retrievable.max") == 0)
-        ret->r = bstr(vm, "64");
-    else if (strcmp(key, "bluetooth.connected.devices.max") == 0)
-        ret->r = bstr(vm, "7");
-    else if (strcmp(key, "bluetooth.sd.trans.max") == 0)
-        ret->r = bstr(vm, "1");
-    else
-        ret->r = NULL;
+    nj_ref key = NJ_ARG_REF(args, 0);
+    const char *value = NULL;
+    /* JSR 82 declares a static query with no BluetoothStateException.  Unknown
+     * names (including the existing permissive null case) need no radio.  Match
+     * the entire Java String so an embedded NUL cannot alias a supported name. */
+    if (nj_string_equals_utf8(key, "bluetooth.sd.attr.retrievable.max"))
+        value = "64";
+    else if (nj_string_equals_utf8(key, "bluetooth.connected.devices.max"))
+        value = "7";
+    else if (nj_string_equals_utf8(key, "bluetooth.sd.trans.max"))
+        value = "1";
+    /* Preserve the three existing answers only when the port has a radio.
+     * Otherwise the capability is unknown, not an initialization error. */
+    ret->r = value && bt_local_fill(vm, &l) ? bstr(vm, value) : NULL;
     return NJ_OK;
 }
 
@@ -2149,7 +2139,8 @@ static const nj_builtin_method local_methods[] = {
     M("getDeviceClass",   "()Ljavax/bluetooth/DeviceClass;", NJ_ACC_PUBLIC),
     M("getDiscoveryAgent", "()Ljavax/bluetooth/DiscoveryAgent;", NJ_ACC_PUBLIC),
     M("setDiscoverable",  "(I)Z", NJ_ACC_PUBLIC),
-    M("getProperty",      "(Ljava/lang/String;)Ljava/lang/String;", NJ_ACC_PUBLIC),
+    M("getProperty",      "(Ljava/lang/String;)Ljava/lang/String;",
+      NJ_ACC_PUBLIC | NJ_ACC_STATIC),
     M("getRecord",        "(Ljavax/bluetooth/ServiceRecord;)Ljavax/bluetooth/ServiceRecord;",
       NJ_ACC_PUBLIC),
     M("updateRecord",     "(Ljavax/bluetooth/ServiceRecord;)V", NJ_ACC_PUBLIC)
