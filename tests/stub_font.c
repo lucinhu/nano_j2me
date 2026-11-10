@@ -48,7 +48,8 @@ static const nj_font stub_font = {
     0,                      /* coverage: 1bpp rows (unused by this stub) */
     NULL,                   /* glyph_ud */
     NULL,                   /* glyph_advance */
-    NULL                    /* no fallback */
+    NULL,                   /* no fallback */
+    0                       /* glyph_ascent: use ascent */
 };
 
 const nj_font *nj_font_builtin(int size, int style)

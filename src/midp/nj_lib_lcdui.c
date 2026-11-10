@@ -1869,6 +1869,7 @@ NJFN(g_drawRGB)
     nj_status st;
     nj_s4 rows;
     const nj_u4 *direct;
+    int disjoint = 0;
 
     if (!arr) {
         return nj_throw(vm, "java/lang/NullPointerException", "rgb is null");
@@ -1893,25 +1894,63 @@ NJFN(g_drawRGB)
         }
     }
 
-    /* Retain ARGB: dropping alpha here turns transparent sprite backgrounds
-     * (for example Asphalt 6's 0x00FF00FF colour key) into solid magenta. */
+    if (!gfx_load(vm, self, &g, &sc)) {
+        return NJ_ERR;
+    }
     direct = arr->kind == NJ_OBJ_ARRAY && arr->aflags == NJ_ARRAY_T_INT ?
         (const nj_u4 *)arr->u.bytes : NULL;
+    if (direct && g.surf->stride > 0 && g.surf->height > 0) {
+        uintptr_t src = (uintptr_t)direct;
+        uintptr_t dst = (uintptr_t)g.surf->pixels;
+        nj_u8 src_bytes = (nj_u8)arr->length * sizeof(nj_u4);
+        nj_u8 dst_bytes = (nj_u8)g.surf->stride * g.surf->height;
+        /* Do not compare unrelated C pointers or add a possibly overflowing
+         * end address. Image storage may itself be this Java int[]. */
+        disjoint = src <= dst ? (nj_u8)(dst - src) >= src_bytes
+                              : (nj_u8)(src - dst) >= dst_bytes;
+    }
+    if (disjoint) {
+        int rop = alpha ? NJ_ROP_PAINT : NJ_ROP_OPAQUE;
+        nj_s4 base;
+        nj_gfx draw_g = g;
+        /* Borrow the Java pixels for this synchronous blit. OPAQUE forces
+         * alpha during drawing, including on ARGB targets, without staging.
+         * No allocation or GC may occur in the blit. */
+        rows = scan >= w ? h : 1;
+        if (rows == 1) draw_g.translate_y = 0;
+        view.width = scan >= w ? (int)scan : (int)w;
+        view.height = (int)rows;
+        view.format = NJ_PIXFMT_ARGB8888;
+        view.has_alpha = alpha != 0;
+        for (base = 0; base < h; base += rows) {
+            nj_s8 at = (nj_s8)offset + (nj_s8)base * scan;
+            nj_s8 dest_y = (nj_s8)y + base + (rows == 1 ? g.translate_y : 0);
+            view.pixels = (nj_u4 *)(direct + at);
+            /* width describes the pitch: only the validated w pixels of each
+             * row are read, including the unpadded last row of the array. */
+            if (dest_y >= (-2147483647L - 1) && dest_y <= 0x7fffffffL)
+                nj_gfx_draw_region(&draw_g, &view, 0, 0, (int)w, (int)rows,
+                                   NJ_TRANS_NONE, 0, 0, NULL,
+                                   (int)x, (int)dest_y, rop);
+        }
+        gfx_store(vm, self, &g);
+        return NJ_OK;
+    }
+
+    /* Retain ARGB: dropping alpha here turns transparent sprite backgrounds
+     * (for example Asphalt 6's 0x00FF00FF colour key) into solid magenta. */
     n = (nj_size)w * (nj_size)h * sizeof(nj_u4);
     rgb = (nj_u4 *)nj_host_alloc(vm, n);
     rows = h;
-    if (!rgb && h > 1) {
+    if (!rgb && h > 1 && (!direct || disjoint)) {
         /* Audio samples can fragment a small device's host heap. A single
-         * scanline preserves drawRGB semantics without a full-image copy. */
+         * scanline suffices unless the source aliases the destination: that
+         * case needs a full snapshot before any destination row is written. */
         rows = 1;
         rgb = (nj_u4 *)nj_host_alloc(vm, (nj_size)w * sizeof(nj_u4));
     }
     if (!rgb) {
         return nj_throw_oom(vm);
-    }
-    if (!gfx_load(vm, self, &g, &sc)) {
-        nj_host_free(vm, rgb);
-        return NJ_ERR;
     }
     st = NJ_OK;
     view.width = (int)w;
@@ -1921,6 +1960,8 @@ NJFN(g_drawRGB)
     view.has_alpha = alpha != 0;
     {
         nj_s4 base, row, col;
+        nj_gfx draw_g = g;
+        if (rows == 1) draw_g.translate_y = 0;
         for (base = 0; base < h; base += rows) {
             for (row = 0; row < rows; row++) {
                 for (col = 0; col < w; col++) {
@@ -1930,9 +1971,9 @@ NJFN(g_drawRGB)
                         alpha ? p : (p | 0xFF000000u);
                 }
             }
-            nj_s8 dest_y = (nj_s8)y + base;
-            if (dest_y <= 0x7fffffffL)
-                nj_gfx_draw_region(&g, &view, 0, 0, (int)w, (int)rows,
+            nj_s8 dest_y = (nj_s8)y + base + (rows == 1 ? g.translate_y : 0);
+            if (dest_y >= (-2147483647L - 1) && dest_y <= 0x7fffffffL)
+                nj_gfx_draw_region(&draw_g, &view, 0, 0, (int)w, (int)rows,
                                    NJ_TRANS_NONE, 0, 0, NULL,
                                    (int)x, (int)dest_y, NJ_ROP_PAINT);
         }

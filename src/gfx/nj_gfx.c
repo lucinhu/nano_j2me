@@ -1952,6 +1952,7 @@ static void nj_region_draw(nj_gfx *g, const nj_u1 *src, nj_s8 src_stride_bytes,
                            int dx, int dy, int alpha)
 {
     int tw, th, bpp, src_bpp;
+    int opaque = rop == NJ_ROP_OPAQUE;
     nj_s8 X0, Y0, cx0, cy0, cx1, cy1, X, Y;
 
     if (!g || !nj_surface_ok(g->surf) || !src) {
@@ -1971,6 +1972,9 @@ static void nj_region_draw(nj_gfx *g, const nj_u1 *src, nj_s8 src_stride_bytes,
     if (alpha > 255) {
         alpha = 255;
     }
+    /* Ignore the source alpha without manufacturing an opaque image copy.
+     * Global alpha still applies; at full weight this is a replacement. */
+    if (opaque) rop = alpha == 255 ? NJ_ROP_SET : NJ_ROP_PAINT;
     bpp = nj_surface_bpp(g->surf);
     nj_trans_size(transform, sw, sh, &tw, &th);
 
@@ -2009,6 +2013,7 @@ static void nj_region_draw(nj_gfx *g, const nj_u1 *src, nj_s8 src_stride_bytes,
     if (transform == NJ_TRANS_NONE && mask == NULL && !xor_on
         && src_format == g->surf->format && src_bpp == bpp
         && alpha == 255
+        && !(opaque && src_format == NJ_PIXFMT_ARGB8888)
         && (src_format != NJ_PIXFMT_ARGB8888 || rop == NJ_ROP_SET)) {
         int row_bytes = (int)(cx1 - cx0 + 1) * bpp;
         int first = (int)(cx0 - X0);
@@ -2039,6 +2044,7 @@ static void nj_region_draw(nj_gfx *g, const nj_u1 *src, nj_s8 src_stride_bytes,
      */
     if (mask == NULL && !xor_on && alpha == 255
         && src_format == g->surf->format && src_bpp == bpp
+        && !(opaque && src_format == NJ_PIXFMT_ARGB8888)
         && (src_format != NJ_PIXFMT_ARGB8888 || rop == NJ_ROP_SET)) {
         nj_u1 *dst = (nj_u1 *)g->surf->pixels;
         nj_s8 step;
@@ -2281,7 +2287,7 @@ static void nj_region_draw(nj_gfx *g, const nj_u1 *src, nj_s8 src_stride_bytes,
     if (transform == NJ_TRANS_NONE && mask == NULL && !xor_on
         && alpha == 255 && src_format == NJ_PIXFMT_ARGB8888
         && g->surf->format == NJ_PIXFMT_ARGB8888 && src_bpp == bpp
-        && rop != NJ_ROP_SET) {
+        && (rop != NJ_ROP_SET || opaque)) {
         int first = (int)(cx0 - X0);
         int n = (int)(cx1 - cx0 + 1);
         nj_u1 *dst = (nj_u1 *)g->surf->pixels;
@@ -2296,6 +2302,19 @@ static void nj_region_draw(nj_gfx *g, const nj_u1 *src, nj_s8 src_stride_bytes,
             int probe_n = 0;
             int left = n;
             int use_groups = 0;
+
+            if (opaque) {
+                /* drawRGB(processAlpha=false) onto an ARGB render target:
+                 * one read and write per pixel, no staging allocation/copy. */
+                int t;
+                for (t = 0; t < n; ++t) {
+                    nj_u4 pixel = nj_word_get(sp, 0) | 0xFF000000u;
+                    memcpy(dp, &pixel, sizeof pixel);
+                    sp += 4;
+                    dp += 4;
+                }
+                continue;
+            }
 
             /*
              * An opaque row of a painted image is a plain copy; the probe
@@ -2472,6 +2491,7 @@ static void nj_region_draw(nj_gfx *g, const nj_u1 *src, nj_s8 src_stride_bytes,
             sp = nj_src_pixel(src, ((nj_s8)(sy + v)) * src_stride_bytes
                                    + (nj_s8)(sx + u) * src_bpp,
                               src_format);
+            if (opaque) sp |= 0xFF000000u;
 
             if (mask) {
                 nj_u4 mp = nj_word_get(mask, (nj_s8)j * mask_stride + i);
