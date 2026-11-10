@@ -43,6 +43,31 @@ Android, an ESP32-S3, or whatever you are holding.
                     └──────────────────────────────────────────┘
 ```
 
+## What's new in 0.5.6
+
+This patch release fixes compatibility and correctness bugs rather than adding
+features. Java Math returns its defined values at the numeric edges (`abs`,
+`min`/`max`, `round`), `System.arraycopy` handles overlapping ranges and
+partial reference-copy failure like the reference implementation, and
+`java.util.Random` honors overridden `next(int)` and `setSeed(long)` in
+subclasses. RMS record enumerations are now live, reopening a store shares one
+open instance, the interpreter's constant-pool fast path handles collision
+slots, `Integer.toString` radix formatting uses defined unsigned magnitude
+arithmetic, and heap/UTF-16 allocation arithmetic rejects sizes that would wrap.
+
+The M3G file loader no longer mistakes a 40-byte VertexArray for a component
+transform, fixing the crash that stopped Stranded 2 (孤岛余生2时间之谜) at the
+dinosaur scene. RMS record lookup reads builtin Vector/Integer fields without
+per-element native calls, up to 96× faster in a fixed-work microbenchmark (not
+a game FPS claim), and the standalone Android CMake component used by
+`externalNativeBuild` now builds the full runtime.
+
+**Snapshot compatibility:** snapshots written by 0.5.5 load unchanged, including
+their RMS stores; snapshots written by 0.5.6 need the new runtime because the
+builtin class table gains two internal RMS classes. Game JARs, world files and
+RMS disk saves are unaffected. See
+[release details and verification](docs/RELEASE_0.5.6.md).
+
 ## What's new in 0.5.5
 
 Minecraft compatibility now includes persistent depth between host frames,
