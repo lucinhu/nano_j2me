@@ -5404,6 +5404,11 @@ static int nj_midp_key_char_inner(nj_vm *vm, int key, int down, nj_u4 ch)
     if (!vm) {
         return 0;
     }
+    /* POWER belongs to the platform, even when accompanied by a character.
+     * Consume it before the raw-key fallback can expose its enum value. */
+    if (key == NJ_KEY_POWER) {
+        return 1;
+    }
     d = nj_midp_current(vm);
     if (!d) {
         return 0;
@@ -5493,6 +5498,9 @@ static int nj_midp_key_char_inner(nj_vm *vm, int key, int down, nj_u4 ch)
 int nj_midp_key_repeat(nj_vm *vm, int key)
 {
     nj_ref d;
+    if (vm && key == NJ_KEY_POWER) {
+        return 1;
+    }
     if (!vm || !(d = nj_midp_current(vm))) {
         return 0;
     }

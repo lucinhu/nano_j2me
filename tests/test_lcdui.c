@@ -2973,6 +2973,186 @@ static void test_canvas_key_methods(nj_vm *vm)
     OK(vm->exception == NULL);
 }
 
+/* Canonical platform POWER is not a Java Canvas key code.  In particular,
+ * its enum value must not escape as raw 27 (which some games treat as Back).
+ * These fixture classes belong to this test, not to the runtime builtin ABI. */
+static int pk_down, pk_up, pk_code, pk_char;
+
+static nj_status pk_record(nj_vm *vm, nj_value *args, int down)
+{
+    nj_value r;
+    nj_status st;
+    if (down) { pk_down++; } else { pk_up++; }
+    pk_code = NJ_ARG_INT(args, 0);
+    st = nj_call(vm, NJ_THIS(args), NJ_C_DISPLAYABLE, "getKeyChar", "()I",
+                 NULL, &r);
+    if (st == NJ_OK) { pk_char = r.i; }
+    return st;
+}
+
+NJ_NATIVE_FN(pk_pressed)
+{
+    (void)th; (void)ret;
+    return pk_record(vm, args, 1);
+}
+
+NJ_NATIVE_FN(pk_released)
+{
+    (void)th; (void)ret;
+    return pk_record(vm, args, 0);
+}
+
+NJ_NATIVE_FN(pk_paint)
+{
+    (void)vm; (void)th; (void)args; (void)ret;
+    return NJ_OK;
+}
+
+static int pk_field(nj_vm *vm, nj_ref canvas, const char *name)
+{
+    nj_field *f = nj_field_lookup(vm, NJ_C_CANVAS, name, "I", 0);
+    OK(f != NULL);
+    return f ? nj_field_read_int(vm, canvas, f) : -1;
+}
+
+static void pk_normal_key(nj_vm *vm, nj_ref canvas, int key, nj_u4 ch,
+                          int code, int character, int suppressed)
+{
+    int downs = pk_down, ups = pk_up, ok = 0;
+    OK(nj_midp_key_char(vm, key, 1, ch) == 1);
+    OK(pk_down == downs + !suppressed && pk_up == ups);
+    if (!suppressed) { OK(pk_code == code && pk_char == character); }
+    OK(call_int(vm, canvas, NJ_C_DISPLAYABLE, "getKeyChar", "()I", NULL,
+                &ok) == character && ok);
+    OK(nj_midp_key_char(vm, key, 0, ch) == 1);
+    OK(pk_up == ups + !suppressed && pk_down == downs + !suppressed);
+    if (!suppressed) { OK(pk_code == code && pk_char == character); }
+    OK(vm->exception == NULL);
+}
+
+static void pk_power_ignored(nj_vm *vm, nj_ref canvas)
+{
+    static const nj_u4 chars[] = {0u, 'P', 27u};
+    int downs = pk_down, ups = pk_up, ok = 0;
+    int held = pk_field(vm, canvas, NJ_F_C_HELD);
+    int latched = pk_field(vm, canvas, NJ_F_C_KEYS);
+    int character = call_int(vm, canvas, NJ_C_DISPLAYABLE, "getKeyChar",
+                             "()I", NULL, &ok);
+    int running = vm->running, state = vm->state;
+    unsigned i;
+    OK(ok);
+    for (i = 0; i < sizeof(chars) / sizeof(chars[0]); ++i) {
+        OK(nj_midp_key_char(vm, NJ_KEY_POWER, 1, chars[i]) == 1);
+        OK(nj_midp_key_repeat(vm, NJ_KEY_POWER) == 1);
+        OK(nj_midp_key_char(vm, NJ_KEY_POWER, 0, chars[i]) == 1);
+        OK_MSG(pk_down == downs && pk_up == ups,
+               "POWER leaked callbacks: down=%d up=%d", pk_down - downs,
+               pk_up - ups);
+        OK(call_int(vm, canvas, NJ_C_DISPLAYABLE, "getKeyChar", "()I", NULL,
+                    &ok) == character && ok);
+        OK(pk_field(vm, canvas, NJ_F_C_HELD) == held);
+        OK(pk_field(vm, canvas, NJ_F_C_KEYS) == latched);
+        OK(nj_midp_current(vm) == canvas);
+        OK(vm->running == running && (int)vm->state == state);
+        OK(vm->exception == NULL && vm->in_callback == 0);
+    }
+}
+
+static void test_platform_power_key(nj_vm *vm)
+{
+    static const nj_builtin_method methods[] = {
+        {"keyPressed", "(I)V", NJ_ACC_PUBLIC},
+        {"keyReleased", "(I)V", NJ_ACC_PUBLIC},
+        {"paint", "(L" NJ_C_GRAPHICS ";)V", NJ_ACC_PUBLIC}
+    };
+    static const nj_builtin_class fixtures[] = {
+        {"test/PowerCanvas", NJ_C_CANVAS, NJ_ACC_PUBLIC, NULL, 0u, methods, 3u},
+#if NJ_ENABLE_GAME_PACKAGE
+        {"test/PowerGameCanvas", NJ_C_GAMECANVAS, NJ_ACC_PUBLIC, NULL, 0u, methods, 3u}
+#endif
+    };
+    static const int keys[] = {
+        NJ_KEY_0, NJ_KEY_5, NJ_KEY_9, NJ_KEY_STAR, NJ_KEY_POUND,
+        NJ_KEY_UP, NJ_KEY_DOWN, NJ_KEY_LEFT, NJ_KEY_RIGHT, NJ_KEY_FIRE,
+        NJ_KEY_GAME_A, NJ_KEY_GAME_B, NJ_KEY_GAME_C, NJ_KEY_GAME_D,
+        NJ_KEY_CLEAR, NJ_KEY_VOLUP, NJ_KEY_VOLDOWN
+    };
+    static const int codes[] = {
+        48, 53, 57, 42, 35, NJ_MIDP_KEY_UP, NJ_MIDP_KEY_DOWN,
+        NJ_MIDP_KEY_LEFT, NJ_MIDP_KEY_RIGHT, NJ_MIDP_KEY_FIRE,
+        NJ_MIDP_KEY_GAME_A, NJ_MIDP_KEY_GAME_B, NJ_MIDP_KEY_GAME_C,
+        NJ_MIDP_KEY_GAME_D, NJ_MIDP_KEY_CLEAR, NJ_MIDP_KEY_VOLUP,
+        NJ_MIDP_KEY_VOLDOWN
+    };
+    unsigned i;
+    int variant, saved_motorola = vm->motorola_softkeys;
+    nj_u2 mark = vm->nroots;
+    OK(nj_midp_set_current(vm, NULL) == NJ_OK);
+    for (i = 0; i < sizeof(fixtures) / sizeof(fixtures[0]); ++i) {
+        nj_class *cls = nj_class_create_builtin(vm, &fixtures[i]);
+        OK(cls != NULL);
+        if (!cls) { return; }
+        cls->methods[0].native = pk_pressed;
+        cls->methods[1].native = pk_released;
+        cls->methods[2].native = pk_paint;
+    }
+    for (variant = 0; variant < (NJ_ENABLE_GAME_PACKAGE ? 3 : 1); ++variant) {
+        nj_ref canvas = nj_object_new(vm, fixtures[variant != 0].name);
+        nj_value a = iref(variant == 2);
+        int suppressed = variant == 2, ok = 0;
+        OK(canvas != NULL);
+        if (!canvas) { break; }
+        nj_root(vm, canvas);
+        OK(vm->nroots == mark + 1u);
+        if (vm->nroots != mark + 1u) { break; }
+        OK(nj_call_special(vm, canvas, variant ? NJ_C_GAMECANVAS : NJ_C_CANVAS,
+                          "<init>", variant ? "(Z)V" : "()V",
+                          variant ? &a : NULL, NULL) == NJ_OK);
+        OK(nj_midp_set_current(vm, canvas) == NJ_OK);
+        pk_down = pk_up = 0;
+        /* Seed the character and hold an ordinary game key across POWER's
+         * release.  Neither its hold nor its unread press may be lost. */
+        pk_normal_key(vm, canvas, NJ_KEY_NONE, 's', 's', 's', suppressed);
+        OK(nj_midp_key(vm, NJ_KEY_UP, 1) == 1);
+        pk_power_ignored(vm, canvas);
+        if (variant) {
+            OK(call_int(vm, canvas, NJ_C_GAMECANVAS, "getKeyStates", "()I",
+                        NULL, &ok) == NJ_GAME_UP && ok);
+            OK(call_int(vm, canvas, NJ_C_GAMECANVAS, "getKeyStates", "()I",
+                        NULL, &ok) == NJ_GAME_UP && ok);
+        }
+        OK(nj_midp_key(vm, NJ_KEY_UP, 0) == 1);
+        if (variant) {
+            OK(call_int(vm, canvas, NJ_C_GAMECANVAS, "getKeyStates", "()I",
+                        NULL, &ok) == 0 && ok);
+        }
+        /* A printable value and an explicitly typed ESC are independent of
+         * the canonical platform enum, even though ESC's value is also 27. */
+        pk_normal_key(vm, canvas, 'x', 0u, 'x', 0, suppressed);
+        pk_normal_key(vm, canvas, NJ_KEY_NONE, 'p', 'p', 'p', suppressed);
+        pk_normal_key(vm, canvas, NJ_KEY_NONE, 27u, 27, 27, suppressed);
+        pk_power_ignored(vm, canvas);
+        for (i = 0; i < sizeof(keys) / sizeof(keys[0]); ++i) {
+            int c = codes[i];
+            int ch = (c >= 48 && c <= 57) || c == '*' || c == '#' ? c : 0;
+            pk_normal_key(vm, canvas, keys[i], 0u, c, ch, suppressed);
+        }
+        for (i = 0; i < 2u; ++i) {
+            vm->motorola_softkeys = (nj_u1)i;
+            pk_normal_key(vm, canvas, NJ_KEY_SOFT_LEFT, 0u, i ? -21 : -6, 0, suppressed);
+            pk_normal_key(vm, canvas, NJ_KEY_SOFT_RIGHT, 0u, i ? -22 : -7, 0, suppressed);
+        }
+        OK(nj_midp_set_current(vm, NULL) == NJ_OK);
+        nj_root_release(vm, mark);
+    }
+    vm->motorola_softkeys = (nj_u1)saved_motorola;
+    OK(nj_midp_key(vm, NJ_KEY_POWER, 1) == 1);
+    OK(nj_midp_key_char(vm, NJ_KEY_POWER, 0, 27u) == 1);
+    OK(nj_midp_key_repeat(vm, NJ_KEY_POWER) == 1);
+    OK(nj_midp_current(vm) == NULL && vm->exception == NULL);
+    OK(vm->nroots == mark);
+}
+
 /* ------------------------------------------------------------------ */
 /* One Graphics per frame, and the same one every frame                */
 /* ------------------------------------------------------------------ */
@@ -3776,6 +3956,7 @@ static int round_full(const blob *jar, const blob *png, const blob *png_alpha,
     test_widgets(vm);
     test_screen(vm);
     test_canvas_key_methods(vm);
+    test_platform_power_key(vm);
     test_spec_static_methods(vm);
     test_paint_graphics_reused(vm);
     test_callserially_once_per_frame(vm);

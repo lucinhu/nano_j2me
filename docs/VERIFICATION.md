@@ -29,6 +29,26 @@ repeated unless the code changed the path the verification used.
   (frames, logs and stitched screenshots are bulk); the row names the
   directory, and the commit carries the text that quotes it.
 
+## 2026-11-11 platform Power key
+
+The SDL2 overlay's `P` button represents the platform Power key. Its internal
+value, 27, previously reached Canvas callbacks through the raw-key fallback.
+The original Minecraft JAR explicitly treats 27 as Back. This checkpoint
+consumes canonical Power press, release and repeat events at the MIDP boundary;
+it does not implement a power, pause or quit action.
+
+| area | verdict and evidence | detailed record |
+| --- | --- | --- |
+| Power input | VERIFIED with the same extended LCDUI fixture: both previous libraries report 11202 passed and 81 failed; both repaired libraries report 11283 passed and zero failed. Canvas and both GameCanvas suppression modes retain callback counts, character, held/latch state, current displayable and running state across Power events. | [Power key](notes/2026-11-11-power-key.md); `.local-tools/debug-runs/power-key-20261111-main/` |
+| Normal input and regressions | VERIFIED: ordinary game keys, both soft-key conventions, raw printable keys and explicitly typed character 27 remain functional. Normal and strict LCDUI, Form and Game tests pass with three identical teardowns. | [Power key](notes/2026-11-11-power-key.md) |
+| Original Minecraft Power replay | VERIFIED in a separate pair using the original JAR and identical copies of a compatible saved world: 16 MiB, headless 240×320, 90 frames, canonical Power down/up at frames 20/24. The previous library opens Game menu and records one `Image.createImage(String)` OOM episode with “Render distance reduced by 1 chunk”; the repaired library retains the world/HUD image with no OOM. Both genuinely resume and exit normally, without startup fallback or signal. | `.local-tools/debug-runs/mc-power-oom-20261111/power-pair/` |
+| Image allocation cause | OPEN: this pair verifies that consuming Power avoids the unintended menu/OOM path in this scene. It does not establish the exact failed image, fragmentation or a general memory-allocation repair. Caught UDP receive errors after restoration occur in both runs and remain a separate known limitation. | [Power key](notes/2026-11-11-power-key.md) |
+
+Strict coverage includes ASan, UBSan, float-cast-overflow and leak detection,
+with warnings as errors. The test registration count remains 169; this is a
+focused regression checkpoint, not a new full-suite invocation. Built-in layouts,
+original JARs, RMS and worlds retain their identities.
+
 ## 2026-11-11 ImageItem alternate text
 
 The [MIDP ImageItem contract](https://docs.oracle.com/javame/config/cldc/ref-impl/midp2.0/jsr118/javax/microedition/lcdui/ImageItem.html)
