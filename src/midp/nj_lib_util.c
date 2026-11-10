@@ -1679,7 +1679,9 @@ NJFN(rnd_nextIntN)
     do {
         bits = (nj_s4)rnd_next_seed(vm, r, 31);
         val = bits % n;
-    } while (bits - val + (n - 1) < 0);
+        /* Java tests the sign bit of a wrapping 32-bit sum.  Use unsigned
+         * arithmetic so rejection of large bounds cannot overflow signed C. */
+    } while ((nj_u4)bits - (nj_u4)val + (nj_u4)(n - 1) >= 0x80000000u);
     ret->i = val;
     return NJ_OK;
 }
