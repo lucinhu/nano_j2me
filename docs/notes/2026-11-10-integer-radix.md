@@ -71,3 +71,11 @@ The complete isolated Release CTest suite passed **161/161**, serially in
 fix and this regression test. Concurrent workspace changes for version 0.5.6,
 release documentation and frontend metadata were preserved and excluded from
 this validation and commit.
+
+A concurrent drawRGB change (`00318b4`) was subsequently merged. A fresh build
+of the combined tree passed `test_lib`, `test_gfx` and `test_lcdui` (**3/3**),
+including **1790/0** class-library and **8511/0** LCDUI assertions. The original
+Minecraft SDL scene and both snapshot resumes were repeated with this build;
+the selected PNGs retained the baseline hashes. The full-suite and sanitizer
+results above describe the initial isolated boxing fix; the combined tree
+received these focused integration checks and the repeated scene checks.
