@@ -810,6 +810,7 @@ if(NJ_BUILD_TESTS)
   nj_add_test(test_string_intern tests/test_string_intern.c)
   nj_add_test(test_util tests/test_util.c)
   nj_add_test(test_random_bounds tests/test_random_bounds.c)
+  nj_add_test(test_random_dispatch tests/test_random_dispatch.c)
   nj_add_test(test_text_input tests/test_text_input.c)
   if(SDL2_FOUND)
     target_include_directories(test_text_input PRIVATE ${SDL2_INCLUDE_DIRS})
@@ -1216,6 +1217,12 @@ endif()
              COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_superinstr_digest.sh
                      $<TARGET_FILE:nj2me-cli>)
     set_tests_properties(check_superinstr_digest PROPERTIES TIMEOUT 300)
+    if(NJ_PYTHON)
+      add_test(NAME check_random_dispatch_java
+        COMMAND ${NJ_PYTHON} ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_random_dispatch.py
+                $<TARGET_FILE:nj2me-cli>)
+      set_tests_properties(check_random_dispatch_java PROPERTIES TIMEOUT 90 SKIP_RETURN_CODE 77)
+    endif()
     # A mutable Image is white and fully opaque (MIDP 2.0).  A Java int[] starts
     # zeroed - transparent black - so a title that builds its scenery off-screen
     # blended its sprites against black and let the untouched pixels see

@@ -1613,36 +1613,17 @@ NJFN(rnd_setSeed)
 
 NJFN(rnd_init)
 {
-    /*
-     * new Random() seeds from the wall clock, like a device with no RTC.
-     *
-     * This writes the seed itself rather than delegating to rnd_setSeed():
-     * a native reads its receiver through NJ_THIS(args), i.e. args[-1], and
-     * "delegating" would mean calling rnd_setSeed with a locally built
-     * argument array - which has no receiver below it.  That read past the end
-     * of an automatic array is a stack underflow that only faults when the
-     * compiler lays the stack out badly, so it showed up as an intermittent
-     * SIGSEGV in an -O3 build and nowhere else.  A no-argument constructor also
-     * has no args[0] to read a seed from in the first place.
-     */
-    nj_ref r = NJ_THIS(args);
-    nj_field *f = rnd_fseed(vm);
-    nj_field *fh = rnd_fhave(vm);
-
-    if (!f) {
-        return nj_throw(vm, "java/lang/InternalError", "Random layout");
-    }
-    nj_field_write_long(vm, r, f,
-                        ((nj_s8)nj_now_ms(vm) ^ RND_MULT) & RND_MASK);
-    if (fh) {
-        nj_field_write_int(vm, r, fh, 0);
-    }
-    return NJ_OK;
+    nj_value seed[2];
+    memset(seed, 0, sizeof(seed));
+    seed[0].j = nj_now_ms(vm);
+    /* CLDC constructors invoke the overridable setSeed. The VM bridge builds
+     * a real receiver/argument window; never fake NJ_THIS with a local array. */
+    return nj_call(vm, NJ_THIS(args), RND_CLS, "setSeed", "(J)V", seed, ret);
 }
 
 NJFN(rnd_init_seed)
 {
-    return rnd_setSeed(vm, th, args, ret);
+    return nj_call(vm, NJ_THIS(args), RND_CLS, "setSeed", "(J)V", args, ret);
 }
 
 NJFN(rnd_next)
@@ -1656,10 +1637,39 @@ NJFN(rnd_next)
     return NJ_OK;
 }
 
+/* Resolve the actual virtual target, including inherited overrides. Only a
+ * method declared by Random itself may bypass the bridge. No Java storage is
+ * cached across calls: an override may allocate, collect or reenter Random. */
+static int rnd_base_method(nj_ref r, const char *name, const char *desc)
+{
+    nj_method *m;
+    if (strcmp(r->cls->name, RND_CLS) == 0) {
+        return 1;
+    }
+    m = nj_method_lookup(r->cls, name, desc);
+    return m && strcmp(m->owner->name, RND_CLS) == 0;
+}
+
+static nj_status rnd_draw(nj_vm *vm, nj_ref r, int bits, nj_s4 *out)
+{
+    nj_value arg, result;
+    nj_status status;
+    if (rnd_base_method(r, "next", "(I)I")) {
+        *out = (nj_s4)rnd_next_seed(vm, r, bits);
+        return NJ_OK;
+    }
+    memset(&arg, 0, sizeof(arg));
+    arg.i = bits;
+    status = nj_call(vm, r, RND_CLS, "next", "(I)I", &arg, &result);
+    if (status == NJ_OK) {
+        *out = result.i;
+    }
+    return status;
+}
+
 NJFN(rnd_nextInt)
 {
-    ret->i = (nj_s4)rnd_next_seed(vm, NJ_THIS(args), 32);
-    return NJ_OK;
+    return rnd_draw(vm, NJ_THIS(args), 32, &ret->i);
 }
 
 NJFN(rnd_nextIntN)
@@ -1667,17 +1677,25 @@ NJFN(rnd_nextIntN)
     nj_ref r = NJ_THIS(args);
     nj_s4 n = NJ_ARG_INT(args, 0);
     nj_s4 bits, val;
+    nj_status status;
 
     if (n <= 0) {
         return nj_throw(vm, "java/lang/IllegalArgumentException",
                         "n must be positive");
     }
     if ((n & -n) == n) {   /* n is a power of two */
-        ret->i = (nj_s4)(((nj_s8)n * (nj_s8)rnd_next_seed(vm, r, 31)) >> 31);
+        status = rnd_draw(vm, r, 31, &bits);
+        if (status != NJ_OK) {
+            return status;
+        }
+        ret->i = (nj_s4)(((nj_s8)n * bits) >> 31);
         return NJ_OK;
     }
     do {
-        bits = (nj_s4)rnd_next_seed(vm, r, 31);
+        status = rnd_draw(vm, r, 31, &bits);
+        if (status != NJ_OK) {
+            return status;
+        }
         val = bits % n;
         /* Java tests the sign bit of a wrapping 32-bit sum.  Use unsigned
          * arithmetic so rejection of large bounds cannot overflow signed C. */
@@ -1711,8 +1729,18 @@ NJFN(rnd_nextLong)
      * 2^32 when the second half has its top bit set, which is what the OpenJDK
      * reference values in tests/test_lib.c caught.
      */
-    nj_s8 hi = (nj_s4)rnd_next_seed(vm, r, 32);
-    nj_s8 lo = (nj_s4)rnd_next_seed(vm, r, 32);
+    nj_s4 high_bits, low_bits;
+    nj_s8 hi, lo;
+    nj_status status = rnd_draw(vm, r, 32, &high_bits);
+    if (status != NJ_OK) {
+        return status;
+    }
+    status = rnd_draw(vm, r, 32, &low_bits);
+    if (status != NJ_OK) {
+        return status;
+    }
+    hi = high_bits;
+    lo = low_bits;
 
     /*
      * Java's own expression is ((long) next(32) << 32) + next(32), and next(32)
@@ -1733,31 +1761,61 @@ NJFN(rnd_nextLong)
 
 NJFN(rnd_nextBoolean)
 {
-    ret->i = (rnd_next_seed(vm, NJ_THIS(args), 1) != 0) ? 1 : 0;
+    nj_s4 v;
+    nj_status status = rnd_draw(vm, NJ_THIS(args), 1, &v);
+    if (status != NJ_OK) {
+        return status;
+    }
+    ret->i = v != 0;
     return NJ_OK;
 }
 
 NJFN(rnd_nextFloat)
 {
-    nj_s8 v = rnd_next_seed(vm, NJ_THIS(args), 24);
-
-    ret->f = (float)((double)v / (double)(1 << 24));
+    nj_s4 v;
+    nj_status status = rnd_draw(vm, NJ_THIS(args), 24, &v);
+    if (status != NJ_OK) {
+        return status;
+    }
+    ret->f = (float)v / (float)(1 << 24);
     return NJ_OK;
 }
 
 /* nextDouble(): 26 bits then 27 bits, exactly as java.util.Random does. */
-static double rnd_next_double(nj_vm *vm, nj_ref r)
+static nj_status rnd_next_double(nj_vm *vm, nj_ref r, double *out)
 {
-    nj_s8 hi = (nj_s8)rnd_next_seed(vm, r, 26);
-    nj_s8 lo = (nj_s8)rnd_next_seed(vm, r, 27);
-
-    return (double)((hi << 27) + lo) / (double)(1LL << 53);
+    nj_s4 hi, lo;
+    nj_status status = rnd_draw(vm, r, 26, &hi);
+    if (status != NJ_OK) {
+        return status;
+    }
+    status = rnd_draw(vm, r, 27, &lo);
+    if (status != NJ_OK) {
+        return status;
+    }
+    /* Multiplication also handles a negative override result without the
+     * undefined C left shift of a negative int. Do not mask subclass values. */
+    *out = (double)((nj_s8)hi * (1LL << 27) + lo) / (double)(1LL << 53);
+    return NJ_OK;
 }
 
 NJFN(rnd_nextDouble)
 {
-    ret->d = rnd_next_double(vm, NJ_THIS(args));
-    return NJ_OK;
+    return rnd_next_double(vm, NJ_THIS(args), &ret->d);
+}
+
+static nj_status rnd_uniform_double(nj_vm *vm, nj_ref r, double *out)
+{
+    nj_value result;
+    nj_status status;
+    if (rnd_base_method(r, "nextDouble", "()D")) {
+        return rnd_next_double(vm, r, out);
+    }
+    status = nj_call(vm, r, RND_CLS, "nextDouble", "()D", NULL, &result);
+    if (status == NJ_OK) {
+        *out = result.d;
+    }
+    return status;
 }
 
 NJFN(rnd_nextGaussian)
@@ -1774,9 +1832,18 @@ NJFN(rnd_nextGaussian)
     for (;;) {
         /* The polar method of java.util.Random: two uniform doubles in
          * (-1,1), rejected outside the unit circle. */
-        double v1 = 2.0 * rnd_next_double(vm, r) - 1.0;
-        double v2 = 2.0 * rnd_next_double(vm, r) - 1.0;
-        double s = v1 * v1 + v2 * v2;
+        double u1, u2, v1, v2, s;
+        nj_status status = rnd_uniform_double(vm, r, &u1);
+        if (status != NJ_OK) {
+            return status;
+        }
+        status = rnd_uniform_double(vm, r, &u2);
+        if (status != NJ_OK) {
+            return status;
+        }
+        v1 = 2.0 * u1 - 1.0;
+        v2 = 2.0 * u2 - 1.0;
+        s = v1 * v1 + v2 * v2;
         if (s >= 1.0 || s == 0.0) {
             continue;
         }
