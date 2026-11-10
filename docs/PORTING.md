@@ -236,11 +236,31 @@ the frame loop where `-O2` and `-O3` measured it (`docs/notes/2026-10-30-android
 optimisation-level.md`). `--opt <level>` on either script re-selects the level
 for a size-limited target or for an experiment; it is not a speed switch.
 
+For an app that embeds the JNI library with `externalNativeBuild`, use the
+[Android CMake component](../src/port/android/CMakeLists.txt) from its location
+in the source tree. A standalone NDK build of that component looks like this
+(after setting `ANDROID_NDK_HOME` to an installed NDK):
+
+```sh
+cmake -S src/port/android -B build/android-cmake-arm64 -G Ninja \
+  -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
+  -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-21 \
+  -DCMAKE_BUILD_TYPE=Release
+cmake --build build/android-cmake-arm64
+```
+
+The output is `build/android-cmake-arm64/libnj2me.so`. The component gathers the
+same runtime sources as the shell builder and links their Android dependencies.
+Its existing compile profile is C99, `-O2`, an 8 MiB default Java heap, switch
+dispatch and JIT disabled; the APK scripts select their own feature and compiler
+flags. Source coverage alone does not make the two profiles equivalent. See
+[the component repair and validation](notes/2026-11-10-android-cmake.md).
+
 The floor is **API 21**, the oldest level the NDK still ships a compiler for, and
-the audio is what makes it work: neither `libaaudio.so` nor `libOpenSLES.so` is
-linked. AAudio is `dlopen()`ed on the first sound and used when the phone has it
-(API 26+); when it is missing the same mixer is driven by OpenSL ES, which every
-Android since 2.3 has. One APK, both devices: verified on an API 36 emulator
+the audio is what makes it work: `libaaudio.so` is loaded dynamically. AAudio is
+`dlopen()`ed on the first sound and used when the phone has it (API 26+); when it
+is missing the same mixer is driven by OpenSL ES, which is linked from the NDK
+and available on Android since 2.3. One APK, both devices: verified on an API 36 emulator
 (`audio: AAudio started, 44100 Hz, 2 ch`) and on an API 21 emulator
 (`audio: OpenSL ES started, 44100 Hz, 2 ch`). A hard link to `libaaudio.so` would
 make the loader refuse `libnj2me.so` entirely on an older phone, which is why the
