@@ -770,6 +770,15 @@ typedef struct nj_port {
      * A port must submit committed text via NJ_EV_TEXT_INPUT, and suppress
      * duplicate printable handset keys while native text entry is active. */
     void (*text_input)(void *ud, const nj_text_input_state *state);
+
+    /* Optional synchronous fork/join for independent native work. Execute
+     * work(context, i) exactly once for every i in [0, count), and join all
+     * workers before returning. Serial execution is a valid fallback.
+     * Work functions never call the VM, allocate Java objects, or invoke port
+     * callbacks. The caller owns context and all referenced data until return;
+     * output regions are disjoint. NULL preserves the serial renderer. */
+    void (*parallel_for)(void *ud, void (*work)(void *, nj_u4),
+                         void *context, nj_u4 count);
 } nj_port;
 
 /* ------------------------------------------------------------------ */

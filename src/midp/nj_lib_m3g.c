@@ -12286,9 +12286,9 @@ static nj_u4 sw_span(const m3g_span *p)
     return drawn;
 }
 
-static nj_u4 sw_tri(m3g_sw *sw, const float xy[6], const float inv[3],
+static nj_u4 sw_tri_band(m3g_sw *sw, const float xy[6], const float inv[3],
                     const double depth[3], const float st[6], int has_tex,
-                    const nj_u4 rgb[3], const nj_u4 rgb2[3], int twosided)
+                    const nj_u4 rgb[3], const nj_u4 rgb2[3], int twosided, int band)
 {
     float x0 = xy[0], y0 = xy[1], x1 = xy[2], y1 = xy[3], x2 = xy[4], y2 = xy[5];
     float area = (x1 - x0) * (y2 - y0) - (x2 - x0) * (y1 - y0);
@@ -12595,7 +12595,13 @@ static nj_u4 sw_tri(m3g_sw *sw, const float xy[6], const float inv[3],
     }
     depth_constant = dxz == 0.0 && dyz == 0.0;
     constant_key = depth_constant ? sw_depth_key(zrow, depth_clamp) : 0;
-    for (py = miny; py <= maxy; py++) {
+    /* Keep the serial accumulator order in both bands. Jumping directly to
+     * the second band's first row changes floating-point rounding at shared
+     * edges and depth ties. Only pixel work is skipped before the midpoint. */
+    int midpoint = miny + (maxy - miny + 1) / 2;
+    int endy = band == 0 ? midpoint - 1 : maxy;
+    for (py = miny; py <= endy; py++) {
+      if (band != 1 || py >= midpoint) {
         float rg = g, rh = h, rk = k;
         float rr = cr, rgc = cg, rbc = cb, ra = ca_row;
         float lo = fminx, hi = fmaxx;
@@ -12730,6 +12736,7 @@ static nj_u4 sw_tri(m3g_sw *sw, const float xy[6], const float inv[3],
 #endif
             drawn |= sw_span(&span);
         }
+      }
         w0 += sw0;
         w1 += sw1;
         w2 += sw2;
@@ -12743,6 +12750,62 @@ static nj_u4 sw_tri(m3g_sw *sw, const float xy[6], const float inv[3],
         ca_row += dya;
     }
     return drawn;
+}
+
+typedef struct {
+    m3g_sw *sw;
+    const float *xy, *inv, *st;
+    const double *depth;
+    const nj_u4 *rgb, *rgb2;
+    int has_tex, twosided;
+    nj_u4 drawn[2];
+} m3g_triangle_job;
+
+static void sw_triangle_work(void *context, nj_u4 part)
+{
+    m3g_triangle_job *job = (m3g_triangle_job *)context;
+    job->drawn[part] = sw_tri_band(job->sw, job->xy, job->inv, job->depth,
+        job->st, job->has_tex, job->rgb, job->rgb2, job->twosided, (int)part);
+}
+
+/* An embedder may expose aliased image storage. Feedback sampling is not
+ * independent row work: preserve its serial read/write order. */
+static int sw_texture_aliases_target(const m3g_sw *sw)
+{
+    if (!sw->tex || !sw->surf || !sw->surf->pixels) return 0;
+    if (sw->tex_w <= 0 || sw->tex_h <= 0 || sw->tex_bpp <= 0 || sw->tex_bpp > 4 ||
+        sw->surf->height <= 0 || sw->surf->stride <= 0) return 1;
+    nj_u8 texture_bytes = (nj_u8)sw->tex_w * sw->tex_h * sw->tex_bpp;
+    nj_u8 target_bytes = (nj_u8)sw->surf->height * sw->surf->stride;
+    uintptr_t texture = (uintptr_t)sw->tex, target = (uintptr_t)sw->surf->pixels;
+    return texture <= target ? (nj_u8)(target-texture) < texture_bytes
+                             : (nj_u8)(texture-target) < target_bytes;
+}
+
+static nj_u4 sw_tri(nj_vm *vm, m3g_sw *sw, const float xy[6], const float inv[3],
+                    const double depth[3], const float st[6], int has_tex,
+                    const nj_u4 rgb[3], const nj_u4 rgb2[3], int twosided)
+{
+    /* Small triangles cost less than a cross-core handoff. Dispatch only
+     * substantial visible bounds; no heap/VM operation occurs in a worker. */
+    if (vm->port && vm->port->parallel_for &&
+        (!has_tex || !sw_texture_aliases_target(sw))) {
+        float area = (xy[2]-xy[0])*(xy[5]-xy[1]) -
+                     (xy[4]-xy[0])*(xy[3]-xy[1]);
+        if (isfinite(area) && fabsf(area) >= 8192.0f) {
+            float lx = fmaxf((float)sw->vx, fminf(xy[0], fminf(xy[2], xy[4])));
+            float hx = fminf((float)(sw->vx+sw->vw), fmaxf(xy[0], fmaxf(xy[2], xy[4])));
+            float ly = fmaxf((float)sw->vy, fminf(xy[1], fminf(xy[3], xy[5])));
+            float hy = fminf((float)(sw->vy+sw->vh), fmaxf(xy[1], fmaxf(xy[3], xy[5])));
+            if (hy-ly >= 16.0f && (hx-lx)*(hy-ly) >= 8192.0f) {
+                m3g_triangle_job job = {sw, xy, inv, st, depth, rgb, rgb2,
+                                       has_tex, twosided, {0u, 0u}};
+                vm->port->parallel_for(vm->port->ud, sw_triangle_work, &job, 2u);
+                return job.drawn[0] | job.drawn[1];
+            }
+        }
+    }
+    return sw_tri_band(sw, xy, inv, depth, st, has_tex, rgb, rgb2, twosided, -1);
 }
 
 /*
@@ -13424,7 +13487,7 @@ static void jr_emit(m3g_jr *r, const jr_vtx *v0, const jr_vtx *v1,
             }
         }
         /* The rasteriser writes the pixels: depth, texture, culling. */
-        if (sw_tri(&r->sw, xy, inv, depth, st,
+        if (sw_tri(r->vm, &r->sw, xy, inv, depth, st,
                    r->sw.tex != NULL && (r->tpos != NULL || r->sw.sprite),
                    rgb, rgb2, r->twosided) != 0u) {
             r->drawn++;

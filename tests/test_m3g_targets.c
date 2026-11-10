@@ -15,6 +15,8 @@ enum { W = 240, H = 320, GUARD = 16, PAD = 16 };
 static unsigned checks;
 /* Optional cross-build capture: color plus depth, excluding row padding. */
 static FILE *capture;
+/* Also used by the concurrent fork/join equivalence suite. */
+static void (*test_parallel_for)(void *, void (*)(void *, nj_u4), void *, nj_u4);
 #define CHECK(x)                                                                                   \
     do {                                                                                           \
         ++checks;                                                                                  \
@@ -259,6 +261,7 @@ static void init(target *t, int format)
     CHECK(k < 4);
     t->port.alloc = count_alloc;
     t->port.free = count_free;
+    t->port.parallel_for = test_parallel_for;
     t->vm = nj_vm_create(&t->port, 8 * 1024 * 1024);
     CHECK(t->vm);
     CHECK(nj_lib_late_init(t->vm) == NJ_OK);
