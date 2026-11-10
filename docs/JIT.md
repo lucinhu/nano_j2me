@@ -6,9 +6,9 @@ portable interpreter (`nj_interp_run()` at `src/core/nj_interp.c:466`) or to an
 installed *execution engine*.  An engine is any object that can execute a
 thread's Java frames and return the same observable effects as the interpreter.
 
-The tree includes opt-in **RV32 and ARM64 baseline JITs**: portable machine-code
-encoders sharing a bounded per-VM hot-block cache and interpreter dispatch
-integration. x86_64 currently uses the interpreter. RV32 has bounded temporary
+The tree includes opt-in **RV32, ARM64 and System V x86-64 baseline JITs**:
+portable machine-code encoders sharing a bounded per-VM hot-block cache and
+interpreter dispatch integration. They are disabled by default. RV32 has bounded temporary
 register reuse and integer constant propagation within each leaf block; there is
 no method-level optimizer, general register allocator, or persistent code cache. The original engine
 contract and future method-level designs below remain useful background; the
@@ -20,9 +20,10 @@ Enable `NJ_ENABLE_JIT=1` (default `0`). CMake also enables `NJ_ENABLE_ENGINE`;
 direct compiler builds default the engine switch to the JIT switch and reject
 an explicitly disabled engine with an enabled JIT. `nj_vm_create()` tries to
 install the matching JIT automatically. Native execution requires little-endian
-RV32 with the standard ILP32 register set (not RV32E), or little-endian AArch64
-with LP64 flat pointers (not ILP32 or arm64e). All three executable-memory
-callbacks must exist. Unsupported hosts and ports continue interpreted execution.
+RV32 with the standard ILP32 register set (not RV32E), little-endian AArch64
+with LP64 flat pointers (not ILP32 or arm64e), or little-endian System V x86-64
+with LP64 flat pointers and SSE2. Windows x64 uses a different calling convention
+and stays interpreted. All three executable-memory callbacks must exist. Unsupported hosts and ports continue interpreted execution.
 There is no runtime CPU probing; explicit extension settings must match the CPU.
 
 ### RV32
@@ -55,10 +56,12 @@ cmake --build build-rv32 -j
 ```
 
 A direct C build can use `-DNJ_ENABLE_JIT=1` and the same feature defines. Include
-`src/core/nj_jit.c`, `src/core/nj_jit_rv32.c` and `src/core/nj_jit_arm64.c` in the
-source list. The Android, ESP-IDF and embedded-test component lists include them;
-they compile empty when the JIT is disabled. Execution still requires a supported
-CPU/ABI and executable-memory callbacks.
+`src/core/nj_jit.c`, `src/core/nj_jit_rv32.c`, `src/core/nj_jit_arm64.c` and
+`src/core/nj_jit_x86_64.c` in the source list. Root and embedded-test CMake lists
+contain all four files. Android and ESP-IDF component CMake lists contain the
+shared, RV32 and ARM64 files; `tools/build_android.sh` instead collects all
+`src/core/*.c`. These files compile empty when the JIT is disabled. Execution
+still requires a supported CPU/ABI and executable-memory callbacks.
 
 The RV32I path covers integer constants, local load/store (including references),
 add/subtract/negate, bitwise operations, shifts, narrowing, `iinc`, supported
@@ -166,6 +169,33 @@ cmake -S . -B build-arm64 -DCMAKE_TOOLCHAIN_FILE=/path/to/arm64-toolchain.cmake 
 cmake --build build-arm64 -j
 ```
 
+### x86-64 / System V AMD64
+
+The x86-64 encoder uses the System V LP64 calling convention and baseline
+integer/SSE2 instructions. It shares the bounded cache, probe maps, guarded
+fallback and scheduling budget with the other backends. The host guard is
+`NJ_JIT_HOST_X86_64` in `include/nj2me/nj_config.h`; an enabled build still needs
+executable-memory callbacks from its port. This is not the Windows x64 ABI.
+
+Current lowering includes integer constants/arithmetic/shifts, numeric
+`ldc`/`ldc_w`, local slot loads/stores, simple stack operations, `iinc`,
+conditional branches, `goto`, bounded loops, resolved instance fields,
+`iaload`/`iastore`, `arraylength`, and scalar float/double arithmetic and
+negation. Float/double arithmetic requires the corresponding Java feature
+flags. Integer division guards both a zero divisor and `INT_MIN / -1`; the
+latter returns to the interpreter for Java's defined overflow result.
+
+Static fields, other typed array accesses, calls, returns, allocation and other
+unsupported bytecodes end the native window. Calls and returns still use the
+interpreter's Java frame machinery; a compiled block is not a compiled method.
+A backward edge must target the window entry at the same operand-stack depth
+(zero net stack delta).
+Supported FP negation toggles the sign bit. Scalar arithmetic uses the host's
+SSE2 floating-point environment.
+
+For reproducible Minecraft GEN mode comparisons and their limits, see
+[the current mode diagnostic](notes/2026-11-10-minecraft-jit-modes.md).
+
 ### Shared runtime
 
 Each generated function is a bounded leaf with ABI
@@ -267,15 +297,17 @@ that drops metadata only, never compiled code. A later recompile of the same
 (method, pc) finds the surviving code-cache entry and reuses it instead of
 emitting a duplicate. Refused sites are never analyzed again until their map is
 recycled, and code eviction clears the site's cell so it starts cold again.
-Emission can shorten an analyzed prefix to fit the code buffer; the minimum
-length is checked again before allocation. Integer division/remainder compiles
+Emission policy depends on the backend: an encoder can shorten an analyzed
+prefix or decline a window that does not fit the code buffer. A shortened
+prefix's minimum length is checked again before allocation. Integer division/remainder compiles
 inline; a zero divisor is one more guarded instruction, so the interpreter
 raises the usual `ArithmeticException` at the original PC.
 A 64-entry cache requests at most 128 KiB of code at default limits; OS page
 rounding and port headers are additional (POSIX commonly consumes one page per
-small block). At default limits the JIT allocates about 11 KiB of host metadata
-per VM on RV32 and 12 KiB on LP64 (code entries with fault records, method table
-and probe arena); `metadata_bytes` reports the exact size. Metadata belongs to the VM host allocator. Executable storage
+small block). The JIT allocates fixed host metadata per VM for code entries
+with fault records, the method table and the probe arena; `metadata_bytes`
+reports its exact size for the build's configuration and ABI. Metadata belongs
+to the VM host allocator. Executable storage
 belongs to the port and is freed on eviction, `nj_jit_disable()`, or VM
 destruction, even when an external engine temporarily replaced the JIT. Cached
 bytecode/method metadata must remain immutable, as in the current class loader.
@@ -979,10 +1011,10 @@ bash tools/check_no_statics.sh
 3. **Completed: ARM64 baseline blocks.** AArch64 LP64 uses the same cache,
    dispatch, exception and lifecycle contract, with full-width references and
    independently configurable scalar FP. SIMD/LSE lowering remains future work.
-4. **Next: x86_64 and more bytecodes.** Add an x86_64 emitter behind the same
-   block contract, then extend lowering with result equivalence and
-   scheduler/exception tests. Per-method compiled entry and `interp_invoke`
-   hooks remain optional later work; they require the transfer contract in §5.
+4. **Completed: System V x86-64 baseline blocks.** The encoder uses the shared
+   block contract with integer/SSE2 lowering, guarded fallback and bounded loops.
+   More bytecode coverage, per-method compiled entry and `interp_invoke` hooks
+   remain future work; frame transfers require the contract in §5.
 5. **Superinstruction/fusion and IC fast paths.** Preserve the counter
    semantics or update the reference.
 6. **Register allocation with stack maps.** Required before mid-method deopt is
@@ -991,7 +1023,7 @@ bash tools/check_no_statics.sh
    moving collector (would invalidate raw references), preemptive scheduling,
    and a persistent code cache across VM instances.
 
-The gate for every step is the same: `tests/test_engine.c` (and the existing 90
-ctest tests) must keep passing, and the default build must keep its zero-cost
+The gate for every step is the same: `tests/test_engine.c` and the existing
+CTest suite must keep passing, and the default build must keep its zero-cost
 property.  A JIT that makes the interpreter build bigger or slower has broken
 the contract of this seam.

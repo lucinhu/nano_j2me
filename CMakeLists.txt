@@ -131,7 +131,7 @@ set(NJ_THREADED_DISPATCH ${NJ_THREADED_DISPATCH_DEFAULT} CACHE STRING "Use the c
 set(NJ_ENABLE_SUPERINSTR 1 CACHE STRING "Run fused bytecode pairs in one dispatch (no RAM cost)")
 set(NJ_ENABLE_JUMP_THREADING 1 CACHE STRING "Follow goto chains without re-dispatching")
 set(NJ_ENABLE_ENGINE 0 CACHE STRING "Pluggable execution engine interface")
-set(NJ_ENABLE_JIT 0 CACHE STRING "Enable the RV32/ARM64 baseline JIT (implies engine interface)")
+set(NJ_ENABLE_JIT 0 CACHE STRING "Enable the RV32/ARM64/x86-64 baseline JIT (implies engine interface)")
 if(NOT NJ_ENABLE_JIT MATCHES "^[01]$")
   message(FATAL_ERROR "NJ_ENABLE_JIT must be 0 or 1")
 endif()

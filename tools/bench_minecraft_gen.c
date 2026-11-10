@@ -3,6 +3,11 @@
  * no game bytes or save files are included or changed by this tool.
  *
  * Usage: bench_minecraft_gen <original.jar> <signed-64-bit-seed>
+ *        [--jit-mode interpreter|probe-only|execute]
+ * Without the option, keep the linked library's default execution mode.
+ * Explicit modes are set before app/Level initialization. NJ_ENABLE_JIT=0
+ * accepts only interpreter. JIT counters cover generate() only; resource
+ * gauges are post-generate values. Hash export is outside both stats windows.
  * Uses a fresh 64 MiB headless VM, survival gameType=0, and calls the original
  * Level()/Gen(Level,seed)/Gen.generate(NULL) methods. Only generate() is timed:
  * this excludes the UI, Player creation, save/load, rendering and checksums.
@@ -18,17 +23,59 @@
  * Hashes are FNV-1a over Pal.exportChunk's 32768 block bytes / 16384 packed
  * data bytes. The aggregate hashes consume each chunk hash in little-endian
  * byte order, matching the game's WorldSum helper without depending on it.
- * Dispatches count fused interpreter handlers, not original JVM instructions.
+ * The legacy GEN `dispatch` field is vm.insns: fused interpreter handlers in
+ * interpreter mode, but unfused handlers plus charged native bytecodes with
+ * the owned JIT installed. Do not compare it as opcode coverage across modes.
  */
 #define _POSIX_C_SOURCE 200809L
 #include "nj2me/nj.h"
 #include "nj_internal.h" /* temporary GC roots; no sampling or VM layout access */
+#if NJ_ENABLE_JIT
+#include "nj2me/nj_jit.h"
+#endif
 
 #include <errno.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <time.h>
+
+#if NJ_ENABLE_JIT
+static void jit_report(const nj_jit_stats *before, const nj_jit_stats *after,
+                       int owned_before, int owned_after)
+{
+#define DELTA(field) (unsigned long long)(after->field - before->field)
+    printf("JIT_DELTA compiled_blocks=%llu executed_blocks=%llu bytecodes=%llu "
+           "declined_blocks=%llu code_evictions=%llu method_map_evictions=%llu "
+           "recompiled_blocks=%llu unsupported_blocks=%llu short_blocks=%llu "
+           "memory_failures=%llu commit_failures=%llu faults=%llu "
+           "queries=%llu code_hits=%llu cold_skips=%llu negative_hits=%llu "
+           "probe_only_skips=%llu budget_skips=%llu stack_skips=%llu\n",
+           DELTA(compiled_blocks), DELTA(executed_blocks), DELTA(bytecodes),
+           DELTA(declined_blocks), DELTA(code_evictions),
+           DELTA(method_map_evictions), DELTA(recompiled_blocks),
+           DELTA(unsupported_blocks), DELTA(short_blocks),
+           DELTA(memory_failures), DELTA(commit_failures), DELTA(faults),
+           DELTA(queries), DELTA(code_hits), DELTA(cold_skips),
+           DELTA(negative_hits), DELTA(probe_only_skips), DELTA(budget_skips),
+           DELTA(stack_skips));
+    /* Bins use the static block.insns length, execution-weighted. They do not
+     * measure completed bytecodes on a loop/guard exit. */
+    printf("JIT_LENGTHS_DELTA n1=%llu n2_3=%llu n4_7=%llu n8_15=%llu n16_plus=%llu\n",
+           DELTA(block_lengths[0]), DELTA(block_lengths[1]),
+           DELTA(block_lengths[2]), DELTA(block_lengths[3]),
+           DELTA(block_lengths[4]));
+#undef DELTA
+    printf("JIT_AFTER owned_before=%d owned_after=%d code_bytes=%llu "
+           "peak_code_bytes=%llu metadata_bytes=%llu stats_enabled=%d "
+           "detailed_stats_enabled=%d\n", owned_before, owned_after,
+           (unsigned long long)after->code_bytes,
+           (unsigned long long)after->peak_code_bytes,
+           (unsigned long long)after->metadata_bytes,
+           after->stats_enabled, after->detailed_stats_enabled);
+}
+#endif
 
 static double seconds(clockid_t clock_id)
 {
@@ -136,12 +183,35 @@ int main(int argc, char **argv)
     const char *spawn_names[3] = {"spawnX", "spawnY", "spawnZ"};
     nj_value args[2];
     nj_vm_stats before, after;
+#if NJ_ENABLE_JIT
+    nj_jit_stats jit_before, jit_after;
+    int jit_owned_before, jit_owned_after;
+#endif
+    const char *jit_mode = NULL;
     double wall, cpu;
     int status = 1, port_open = 0, i;
 
-    if (argc != 3) {
-        fprintf(stderr, "usage: %s <original.jar> <signed-64-bit-seed>\n", argv[0]);
+    if (argc != 3 && argc != 5) {
+        fprintf(stderr, "usage: %s <original.jar> <signed-64-bit-seed> "
+                "[--jit-mode interpreter|probe-only|execute]\n", argv[0]);
         return 2;
+    }
+    if (argc == 5) {
+        jit_mode = argv[4];
+        if (strcmp(argv[3], "--jit-mode") != 0 ||
+            (strcmp(jit_mode, "interpreter") != 0 &&
+             strcmp(jit_mode, "probe-only") != 0 &&
+             strcmp(jit_mode, "execute") != 0)) {
+            fprintf(stderr, "invalid JIT mode; use --jit-mode "
+                    "interpreter|probe-only|execute\n");
+            return 2;
+        }
+#if !NJ_ENABLE_JIT
+        if (strcmp(jit_mode, "interpreter") != 0) {
+            fprintf(stderr, "JIT mode %s unavailable: NJ_ENABLE_JIT=0\n", jit_mode);
+            return 2;
+        }
+#endif
     }
     errno = 0;
     seed = strtoll(argv[2], &end, 0);
@@ -174,7 +244,40 @@ int main(int argc, char **argv)
     port_open = 1;
     port.rms_dir = "";
     vm = nj_vm_create(&port, 64u * 1024u * 1024u);
-    if (!vm || nj_lib_late_init(vm) != NJ_OK ||
+    if (!vm) {
+        fprintf(stderr, "cannot initialize VM\n");
+        goto done;
+    }
+#if NJ_ENABLE_JIT
+    if (jit_mode) {
+        if (strcmp(jit_mode, "interpreter") == 0) {
+            nj_jit_disable(vm);
+        } else if (nj_jit_set_mode(vm, strcmp(jit_mode, "probe-only") == 0
+                                          ? NJ_JIT_MODE_PROBE_ONLY
+                                          : NJ_JIT_MODE_EXECUTE) != NJ_OK) {
+            fprintf(stderr, "JIT mode %s unavailable on this VM/port\n", jit_mode);
+            status = 2;
+            goto done;
+        }
+    }
+    jit_owned_before = nj_jit_get_stats(vm, &jit_before);
+    printf("JIT_CONFIG requested=%s mode=%s enabled=1 owned=%d stats=%d "
+           "detailed_stats=%d cache_entries=%u cache_ways=%u method_entries=%u "
+           "method_arena_bytes=%u hot_threshold=%u min_block_insns=%u "
+           "max_block_insns=%u max_code_bytes=%u max_faults=%u max_exits=%u\n",
+           jit_mode ? jit_mode : "default",
+           jit_owned_before ? (jit_mode ? jit_mode : "execute") : "interpreter",
+           jit_owned_before, NJ_JIT_STATS, NJ_JIT_DETAILED_STATS,
+           (unsigned)NJ_JIT_CACHE_ENTRIES, (unsigned)NJ_JIT_CACHE_WAYS,
+           (unsigned)NJ_JIT_METHOD_ENTRIES, (unsigned)NJ_JIT_METHOD_ARENA_BYTES,
+           (unsigned)NJ_JIT_HOT_THRESHOLD, (unsigned)NJ_JIT_MIN_BLOCK_INSNS,
+           (unsigned)NJ_JIT_MAX_BLOCK_INSNS, (unsigned)NJ_JIT_MAX_CODE_BYTES,
+           (unsigned)NJ_JIT_MAX_FAULTS, (unsigned)NJ_JIT_MAX_EXITS);
+#else
+    printf("JIT_CONFIG requested=%s mode=interpreter enabled=0 owned=0\n",
+           jit_mode ? jit_mode : "default");
+#endif
+    if (nj_lib_late_init(vm) != NJ_OK ||
         !(app = nj_app_open(vm, jar, (nj_u4)file_size))) {
         fprintf(stderr, "cannot initialize VM or open JAR\n");
         goto done;
@@ -214,6 +317,9 @@ int main(int argc, char **argv)
         goto done;
     }
     nj_vm_get_stats(vm, &before);
+#if NJ_ENABLE_JIT
+    jit_owned_before = nj_jit_get_stats(vm, &jit_before);
+#endif
     cpu = seconds(CLOCK_PROCESS_CPUTIME_ID);
     wall = seconds(CLOCK_MONOTONIC);
     args[0].r = NULL;
@@ -223,6 +329,10 @@ int main(int argc, char **argv)
     wall = seconds(CLOCK_MONOTONIC) - wall;
     cpu = seconds(CLOCK_PROCESS_CPUTIME_ID) - cpu;
     nj_vm_get_stats(vm, &after);
+#if NJ_ENABLE_JIT
+    jit_owned_after = nj_jit_get_stats(vm, &jit_after);
+    jit_report(&jit_before, &jit_after, jit_owned_before, jit_owned_after);
+#endif
     printf("GEN seed=%lld type=0 wall_ms=%.3f cpu_ms=%.3f dispatch=%llu "
            "natives=%llu gc=%u heap=%lu peak=%lu\n",
            seed, wall * 1000.0, cpu * 1000.0,
