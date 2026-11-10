@@ -576,7 +576,8 @@ nj_status nj_midp_frame(nj_vm *vm)
      */
     if (!vm->paint_active &&
         !vm->painted_in_frame &&
-        (!vm->app_painted || vm->app_paint_idle > vm->app_paint_period)) {
+        (!vm->app_painted || vm->app_paint_idle > vm->app_paint_period ||
+         vm->app_paint_idle == 255u)) {
         (void)nj_midp_paint(vm);
     }
     /*

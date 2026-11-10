@@ -3115,6 +3115,34 @@ static void test_callserially_once_per_frame(nj_vm *vm)
     OK_MSG(!nj_has_exception(vm), "drain finishes without exception");
 }
 
+/* A long synchronous render can saturate the remembered paint interval.
+ * Once the producer stops, the frame pump must still paint the result Form. */
+static void test_paint_idle_saturation(nj_vm *vm)
+{
+    nj_ref form = construct(vm, NJ_C_FORM, "(Ljava/lang/String;)V",
+                            (nj_value[]){ sref(str(vm, "Result")) });
+    nj_u8 before;
+    int was_running = vm->running;
+    OK(form != NULL);
+    OK(nj_midp_set_current(vm, form) == NJ_OK);
+    vm->app_painted = 1u;
+    vm->app_painted_frame = 0u;
+    vm->painted_in_frame = 0u;
+    vm->app_paint_idle = 254u;
+    vm->app_paint_period = 255u;
+    vm->running = 1;
+    before = vm->paints;
+    OK(nj_midp_frame(vm) == NJ_OK);
+    OK(vm->paints == before);
+    OK(vm->app_paint_idle == 255u);
+    OK(nj_midp_frame(vm) == NJ_OK);
+    OK_MSG(vm->paints == before + 1u,
+           "saturated idle counter suppressed the result Form forever");
+    vm->running = was_running;
+    vm->app_painted = 0u;
+    vm->app_paint_idle = vm->app_paint_period = 0u;
+}
+
 /* ------------------------------------------------------------------ */
 /* CustomItem: a subclass paints itself and receives keys              */
 /* ------------------------------------------------------------------ */
@@ -3749,6 +3777,7 @@ static int round_full(const blob *jar, const blob *png, const blob *png_alpha,
     test_spec_static_methods(vm);
     test_paint_graphics_reused(vm);
     test_callserially_once_per_frame(vm);
+    test_paint_idle_saturation(vm);
     test_customitem(vm);
     /* Last: it swaps the port clock for a fake one, and the restore leaves the
      * modular clock one wrap ahead - harmless for everything above, so keep
