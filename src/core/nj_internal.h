@@ -1098,16 +1098,25 @@ static inline nj_u4 nj_cp_key_hash(const nj_class *c, nj_u4 cp_index)
 
 static inline nj_cpentry *nj_cp_hit(nj_vm *vm, nj_class *c, nj_u2 index)
 {
-    nj_cpentry *e;
+    nj_u4 mask, h, probes = 0u;
 
     if (vm->cp_cache_size == 0u) {
         return NULL;
     }
-    e = &vm->cp_cache[nj_cp_key_hash(c, (nj_u4)index)
-                      & ((nj_u4)vm->cp_cache_size - 1u)];
-    if (e->used && e->cls == c && e->cp_index == index) {
-        vm->cp_cache_hits++;
-        return e;
+    mask = (nj_u4)vm->cp_cache_size - 1u;
+    h = nj_cp_key_hash(c, (nj_u4)index) & mask;
+    /* Match cp_cache_slot's probe order: a cached collision should not call
+     * the resolver just to hash and scan the same prefix again. */
+    while (probes++ <= mask) {
+        nj_cpentry *e = &vm->cp_cache[h];
+        if (!e->used) {
+            return NULL;
+        }
+        if (e->cls == c && e->cp_index == index) {
+            vm->cp_cache_hits++;
+            return e;
+        }
+        h = (h + 1u) & mask;
     }
     return NULL;
 }

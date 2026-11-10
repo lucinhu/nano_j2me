@@ -1343,6 +1343,7 @@ nj_add_test(test_clip tests/test_clip.c)
   endif()
   nj_add_test(test_vm        tests/test_vm.c
               ${NJ_FIXTURES}/hello.jar HelloWorld "wideargs ok")
+  nj_add_test(test_cp_cache tests/test_cp_cache.c)
 
   # A malformed class file must come back as a Java exception - never as a
   # crash and never as a hang.  The fixture is checked in (tests/fixtures/ is
