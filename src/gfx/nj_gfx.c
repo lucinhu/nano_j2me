@@ -438,6 +438,8 @@ void nj_gfx_init(nj_gfx *g, nj_surface *surf)
     g->blend = NJ_BLEND_SRC_OVER;      /* MIDP composites images */
     g->xor_color = 0u;
     g->use_xor = 0;
+    g->fill_rect = NULL;
+    g->fill_ud = NULL;
     g->font = nj_font_builtin(NJ_FONT_SIZE_MEDIUM, NJ_FONT_STYLE_PLAIN);
 
     if (surf) {
@@ -1178,6 +1180,13 @@ void nj_gfx_fill_rect(nj_gfx *g, int x, int y, int w, int h)
         return;
     }
     if (!nj_box_from_user(g, x, y, w, h, &bx0, &by0, &bx1, &by1)) {
+        return;
+    }
+    if (g->fill_rect && !g->use_xor &&
+        (g->blend != NJ_BLEND_SRC_OVER || (g->color >> 24) == 255u) &&
+        g->fill_rect(g->fill_ud, g->surf, (int)bx0, (int)by0,
+                     (int)(bx1-bx0+1), (int)(by1-by0+1),
+                     nj_surface_format_color(g->surf->format, g->color))) {
         return;
     }
     for (yy = by0; yy <= by1; yy++) {

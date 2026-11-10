@@ -28,3 +28,19 @@ mismatches, caller Core 0 and worker Core 1. Four fixed rendering workloads
 matched their Java checksums and final native/LCD CRCs; two on/off repetitions
 returned all PSRAM and measured roughly 1.46x-1.51x throughput on large triangles.
 Full JBenchmark/game and firmware records live in the parent Korvo repository.
+
+Opaque Graphics fills may also use `nj_port.gfx_fill_rect`. The generic gfx
+initializer clears this hook; the MIDP Graphics loader borrows it from the port.
+Only translated, clipped, opaque, non-XOR rectangles are offered. Colors are
+already packed for the target format. A callback must finish synchronously or
+return zero without writing to retain the software fallback. It must not call
+back into the VM or retain the surface. Rebuild consumers of `nj_gfx` and
+`nj_port` with the updated headers.
+
+The new standalone fill regression compares complete guarded buffers across
+RGB565/RGB888/ARGB8888, clip/translation, declined acceleration, alpha and XOR.
+The Korvo port splits large fills by rows and uses 128-bit PIE stores only on
+Core 1, with scalar alignment prefixes/tails and a scalar Core 0 band. A real
+128-round PSRAM test with odd strides, unaligned starts and canaries completed
+with zero mismatches (110,720 SIMD blocks). Measured fill performance and the
+board's independent SIMD/parallel settings live in the parent report.

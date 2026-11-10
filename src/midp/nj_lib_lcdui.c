@@ -763,6 +763,10 @@ static int gfx_load(nj_vm *vm, nj_ref g_obj, nj_gfx *g, nj_surface *surf_scratch
      */
     vm->gfx_calls++;
     nj_gfx_init(g, s);
+    if (vm->port) {
+        g->fill_rect = vm->port->gfx_fill_rect;
+        g->fill_ud = vm->port->ud;
+    }
 
     tx = (int)fget_hot(vm, g_obj, NJ_HF_G_TX, G_CLS, F_G_TX, D_INT);
     ty = (int)fget_hot(vm, g_obj, NJ_HF_G_TY, G_CLS, F_G_TY, D_INT);

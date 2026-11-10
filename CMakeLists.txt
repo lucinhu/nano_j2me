@@ -1602,6 +1602,13 @@ nj_add_test(test_clip tests/test_clip.c)
     add_test(NAME test_gfx COMMAND test_gfx)
     set_tests_properties(test_gfx PROPERTIES
       WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+    add_executable(test_gfx_fill tests/test_gfx_fill.c src/gfx/nj_gfx.c tests/stub_font.c)
+    target_include_directories(test_gfx_fill PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src/core
+      ${CMAKE_CURRENT_SOURCE_DIR}/src/gfx)
+    target_link_libraries(test_gfx_fill PRIVATE m)
+    target_compile_options(test_gfx_fill PRIVATE -UNDEBUG)
+    add_test(NAME test_gfx_fill COMMAND test_gfx_fill)
   endif()
 
   # Antialiased text, with the rasteriser taken out of the picture.  test_gfx

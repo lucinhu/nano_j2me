@@ -779,6 +779,10 @@ typedef struct nj_port {
      * output regions are disjoint. NULL preserves the serial renderer. */
     void (*parallel_for)(void *ud, void (*work)(void *, nj_u4),
                          void *context, nj_u4 count);
+
+    /* Optional synchronous, already-clipped opaque fill; see nj_gfx_fill_fn.
+     * NULL preserves the software rasterizer. */
+    nj_gfx_fill_fn gfx_fill_rect;
 } nj_port;
 
 /* ------------------------------------------------------------------ */

@@ -33,6 +33,13 @@ typedef struct nj_surface {
     int   bpp;        /* bytes per pixel, cached */
 } nj_surface;
 
+/* Optional synchronous opaque rectangle fill. Coordinates are clipped to the
+ * surface; packed_color already uses its pixel format. Return nonzero only
+ * after completing all writes. Return zero without writing to use the CPU
+ * fallback. The callback must not enter the VM or retain the borrowed surface. */
+typedef int (*nj_gfx_fill_fn)(void *ud, const nj_surface *surface,
+                             int x, int y, int w, int h, nj_u4 packed_color);
+
 /* ------------------------------------------------------------------ */
 /* Stroke / blend styles                                               */
 /* ------------------------------------------------------------------ */
@@ -238,6 +245,8 @@ typedef struct nj_gfx {
     const nj_font *font;
     nj_u4 xor_color;   /* setXORMode target */
     int   use_xor;
+    nj_gfx_fill_fn fill_rect;
+    void *fill_ud;
 } nj_gfx;
 
 /* Initialize `g` for `surf`; clip becomes the whole surface, color black,
