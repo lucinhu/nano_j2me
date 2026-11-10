@@ -4178,6 +4178,7 @@ typedef struct ui_frame {
     int content_h;   /* height of the content area */
     int row_h;       /* one text row */
     int small_h;     /* one small-text row */
+    int content_w;
     nj_ref font;
     nj_ref small;
 } ui_frame;
@@ -4201,59 +4202,43 @@ typedef struct ui_frame {
  * a word that is longer than the line - a URL or a class name has no spaces, and
  * running it off the edge is the behaviour being fixed.
  */
-static void ui_text(nj_vm *vm, nj_gfx *g, nj_ref font, nj_ref s, int x, int y,
-                    int maxw)
+/* A NULL Graphics measures exactly the same line breaks used for drawing. */
+static int ui_text(nj_vm *vm, nj_gfx *g, nj_ref font, nj_ref s, int x, int y,
+                   int maxw)
 {
     const nj_u2 *ch;
-    const nj_font *f;
-    int len;
-    int i, start, last_space, w, line_h, cy;
-
-    NJ_UNUSED(vm);
-    NJ_UNUSED(font);
-    if (!s || !g) {
-        return;
-    }
+    const nj_font *f = g ? g->font : nj_midp_font_for(vm, font);
+    int len, i, start = 0, last_space = -1, w = 0, cy = y;
+    nj_s8 lines = 1;
+    if (!s || !f || f->height <= 0) return 0;
     ch = nj_string_chars(s);
     len = (int)nj_string_len(s);
-    if (!ch || len <= 0) {
-        return;
-    }
-    f = g->font;
-    if (maxw <= 0 || !f || f->height <= 0) {
-        nj_gfx_draw_text(g, ch, len, x, y, NJ_ANCHOR_LEFT | NJ_ANCHOR_TOP);
-        return;
-    }
-
-    line_h = f->height;
-    cy = y;
-    start = 0;
-    last_space = -1;
-    w = 0;
-
+    if (!ch || len <= 0) return 0;
     for (i = 0; i < len; i++) {
-        int cw = nj_font_char_width(f, ch[i]);
-
-        if (ch[i] == (nj_u2)' ') {
-            last_space = i;
+        int newline = ch[i] == '\n' || ch[i] == '\r';
+        int cw = newline ? 0 : nj_font_char_width(f, ch[i]);
+        if (newline) {
+            if (g && i > start)
+                nj_gfx_draw_text(g, ch+start, i-start, x, cy, NJ_ANCHOR_LEFT|NJ_ANCHOR_TOP);
+            if (ch[i] == '\r' && i+1 < len && ch[i+1] == '\n') ++i;
+            start = i+1; last_space = -1; w = 0; ++lines;
+            cy = cy > 0x7fffffff-f->height ? 0x7fffffff : cy+f->height;
+            continue;
         }
-        if (w + cw > maxw && i > start) {
-            int brk = (last_space > start) ? last_space : i;
-            nj_gfx_draw_text(g, ch + start, brk - start, x, cy,
-                             NJ_ANCHOR_LEFT | NJ_ANCHOR_TOP);
-            cy += line_h;
-            start = (ch[brk] == (nj_u2)' ') ? brk + 1 : brk;
-            i = start - 1;
-            last_space = -1;
-            w = 0;
+        if (ch[i] == ' ') last_space = i;
+        if (maxw > 0 && (nj_s8)w+cw > maxw && i > start) {
+            int brk = last_space > start ? last_space : i;
+            if (g) nj_gfx_draw_text(g, ch+start, brk-start, x, cy, NJ_ANCHOR_LEFT|NJ_ANCHOR_TOP);
+            start = ch[brk] == ' ' ? brk+1 : brk;
+            i = start-1; last_space = -1; w = 0; ++lines;
+            cy = cy > 0x7fffffff-f->height ? 0x7fffffff : cy+f->height;
             continue;
         }
         w += cw;
     }
-    if (start < len) {
-        nj_gfx_draw_text(g, ch + start, len - start, x, cy,
-                         NJ_ANCHOR_LEFT | NJ_ANCHOR_TOP);
-    }
+    if (g && start < len)
+        nj_gfx_draw_text(g, ch+start, len-start, x, cy, NJ_ANCHOR_LEFT|NJ_ANCHOR_TOP);
+    return lines*f->height > 0x7fffffff ? 0x7fffffff : (int)(lines*f->height);
 }
 
 /* Standard "row" background: a highlight when selected. */
@@ -4279,6 +4264,8 @@ static void ui_row_text(nj_vm *vm, nj_gfx *g, nj_ref font, nj_ref s, int x,
  * path as the built-in ones and a missing override raises
  * AbstractMethodError instead of drawing nothing.
  */
+static nj_ref item_text(nj_vm *vm, nj_ref item);
+
 static int item_measure(nj_vm *vm, nj_ref item, const ui_frame *uf, int avail)
 {
     nj_value a[1];
@@ -4293,13 +4280,27 @@ static int item_measure(nj_vm *vm, nj_ref item, const ui_frame *uf, int avail)
         nj_clear_exception(vm);
         return UI_ITEM_H;
     }
+    if (isa(vm, item, NJ_C_STRINGITEM)) {
+        int text_h = ui_text(vm, NULL, uf->font, item_text(vm, item), 0, 0, avail);
+        if (text_h > h) h = text_h;
+    } else if (isa(vm, item, NJ_C_IMAGEITEM)) {
+        nj_image image;
+        nj_ref ref = rget(vm, item, NJ_C_ITEM, "itImage", D_IMAGE);
+        if (ref && img_view(vm, ref, &image) && image.height > h) h = image.height;
+    }
+    {
+        nj_s4 preferred = fget(vm, item, NJ_C_ITEM, "itPrefH", D_INT);
+        if (preferred > h) h = preferred;
+    }
     if (h < 0) {
         h = 0;
     }
     if (h > 0) {
         nj_ref label = rget(vm, item, NJ_C_ITEM, "itLabel", D_STR);
         if (label && nj_string_len(label) > 0u) {
-            h += uf->small_h;
+            int label_h = ui_text(vm, NULL, uf->small, label, 0, 0, avail);
+            if (label_h < uf->small_h) label_h = uf->small_h;
+            h = (nj_s8)h+label_h > 0x7fffffff ? 0x7fffffff : h+label_h;
         }
     }
     return (int)h;
@@ -4335,8 +4336,8 @@ static void item_draw_default(nj_vm *vm, nj_gfx *g, nj_ref item, const ui_frame 
 
     if (label && nj_string_len(label) > 0u) {
         nj_gfx_set_color(g, selected ? UI_SEL_FG : UI_DIM);
-        ui_text(vm, g, uf->small, label, x, ty, w);
-        ty += uf->small_h;
+        int label_h = ui_text(vm, g, uf->small, label, x, ty, w);
+        ty += label_h > uf->small_h ? label_h : uf->small_h;
     }
     if (img) {
         nj_image view;
@@ -4472,27 +4473,52 @@ static int form_line_height(nj_vm *vm, nj_ref item, const ui_frame *uf)
     if (!item) {
         return 0;
     }
-    h = item_measure(vm, item, uf, uf->content_h > 0 ? uf->content_h : 100);
+    h = item_measure(vm, item, uf, uf->content_w);
     if (h <= 0) {
         h = UI_ITEM_H;
     }
-    return h + UI_ROW_GAP;
+    return h > 0x7fffffff-UI_ROW_GAP ? 0x7fffffff : h+UI_ROW_GAP;
 }
 
-static int form_total_height(nj_vm *vm, nj_ref form, const ui_frame *uf)
-{
-    nj_s4 n = fget(vm, form, NJ_C_FORM, "fmCount", D_INT);
-    nj_ref items = rget(vm, form, NJ_C_FORM, "fmItems", D_ITEMARR);
-    nj_s4 i;
-    int total = 0;
+typedef struct { int total, top, bottom, focus; } form_metrics;
 
+static form_metrics form_layout(nj_vm *vm, nj_ref form, ui_frame *uf, int reveal)
+{
+    form_metrics m = {0, 0, 0, 0};
+    nj_ref items = rget(vm, form, NJ_C_FORM, "fmItems", D_ITEMARR);
+    nj_s4 n = fget(vm, form, NJ_C_FORM, "fmCount", D_INT);
+    int maxscroll;
+    if (items && n > (nj_s4)items->length) n = (nj_s4)items->length;
     if (!items || n <= 0) {
-        return 0;
+        uf->scroll = 0;
+        fput(vm, form, NJ_C_FORM, "fmScroll", D_INT, 0);
+        return m;
     }
-    for (i = 0; i < n && (nj_u4)i < items->length; i++) {
-        total += form_line_height(vm, nj_array_get_ref(items, (nj_u4)i), uf);
+    m.focus = fget(vm, form, NJ_C_FORM, "fmIndex", D_INT);
+    if (m.focus < 0) m.focus = 0;
+    if (m.focus >= n) m.focus = n-1;
+    fput(vm, form, NJ_C_FORM, "fmIndex", D_INT, m.focus);
+    for (nj_s4 i = 0; i < n; ++i) {
+        int h = form_line_height(vm, nj_array_get_ref(items, (nj_u4)i), uf);
+        int end = (nj_s8)m.total+h > 0x7fffffff ? 0x7fffffff : m.total+h;
+        if (i == m.focus) { m.top = m.total; m.bottom = end; }
+        m.total = end;
     }
-    return total;
+    maxscroll = m.total > uf->content_h ? m.total-uf->content_h : 0;
+    uf->scroll = fget(vm, form, NJ_C_FORM, "fmScroll", D_INT);
+    if (uf->scroll < 0) uf->scroll = 0;
+    if (uf->scroll > maxscroll) uf->scroll = maxscroll;
+    if (reveal && uf->content_h > 0) {
+        if (m.bottom-m.top <= uf->content_h) {
+            if (m.top < uf->scroll) uf->scroll = m.top;
+            if (m.bottom > uf->scroll+uf->content_h) uf->scroll = m.bottom-uf->content_h;
+        } else if (m.bottom <= uf->scroll || m.top >= uf->scroll+uf->content_h) {
+            uf->scroll = m.top;
+        }
+        if (uf->scroll > maxscroll) uf->scroll = maxscroll;
+    }
+    fput(vm, form, NJ_C_FORM, "fmScroll", D_INT, uf->scroll);
+    return m;
 }
 
 static void form_render(nj_vm *vm, nj_gfx *g, nj_ref form, ui_frame *uf,
@@ -4501,20 +4527,12 @@ static void form_render(nj_vm *vm, nj_gfx *g, nj_ref form, ui_frame *uf,
     nj_ref items = rget(vm, form, NJ_C_FORM, "fmItems", D_ITEMARR);
     nj_s4 n = fget(vm, form, NJ_C_FORM, "fmCount", D_INT);
     nj_s4 i;
-    int y = uf->content_y;
-    int bottom = uf->content_y + uf->content_h;
-    int total = form_total_height(vm, form, uf);
-    int maxscroll = total - uf->content_h;
-
-    if (maxscroll < 0) {
-        maxscroll = 0;
-    }
-    if (uf->scroll > maxscroll) {
-        uf->scroll = maxscroll;
-    }
-    if (uf->scroll < 0) {
-        uf->scroll = 0;
-    }
+    form_metrics metrics = form_layout(vm, form, uf, 1);
+    nj_s8 y = (nj_s8)uf->content_y-uf->scroll;
+    int bottom = uf->content_y+uf->content_h;
+    int total = metrics.total;
+    int maxscroll = total > uf->content_h ? total-uf->content_h : 0;
+    int oldx = g->clip_x, oldy = g->clip_y, oldw = g->clip_w, oldh = g->clip_h;
     if (!items || n <= 0) {
         nj_gfx_set_color(g, UI_DIM);
         {
@@ -4525,10 +4543,11 @@ static void form_render(nj_vm *vm, nj_gfx *g, nj_ref form, ui_frame *uf,
         }
         return;
     }
+    nj_gfx_set_clip(g, 0, uf->content_y, g->surf->width, uf->content_h);
     for (i = 0; i < n && (nj_u4)i < items->length; i++) {
         nj_ref it = nj_array_get_ref(items, (nj_u4)i);
         int h = form_line_height(vm, it, uf);
-        int sel = (focus && (int)i == fget(vm, form, NJ_C_FORM, "fmIndex", D_INT));
+        int sel = (focus && (int)i == metrics.focus);
         if (y + h < uf->content_y) {
             y += h;
             continue;
@@ -4537,20 +4556,22 @@ static void form_render(nj_vm *vm, nj_gfx *g, nj_ref form, ui_frame *uf,
             break;
         }
         if (sel) {
-            ui_row_bg(g, 0, y, g->surf->width, h - UI_ROW_GAP, 1);
+            ui_row_bg(g, 0, (int)y, g->surf->width, h - UI_ROW_GAP, 1);
         }
-        (void)item_draw(vm, g, it, uf, UI_PAD, y, g->surf->width - 2 * UI_PAD,
+        (void)item_draw(vm, g, it, uf, UI_PAD, (int)y, g->surf->width - 2 * UI_PAD,
                         sel);
         y += h;
     }
     /* Scroll indicator: a 2px bar on the right when the content overflows. */
     if (maxscroll > 0) {
         int track = uf->content_h;
-        int thumb = track * track / total;
-        int pos = (uf->scroll * (track - thumb)) / maxscroll;
+        int thumb = (int)((nj_s8)track*track/total);
+        if (thumb < 2) thumb = track < 2 ? track : 2;
+        int pos = (int)((nj_s8)uf->scroll*(track-thumb)/maxscroll);
         nj_gfx_set_color(g, UI_BORDER);
         nj_gfx_fill_rect(g, g->surf->width - 2, uf->content_y + pos, 2, thumb);
     }
+    g->clip_x = oldx; g->clip_y = oldy; g->clip_w = oldw; g->clip_h = oldh;
 }
 
 /*
@@ -4727,6 +4748,7 @@ static void ui_setup(nj_vm *vm, nj_gfx *g, nj_ref displayable, ui_frame *uf)
     int bottom = g->surf->height - UI_BAR_H;
 
     uf->scroll = 0;
+    uf->content_w = g->surf->width > 2*UI_PAD ? g->surf->width-2*UI_PAD : 0;
     uf->font = NULL;
     uf->small = NULL;
     uf->row_h = f ? f->height + 2 : 12;
@@ -4804,6 +4826,40 @@ static int ui_is_fire(int action)
     return (action == NJ_MIDP_KEY_FIRE || action == NJ_GAME_FIRE) ? 1 : 0;
 }
 
+static int form_move(nj_vm *vm, nj_ref form, int delta)
+{
+    nj_surface *surface = nj_midp_screen(vm);
+    nj_gfx g;
+    ui_frame uf;
+    form_metrics m;
+    nj_s4 n = fget(vm, form, NJ_C_FORM, "fmCount", D_INT);
+    int next, step, previous;
+    if (!surface || n <= 0) return 0;
+    nj_gfx_init(&g, surface);
+    ui_setup(vm, &g, form, &uf);
+    m = form_layout(vm, form, &uf, 1);
+    step = uf.content_h/2;
+    if (step < uf.row_h) step = uf.row_h;
+    if (uf.content_h > 0 && delta > 0 && m.bottom > uf.scroll+uf.content_h) {
+        int limit = m.bottom-uf.content_h;
+        uf.scroll = (nj_s8)uf.scroll+step > limit ? limit : uf.scroll+step;
+    } else if (uf.content_h > 0 && delta < 0 && m.top < uf.scroll) {
+        uf.scroll = uf.scroll-step < m.top ? m.top : uf.scroll-step;
+    } else {
+        previous = m.focus;
+        next = m.focus+delta;
+        if (next < 0) next = 0;
+        if (next >= n) next = n-1;
+        fput(vm, form, NJ_C_FORM, "fmIndex", D_INT, next);
+        m = form_layout(vm, form, &uf, 1);
+        if (m.focus != previous && m.bottom-m.top > uf.content_h)
+            uf.scroll = delta > 0 ? m.top : m.bottom-uf.content_h;
+    }
+    fput(vm, form, NJ_C_FORM, "fmScroll", D_INT, uf.scroll);
+    nj_midp_repaint(vm);
+    return 1;
+}
+
 static int screen_move(nj_vm *vm, nj_ref d, int delta)
 {
     if (isa(vm, d, NJ_C_LIST)) {
@@ -4819,19 +4875,7 @@ static int screen_move(nj_vm *vm, nj_ref d, int delta)
         nj_midp_repaint(vm);
         return 1;
     }
-    if (isa(vm, d, NJ_C_FORM)) {
-        nj_s4 n = fget(vm, d, NJ_C_FORM, "fmCount", D_INT);
-        nj_s4 i = fget(vm, d, NJ_C_FORM, "fmIndex", D_INT);
-        if (n <= 0) {
-            return 0;
-        }
-        i += delta;
-        if (i < 0) { i = 0; }
-        if (i >= n) { i = n - 1; }
-        fput(vm, d, NJ_C_FORM, "fmIndex", D_INT, i);
-        nj_midp_repaint(vm);
-        return 1;
-    }
+    if (isa(vm, d, NJ_C_FORM)) return form_move(vm, d, delta);
     return 0;
 }
 
@@ -4863,6 +4907,7 @@ static int form_item_key(nj_vm *vm, nj_ref form, int delta)
         return 1;
     }
     if (isa(vm, it, NJ_C_GAUGE)) {
+        if (!fget(vm, it, NJ_C_GAUGE, "gaInteractive", D_BOOL)) return 0;
         nj_s4 v = fget(vm, it, NJ_C_GAUGE, "gaValue", D_INT);
         nj_s4 max = fget(vm, it, NJ_C_GAUGE, "gaMax", D_INT);
         v += delta * 5;
@@ -5547,7 +5592,8 @@ static int nj_midp_pointer_inner(nj_vm *vm, int x, int y, int kind)
                 nj_ref items = rget(vm, d, NJ_C_FORM, "fmItems", D_ITEMARR);
                 nj_s4 n = fget(vm, d, NJ_C_FORM, "fmCount", D_INT);
                 nj_s4 i;
-                int row_y = uf.content_y;
+                (void)form_layout(vm, d, &uf, 1);
+                nj_s8 row_y = (nj_s8)uf.content_y-uf.scroll;
                 for (i = 0; items && i < n && (nj_u4)i < items->length; i++) {
                     int h;
                     it = nj_array_get_ref(items, (nj_u4)i);
@@ -6553,8 +6599,8 @@ static int customitem_render(nj_vm *vm, nj_gfx *g, nj_ref item,
     customitem_measure(vm, item, w, &cw, &ch);
     if (label && nj_string_len(label) > 0u) {
         nj_gfx_set_color(g, selected ? UI_SEL_FG : UI_DIM);
-        ui_text(vm, g, uf->small, label, x, y, w);
-        labelh = uf->small_h;
+        labelh = ui_text(vm, g, uf->small, label, x, y, w);
+        if (labelh < uf->small_h) labelh = uf->small_h;
     }
     img = customitem_prepare(vm, item, cw, ch);
     gfx = rget(vm, item, NJ_C_CUSTOMITEM, "ciGraphics", D_GFX);
@@ -8668,6 +8714,7 @@ NJFN(form_init)
     rput(vm, self, NJ_C_FORM, "fmItems", D_ITEMARR, NULL);
     fput(vm, self, NJ_C_FORM, "fmCount", D_INT, 0);
     fput(vm, self, NJ_C_FORM, "fmIndex", D_INT, 0);
+    fput(vm, self, NJ_C_FORM, "fmScroll", D_INT, 0);
     rput(vm, self, NJ_C_FORM, "fmItemListener", D_ISL, NULL);
     rput(vm, self, NJ_C_FORM, "fmBuffer", D_IMAGE, NULL);
     return vm->exception ? NJ_ERR : NJ_OK;
@@ -8915,6 +8962,7 @@ NJFN(form_deleteAll)
     }
     fput(vm, self, NJ_C_FORM, "fmCount", D_INT, 0);
     fput(vm, self, NJ_C_FORM, "fmIndex", D_INT, 0);
+    fput(vm, self, NJ_C_FORM, "fmScroll", D_INT, 0);
     return NJ_OK;
 }
 
@@ -9006,6 +9054,7 @@ NJFN(list_init)
     rput(vm, self, NJ_C_FORM, "fmItems", D_ITEMARR, NULL);
     fput(vm, self, NJ_C_FORM, "fmCount", D_INT, 0);
     fput(vm, self, NJ_C_FORM, "fmIndex", D_INT, 0);
+    fput(vm, self, NJ_C_FORM, "fmScroll", D_INT, 0);
     rput(vm, self, NJ_C_FORM, "fmItemListener", D_ISL, NULL);
     rput(vm, self, NJ_C_FORM, "fmBuffer", D_IMAGE, NULL);
     if (type < NJ_CHOICE_EXCLUSIVE || type > NJ_CHOICE_IMPLICIT) {
@@ -12059,6 +12108,7 @@ static const nj_builtin_field screen_fields[] = {
     FLD("fmItems",   D_ITEMARR, 0),
     FLD("fmCount",   D_INT,     0),
     FLD("fmIndex",   D_INT,     0),
+    FLD("fmScroll",  D_INT,     0),
     FLD("fmItemListener", D_ISL, 0),
     FLD("fmBuffer",  D_IMAGE,   0)
 };
