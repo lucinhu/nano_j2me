@@ -30,11 +30,40 @@ NJFN(sys_nanoTime)
     return NJ_OK;
 }
 
-/*
- * System.arraycopy is one of the hottest methods in a J2ME game (sprite and
- * tile blitting both go through it), so the copy loop is type-specialised
- * rather than going through per-element helpers.
- */
+/* Native-created arrays sometimes have no class mirror. Their element kind
+ * still establishes primitive-array identity; an untyped reference array is
+ * treated as Object[]. No resolution/allocation may occur while copying. */
+static int sys_copy_value_assignable(nj_ref value, nj_class *component)
+{
+    const char *name;
+    if (!value) {
+        return 1;
+    }
+    if (value->cls) {
+        return nj_class_is_assignable(value->cls, component);
+    }
+    if (value->kind != NJ_OBJ_ARRAY) {
+        return 0;
+    }
+    name = component->name;
+    if (name && (strcmp(name, "java/lang/Object") == 0 ||
+                 strcmp(name, "java/lang/Cloneable") == 0 ||
+                 strcmp(name, "java/io/Serializable") == 0)) {
+        return 1;
+    }
+    if (!component->is_array) {
+        return 0;
+    }
+    if (value->aflags != NJ_ARRAY_T_REF) {
+        return component->array_elem == value->aflags;
+    }
+    return component->component_cls && component->component_cls->name &&
+           strcmp(component->component_cls->name, "java/lang/Object") == 0;
+}
+
+/* Bulk-copy primitive arrays and references whose declared types prove the
+ * entire range safe. Otherwise check and publish one element at a time: Java
+ * requires exactly the valid prefix to be copied before ArrayStoreException. */
 NJFN(sys_arraycopy)
 {
     nj_ref src = NJ_ARG_REF(args, 0);
@@ -54,8 +83,10 @@ NJFN(sys_arraycopy)
         return nj_throw(vm, "java/lang/ArrayStoreException", NULL);
     }
     if (len < 0 || src_pos < 0 || dst_pos < 0 ||
-        (nj_u4)(src_pos + len) > src->length ||
-        (nj_u4)(dst_pos + len) > dst->length) {
+        (nj_u4)src_pos > src->length ||
+        (nj_u4)len > src->length - (nj_u4)src_pos ||
+        (nj_u4)dst_pos > dst->length ||
+        (nj_u4)len > dst->length - (nj_u4)dst_pos) {
         return nj_throw(vm, "java/lang/ArrayIndexOutOfBoundsException", NULL);
     }
     if (len == 0) {
@@ -81,22 +112,20 @@ NJFN(sys_arraycopy)
         nj_ref *d = dst->u.refs;
         nj_ref *s = src->u.refs;
         nj_class *comp = dst->cls ? dst->cls->component_cls : NULL;
-        nj_s4 i;
-        if (d > s) {
-            for (i = len - 1; i >= 0; i--) {
-                d[dst_pos + i] = s[src_pos + i];
-            }
+        nj_class *from = src->cls ? src->cls->component_cls : NULL;
+        if (src == dst || !comp ||
+            (from && nj_class_is_assignable(from, comp))) {
+            memmove(d + dst_pos, s + src_pos, (nj_size)len * sizeof(nj_ref));
         } else {
+            nj_s4 i;
+            /* Different arrays cannot overlap. A failed check must leave the
+             * failing slot and every following destination slot untouched. */
             for (i = 0; i < len; i++) {
-                d[dst_pos + i] = s[src_pos + i];
-            }
-        }
-        if (comp) {
-            for (i = 0; i < len; i++) {
-                nj_ref v = d[dst_pos + i];
-                if (v && v->cls && !nj_class_is_assignable(v->cls, comp)) {
+                nj_ref v = s[src_pos + i];
+                if (!sys_copy_value_assignable(v, comp)) {
                     return nj_throw(vm, "java/lang/ArrayStoreException", NULL);
                 }
+                d[dst_pos + i] = v;
             }
         }
     }
