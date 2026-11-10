@@ -3573,7 +3573,7 @@ static nj_ref skin_load(nj_vm *vm, int with_skin)
     }
     arr = r.r;
     for (i = 0u; i < nj_array_length(arr); i++) {
-        nj_ref o = nj_array_get_ref(arr, i + 1u);
+        nj_ref o = nj_array_get_ref(arr, i);
         const char *cn = nj_ref_class_name(o);
 
         if (cn && strstr(cn, "SkinnedMesh")) {

@@ -1987,7 +1987,7 @@ static void test_widgets(nj_vm *vm)
         OK(gauge != NULL);
         OK(call_int(vm, gauge, NJ_C_GAUGE, "isInteractive", "()Z", NULL, &ok) == 1 && ok);
         OK(call_int(vm, gauge, NJ_C_GAUGE, "getMaxValue", "()I", NULL, &ok) == 10 && ok);
-        OK(call_int(vm, gauge, NJ_C_GAUGE, "getValue", "()I", NULL, &ok) == 0 && ok);
+        OK(call_int(vm, gauge, NJ_C_GAUGE, "getValue", "()I", NULL, &ok) == 3 && ok);
         a[0] = iref(7);
         OK(nj_call(vm, gauge, NJ_C_GAUGE, "setValue", "(I)V", a, NULL) == NJ_OK);
         OK(call_int(vm, gauge, NJ_C_GAUGE, "getValue", "()I", NULL, &ok) == 7 && ok);
@@ -1996,8 +1996,30 @@ static void test_widgets(nj_vm *vm)
         OK(vm->exception == NULL);
         a[0] = iref(99);
         (void)nj_call(vm, gauge, NJ_C_GAUGE, "setValue", "(I)V", a, NULL);
-        OK_MSG(exc_is(vm, "java/lang/IllegalArgumentException"),
-               "Gauge.setValue(out of range) did not throw");
+        OK(vm->exception == NULL);
+        OK(call_int(vm, gauge, NJ_C_GAUGE, "getValue", "()I", NULL, &ok) == 10 && ok);
+        a[0] = iref(-1);
+        OK(nj_call(vm, gauge, NJ_C_GAUGE, "setValue", "(I)V", a, NULL) == NJ_OK);
+        OK(call_int(vm, gauge, NJ_C_GAUGE, "getValue", "()I", NULL, &ok) == 0 && ok);
+        {
+            nj_ref progress = construct(vm, NJ_C_GAUGE, "(Ljava/lang/String;ZII)V",
+                (nj_value[]){ sref(str(vm, "Progress")), iref(0), iref(100), iref(30) });
+            OK(progress != NULL);
+            a[0] = iref(70);
+            OK(nj_call(vm, progress, NJ_C_GAUGE, "setValue", "(I)V", a, NULL) == NJ_OK);
+            OK(call_int(vm, progress, NJ_C_GAUGE, "getValue", "()I", NULL, &ok) == 70 && ok);
+            a[0] = iref(-1);
+            OK(nj_call(vm, progress, NJ_C_GAUGE, "setMaxValue", "(I)V", a, NULL) == NJ_OK);
+            OK(call_int(vm, progress, NJ_C_GAUGE, "getValue", "()I", NULL, &ok) == 0 && ok);
+            a[0] = iref(3);
+            OK(nj_call(vm, progress, NJ_C_GAUGE, "setValue", "(I)V", a, NULL) == NJ_OK);
+            a[0] = iref(4);
+            (void)nj_call(vm, progress, NJ_C_GAUGE, "setValue", "(I)V", a, NULL);
+            OK(exc_is(vm, "java/lang/IllegalArgumentException"));
+            a[0] = iref(20);
+            OK(nj_call(vm, progress, NJ_C_GAUGE, "setMaxValue", "(I)V", a, NULL) == NJ_OK);
+            OK(call_int(vm, progress, NJ_C_GAUGE, "getValue", "()I", NULL, &ok) == 0 && ok);
+        }
 
         /* ChoiceGroup(String label, int type); EXCLUSIVE == 1 in MIDP. */
         cg = construct(vm, NJ_C_CHOICEGROUP, "(Ljava/lang/String;I)V",

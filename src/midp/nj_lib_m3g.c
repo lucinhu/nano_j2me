@@ -6999,8 +6999,22 @@ static nj_status m3g_build_objects(nj_vm *vm, const nj_u1 *data, nj_u4 len,
             for (k = 0u; k < f->nanimation_refs; k++) {
                 m3g_mark_ref(is_ref, objs, nobj, mode, f->animation_refs[k], i + 1u);
             }
-            if (objs[i].type == NJ_M3G_T_MESH) {
+            if (objs[i].type == NJ_M3G_T_MESH ||
+                objs[i].type == NJ_M3G_T_SKINNED_MESH) {
                 m3g_mark_ref(is_ref, objs, nobj, mode, f->a, i + 1u);
+            }
+            if (objs[i].type == NJ_M3G_T_SKINNED_MESH) {
+                /* Skinning adds a skeleton and bone-node links to Mesh's
+                 * vertex buffer and submesh links. They are graph edges too:
+                 * returning the skeleton or vertex buffer as a root breaks
+                 * callers that expect the authored World/Node roots. */
+                m3g_mark_ref(is_ref, objs, nobj, mode, f->c, i + 1u);
+                if (f->extra) {
+                    for (k = 0u; k < f->d; k++) {
+                        m3g_mark_ref(is_ref, objs, nobj, mode,
+                                     f->extra[4u * k], i + 1u);
+                    }
+                }
             }
             if (objs[i].type == NJ_M3G_T_WORLD) {
                 /* the World's own two references are read the same way */
@@ -15200,6 +15214,7 @@ NJFN(m3g_g3d_getProperties)
         { "supportMipmapping",             0, 1 },
         { "supportPerspectiveCorrection",  1, 1 },
         { "supportLocalCameraLighting",    0, 1 },
+        { "numTextureUnits",               1, 0 },
         { "maxLights",                     8, 0 },
         { "maxViewportWidth",           4096, 0 },
         { "maxViewportHeight",          4096, 0 },

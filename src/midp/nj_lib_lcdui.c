@@ -7163,18 +7163,22 @@ NJFN(gauge_init)
     nj_s4 initial = NJ_ARG_INT(args, 3);
 
     (void)item_init(vm, th, args, ret);
-    if (max <= 0) {
+    if (max <= 0 && (interactive || max != -1)) {
         return nj_throw(vm, "java/lang/IllegalArgumentException",
-                        "maxValue must be positive");
+                        "invalid maximum value");
     }
-    if (initial < 0 || initial > max) {
+    if (max == -1 && (initial < 0 || initial > 3)) {
         return nj_throw(vm, "java/lang/IllegalArgumentException",
-                        "initial value out of range");
+                        "invalid indefinite gauge state");
+    }
+    if (max > 0) {
+        if (initial < 0) initial = 0;
+        if (initial > max) initial = max;
     }
     rput(vm, self, NJ_C_GAUGE, "gaLabel", D_STR, label);
     fput(vm, self, NJ_C_GAUGE, "gaInteractive", D_BOOL, interactive ? 1 : 0);
     fput(vm, self, NJ_C_GAUGE, "gaMax", D_INT, max);
-    fput(vm, self, NJ_C_GAUGE, "gaValue", D_INT, interactive ? 0 : initial);
+    fput(vm, self, NJ_C_GAUGE, "gaValue", D_INT, initial);
     return vm->exception ? NJ_ERR : NJ_OK;
 }
 
@@ -7183,16 +7187,21 @@ NJFN(gauge_setValue)
     nj_ref self = NJ_THIS(args);
     nj_s4 v = NJ_ARG_INT(args, 0);
 
-    if (!fget(vm, self, NJ_C_GAUGE, "gaInteractive", D_BOOL)) {
-        return nj_throw(vm, "java/lang/IllegalStateException",
-                        "gauge is not interactive");
-    }
-    if (v < 0 || v > fget(vm, self, NJ_C_GAUGE, "gaMax", D_INT)) {
-        return nj_throw(vm, "java/lang/IllegalArgumentException",
-                        "value out of range");
+    nj_s4 max = fget(vm, self, NJ_C_GAUGE, "gaMax", D_INT);
+
+    /* Interaction controls user input, not application updates. Definite
+     * gauges clamp to their range; indefinite gauges accept states 0..3. */
+    if (max == -1) {
+        if (v < 0 || v > 3) {
+            return nj_throw(vm, "java/lang/IllegalArgumentException",
+                            "invalid indefinite gauge state");
+        }
+    } else {
+        if (v < 0) v = 0;
+        if (v > max) v = max;
     }
     fput(vm, self, NJ_C_GAUGE, "gaValue", D_INT, v);
-    item_state_changed(vm, self);
+    nj_midp_repaint(vm);
     return NJ_OK;
 }
 
@@ -7207,19 +7216,18 @@ NJFN(gauge_setMaxValue)
     nj_ref self = NJ_THIS(args);
     nj_s4 max = NJ_ARG_INT(args, 0);
 
-    if (max <= 0) {
+    nj_s4 oldmax = fget(vm, self, NJ_C_GAUGE, "gaMax", D_INT);
+    nj_s4 v = fget(vm, self, NJ_C_GAUGE, "gaValue", D_INT);
+    if (max <= 0 && (max != -1 ||
+        fget(vm, self, NJ_C_GAUGE, "gaInteractive", D_BOOL))) {
         return nj_throw(vm, "java/lang/IllegalArgumentException",
-                        "maxValue must be positive");
+                        "invalid maximum value");
     }
-    if (!fget(vm, self, NJ_C_GAUGE, "gaInteractive", D_BOOL)) {
-        return nj_throw(vm, "java/lang/IllegalStateException",
-                        "gauge is not interactive");
-    }
+    if ((oldmax == -1) != (max == -1)) v = 0;
+    else if (max > 0 && v > max) v = max;
     fput(vm, self, NJ_C_GAUGE, "gaMax", D_INT, max);
-    if (fget(vm, self, NJ_C_GAUGE, "gaValue", D_INT) > max) {
-        fput(vm, self, NJ_C_GAUGE, "gaValue", D_INT, max);
-    }
-    item_state_changed(vm, self);
+    fput(vm, self, NJ_C_GAUGE, "gaValue", D_INT, v);
+    nj_midp_repaint(vm);
     return NJ_OK;
 }
 
