@@ -29,6 +29,26 @@ repeated unless the code changed the path the verification used.
   (frames, logs and stitched screenshots are bulk); the row names the
   directory, and the commit carries the text that quotes it.
 
+## 2026-11-11 ImageItem alternate text
+
+The [MIDP ImageItem contract](https://docs.oracle.com/javame/config/cldc/ref-impl/midp2.0/jsr118/javax/microedition/lcdui/ImageItem.html)
+permits null alternate text in both constructors and the setter. This checkpoint
+follows `fca2cd857a91d38e6cd26538871a92e00888ecb1`.
+There are now 169 registered tests. The new ImageItem fixture and four affected
+LCDUI/Form paths pass against both normal and strict sanitizer libraries.
+The preceding 168-test cohort remains recorded with its original runtime below.
+
+| area | verdict and evidence | detailed record |
+| --- | --- | --- |
+| Nullable alternate text | VERIFIED with the same fixture before and after the repair: each old library reports 348 checks and 16 failures; each repaired library reports 778 checks and zero failures. Both constructors accept null, the setter clears text repeatedly, empty text stays distinct from null, and illegal layout/appearance still throws IllegalArgumentException. Failed old constructors skip subsequent checks, explaining the different totals. | [ImageItem alternate text](notes/2026-11-10-imageitem-alttext.md); `.local-tools/debug-runs/imageitem-nullalt-20261110-main/` |
+| GC and getters | VERIFIED: the Item alone retains label, immutable Image and alternate text after temporary input roots are released and GC actually runs. Public getters preserve contents and image dimensions. | [ImageItem alternate text](notes/2026-11-10-imageitem-alttext.md) |
+| Focused regressions | VERIFIED in normal and strict builds: LCDUI 8826 checks with three identical teardowns; Form overflow, wrapping, chrome, focus and Gauge; snapshot roundtrip 752 checks with 2,119,650 serialized bytes; old-layout snapshot refusal followed by fresh startup 585 checks. | [ImageItem alternate text](notes/2026-11-10-imageitem-alttext.md) |
+
+Strict coverage uses ASan, UBSan, float-cast-overflow and leak detection with
+warnings as errors. It covers these focused tests. The repair removes three
+incorrect null checks and preserves built-in member layouts. Benchmark results
+remain associated with the earlier runtime identities in the versioned note.
+
 ## 2026-11-10 upstream Form integration
 
 Merge `b184dba01e0ed67180bff6ee631c6c305430690f` retains the callback,

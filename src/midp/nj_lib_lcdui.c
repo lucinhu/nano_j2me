@@ -7097,10 +7097,6 @@ NJFN(ii_init)
     if (!item_layout_valid(layout)) {
         return nj_throw(vm, "java/lang/IllegalArgumentException", "unknown layout directives");
     }
-    if (!alt) {
-        return nj_throw(vm, "java/lang/NullPointerException",
-                        "altText is null");
-    }
     rput(vm, self, NJ_C_ITEM, "itLabel", D_STR, label);
     rput(vm, self, NJ_C_IMAGEITEM, "iiImage", D_IMAGE, img);
     rput(vm, self, NJ_C_IMAGEITEM, "iiAlt", D_STR, alt);
@@ -7132,10 +7128,6 @@ NJFN(ii_init_app)
     (void)item_init(vm, th, args, ret);
     if (!item_layout_valid(layout)) {
         return nj_throw(vm, "java/lang/IllegalArgumentException", "unknown layout directives");
-    }
-    if (!alt) {
-        return nj_throw(vm, "java/lang/NullPointerException",
-                        "altText is null");
     }
     if (mode < 0 || mode > 2) {
         return nj_throw(vm, "java/lang/IllegalArgumentException",
@@ -7177,9 +7169,6 @@ NJFN(ii_setAltText)
 {
     nj_ref self = NJ_THIS(args);
     nj_ref s = NJ_ARG_REF(args, 0);
-    if (!s) {
-        return nj_throw(vm, "java/lang/NullPointerException", "altText is null");
-    }
     rput(vm, self, NJ_C_IMAGEITEM, "iiAlt", D_STR, s);
     return NJ_OK;
 }
