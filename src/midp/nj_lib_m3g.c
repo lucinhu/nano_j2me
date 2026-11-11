@@ -15311,6 +15311,7 @@ NJFN(m3g_g3d_getProperties)
         { "maxLights",                     8, 0 },
         { "maxViewportWidth",           4096, 0 },
         { "maxViewportHeight",          4096, 0 },
+        { "maxViewportDimension",       4096, 0 },
         { "maxTextureDimension",        1024, 0 },
         { "maxSpriteCropDimension",     4096, 0 },
         { "maxTransformsPerVertex",        3, 0 }

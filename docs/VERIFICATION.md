@@ -29,6 +29,47 @@ repeated unless the code changed the path the verification used.
   (frames, logs and stitched screenshots are bulk); the row names the
   directory, and the commit carries the text that quotes it.
 
+## 2026-11-11 M3G discovery and System properties
+
+The ordinary HD observation below exposed a missing discovery property. With
+M3G enabled, `System.getProperty("microedition.m3g.version")` now returns `1.0`.
+`Graphics3D.getProperties()` also includes `maxViewportDimension`, equal to the
+minimum of its existing width and height limits (4096). The same checkpoint
+corrects `System.getProperty("")` to throw `IllegalArgumentException`, as required
+by CLDC 1.1; null still throws `NullPointerException` and unknown nonempty keys
+still return null.
+
+The same extended VM fixture fails exactly these three checks against each old
+library and passes against each repaired library, in both Release and strict
+sanitizer builds. Its existing three load/run/destroy rounds remain intact.
+See [M3G discovery](notes/2026-11-11-m3g-version.md) for the focused regression
+results and normative references. There are still 170 registered tests; the
+previous full-suite result remains associated with its earlier runtime.
+
+This repairs discovery and the property table. It does not claim M3G conformance,
+new texture capabilities, or enforcement of `setViewport` dimension bounds;
+that setter still needs a separate fix. The earlier benchmark scores retain
+the measured binary identity and are not relabeled with this repair.
+
+## 2026-11-11 ordinary JBenchmark3D and HD observations
+
+These observations use source `51d784b`, ordinary Release CLI
+`213c576af70a48febd5b0123cbe49e87f3c3b30b4df4cd4449640ae6d3bc55f2`,
+CPU 3, 240×320, fixed 16 MiB heap, uncapped software SDL2 and 100% speed.
+Original JARs and private input directories retain their identities. The earlier
+runtime rows below remain historical observations.
+
+| area | verdict and evidence | detailed record |
+| --- | --- | --- |
+| JBenchmark3D | VERIFIED actual final Results: HQ 12658, LQ 36100, 4,989,297 triangles/s and 1,922,275 kTexels/s. Results appear by 105.274 seconds and remain identical through the 280-second capture; F10 exits normally. No observer or explicit frame budget. | [Versioned measurements](notes/2026-11-10-jbenchmark-baseline.md); `.local-tools/debug-runs/jbenchmark3d-51d784b/` |
+| JBenchmark HD | VERIFIED observed Results: Bilinear Success 92%, Trilinear Failed/Not supported, Perspective Success 99%, Z-buffer Failure 7 bit, Smooth 8,390,400 and Textured 7,078,325 triangles/s, Fill Failed, Gaming 10511 (350.4 fps), version 4.0.3. Individual Down presses expose Gaming and the system page. Final Results precede the supervisor's deadline SIGTERM at 598 seconds; the process handles quit/teardown and exits zero. | [Versioned measurements](notes/2026-11-10-jbenchmark-baseline.md); `.local-tools/debug-runs/jbenchmarkhd-51d784b/` |
+| HD capability and discovery paths | VERIFIED static cause: Trilinear requires mipmapping and Fill requires two texture units; the renderer declares false/one. The measured runtime also omits `microedition.m3g.version`, causing HD to display M3G No and skip its separate capability query. Blank fields are not zeros. | [Versioned measurements](notes/2026-11-10-jbenchmark-baseline.md) |
+
+These are single desktop observations, without an A/B speedup or Android FPS
+claim. JBenchmark 1/2 results retain their earlier runtime identities. The earlier
+3D failure to expose Results has no established cause; this successful run does
+not establish an SDL2, CPU-affinity or scheduler repair.
+
 ## 2026-11-11 optional Java heap growth
 
 The isolated Release build passed all 170 registered tests. Five focused tests also passed with ASan, UBSan and leak checking, including 69 assertions for heap growth and restore. The original Minecraft JAR opened its own menu on P in both 90-frame runs from the same saved world. At 16 MiB fixed it logged an image OOM and reduced view distance; with growth enabled the same binary expanded to 32 MiB and showed neither symptom in the replay. See [heap growth](notes/2026-11-11-auto-heap.md) for the setup and limits.

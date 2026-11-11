@@ -175,6 +175,9 @@ static const nj_device_prop runtime_props[] = {
     { "microedition.configuration", "CLDC-1.1" },
     { "microedition.profiles",      "MIDP-2.0" },
     { "microedition.locale",        "en-US" },
+#if NJ_ENABLE_M3G
+    { "microedition.m3g.version",   "1.0" },
+#endif
     { "line.separator",             "\n" },
     { "file.separator",             "/" },
     { "java.version",               "1.4.2" },
@@ -257,6 +260,9 @@ NJFN(sys_getProperty)
 
     if (!key) {
         return nj_throw(vm, "java/lang/NullPointerException", NULL);
+    }
+    if (nj_string_length(key) == 0) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException", NULL);
     }
     if (nj_string_to_utf8(key, k, (int)sizeof(k)) <= 0) {
         ret->r = NULL;
