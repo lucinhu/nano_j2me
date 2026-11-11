@@ -223,3 +223,28 @@ evidence is under `.local-tools/debug-runs/jbenchmark-fixed-20261110/form-b184/`
 the diagnostic source, logs and frozen report remain under
 `.local-tools/debug-runs/jbenchmark3d-20261110-diagnostic/` and its Lead-owned
 `../form-upstream-20261110-main/3d-state-session/`.
+
+## 2026-11-11: JBenchmark3D completes on ordinary Release
+
+Commit `51d784b` runs the original JBenchmark3D JAR (SHA-256 above) with
+uninstrumented CLI SHA-256
+`213c576af70a48febd5b0123cbe49e87f3c3b30b4df4cd4449640ae6d3bc55f2`.
+Settings: CPU 3, 240×320 Java canvas, fixed 16 MiB heap, `--fps 0`, 100%
+speed, SDL2 software rendering over X11, and 960×1280 window. One F1 Start
+finishes at 12.336 s after launch; captures at 25 and 55 s show active tests.
+The final Performance page is visible from the 105.274 s capture and remains
+unchanged in all four later captures. F10 exits normally at 280.420 s.
+
+| Results field | Value |
+|---|---:|
+| JBenchmark3D HQ | 12,658 |
+| JBenchmark3D LQ | 36,100 |
+| Triangles/s | 4,989,297 |
+| KTexels/s | 1,922,275 |
+
+Final image SHA-256: `24aaa91a5cf18b463b5b61353c8aceb63452475309b02c1bd325980475245939`.
+Command, environment, logs and screenshots are retained under
+`.local-tools/debug-runs/jbenchmark3d-51d784b/`. The JAR and executable hashes
+matched before and after the run. This resolves the missing ordinary 3D score
+for this build. The previous missing Results page remains unexplained, and the
+single run does not quantify a speedup or update the other three JBenchmark scores.
