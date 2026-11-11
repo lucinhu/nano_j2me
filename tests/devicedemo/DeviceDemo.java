@@ -21,7 +21,8 @@ import javax.microedition.midlet.MIDlet;
  *      (the java.version rows sat behind a chain of else-ifs that answered the
  *      device first and fell off the end for everything else);
  *   3. a key NOBODY answers is null rather than a wrong guess, including for a
- *      key longer than the old 64-byte lookup buffer and for the empty string.
+ *      key longer than the old 64-byte lookup buffer;
+ *   4. an empty key throws IllegalArgumentException, as CLDC requires.
  *
  * The check script knows what each profile is supposed to contain, so the
  * fixture stays a reporter: it prints whatever it finds and asserts nothing.
@@ -51,6 +52,15 @@ public class DeviceDemo extends MIDlet {
         return System.getProperty(key) == null ? "true" : "false";
     }
 
+    private static String rejectsEmptyKey() {
+        try {
+            System.getProperty("");
+            return "false";
+        } catch (IllegalArgumentException expected) {
+            return "true";
+        }
+    }
+
     public void startApp() {
         String line;
         String mediaLine = "DEVM FAILED";
@@ -69,7 +79,7 @@ public class DeviceDemo extends MIDlet {
                     + " profiles=" + val("microedition.profiles")
                     + " unknown=" + isNull("com.example.no.such.key")
                     + " longkey=" + isNull(longKey())
-                    + " emptykey=" + isNull("");
+                    + " emptykeyIAE=" + rejectsEmptyKey();
             /* JSR 135's eight MMAPI properties go on a second line: the DEV
                line is already long enough that the runner's log line buffer
                cut its tail, and a title is allowed to read any of these

@@ -29,6 +29,58 @@ repeated unless the code changed the path the verification used.
   (frames, logs and stitched screenshots are bulk); the row names the
   directory, and the commit carries the text that quotes it.
 
+## 2026-11-11 GameCanvas flush ownership and restore boundaries
+
+Integrated upstream `a2e5ba84` through merge `1fe6a2a7`, retaining the viewport
+validation in `48bd7322`. Explicit GameCanvas flushes now own the displayed
+frame, so the adaptive paint pump and input do not publish an unfinished buffer
+between flushes. Explicit repaint requests and legacy non-flushing canvases
+retain their paint paths.
+
+VERIFIED two additional boundaries: both flush overloads are no-ops for a
+hidden GameCanvas, while offscreen `paint(Graphics)` remains usable; successful
+snapshot restore clears the four host-only paint ownership/cadence fields.
+An early CRC rejection preserves the running application's frame ownership.
+The same final fixture reports **14,214 checks, 15 failures** against each old
+library and **14,214 checks, zero failures** against each repaired library,
+using Release and strict sanitizer builds. The old failures are twelve hidden
+flush checks and three live-VM restore checks; fresh restore, startup and CRC
+rejection controls pass. See [boundary details](notes/2026-11-11-gamecanvas-state-boundaries.md).
+
+The merged normal suite passes all **171 registered tests**. The aggregate is
+153 complete first-pass results, 17 directed recoveries and the parallel M3G
+test, with each name counted once. Missing private game dependencies, three
+internal skip paths and two stale fixture assumptions were corrected before
+counting success. The Game fixture now displays its canvas through the public
+API before testing visible flushes; the device fixture expects an empty
+property key to throw `IllegalArgumentException`. Original pixel assertions
+remain. Three real-game FreeJ2ME frame comparisons pass (MAE 6.96, 4.86 and 1.82
+out of 255); the real M3G probe accepts 985 files with no refused objects.
+
+Strict ASan/UBSan/float-cast-overflow/leak checks pass nine groups: Save,
+GameCanvas flush, LCDUI, Display callbacks, Game, Form scroll, Form snapshot,
+M3G and VM lifecycle/properties. Warnings are errors and sanitizer recovery is
+disabled. Parallel M3G completes 234 forks and 117,504,000 compared bytes; the
+unchanged test uses a private `tmpfile` adapter for the host's `/tmp` quota.
+The default build has `NJ_ENABLE_ENGINE=0`, so the engine test performs zero
+engine checks. The static-source audit excludes an ESP32 example requiring its
+SDK and libretro's process-global ABI entry points; these coverage limits are
+not claims of extra coverage.
+
+VERIFIED original Minecraft JAR and preserved world resume at 240x320, 16 MiB
+initial heap with growth enabled. A paced 90-frame headless replay sends raw P
+(key 27) down at frame 20 and up at 24; the actual game menu appears over the
+world. Heap grows from 16 to 32 MiB under its 128 MiB cap, with no OOM or uncaught
+exception. Original JAR, world, RMS and root build remain unchanged. The 489
+caught datagram receive errors after restoring native handles remain a known
+limitation; they do not establish a networking fix. This replay is not a speed
+measurement, and earlier benchmark scores retain their original identities.
+
+Evidence: `.local-tools/debug-runs/gamecanvas-upstream-20261111-main/`,
+`gamecanvas-upstream-20261111-sanitize/` and
+`gamecanvas-upstream-20261111-scene/`. Final CLI SHA-256:
+`26b085867dba09839af6f65e361de16d7f6a5fd4d393ec52eb7ca27d30f8a65f`.
+
 ## 2026-11-11 M3G viewport dimension validation
 
 VERIFIED `Graphics3D.setViewport` rejects nonpositive dimensions and dimensions

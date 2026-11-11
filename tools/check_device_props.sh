@@ -85,7 +85,7 @@ notnull osname
 expect profiles MIDP-2.0 "microedition.profiles is not the runtime's own answer"
 expect unknown true  "a key nobody answers was answered anyway"
 expect longkey true  "a 200-character key matched a shorter one"
-expect emptykey true "the empty key was answered"
+expect emptykeyIAE true "an empty key must throw IllegalArgumentException"
 # JSR 135 defines eight MMAPI system properties.  A title is allowed to read
 # them without a null check (1942空战 calls .equals on supports.mixing, and
 # the NPE landed in its own catch), so every one has to be answered - with

@@ -2362,6 +2362,15 @@ int nj_vm_load(nj_vm *vm, FILE *f)
     nj_host_free(vm, csbase);
     nj_host_free(vm, map);
     vm->motorola_softkeys = (nj_u1)(flags & NJ_SAVE_F_MOTOROLA);
+    /* Host drawing history belongs to the application we replaced. A fresh
+     * VM has none, and a successful live load must start at the same point.
+     * Do this only after the final failure exit; an early refusal must keep
+     * the old ownership so an unfinished Java buffer is not published. The
+     * host screen itself is not in the snapshot. */
+    vm->app_painted = 0u;
+    vm->app_painted_frame = 0u;
+    vm->app_paint_idle = 0u;
+    vm->app_paint_period = 0u;
     return NJ_OK;
 
 fail:
