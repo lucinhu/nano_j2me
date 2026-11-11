@@ -5623,6 +5623,114 @@ static void test_constant_seeds(nj_vm *vm)
     nj_clear_exception(vm);
 }
 
+/* Public setter/getter state only: no target, rendering or large image. */
+static nj_status viewport_set(nj_vm *vm, nj_ref g3d, const nj_s4 v[4])
+{
+    nj_value a[4];
+    int i;
+    for (i = 0; i < 4; i++) { a[i].i = v[i]; }
+    return nj_call(vm, g3d, CLS("Graphics3D"), "setViewport", "(IIII)V", a, NULL);
+}
+
+static void viewport_expect(nj_vm *vm, nj_ref g3d, const nj_s4 v[4], const char *phase)
+{
+    static const char *getters[4] = {
+        "getViewportX", "getViewportY", "getViewportWidth", "getViewportHeight"
+    };
+    int i;
+    for (i = 0; i < 4; i++) {
+        nj_value r;
+        nj_status st;
+        char what[160];
+        r.i = 0;
+        st = nj_call(vm, g3d, CLS("Graphics3D"), getters[i], "()I", NULL, &r);
+        snprintf(what, sizeof what, "viewport %s: %s preserves exact state", phase, getters[i]);
+        check(st == NJ_OK && !nj_has_exception(vm) && r.i == v[i], what);
+    }
+}
+
+static void test_viewport_boundaries(void)
+{
+    static const nj_s4 legal[][4] = {
+        { -17, 23, 1, 1 }, { -17, 23, 4096, 1 },
+        { -17, 23, 1, 4096 }, { -17, 23, 4096, 4096 },
+        { (-2147483647 - 1), 2147483647, 1, 1 },
+        { 2147483647, (-2147483647 - 1), 1, 1 }
+    };
+    static const nj_s4 invalid[][2] = {
+        { 0, 21 }, { -1, 21 }, { -7, 21 },
+        { (-2147483647 - 1), 21 }, { 2147483647, 21 }, { 4097, 21 },
+        { 29, 0 }, { 29, -1 }, { 29, -7 },
+        { 29, (-2147483647 - 1) }, { 29, 2147483647 }, { 29, 4097 },
+        { 0, 4097 }, { 4097, 0 }, { (-2147483647 - 1), 2147483647 }
+    };
+    static const nj_s4 seed[4] = { -31, 47, 123, 321 };
+    nj_port port;
+    nj_vm *vm;
+    nj_ref g3d;
+    nj_value r;
+    nj_u4 mark;
+    size_t i;
+
+    printf("== viewport dimensions and failure atomicity ==\n");
+    nj_port_headless_ex(&port, 240, 320, 0, NULL);
+    vm = nj_vm_create(&port, 512u * 1024u);
+    check(vm != NULL, "viewport isolated VM constructs");
+    if (!vm) { nj_port_shutdown(&port); return; }
+    check(nj_lib_late_init(vm) == NJ_OK, "viewport builtins initialize");
+    r.r = 0;
+    check(nj_call_static(vm, CLS("Graphics3D"), "getInstance",
+          "()L" CLS("Graphics3D") ";", NULL, &r) == NJ_OK && r.r &&
+          !nj_has_exception(vm), "viewport public Graphics3D instance constructs");
+    g3d = r.r;
+    if (!g3d || nj_has_exception(vm)) { goto done; }
+    mark = nj_root_mark(vm);
+    nj_root(vm, g3d);
+    check(nj_root_mark(vm) == mark + 1u, "viewport receiver root is inserted");
+    if (nj_root_mark(vm) != mark + 1u) { goto done; }
+    r.r = g3d;
+    check(nj_call(vm, g3d, CLS("Graphics3D"), "getTarget", "()Ljava/lang/Object;",
+          NULL, &r) == NJ_OK && !nj_has_exception(vm) && r.r == NULL,
+          "viewport starts with no bound target");
+    for (i = 0; i < sizeof legal / sizeof legal[0]; i++) {
+        check(viewport_set(vm, g3d, legal[i]) == NJ_OK && !nj_has_exception(vm),
+              "viewport legal dimensions and arbitrary x/y succeed without target");
+        viewport_expect(vm, g3d, legal[i], "legal");
+    }
+    for (i = 0; i < sizeof invalid / sizeof invalid[0]; i++) {
+        nj_s4 bad[4] = { 2147483647, (-2147483647 - 1), invalid[i][0], invalid[i][1] };
+        nj_status st;
+        const char *name;
+        char what[160];
+        check(viewport_set(vm, g3d, seed) == NJ_OK && !nj_has_exception(vm),
+              "viewport valid seed restores state before rejection");
+        viewport_expect(vm, g3d, seed, "seed");
+        st = viewport_set(vm, g3d, bad);
+        name = nj_ref_class_name(vm->exception);
+        snprintf(what, sizeof what, "viewport invalid dimensions %d x %d throw IAE",
+                 (int)bad[2], (int)bad[3]);
+        check(st != NJ_OK && name && strcmp(name, "java/lang/IllegalArgumentException") == 0,
+              what);
+        /* Count the exception assertion before clearing so old/wrong failures
+         * cannot masquerade as a successful state-preservation check. */
+        nj_clear_exception(vm);
+        viewport_expect(vm, g3d, seed, "rejected call");
+    }
+    check(viewport_set(vm, g3d, legal[0]) == NJ_OK && !nj_has_exception(vm),
+          "viewport legal setter recovers after all rejected dimensions");
+    viewport_expect(vm, g3d, legal[0], "recovery");
+    r.r = g3d;
+    check(nj_call(vm, g3d, CLS("Graphics3D"), "getTarget", "()Ljava/lang/Object;",
+          NULL, &r) == NJ_OK && !nj_has_exception(vm) && r.r == NULL,
+          "viewport state-only calls never bind a target");
+    nj_root_release(vm, mark);
+    check(nj_root_mark(vm) == mark && !nj_has_exception(vm),
+          "viewport roots and exception state balance");
+done:
+    nj_vm_destroy(vm);
+    nj_port_shutdown(&port);
+}
+
 int main(void)
 {
     nj_port port;
@@ -8380,6 +8488,7 @@ int main(void)
 
     nj_vm_destroy(vm);
     nj_port_shutdown(&port);
+    test_viewport_boundaries();
     printf("%d checks, %d failures\n", checks, failures);
     if (failures) {
         printf("FAILED (%d failures)\n", failures);

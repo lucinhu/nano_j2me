@@ -4093,6 +4093,10 @@ NJFN(m3g_setViewport)
     static const char *names[4] = { "_nj_vx", "_nj_vy", "_nj_vw", "_nj_vh" };
     int i;
 
+    if (NJ_ARG_INT(args, 2) <= 0 || NJ_ARG_INT(args, 3) <= 0 ||
+        NJ_ARG_INT(args, 2) > 4096 || NJ_ARG_INT(args, 3) > 4096) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException", NULL);
+    }
     for (i = 0; i < 4; i++) {
         nj_iput(vm, self, nj_field_lookup(vm, NJ_C_G3D, names[i], "I", 0),
                 NJ_ARG_INT(args, i));

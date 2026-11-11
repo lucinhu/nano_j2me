@@ -29,6 +29,31 @@ repeated unless the code changed the path the verification used.
   (frames, logs and stitched screenshots are bulk); the row names the
   directory, and the commit carries the text that quotes it.
 
+## 2026-11-11 M3G viewport dimension validation
+
+VERIFIED `Graphics3D.setViewport` rejects nonpositive dimensions and dimensions
+above the declared 4096-pixel width or height limit with
+`IllegalArgumentException`, before writing any of the four viewport fields.
+Coordinates retain their full integer range, and the setter works without a
+bound render target.
+
+The same extended M3G fixture reports 1127 checks and 75 failures against each
+old library, and 1127 checks with zero failures against each repaired library.
+All 75 old failures belong to the 15 invalid-size cases: exception type and
+preservation of all four getter values. The existing 935 checks remain intact;
+the 192 added checks also cover six legal boundary combinations, extreme
+coordinates, no target and recovery after rejection.
+
+Both Release and strict builds pass. Strict validation uses ASan, UBSan,
+float-cast-overflow checking and leak detection with warnings treated as errors
+and sanitizer recovery disabled. The related VM fixture passes System/M3G
+property checks and its three create/run/destroy rounds in each build. Each
+archive retains its original 76-member order, with only the M3G object changed.
+See [viewport validation](notes/2026-11-11-m3g-viewport.md) and the retained
+`.local-tools/debug-runs/m3g-viewport-20261111-main/` evidence. This is a focused
+regression; the earlier full 170-test result and benchmark scores keep their
+original runtime identities.
+
 ## 2026-11-11 M3G discovery and System properties
 
 The ordinary HD observation below exposed a missing discovery property. With
@@ -46,10 +71,10 @@ See [M3G discovery](notes/2026-11-11-m3g-version.md) for the focused regression
 results and normative references. There are still 170 registered tests; the
 previous full-suite result remains associated with its earlier runtime.
 
-This repairs discovery and the property table. It does not claim M3G conformance,
-new texture capabilities, or enforcement of `setViewport` dimension bounds;
-that setter still needs a separate fix. The earlier benchmark scores retain
-the measured binary identity and are not relabeled with this repair.
+This checkpoint repairs discovery and the property table. Its focused regression
+did not cover viewport size enforcement; that validation is recorded separately
+above. It does not establish M3G conformance or additional texture capabilities.
+The earlier benchmark scores retain their measured binary identity.
 
 ## 2026-11-11 ordinary JBenchmark3D and HD observations
 
