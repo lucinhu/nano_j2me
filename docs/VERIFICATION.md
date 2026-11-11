@@ -29,6 +29,52 @@ repeated unless the code changed the path the verification used.
   (frames, logs and stitched screenshots are bulk); the row names the
   directory, and the commit carries the text that quotes it.
 
+## 2026-11-11 Four-JAR benchmark observation at e32374c
+
+VERIFIED four sequential runs using the published `e32374c37fe1ec56d79f4e5988f787fe2de35b96`
+runtime and CLI SHA-256
+`26b085867dba09839af6f65e361de16d7f6a5fd4d393ec52eb7ca27d30f8a65f`.
+These are desktop observations at 240x320, a fixed 16 MiB heap with growth
+explicitly disabled, CPU3 affinity, uncapped frames, speed 100%, SDL2 X11 and
+the software renderer. Each JAR uses private state, RMS and filesystem paths.
+See the [versioned benchmark record](notes/2026-11-11-jbenchmark-e32374c.md).
+
+| Original JAR | Actual result observed |
+|---|---|
+| JBenchmark 1.1.1 | OPEN: no Results within the 120-second limit; four late samples show the same cube frame. No score recorded. |
+| JBenchmark2 2.1.1 | Overall **8672**; Image 2155, Text **47290**, Sprites 59352, 3D Transform 2342, User Interface 2418. Components are not summed to obtain the overall score. |
+| JBenchmark3D 3.1.0 | HQ **12278**, LQ **34458**, triangles **4882425/s**, texture **1909412 kTexels/s**. |
+| JBenchmarkHD 4.0.3 | Bilinear Success 92%; trilinear Failed/Not supported; perspective Success 99%; Z-buffer Failure 7 bit; smooth 8309694, textured 6750051, Fill literal Failed, Gaming **9624 (320.8 fps)**. |
+
+HD's information screen displays M3G 1.0 and maximum viewport dimension 4096.
+It also reports Form dimensions **0x0**, Canvas **240x320** and Fullcanvas
+**240x320**; the zero values are retained as observed. JBenchmark3D's bottom
+version/dimension fields were not captured; its version above comes from the
+original JAR metadata. This cohort does not establish a before/after speed
+increase or Android performance.
+
+The first JBenchmark attempt was aborted after a stale X11 window ID caused
+`BadWindow`. Its logs remain separate. The observer was corrected to rediscover
+and validate the same process's visible window before screenshots and input;
+one explicitly authorized recovery followed. No other target was repeated.
+The first three completed runs ended through their deadline SIGTERM, with
+wall times 119.2165, 179.1192 and 299.2084 seconds. HD ended through one F10 at
+628.4776 seconds. Process exit zero is not used as proof of Results.
+
+OPEN JBenchmark diagnosis: the single logged division by zero lies inside the
+original Java `catch (Exception)` range. JB2 logs 54 analogous throws and still
+reaches Results. Read-only bytecode and bridge review has not established the
+cause of JBenchmark's missing Results; neither a caught exception nor cumulative
+paint counts prove a stalled Java thread. The Text digit in JB2 was resolved
+against matching glyph pixels in its original screenshot: **47290**.
+
+Independent offline review verifies all 210 protected inputs, four original
+JAR hashes, sequential run records, 154 artifact hashes and 115 screenshots at
+960x1280. Original games, saves and root build remain unchanged. Evidence:
+`.local-tools/debug-runs/jbenchmark-e32374c-20261111/` and the independent
+`jbenchmark-e32374c-20261111-lead/` review. The earlier 171-test and nine-group
+sanitizer results below retain their original validation identity.
+
 ## 2026-11-11 GameCanvas flush ownership and restore boundaries
 
 Integrated upstream `a2e5ba84` through merge `1fe6a2a7`, retaining the viewport
