@@ -731,6 +731,7 @@ struct nj_vm {
      * a frame of its own.  A title that paints itself is left to paint itself:
      * the runner's extra paint would show a frame the title never asked for.
      */
+    /* Bit 0: synchronous paint; bit 1: explicit GameCanvas buffer flush. */
     nj_u1         app_painted;
     /* ... and that it painted THIS frame: the frame hook ages the silence. */
     nj_u1         app_painted_frame;
@@ -742,6 +743,8 @@ struct nj_vm {
      * paint in between (合金弹头2013BT版_678's flicker), while a title that
      * painted twice at startup and then went quiet gets its frames back
      * (开心农场BT版_6075).
+     * This fallback applies to Canvas; a self-flushing GameCanvas retains
+     * its last complete frame until another flush or explicit repaint.
      */
     nj_u1         app_paint_period;
     /* Frames since the application last painted one of its own. */

@@ -5484,7 +5484,10 @@ static int nj_midp_key_char_inner(nj_vm *vm, int key, int down, nj_u4 ch)
     if (vm->exception) {
         return consumed;
     }
-    if (consumed) {
+    /* A self-flushing GameCanvas publishes after its input-driven rendering
+     * is complete. Do not turn input delivery into an implicit buffer copy;
+     * a repaint explicitly queued by the callback remains pending. */
+    if (consumed && !((vm->app_painted & 2u) && isa(vm, d, NJ_C_GAMECANVAS))) {
         nj_midp_repaint(vm);
     }
     return consumed;
@@ -5577,7 +5580,8 @@ static int nj_midp_pointer_inner(nj_vm *vm, int x, int y, int kind)
             fput(vm, d, NJ_C_CANVAS, F_C_PRESSED, D_BOOL,
                  (kind == NJ_POINTER_DOWN) ? 1 : 0);
         }
-        nj_midp_repaint(vm);
+        if (!((vm->app_painted & 2u) && isa(vm, d, NJ_C_GAMECANVAS)))
+            nj_midp_repaint(vm);
         return 1;
     }
     /* Built-in editors must focus the row under the finger. Treating a tap
@@ -5684,7 +5688,7 @@ static nj_status nj_midp_paint_body(nj_vm *vm)
      * whatever the application did only when the application did not paint
      * itself (see the frame hook in nj_lib_midlet.c). */
     if (vm->in_paint) {
-        vm->app_painted = 1u;   /* serviceRepaints() asked for this one */
+        vm->app_painted |= 1u;   /* serviceRepaints() asked for this one */
         vm->app_painted_frame = 1u;
     }
     vm->painted_in_frame = 1u;
