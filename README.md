@@ -4,7 +4,7 @@
 
 [![latest release](https://img.shields.io/github/v/release/lucinhu/nano_j2me?sort=semver&label=release&color=blue)](https://github.com/lucinhu/nano_j2me/releases/latest)
 [![licence](https://img.shields.io/github/license/lucinhu/nano_j2me)](LICENSE)
-[![tests](https://img.shields.io/badge/tests-169%20passing-brightgreen)](docs/VERIFICATION.md)
+[![tests](https://img.shields.io/badge/tests-170%20passing-brightgreen)](docs/VERIFICATION.md)
 [![sanitized](https://img.shields.io/badge/sanitized-ASan%20%2B%20UBSan%20%2B%20LSan-brightgreen)](tools/run_sanitized_tests.sh)
 [![C99, no dependencies](https://img.shields.io/badge/C99-no%20dependencies-informational)](#design-commitments)
 
@@ -878,7 +878,10 @@ of that file too - `map_up = W`, `map_fire = J` and so on, with the names
 `SDL_GetKeyName()` prints; an empty value means the default key. A direct
 `nj2me game.jar` run reads the same file for heap, filter, fullscreen,
 renderer, mute and network, while `--scale`, `--fps`, `--keys` and `--heap` on
-the command line still win. The launcher is drawn by the runtime's own
+the command line still win. Optional automatic heap growth is off by default
+and applies on the next game launch. Use `--heap-grow` or `--no-heap-grow` to
+explicitly override the setting. `--heap` still sets the initial size; the
+default growth limit is 128 MiB. The launcher is drawn by the runtime's own
 rasteriser and built-in faces, so Chinese game names render with no toolkit and
 no extra dependency. The window remembers the size it was left at
 (`window = 900x700`), a running game's window carries its display name, and

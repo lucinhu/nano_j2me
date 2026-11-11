@@ -884,6 +884,11 @@ struct nj_vm {
     nj_u4      scratch_u2_len;
 
     void      *loader_ud;
+
+    /* Host reservation and caller policy. Never serialize these: a snapshot
+     * adopts the receiving VM's limit. Keep outside heap (heap_init resets it). */
+    nj_size    heap_capacity;
+    nj_size    heap_limit;
 };
 
 /* VM states */
@@ -1023,6 +1028,7 @@ static inline void nj_frame_pop_fast(nj_thread *th)
 }
 
 nj_status nj_heap_init(nj_vm *vm, void *block, nj_size size);
+void *nj_heap_reserve(nj_vm *vm, nj_size size, nj_size *capacity);
 void      nj_heap_destroy(nj_vm *vm);
 void     *nj_alloc(nj_vm *vm, nj_size bytes);         /* raw, zeroed */
 nj_ref    nj_new_instance(nj_vm *vm, nj_class *cls);

@@ -2973,8 +2973,8 @@ static void test_canvas_key_methods(nj_vm *vm)
     OK(vm->exception == NULL);
 }
 
-/* Canonical platform POWER is not a Java Canvas key code.  In particular,
- * its enum value must not escape as raw 27 (which some games treat as Back).
+/* Preserve POWER's established raw code 27: games can use it for Back or
+ * Pause.  Deliver press/release through the same Canvas path as other keys.
  * These fixture classes belong to this test, not to the runtime builtin ABI. */
 static int pk_down, pk_up, pk_code, pk_char;
 
@@ -3030,26 +3030,23 @@ static void pk_normal_key(nj_vm *vm, nj_ref canvas, int key, nj_u4 ch,
     OK(vm->exception == NULL);
 }
 
-static void pk_power_ignored(nj_vm *vm, nj_ref canvas)
+static void pk_power_delivered(nj_vm *vm, nj_ref canvas, int suppressed)
 {
     static const nj_u4 chars[] = {0u, 'P', 27u};
-    int downs = pk_down, ups = pk_up, ok = 0;
     int held = pk_field(vm, canvas, NJ_F_C_HELD);
     int latched = pk_field(vm, canvas, NJ_F_C_KEYS);
-    int character = call_int(vm, canvas, NJ_C_DISPLAYABLE, "getKeyChar",
-                             "()I", NULL, &ok);
     int running = vm->running, state = vm->state;
     unsigned i;
-    OK(ok);
     for (i = 0; i < sizeof(chars) / sizeof(chars[0]); ++i) {
-        OK(nj_midp_key_char(vm, NJ_KEY_POWER, 1, chars[i]) == 1);
+        int downs, ups;
+        pk_normal_key(vm, canvas, NJ_KEY_POWER, chars[i], 27,
+                      (int)chars[i], suppressed);
+        downs = pk_down;
+        ups = pk_up;
+        /* Canvas advertises no keyRepeated support; held/latch bits for
+         * ordinary game keys must survive an unrelated POWER event. */
         OK(nj_midp_key_repeat(vm, NJ_KEY_POWER) == 1);
-        OK(nj_midp_key_char(vm, NJ_KEY_POWER, 0, chars[i]) == 1);
-        OK_MSG(pk_down == downs && pk_up == ups,
-               "POWER leaked callbacks: down=%d up=%d", pk_down - downs,
-               pk_up - ups);
-        OK(call_int(vm, canvas, NJ_C_DISPLAYABLE, "getKeyChar", "()I", NULL,
-                    &ok) == character && ok);
+        OK(pk_down == downs && pk_up == ups);
         OK(pk_field(vm, canvas, NJ_F_C_HELD) == held);
         OK(pk_field(vm, canvas, NJ_F_C_KEYS) == latched);
         OK(nj_midp_current(vm) == canvas);
@@ -3114,7 +3111,7 @@ static void test_platform_power_key(nj_vm *vm)
          * release.  Neither its hold nor its unread press may be lost. */
         pk_normal_key(vm, canvas, NJ_KEY_NONE, 's', 's', 's', suppressed);
         OK(nj_midp_key(vm, NJ_KEY_UP, 1) == 1);
-        pk_power_ignored(vm, canvas);
+        pk_power_delivered(vm, canvas, suppressed);
         if (variant) {
             OK(call_int(vm, canvas, NJ_C_GAMECANVAS, "getKeyStates", "()I",
                         NULL, &ok) == NJ_GAME_UP && ok);
@@ -3131,7 +3128,7 @@ static void test_platform_power_key(nj_vm *vm)
         pk_normal_key(vm, canvas, 'x', 0u, 'x', 0, suppressed);
         pk_normal_key(vm, canvas, NJ_KEY_NONE, 'p', 'p', 'p', suppressed);
         pk_normal_key(vm, canvas, NJ_KEY_NONE, 27u, 27, 27, suppressed);
-        pk_power_ignored(vm, canvas);
+        pk_power_delivered(vm, canvas, suppressed);
         for (i = 0; i < sizeof(keys) / sizeof(keys[0]); ++i) {
             int c = codes[i];
             int ch = (c >= 48 && c <= 57) || c == '*' || c == '#' ? c : 0;
@@ -3146,9 +3143,9 @@ static void test_platform_power_key(nj_vm *vm)
         nj_root_release(vm, mark);
     }
     vm->motorola_softkeys = (nj_u1)saved_motorola;
-    OK(nj_midp_key(vm, NJ_KEY_POWER, 1) == 1);
-    OK(nj_midp_key_char(vm, NJ_KEY_POWER, 0, 27u) == 1);
-    OK(nj_midp_key_repeat(vm, NJ_KEY_POWER) == 1);
+    OK(nj_midp_key(vm, NJ_KEY_POWER, 1) == 0);
+    OK(nj_midp_key_char(vm, NJ_KEY_POWER, 0, 27u) == 0);
+    OK(nj_midp_key_repeat(vm, NJ_KEY_POWER) == 0);
     OK(nj_midp_current(vm) == NULL && vm->exception == NULL);
     OK(vm->nroots == mark);
 }

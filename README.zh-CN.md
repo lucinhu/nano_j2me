@@ -4,7 +4,7 @@
 
 [![最新发布](https://img.shields.io/github/v/release/lucinhu/nano_j2me?sort=semver&label=release&color=blue)](https://github.com/lucinhu/nano_j2me/releases/latest)
 [![许可](https://img.shields.io/github/license/lucinhu/nano_j2me)](LICENSE)
-[![测试](https://img.shields.io/badge/tests-169%20passing-brightgreen)](docs/VERIFICATION.md)
+[![测试](https://img.shields.io/badge/tests-170%20passing-brightgreen)](docs/VERIFICATION.md)
 [![sanitizer](https://img.shields.io/badge/sanitized-ASan%20%2B%20UBSan%20%2B%20LSan-brightgreen)](tools/run_sanitized_tests.sh)
 [![C99，零依赖](https://img.shields.io/badge/C99-no%20dependencies-informational)](#设计上的硬约束)
 
@@ -621,7 +621,7 @@ build/nj2me --print-library          # 看看列表看到了什么
 的行——`map_up = W`、`map_fire = J` 之类，值就是 `SDL_GetKeyName()` 打印的
 键名，留空表示默认键。直接 `nj2me game.jar` 运行会读取同一份文件里的堆、
 滤镜、全屏、渲染、静音和网络设置，命令行上的 `--scale`、`--fps`、`--keys`
-和 `--heap` 仍然优先。启动器由运行时自己的光栅器和内置字体绘制，所以不依赖
+和 `--heap` 仍然优先。桌面设置的“自动扩展内存”默认关闭，在下次启动游戏时生效；也可用 `--heap-grow` 开启，或用 `--no-heap-grow` 覆盖已保存的设置。`--heap` 仍决定初始大小，开启扩展后的默认上限为 128 MiB。启动器由运行时自己的光栅器和内置字体绘制，所以不依赖
 任何界面工具包也能显示中文游戏名。窗口会记住上次拖动到的尺寸
 （`window = 900x700`），运行中的游戏窗口标题带游戏名；同一份文件里的
 `recent =`、`favorite =` 行保存最近玩过的游戏和加了星的行，设置页的“恢复默认”

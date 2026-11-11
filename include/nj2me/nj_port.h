@@ -888,6 +888,11 @@ typedef struct nj_run_opts {
     /* Borrowed handset profile, installed before props.  Besides properties,
      * motorola-e398 selects Canvas soft-key codes -21/-22.  NULL is generic. */
     const nj_device *device;
+
+    /* Optional maximum Java heap bytes.  0 preserves a fixed heap.  A larger
+     * limit reserves stable storage at startup, then expands the usable heap
+     * only after allocation still fails following garbage collection. */
+    nj_size     heap_limit;
 } nj_run_opts;
 
 /*

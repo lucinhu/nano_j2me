@@ -29,7 +29,17 @@ repeated unless the code changed the path the verification used.
   (frames, logs and stitched screenshots are bulk); the row names the
   directory, and the commit carries the text that quotes it.
 
-## 2026-11-11 platform Power key
+## 2026-11-11 optional Java heap growth
+
+The isolated Release build passed all 170 registered tests. Five focused tests also passed with ASan, UBSan and leak checking, including 69 assertions for heap growth and restore. The original Minecraft JAR opened its own menu on P in both 90-frame runs from the same saved world. At 16 MiB fixed it logged an image OOM and reduced view distance; with growth enabled the same binary expanded to 32 MiB and showed neither symptom in the replay. See [heap growth](notes/2026-11-11-auto-heap.md) for the setup and limits.
+
+## 2026-11-11 platform Power key (historical, superseded)
+
+The following checkpoint records `7f2fca9`. Its event-consuming behavior has
+since been withdrawn at the user's request: the current code delivers raw 27
+to the original game's menu/back handler again. Avoiding that menu did not
+repair its image allocation failure. The recorded results below describe the
+old experiment, not the current intended behavior.
 
 The SDL2 overlay's `P` button represents the platform Power key. Its internal
 value, 27, previously reached Canvas callbacks through the raw-key fallback.

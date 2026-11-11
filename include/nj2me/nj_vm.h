@@ -33,6 +33,14 @@ typedef struct nj_method nj_method;
 /* Lifecycle                                                           */
 /* ------------------------------------------------------------------ */
 nj_vm  *nj_vm_create(const nj_port *port, nj_size heap_bytes);
+/* Optional stable-address heap growth. Zero heap_bytes selects NJ_MAX_HEAP;
+ * zero heap_limit keeps the fixed-heap behavior. A nonzero limit must be at
+ * least the initial size; both sizes must be multiples of NJ_OBJ_ALIGN when
+ * heap_limit is nonzero. The complete limit is reserved through port.alloc
+ * (or malloc) at creation; only the logical heap is initially zeroed/opened.
+ * This does not promise deferred physical allocation on every host. */
+nj_vm  *nj_vm_create_with_heap_limit(const nj_port *port, nj_size heap_bytes,
+                                    nj_size heap_limit);
 
 /*
  * Tear the VM down completely and return the number of outstanding host

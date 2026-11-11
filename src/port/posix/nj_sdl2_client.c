@@ -621,6 +621,10 @@ static nj_status client_run_game(const nj_client_run_options *options,
     if (opts.heap_bytes == 0 && heap > 0) {
         opts.heap_bytes = heap;
     }
+    /* Read the current library setting for every launch. Explicit CLI
+     * overrides survive a return to the library and another game selection. */
+    opts.heap_limit = nj_client_heap_limit(settings, options->heap_grow_override,
+                                           opts.heap_bytes);
     if (options->rms_dir != NULL) {
         port.rms_dir = options->rms_dir;
     }

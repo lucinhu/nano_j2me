@@ -808,6 +808,7 @@ if(NJ_BUILD_TESTS)
   # ---- the memory contract and the class library ----
   nj_add_test(test_lifecycle tests/test_lifecycle.c)
   nj_add_test(test_heap_bounds tests/test_heap_bounds.c)
+  nj_add_test(test_heap_growth tests/test_heap_growth.c)
   nj_add_test(test_string_intern tests/test_string_intern.c)
   nj_add_test(test_util tests/test_util.c)
   nj_add_test(test_math_edges tests/test_math_edges.c)

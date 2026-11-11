@@ -96,7 +96,7 @@ nj_u4 nj_host_live_count(nj_vm *vm)
     return vm ? vm->host_count : 0u;
 }
 
-void *nj_host_alloc(nj_vm *vm, nj_size n)
+static void *nj_host_alloc_zero(nj_vm *vm, nj_size n, nj_size zero_bytes)
 {
     nj_hosthdr *h;
     nj_size total;
@@ -122,7 +122,13 @@ void *nj_host_alloc(nj_vm *vm, nj_size n)
     if (!h) {
         return NULL;
     }
-    memset(h, 0, total);
+    /* A heap reservation leaves unopened payload untouched. Ordinary host
+     * allocations still clear their entire allocation, including padding. */
+    if (zero_bytes == n) {
+        memset(h, 0, total);
+    } else {
+        memset(h, 0, NJ_HOST_HDR_SIZE + zero_bytes);
+    }
 
     h->size = n;
     h->magic = NJ_HOST_MAGIC;
@@ -139,6 +145,23 @@ void *nj_host_alloc(nj_vm *vm, nj_size n)
         vm->host_peak = vm->host_count;
     }
     return host_user(h);
+}
+
+void *nj_host_alloc(nj_vm *vm, nj_size n)
+{
+    return nj_host_alloc_zero(vm, n, n);
+}
+
+/* Allocate before installing a new arena, so snapshot allocation failure can
+ * leave the old heap intact. The registry owns the full reserved capacity. */
+void *nj_heap_reserve(nj_vm *vm, nj_size size, nj_size *capacity)
+{
+    nj_size cap = vm->heap_limit ? vm->heap_limit : size;
+    if (size < 4096u || cap < size) {
+        return NULL;
+    }
+    *capacity = cap;
+    return nj_host_alloc_zero(vm, cap, size);
 }
 
 void nj_host_free(nj_vm *vm, void *p)
@@ -215,8 +238,9 @@ nj_status nj_heap_init(nj_vm *vm, void *block, nj_size size)
         vm->heap.base = (nj_u1 *)block;
         vm->heap.size = size;
         vm->heap.external = 1u;
+        vm->heap_capacity = size;
     } else {
-        void *p = nj_host_alloc(vm, size);
+        void *p = nj_heap_reserve(vm, size, &vm->heap_capacity);
         if (!p) {
             return NJ_ERR_NOMEM;
         }
@@ -358,11 +382,85 @@ static nj_block *nj_free_find(nj_vm *vm, nj_size total)
     return NULL;
 }
 
+/* Called only after collection and an unsuccessful retry. GC has folded the
+ * logical tail into its free lists. Extend that tail in place; do not sweep
+ * again without marking (the previous sweep already cleared live marks). */
+static int nj_heap_try_grow(nj_vm *vm, nj_size total)
+{
+    nj_size old_size = vm->heap.size, tail_size = 0u, new_size;
+    nj_u8 wanted;
+    nj_u1 *p, *end;
+    nj_block *last = NULL, *tail;
+    nj_block **pp;
+    int bin;
+
+    if (!vm->heap_limit || vm->heap.external || !vm->heap.base ||
+        old_size >= vm->heap_capacity || vm->heap.bump != old_size) {
+        return 0;
+    }
+    p = vm->heap.base;
+    end = p + old_size;
+    while (p < end) {
+        nj_block *b = (nj_block *)p;
+        if ((nj_size)(end - p) < NJ_BLOCK_HDR || b->size < NJ_MIN_BLOCK ||
+            b->size > (nj_size)(end - p)) {
+            return 0;
+        }
+        last = b;
+        p += b->size;
+    }
+    if (last && last->magic == NJ_BLOCK_FREE) {
+        tail_size = last->size;
+    }
+    if (!tail_size && (old_size & (NJ_OBJ_ALIGN - 1u))) {
+        return 0;
+    }
+    wanted = (nj_u8)old_size * 2u;
+    if (wanted < (nj_u8)old_size + total - tail_size) {
+        wanted = (nj_u8)old_size + total - tail_size;
+    }
+    if (wanted > vm->heap_capacity) {
+        wanted = vm->heap_capacity;
+    }
+    new_size = (nj_size)wanted & ~(nj_size)(NJ_OBJ_ALIGN - 1u);
+    if (new_size <= old_size || (nj_u8)(new_size - old_size) + tail_size < total) {
+        return 0;
+    }
+    if (tail_size) {
+        bin = nj_bin_for(tail_size);
+        pp = bin < 0 ? (nj_block **)&vm->heap.big_free
+                     : (nj_block **)&vm->heap.bins[bin].head;
+        while (*pp && *pp != last) {
+            pp = (nj_block **)&NJ_BLOCK_LINK(*pp);
+        }
+        if (!*pp) {
+            return 0;
+        }
+        *pp = (nj_block *)NJ_BLOCK_LINK(last);
+        if (bin >= 0) {
+            vm->heap.bins[bin].count--;
+        }
+        tail = last;
+    } else {
+        tail = (nj_block *)end;
+    }
+    memset(end, 0, new_size - old_size);
+    tail->size = tail_size + new_size - old_size;
+    tail->magic = NJ_BLOCK_FREE;
+    vm->heap.size = new_size;
+    vm->heap.bump = new_size;
+    nj_free_insert(vm, tail);
+    nj_logf(vm, 2, "heap grew: %u -> %u bytes (limit %u)",
+            (unsigned)old_size, (unsigned)new_size, (unsigned)vm->heap_limit);
+    return 1;
+}
+
 void *nj_alloc(nj_vm *vm, nj_size bytes)
 {
     nj_block *b;
     nj_size total;
     int collected = 0;
+    int grown = 0;
 
     if (!vm) {
         return NULL;
@@ -391,6 +489,12 @@ void *nj_alloc(nj_vm *vm, nj_size bytes)
                 b->size = total;
             }
             b->magic = NJ_BLOCK_MAGIC;
+            if (vm->heap_limit) {
+                nj_size frontier = (nj_size)((nj_u1 *)b - vm->heap.base) + b->size;
+                if (frontier > vm->heap.peak) {
+                    vm->heap.peak = frontier;
+                }
+            }
             memset(NJ_BLOCK_PAYLOAD(b), 0, b->size - NJ_BLOCK_HDR);
             return NJ_BLOCK_PAYLOAD(b);
         }
@@ -427,6 +531,10 @@ void *nj_alloc(nj_vm *vm, nj_size bytes)
             if (nj_gc_run(vm) == NJ_OK) {
                 continue;
             }
+        }
+        if (!grown && nj_heap_try_grow(vm, total)) {
+            grown = 1;
+            continue;
         }
         return NULL;
     }

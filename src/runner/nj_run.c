@@ -928,7 +928,7 @@ int nj_run(const nj_port *port_in, const nj_run_opts *opts)
     /* ---- the VM ---- */
     run_hook_ctx hook_ctx;
 
-    vm = nj_vm_create(&port, opts->heap_bytes);
+    vm = nj_vm_create_with_heap_limit(&port, opts->heap_bytes, opts->heap_limit);
     /*
      * Let the display keep being drawn while a Java thread sleeps.
      *

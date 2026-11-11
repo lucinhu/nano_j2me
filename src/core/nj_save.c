@@ -98,8 +98,9 @@ static int restore_native_object(nj_vm *vm, nj_ref object, nj_u4 offset, void *u
 #define NJ_SAVE_HDR_SIZE  176u
 /* Explicit heaps may exceed the library default. Loading may use that
  * caller-selected capacity, but cannot request an arbitrary larger arena. */
-#define NJ_SAVE_HEAP_MAX(vm) ((nj_u8)(vm)->heap.size > (nj_u8)NJ_MAX_HEAP \
-                             ? (nj_u8)(vm)->heap.size : (nj_u8)NJ_MAX_HEAP)
+#define NJ_SAVE_HEAP_MAX(vm) ((vm)->heap_limit ? (nj_u8)(vm)->heap_limit : \
+                             ((nj_u8)(vm)->heap.size > (nj_u8)NJ_MAX_HEAP \
+                              ? (nj_u8)(vm)->heap.size : (nj_u8)NJ_MAX_HEAP))
 /* the largest blob worth believing: arena + stacks + statics + records */
 #define NJ_SAVE_BLOB_MAX(vm) (NJ_SAVE_HEAP_MAX(vm) + (nj_u8)NJ_MAX_THREADS * (nj_u8)NJ_MAX_STACK_SLOTS * 8u + 4u * 1024u * 1024u)
 #define NJ_SAVE_NONE      0xFFFFFFFFu   /* NULL arena offset / no thread   */
@@ -1658,6 +1659,7 @@ int nj_vm_load(nj_vm *vm, FILE *f)
     nj_u2 *legacy_grow = NULL; /* instance_size growth accepted per class  */
     nj_u1 *block = NULL;
     nj_u1 *old_base = NULL;
+    nj_size new_capacity = 0u;
     nj_u1 old_external = 0u;
     nj_u4 magic, version, hdr_size, ptr_size, endian, flags;
     nj_u8 heap_size, heap_bump, heap_used, heap_peak, saved_ms;
@@ -1988,7 +1990,7 @@ int nj_vm_load(nj_vm *vm, FILE *f)
 
     /* A new arena, then drop the old one.  Allocating first means a failure
      * here leaves the running VM intact. */
-    block = (nj_u1 *)nj_host_alloc(vm, (nj_size)heap_size);
+    block = (nj_u1 *)nj_heap_reserve(vm, (nj_size)heap_size, &new_capacity);
     if (!block) {
         NJ_LOAD_FAIL(NJ_ERR_NOMEM);
     }
@@ -2005,6 +2007,7 @@ int nj_vm_load(nj_vm *vm, FILE *f)
         NJ_LOAD_FAIL(NJ_ERR_NOMEM);
     }
     vm->heap.external = 0u;               /* the arena is ours to free now */
+    vm->heap_capacity = new_capacity;
     installed = 1;
     /*
      * The memo tables and the fresh VM's own refs point into the heap that was
