@@ -1556,7 +1556,7 @@ nj_add_test(test_clip tests/test_clip.c)
       ${CMAKE_CURRENT_SOURCE_DIR}/tests)
   endif()
 
-  foreach(extra_test test_font_png test_jpeg test_lcdui test_form_scroll test_imageitem_alttext test_display_serially test_game test_lib
+  foreach(extra_test test_font_png test_jpeg test_lcdui test_form_scroll test_imageitem_alttext test_display_serially test_gamecanvas_flush test_game test_lib
                       test_ioapi test_resolution test_sax test_rms test_rms_enumeration
                       test_rms_lookup test_run_archive
                       test_nokia_sound test_nokia_touch test_datagram test_bluetooth_property)

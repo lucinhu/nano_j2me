@@ -2765,12 +2765,12 @@ static void gc_flush_region(nj_vm *vm, nj_ref self, nj_ref gobj,
          * its own loop, so the runner's paint landed in the middle of the next
          * frame every time.
          *
-         * The adaptive rule in the frame hook takes over if the title stops
-         * flushing (its thread dies, or it only flushes when something
-         * changed), so a quiet GameCanvas still gets its frames.
+         * Quiet frames retain this completed image. An adaptive timeout
+         * cannot tell a stopped producer from a slow one; explicit repaint
+         * and display changes remain supported by the frame hook.
          */
         vm->painted_in_frame = 1u;
-        vm->app_painted = 1u;
+        vm->app_painted |= 2u; /* Retain explicit buffer ownership across paints. */
         vm->app_painted_frame = 1u;
     }
     /* Publishing pixels is not a Canvas.repaint() request. The frame pump
