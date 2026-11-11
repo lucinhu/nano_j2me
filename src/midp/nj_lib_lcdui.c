@@ -630,6 +630,7 @@ void nj_midp_repaint(nj_vm *vm)
 
 void nj_midp_present(nj_vm *vm)
 {
+    int video_active;
 
     if (!vm) {
         return;
@@ -673,7 +674,20 @@ void nj_midp_present(nj_vm *vm)
      * video overlay also sits.  A no-op unless a started video Player asked
      * for it and this displayable is the Canvas it registered.
      */
-    nj_media_video_overlay(vm);
+    video_active = nj_media_video_overlay(vm);
+    /* A producer-owned GameCanvas cannot change the committed screen between
+     * flushes. Keep input/audio/frame pacing and the host HUD ticking, without
+     * making the port compare the same large framebuffer on every VM slice.
+     * Ordinary Canvas and legacy GameCanvas still require their old presents;
+     * direct video also bypasses this optimization. Ports opt in explicitly. */
+    if (vm->port && vm->port->display_idle && !video_active &&
+        !vm->painted_in_frame && (vm->app_painted & 2u)) {
+        nj_ref current = nj_midp_current(vm);
+        if (current && isa(vm, current, NJ_C_GAMECANVAS)) {
+            vm->port->display_idle(vm->port->ud);
+            return;
+        }
+    }
     if (vm->port && vm->port->display_present && vm->screen.pixels) {
         vm->port->display_present(vm->port->ud, 0, 0, vm->screen.width,
                                   vm->screen.height);

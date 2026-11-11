@@ -783,6 +783,14 @@ typedef struct nj_port {
     /* Optional synchronous, already-clipped opaque fill; see nj_gfx_fill_fn.
      * NULL preserves the software rasterizer. */
     nj_gfx_fill_fn gfx_fill_rect;
+
+    /* Optional idle display notification. For a visible GameCanvas which
+     * explicitly owns presentation through flushGraphics(), the committed
+     * screen is unchanged until another flush/paint or a video overlay.
+     * Called instead of display_present on those quiet scheduler frames.
+     * Use this for HUD/host housekeeping without rereading the framebuffer.
+     * NULL retains the existing per-frame display_present behavior. */
+    void (*display_idle)(void *ud);
 } nj_port;
 
 /* ------------------------------------------------------------------ */

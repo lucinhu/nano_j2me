@@ -3,6 +3,10 @@
 #define main display_serially_fixture_main
 #include "test_display_serially.c"
 #undef main
+#include <stdlib.h>
+#if NJ_ENABLE_VIDEO && NJ_ENABLE_M4V
+#include "m4v_clip.h"
+#endif
 
 static void fill_top(nj_ref graphics)
 {
@@ -295,6 +299,153 @@ static void snapshot_boundaries(void)
     fclose(saved);
 }
 
+static int idle_notifications;
+static void *idle_snapshot;
+static nj_size idle_snapshot_bytes;
+static void observe_idle(void *ud)
+{
+    (void)ud;
+    idle_notifications++;
+    if (idle_snapshot) {
+        /* Check the entire committed screen, including pixels outside the
+         * fixture observer's top-left sample. Never expose half a map. */
+        CHECK(memcmp(idle_snapshot, nj_midp_screen(active->vm)->pixels,
+                     idle_snapshot_bytes) == 0);
+    }
+}
+
+static void idle_present_case(void)
+{
+    fixture f;
+    nj_ref c, g, legacy;
+    nj_value ret, args[4];
+    int i, before, idle_before;
+    if (!begin(&f, "opt-in idle notification preserves GameCanvas commits")) return;
+    f.port.display_idle = observe_idle;
+    idle_notifications = 0;
+    c = canvas(1); frame();
+    ret.r = NULL;
+    CHECK(call(c,NJ_C_GAMECANVAS,"getGraphics","()" D_GRAPHICS,NULL,&ret));
+    g = root(ret.r);
+    fill(g,BLUE); flush(c); frame();
+    CHECK(f.presented_pixel == screen_color(BLUE));
+    before = f.presents;
+    idle_before = idle_notifications;
+    idle_snapshot_bytes = (nj_size)f.vm->screen.stride * f.vm->screen.height;
+    idle_snapshot = malloc(idle_snapshot_bytes);
+    CHECK(idle_snapshot != NULL);
+    if (idle_snapshot) memcpy(idle_snapshot, f.vm->screen.pixels, idle_snapshot_bytes);
+    fill_top(g);
+    for (i=0;i<310;i++) frame();
+    CHECK(f.presents == before);
+    CHECK(idle_notifications == idle_before + 310);
+    CHECK(f.presented_pixel == screen_color(BLUE));
+    CHECK(nj_surface_get(nj_midp_screen(f.vm),8,8) == screen_color(BLUE));
+    CHECK(nj_midp_key(f.vm,NJ_KEY_RIGHT,1)); frame();
+    CHECK(nj_midp_key(f.vm,NJ_KEY_RIGHT,0)); frame();
+    CHECK(nj_midp_pointer(f.vm,8,8,NJ_POINTER_DOWN)); frame();
+    CHECK(nj_midp_pointer(f.vm,10,8,NJ_POINTER_MOVE)); frame();
+    CHECK(nj_midp_pointer(f.vm,10,8,NJ_POINTER_UP)); frame();
+    CHECK(f.presents == before);
+    free(idle_snapshot); idle_snapshot = NULL;
+    fill(g,GREEN); flush(c); frame();
+    CHECK(f.presents == before+1);
+    CHECK(f.presented_pixel == screen_color(GREEN));
+    args[0].i=0; args[1].i=0; args[2].i=0; args[3].i=16;
+    CHECK(call(c,NJ_C_GAMECANVAS,"flushGraphics","(IIII)V",args,NULL));
+    before=f.presents; frame();
+    CHECK(f.presents == before); /* Invalid flush cannot publish pixels. */
+    fill(g,BLUE);
+    CHECK(call(c,NJ_C_CANVAS,"repaint","()V",NULL,NULL)); frame();
+    CHECK(f.presents == before+1);
+    CHECK(f.presented_pixel == screen_color(BLUE));
+    /* Rectangular commits publish only their declared region, then quiet
+     * frames must retain that exact mixed image while the producer draws. */
+    fill(g,GREEN);
+    args[0].i=0; args[1].i=0; args[2].i=16; args[3].i=16;
+    CHECK(call(c,NJ_C_GAMECANVAS,"flushGraphics","(IIII)V",args,NULL)); frame();
+    CHECK(nj_surface_get(nj_midp_screen(f.vm),8,8) == screen_color(GREEN));
+    CHECK(nj_surface_get(nj_midp_screen(f.vm),20,20) == screen_color(BLUE));
+    idle_snapshot = malloc(idle_snapshot_bytes);
+    CHECK(idle_snapshot != NULL);
+    if (idle_snapshot) memcpy(idle_snapshot, f.vm->screen.pixels, idle_snapshot_bytes);
+    before=f.presents;
+    fill_top(g);
+    for (i=0;i<310;i++) frame();
+    CHECK(f.presents == before);
+    free(idle_snapshot); idle_snapshot = NULL;
+    /* Hosts which do not opt in keep their per-frame callback contract. */
+    f.port.display_idle = NULL;
+    before=f.presents; frame(); frame();
+    CHECK(f.presents == before+2);
+    f.port.display_idle = observe_idle;
+    legacy=canvas(1); frame();
+    before=f.presents; frame(); frame();
+    CHECK(f.presents == before+2);
+    CHECK((f.vm->app_painted & 2u)==0u);
+    set_current(c); frame();
+    CHECK(call(c,NJ_C_GAMECANVAS,"getGraphics","()" D_GRAPHICS,NULL,&ret));
+    fill(ret.r,GREEN); flush(c); frame();
+    set_current(legacy); frame();
+    before=f.presents; frame();
+    CHECK(f.presents == before+1); /* Hidden owner's flush cannot suppress B. */
+    (void)canvas(0); frame();
+    before=f.presents; frame(); frame();
+    CHECK(f.presents == before+2);
+    end(&f);
+}
+
+#if NJ_ENABLE_VIDEO && NJ_ENABLE_M4V
+static void idle_video_case(void)
+{
+    const char *player_class = "javax/microedition/media/Player";
+    const char *control_class = "javax/microedition/media/control/VideoControl";
+    fixture f;
+    nj_ref c, bytes, in, player, control;
+    nj_value a[2], ret;
+    int before, idle_before;
+    if (!begin(&f, "direct video bypasses GameCanvas idle notification")) return;
+    f.port.display_idle = observe_idle;
+    c=canvas(1); frame();
+    CHECK(call(c,NJ_C_GAMECANVAS,"getGraphics","()" D_GRAPHICS,NULL,&ret));
+    fill(ret.r,BLUE); flush(c); frame(); frame();
+    bytes=root(nj_byte_array_new(f.vm,sizeof(m4v_clip_3gp)));
+    CHECK(bytes != NULL);
+    if (!bytes) { end(&f); return; }
+    memcpy(bytes->u.bytes,m4v_clip_3gp,sizeof(m4v_clip_3gp));
+    in=root(nj_object_new(f.vm,"java/io/ByteArrayInputStream"));
+    a[0].r=bytes;
+    CHECK(nj_call_special(f.vm,in,"java/io/ByteArrayInputStream","<init>","([B)V",a,NULL)==NJ_OK);
+    a[0].r=in; a[1].r=nj_string_new(f.vm,"video/3gpp");
+    CHECK(nj_call_static(f.vm,"javax/microedition/media/Manager","createPlayer",
+                         "(Ljava/io/InputStream;Ljava/lang/String;)Ljavax/microedition/media/Player;",a,&ret)==NJ_OK);
+    player=root(ret.r);
+    CHECK(player != NULL);
+    if (!player) { end(&f); return; }
+    CHECK(call(player,player_class,"realize","()V",NULL,NULL));
+    CHECK(call(player,player_class,"prefetch","()V",NULL,NULL));
+    a[0].r=nj_string_new(f.vm,"VideoControl");
+    CHECK(call(player,player_class,"getControl","(Ljava/lang/String;)Ljavax/microedition/media/Control;",a,&ret));
+    control=root(ret.r);
+    a[0].i=1; a[1].r=c;
+    CHECK(call(control,control_class,"initDisplayMode","(ILjava/lang/Object;)Ljava/lang/Object;",a,&ret));
+    a[0].i=1;
+    CHECK(call(control,control_class,"setVisible","(Z)V",a,NULL));
+    CHECK(call(player,player_class,"start","()V",NULL,NULL));
+    nj_media_frame(f.vm);
+    before=f.presents; idle_before=idle_notifications;
+    frame(); frame();
+    CHECK(f.presents == before+2);
+    CHECK(idle_notifications == idle_before);
+    CHECK(call(player,player_class,"stop","()V",NULL,NULL));
+    frame();
+    CHECK(f.presents == before+2);
+    CHECK(idle_notifications == idle_before+1);
+    CHECK(call(player,player_class,"close","()V",NULL,NULL));
+    end(&f);
+}
+#endif
+
 int main(void)
 {
     int i;
@@ -302,6 +453,10 @@ int main(void)
     hidden_flush_case(0);
     hidden_flush_case(1);
     snapshot_boundaries();
+    idle_present_case();
+#if NJ_ENABLE_VIDEO && NJ_ENABLE_M4V
+    idle_video_case();
+#endif
     printf("GameCanvas flush ownership: %d checks, %d failures\n",checks,failures);
     return failures ? 1 : 0;
 }
