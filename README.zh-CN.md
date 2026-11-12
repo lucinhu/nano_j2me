@@ -150,6 +150,13 @@ nano_j2me 是一个用可移植 C99 写成的运行时，不是只能在桌面�
 | ESP32-C3（ESP-IDF, RISC-V）| 可编译、链接并启动；VM 需要 PSRAM |
 | headless | 测试套件使用的参考移植，可用于嵌入和 CI |
 
+另提供 **Android 2.0+（API 5）旧机专版**，面向 ARMv5/`armeabi` 手机，
+包括 Android 2.3。使用轻量启动器、软件画面输出和 AudioTrack 声音，
+支持浏览导入 JAR、从文件管理器打开 JAR，并沿用标准安卓版的图标。
+运行 `tools/build_android_legacy.sh` 生成独立 APK；安装方式、旧工具链和
+功能限制见 [docs/ANDROID_LEGACY.md](docs/ANDROID_LEGACY.md)。
+[下载 0.5.7 旧机版 APK](https://github.com/lucinhu/nano_j2me/releases/download/v0.5.7/nj2me-0.5.7-android-legacy-armeabi.apk)。
+
 同一个桌面二进制跑了 400 款游戏的[兼容性语料](docs/CORPUS.md)，其中 398 款正常
 运行。移植说明见 [docs/PORTING.md](docs/PORTING.md)。
 

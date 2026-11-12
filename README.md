@@ -170,6 +170,15 @@ Currently supported and verified by the release pipeline:
 | ESP32-C3 (ESP-IDF, RISC-V) | builds, links and boots; needs PSRAM for the VM |
 | headless | the reference port used by the test suite, for embedding and CI |
 
+A separate **Android 2.0+ (API 5) legacy edition** targets ARMv5/`armeabi`
+phones, including Android 2.3, with a lightweight launcher, software display and
+AudioTrack sound. It supports browsing/importing JARs and opening them from file
+managers, and shares the standard edition's launcher icon. Build it with
+`tools/build_android_legacy.sh`; installation,
+old-toolchain requirements and limitations are in
+[docs/ANDROID_LEGACY.md](docs/ANDROID_LEGACY.md). Download the
+[0.5.7 legacy APK](https://github.com/lucinhu/nano_j2me/releases/download/v0.5.7/nj2me-0.5.7-android-legacy-armeabi.apk).
+
 The same desktop binary plays the 400-title
 [compatibility corpus](docs/CORPUS.md) with 398 running titles. Porting notes
 are in [docs/PORTING.md](docs/PORTING.md).

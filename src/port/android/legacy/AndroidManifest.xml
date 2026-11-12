@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.lucinhu.nj2me" android:versionCode="1" android:versionName="legacy-1">
+    <uses-sdk android:minSdkVersion="5" android:targetSdkVersion="5" />
+    <!-- API5 permits reads from shared storage; no runtime permission API is used. -->
+    <uses-permission android:name="android.permission.VIBRATE" />
+    <supports-screens android:smallScreens="true" android:normalScreens="true"
+        android:largeScreens="true" android:anyDensity="true" />
+    <application android:label="@string/app_name" android:icon="@drawable/ic_launcher"
+        android:theme="@android:style/Theme.Black"
+        android:debuggable="true">
+        <activity android:name=".LibraryActivity" android:label="@string/app_name"
+            android:exported="true" android:launchMode="singleTop">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <!-- File managers use either a JAR MIME type or a file/content URI.
+                 API 5 suffix globs do not backtrack over dots in names, so URI
+                 routes are broad. The importer validates each archive before
+                 publishing it; MIME and filename hints are not trusted. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:mimeType="application/java-archive" />
+                <data android:mimeType="application/x-java-archive" />
+                <data android:mimeType="application/octet-stream" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="file" />
+                <data android:scheme="content" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="file" android:mimeType="*/*" />
+                <data android:scheme="content" android:mimeType="*/*" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="application/*" />
+            </intent-filter>
+        </activity>
+        <activity android:name=".GameActivity" android:exported="false"
+            android:configChanges="keyboard|keyboardHidden|orientation" />
+    </application>
+</manifest>

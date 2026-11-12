@@ -45,11 +45,23 @@
 
 #if defined(__ANDROID__)
 
+/* API 5-8 have neither ANativeWindow nor OpenSL ES.  The separate legacy
+ * frontend owns Canvas/AudioTrack; keep their API 9 headers AND symbols out of
+ * that library, while leaving the normal Android backend unchanged. */
+#ifndef NJ_ANDROID_LEGACY
+#define NJ_ANDROID_LEGACY 0
+#endif
+#if !NJ_ANDROID_LEGACY
 #include <android/native_window.h>
 #include <android/native_window_jni.h>
+#endif
 #include <android/log.h>
 #include <jni.h>
 #include <time.h>
+#include <unistd.h>
+#if NJ_ANDROID_LEGACY
+#include <malloc.h>   /* memalign has been available since API 1 */
+#endif
 #include <pthread.h>
 #include <dirent.h>
 #include <sys/stat.h>
@@ -72,15 +84,18 @@
  * in Android 26" and refuses to compile them for an older target; they have to
  * keep matching it.
  */
-#include <dlfcn.h>
 #include <sys/system_properties.h>
+#if !NJ_ANDROID_LEGACY
+#include <dlfcn.h>
 #include <SLES/OpenSLES.h>
 #include <SLES/OpenSLES_Android.h>
+#endif
 
 #ifndef PROP_VALUE_MAX
 #define PROP_VALUE_MAX 92   /* __system_property_get's buffer, from <sys/system_properties.h> */
 #endif
 
+#if !NJ_ANDROID_LEGACY
 typedef struct AAudioStreamStruct AAudioStream;
 typedef struct AAudioStreamBuilderStruct AAudioStreamBuilder;
 typedef int32_t aaudio_result_t;
@@ -127,6 +142,7 @@ typedef struct android_aaudio {
     aaudio_result_t (*requestStop)(AAudioStream *);
     aaudio_result_t (*close)(AAudioStream *);
 } android_aaudio;
+#endif /* !NJ_ANDROID_LEGACY */
 
 #define LOG_TAG "nj2me"
 
@@ -166,11 +182,12 @@ typedef struct android_aaudio {
 
 typedef struct android_audio {
     pthread_mutex_t lock;
-    int   backend;       /* 0 = no device, 1 = AAudio, 2 = OpenSL ES */
+    int   backend;       /* 0 = none, 1 = AAudio, 2 = OpenSL ES, 3 = Java pull */
     int   out_rate, out_ch;
     int   failed;        /* open failed once: stop retrying every tone */
     int   stream_paused;
 
+#if !NJ_ANDROID_LEGACY
     android_aaudio aa;                 /* backend 1 */
     AAudioStream  *stream;
 
@@ -183,6 +200,7 @@ typedef struct android_audio {
     nj_s2         *sl_buf;
     int            sl_buf_frames;
     int            sl_next;
+#endif
 
     /* tone sequencer */
     nj_audio_tone tones[ANDROID_AUDIO_TONES];
@@ -271,7 +289,15 @@ typedef struct android_glyph_face {
 #define BT_SVC_MAX  8
 
 typedef struct android_state {
+#if !NJ_ANDROID_LEGACY
     ANativeWindow *window;
+#else
+    jmethodID blit_mid;            /* GameActivity.blitFrame([SII)V */
+    jshortArray frame_pixels;      /* global ref, run thread writes, JNI frees */
+    jsize frame_count;
+    nj_u2 *frame_rgb565;           /* conversion scratch for non-RGB565 builds */
+    int audio_finished;           /* guarded by audio->lock; no pull after run */
+#endif
     pthread_mutex_t lock;
 
     int   width, height, stride;   /* the LOGICAL screen: what the MIDlet sees */
@@ -649,9 +675,22 @@ static void android_log(void *ud, int level, const char *msg)
 static void android_idle(void *ud)
 {
     android_state *s = AS(ud);
+#if NJ_ANDROID_LEGACY
+    for (;;) {
+        int parked;
+        pthread_mutex_lock(&s->lock);
+        parked = s->paused && !s->quit;
+        pthread_mutex_unlock(&s->lock);
+        if (!parked) {
+            break;
+        }
+        android_sleep_ms(ud, 10);
+    }
+#else
     while (s->paused && !s->quit) {
         android_sleep_ms(ud, 10);
     }
+#endif
 }
 
 /*
@@ -712,12 +751,14 @@ static int android_display_init(void *ud, int *w, int *h, int *stride, void **px
      * caller through nj_port_android_ex) and display_present() scales that into
      * whatever the Surface happens to be.
      */
+#if !NJ_ANDROID_LEGACY
     if (s->window) {
         s->win_w = ANativeWindow_getWidth(s->window);
         s->win_h = ANativeWindow_getHeight(s->window);
         ANativeWindow_setBuffersGeometry(s->window, s->win_w, s->win_h,
                                          WINDOW_FORMAT_RGBA_8888);
     }
+#endif
     if (s->width <= 0) {
         s->width = NJ_SCREEN_WIDTH;
     }
@@ -811,6 +852,7 @@ static nj_u4 android_pixel(const android_state *s, int wide, int lx, int ly)
     return ((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3);
 }
 
+#if !NJ_ANDROID_LEGACY
 /*
  * The same pixel android_pixel() packed, back in three 8-bit channels.
  *
@@ -923,6 +965,7 @@ static nj_u4 android_sample_linear(const android_state *s, int wide,
     b = (bt * (nj_u4)(256 - wy) + bb * (nj_u4)wy) >> 8;
     return android_pack(wide, r, g, b);
 }
+#endif
 
 /*
  * Grow the box of pixels the MIDlet has painted, one present at a time.
@@ -1061,11 +1104,103 @@ static void android_glyph_cache_flush(android_state *s)
     c->next = 0;
 }
 
+#if NJ_ANDROID_LEGACY
+static JNIEnv *android_run_env(android_state *s);
+
+/* Only the logical image crosses JNI.  Scaling on the old phone's Canvas
+ * avoids a native window-sized conversion, and Java inverts that same Canvas
+ * transform before calling nativeTouch.  The array is reused for every frame;
+ * blitFrame must consume/copy it before returning and must not retain it. */
+static int android_legacy_present(android_state *s)
+{
+    JNIEnv *env;
+    jsize count;
+    const jshort *pixels;
+    int row, col, quitting;
+
+    pthread_mutex_lock(&s->lock);
+    quitting = s->quit;
+    pthread_mutex_unlock(&s->lock);
+    if (quitting || !s->shadow || !s->activity_class || !s->blit_mid
+            || s->width <= 0 || s->height <= 0
+            || s->width > 0x7fffffff / s->height) {
+        return 0;
+    }
+    env = android_run_env(s);
+    if (!env) {
+        return 0;
+    }
+    count = (jsize)(s->width * s->height);
+    if (!s->frame_pixels || s->frame_count != count) {
+        jshortArray local;
+        if (s->frame_pixels) {
+            (*env)->DeleteGlobalRef(env, s->frame_pixels);
+            s->frame_pixels = NULL;
+        }
+        free(s->frame_rgb565);
+        s->frame_rgb565 = NULL;
+        s->frame_count = 0;
+        local = (*env)->NewShortArray(env, count);
+        if (local) {
+            s->frame_pixels = (jshortArray)(*env)->NewGlobalRef(env, local);
+            (*env)->DeleteLocalRef(env, local);
+        }
+        if ((*env)->ExceptionCheck(env)) {
+            (*env)->ExceptionClear(env);
+        }
+        if (!s->frame_pixels) {
+            return 0;
+        }
+        s->frame_count = count;
+    }
+    if (s->format == NJ_PIXFMT_RGB565 && s->stride == s->width * 2) {
+        pixels = (const jshort *)s->shadow;
+    } else {
+        if (!s->frame_rgb565) {
+            s->frame_rgb565 = (nj_u2 *)malloc((size_t)count * sizeof(nj_u2));
+            if (!s->frame_rgb565) {
+                return 0;
+            }
+        }
+        for (row = 0; row < s->height; row++) {
+            for (col = 0; col < s->width; col++) {
+                nj_u4 c;
+                if (s->format == NJ_PIXFMT_RGB888) {
+                    const nj_u1 *p = s->shadow + (size_t)row * s->stride
+                                              + (size_t)col * 3u;
+                    c = ((nj_u4)(p[0] >> 3) << 11)
+                      | ((nj_u4)(p[1] >> 2) << 5) | (nj_u4)(p[2] >> 3);
+                } else {
+                    c = android_pixel(s, 0, col, row);
+                }
+                s->frame_rgb565[(size_t)row * s->width + col] = (nj_u2)c;
+            }
+        }
+        pixels = (const jshort *)s->frame_rgb565;
+    }
+    (*env)->SetShortArrayRegion(env, s->frame_pixels, 0, count, pixels);
+    if (!(*env)->ExceptionCheck(env)) {
+        (*env)->CallStaticVoidMethod(env, s->activity_class, s->blit_mid,
+                                    s->frame_pixels, s->width, s->height);
+    }
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        return 0;
+    }
+    if (!s->det_done) {
+        android_detect(s);
+    }
+    return 1;
+}
+#endif
+
 static void android_display_present(void *ud, int x, int y, int w, int h)
 {
     android_state *s = AS(ud);
+#if !NJ_ANDROID_LEGACY
     ANativeWindow *win;
     ANativeWindow_Buffer buf;
+#endif
     (void)x; (void)y; (void)w; (void)h;
 
     /*
@@ -1079,6 +1214,11 @@ static void android_display_present(void *ud, int x, int y, int w, int h)
         android_glyph_cache_flush(s);
     }
 
+#if NJ_ANDROID_LEGACY
+    if (!android_legacy_present(s)) {
+        return;
+    }
+#else
     /*
      * Take a reference for the duration of the frame rather than holding the
      * lock across it.  The window can be replaced at any time - the activity
@@ -1367,6 +1507,7 @@ static void android_display_present(void *ud, int x, int y, int w, int h)
     }
     ANativeWindow_unlockAndPost(win);
     ANativeWindow_release(win);
+#endif
     s->frames_presented++;
 
     if (s->stats == 0) {
@@ -1410,6 +1551,18 @@ static int android_input_poll(void *ud, nj_event *ev)
     android_state *s = AS(ud);
     int have = 0;
 
+#if NJ_ANDROID_LEGACY
+    /* Exit also works from onPause(), and cannot be lost to a full input
+     * queue.  nativeQuit sets quit so android_idle wakes the parked VM. */
+    pthread_mutex_lock(&s->lock);
+    if (s->quit) {
+        memset(ev, 0, sizeof(*ev));
+        ev->type = NJ_EV_QUIT;
+        pthread_mutex_unlock(&s->lock);
+        return 1;
+    }
+    pthread_mutex_unlock(&s->lock);
+#endif
     if (s->speed_percent > 0 && s->speed_percent != s->speed_applied && s->vm) {
         nj_vm_set_speed(s->vm, s->speed_percent);
         s->speed_applied = s->speed_percent;
@@ -2326,6 +2479,7 @@ static void android_audio_close(android_state *s)
     if (!a) {
         return;
     }
+#if !NJ_ANDROID_LEGACY
     if (a->backend == 1 && a->stream) {
         a->aa.requestStop(a->stream);
         a->aa.close(a->stream);
@@ -2351,6 +2505,7 @@ static void android_audio_close(android_state *s)
         dlclose(a->aa.lib);
         a->aa.lib = NULL;
     }
+#endif
     a->backend = 0;
     free(a->ring);
     pthread_mutex_destroy(&a->lock);
@@ -2450,6 +2605,7 @@ static void android_audio_render(android_audio *a, nj_s2 *dst, int frames,
     a->frames_rendered += frames;
 }
 
+#if !NJ_ANDROID_LEGACY
 /* ------------------------------------------------------------------ */
 /* The modern device: AAudio, opened by hand                           */
 /* ------------------------------------------------------------------ */
@@ -2781,6 +2937,21 @@ static int android_audio_ensure(android_state *s, android_audio *a)
     return NJ_ERR_UNSUPPORTED;
 }
 
+#else /* NJ_ANDROID_LEGACY */
+/* Java owns the AudioTrack and drives android_audio_render through JNI.  The
+ * mixer is allocated before the pull thread can start and lives until destroy.
+ * Nothing in this backend links against libandroid, OpenSL ES, or AAudio. */
+static int android_audio_ensure(android_state *s, android_audio *a)
+{
+    int result;
+    (void)s;
+    pthread_mutex_lock(&a->lock);
+    result = a->failed ? NJ_ERR_UNSUPPORTED : NJ_OK;
+    pthread_mutex_unlock(&a->lock);
+    return result;
+}
+#endif
+
 static int android_tone_play(void *ud, const nj_audio_tone *tones, int count)
 {
     android_state *s = AS(ud);
@@ -2948,6 +3119,7 @@ static void android_audio_set_paused(android_audio *a, int paused)
     if (!a || !a->backend) {
         return;
     }
+#if !NJ_ANDROID_LEGACY
     if (a->backend == 1 && a->stream) {
         if (paused && !a->stream_paused) {
             if (a->aa.requestPause(a->stream) == AAUDIO_OK) {
@@ -2960,7 +3132,8 @@ static void android_audio_set_paused(android_audio *a, int paused)
         }
         return;
     }
-    if (a->backend == 2) {
+#endif
+    if (a->backend == 2 || a->backend == 3) {
         pthread_mutex_lock(&a->lock);
         a->stream_paused = paused ? 1 : 0;
         pthread_mutex_unlock(&a->lock);
@@ -2975,7 +3148,13 @@ void nj_port_android_set_active(nj_port *port, int active)
         return;
     }
     s = AS(port->ud);
+#if NJ_ANDROID_LEGACY
+    pthread_mutex_lock(&s->lock);
+#endif
     s->paused = active ? 0 : 1;
+#if NJ_ANDROID_LEGACY
+    pthread_mutex_unlock(&s->lock);
+#endif
     android_audio_set_paused(s->audio, active ? 0 : 1);
     if (!active) {
         return;
@@ -3002,6 +3181,9 @@ static void android_shutdown(void *ud)
     pthread_mutex_destroy(&s->lock);
     free(s->shadow);
     free(s->det_prev);
+#if NJ_ANDROID_LEGACY
+    free(s->frame_rgb565);
+#endif
     free(s);
 }
 
@@ -4492,6 +4674,25 @@ static void android_bt_close(void *ud, void *handle)
     if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
 }
 
+#if NJ_ANDROID_LEGACY
+/* Old bionic malloc promises only 8-byte alignment on ARMv5.  VM host blocks
+ * (including its heap arena) require NJ_OBJ_ALIGN, so provide the port's
+ * matched alloc/free pair.  The port has no realloc hook: runtime host growth
+ * uses these hooks, while ordinary local malloc/realloc buffers keep their
+ * libc ownership.  memalign returns a block directly compatible with free. */
+static void *android_legacy_alloc(void *ud, nj_size n)
+{
+    (void)ud;
+    return n ? memalign((size_t)NJ_OBJ_ALIGN, (size_t)n) : NULL;
+}
+
+static void android_legacy_free(void *ud, void *p)
+{
+    (void)ud;
+    free(p);
+}
+#endif
+
 /* Construction and the public configuration entry points              */
 /* ------------------------------------------------------------------ */
 /*
@@ -4518,6 +4719,18 @@ nj_status nj_port_android_ex(nj_port *out, int screen_w, int screen_h)
         return NJ_ERR_NOMEM;
     }
     pthread_mutex_init(&s->lock, NULL);
+#if NJ_ANDROID_LEGACY
+    /* Java may pull before nativeRun has entered the VM.  Publish one stable
+     * mixer now, rather than racing a first playTone/PCM lazy allocation. */
+    if (!android_audio_get(s)) {
+        pthread_mutex_destroy(&s->lock);
+        free(s);
+        return NJ_ERR_NOMEM;
+    }
+    s->audio->backend = 3;
+    s->audio->out_rate = ANDROID_AUDIO_RATE;
+    s->audio->out_ch = 2;
+#endif
     s->frame_cap_req = -1;      /* follow fps_cap until a player says otherwise */
     s->frame_cap_applied = -2;  /* not applied yet; see android_input_poll */
 
@@ -4535,6 +4748,10 @@ nj_status nj_port_android_ex(nj_port *out, int screen_w, int screen_h)
     memset(out, 0, sizeof(*out));
     out->name = "android";
     out->ud = s;
+#if NJ_ANDROID_LEGACY
+    out->alloc = android_legacy_alloc;
+    out->free = android_legacy_free;
+#endif
     out->millis = android_millis;
     out->sleep_ms = android_sleep_ms;
     out->idle = android_idle;
@@ -4641,6 +4858,11 @@ nj_status nj_port_android_ex(nj_port *out, int screen_w, int screen_h)
 
 void nj_port_android_set_window(nj_port *port, void *native_window)
 {
+#if NJ_ANDROID_LEGACY
+    /* Canvas owns the Java surface; there is no native window at API 5. */
+    (void)port;
+    (void)native_window;
+#else
     android_state *s;
     ANativeWindow *old;
 
@@ -4679,6 +4901,7 @@ void nj_port_android_set_window(nj_port *port, void *native_window)
     if (old) {
         ANativeWindow_release(old);
     }
+#endif
 }
 
 /*
@@ -4708,10 +4931,12 @@ void nj_port_android_set_window_size(nj_port *port, int width, int height)
     pthread_mutex_lock(&s->lock);
     s->win_w = width;
     s->win_h = height;
+#if !NJ_ANDROID_LEGACY
     if (s->window) {
         (void)ANativeWindow_setBuffersGeometry(s->window, width, height,
                                                WINDOW_FORMAT_RGBA_8888);
     }
+#endif
     pthread_mutex_unlock(&s->lock);
 }
 
@@ -4858,7 +5083,13 @@ int nj_port_android_stats(const nj_port *port, char *buf, nj_size cap)
                  s->speed_applied > 0 ? s->speed_applied : 100,
                  a ? (a->failed ? "failed"
                                 : (a->stream_paused ? "paused" : "on")) : "off");
-    if (n > 0 && n < (int)cap && a && a->stream) {
+    if (n > 0 && n < (int)cap && a
+#if NJ_ANDROID_LEGACY
+            && a->backend == 3
+#else
+            && a->stream
+#endif
+            ) {
         n += snprintf(buf + n, (size_t)((int)cap - n),
                       " rate=%d rates=%lld tones=%lld pcm=%lld",
                       a->out_rate, a->frames_rendered, a->tones_played,
@@ -4932,6 +5163,16 @@ static void *android_main_thread(void *arg)
         pthread_mutex_unlock(&s->lock);
     }
     (void)nj_run(&a->port, &a->opts);
+#if NJ_ANDROID_LEGACY
+    /* Keep the mixer alive for a pull already in progress, but stop consuming
+     * queued sound as soon as the game ends.  Java joins its audio thread
+     * before nativeDestroy, where the mixer is finally released. */
+    if (s && s->audio) {
+        pthread_mutex_lock(&s->audio->lock);
+        s->audio_finished = 1;
+        pthread_mutex_unlock(&s->audio->lock);
+    }
+#endif
     if (s && s->run_attached && s->jvm) {
         (*s->jvm)->DetachCurrentThread(s->jvm);
         s->run_attached = 0;
@@ -4958,6 +5199,64 @@ static int android_jstr(JNIEnv *env, jstring js, char *dst, size_t cap)
     return 1;
 }
 
+#if NJ_ANDROID_LEGACY
+/* Java uses this handshake before passing a NULL surface to nativeCreate. */
+JNIEXPORT jint JNICALL
+Java_com_lucinhu_nj2me_GameActivity_nativeLegacyVersion(JNIEnv *env, jclass cls)
+{
+    (void)env; (void)cls;
+    return 1;
+}
+
+/* Pull PCM16 stereo at ANDROID_AUDIO_RATE.  The caller owns thread lifetime:
+ * stop/pause AudioTrack to unblock write(), then join BOTH nativeRun's Java
+ * thread and the audio thread before nativeDestroy(handle).  No JNI pointer
+ * or array remains pinned while Java blocks in AudioTrack.write(). */
+JNIEXPORT jint JNICALL
+Java_com_lucinhu_nj2me_GameActivity_nativeRenderAudio(JNIEnv *env, jclass cls,
+                                                       jlong handle,
+                                                       jshortArray out,
+                                                       jint frames)
+{
+    android_app *app = (android_app *)(intptr_t)handle;
+    android_state *s;
+    android_audio *a;
+    jshort *dst;
+    jsize capacity;
+    (void)cls;
+
+    if (!app || !out || frames <= 0) {
+        return 0;
+    }
+    s = AS(app->port.ud);
+    if (!s || !s->audio) {
+        return 0;
+    }
+    capacity = (*env)->GetArrayLength(env, out) / 2;
+    if (frames > capacity) {
+        frames = capacity;
+    }
+    if (frames <= 0) {
+        return 0;
+    }
+    dst = (*env)->GetShortArrayElements(env, out, NULL);
+    if (!dst) {
+        return 0;
+    }
+    a = s->audio;
+    pthread_mutex_lock(&a->lock);
+    if (a->failed || a->stream_paused || s->audio_finished) {
+        memset(dst, 0, (size_t)frames * 2u * sizeof(jshort));
+    } else {
+        a->callbacks++;
+        android_audio_render(a, (nj_s2 *)dst, (int)frames, 2);
+    }
+    pthread_mutex_unlock(&a->lock);
+    (*env)->ReleaseShortArrayElements(env, out, dst, 0);
+    return frames;
+}
+#endif
+
 JNIEXPORT jlong JNICALL
 Java_com_lucinhu_nj2me_GameActivity_nativeCreate(JNIEnv *env, jobject thiz,
                                                  jobject surface,
@@ -4969,7 +5268,9 @@ Java_com_lucinhu_nj2me_GameActivity_nativeCreate(JNIEnv *env, jobject thiz,
 {
     android_app *a;
     android_state *s;
+#if !NJ_ANDROID_LEGACY
     ANativeWindow *win;
+#endif
     char rms[512], fsd[512];
 
     (void)thiz;
@@ -5018,9 +5319,29 @@ Java_com_lucinhu_nj2me_GameActivity_nativeCreate(JNIEnv *env, jobject thiz,
                 "(JZIIIZLjava/lang/String;II)V");
             if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); s->ime_mid = NULL; }
             s->ime_owner = (jlong)(intptr_t)a;
+#if NJ_ANDROID_LEGACY
+            s->blit_mid = (*env)->GetStaticMethodID(env, cls, "blitFrame",
+                                                   "([SII)V");
+            if ((*env)->ExceptionCheck(env)) {
+                (*env)->ExceptionClear(env);
+                s->blit_mid = NULL;
+            }
+#endif
         }
     }
     (*env)->GetJavaVM(env, &s->jvm);
+#if NJ_ANDROID_LEGACY
+    if (!s->activity_class || !s->blit_mid) {
+        __android_log_write(ANDROID_LOG_ERROR, LOG_TAG,
+                            "legacy: GameActivity.blitFrame([SII)V is required");
+        if (s->activity_class) {
+            (*env)->DeleteGlobalRef(env, s->activity_class);
+        }
+        nj_port_shutdown(&a->port);
+        free(a);
+        return 0;
+    }
+#endif
 
     /*
      * The platform's text stack, for the characters the built-in bitmap faces
@@ -5386,11 +5707,15 @@ Java_com_lucinhu_nj2me_GameActivity_nativeCreate(JNIEnv *env, jobject thiz,
         }
     }
 
+#if !NJ_ANDROID_LEGACY
     win = ANativeWindow_fromSurface(env, surface);
     nj_port_android_set_window(&a->port, win);
     if (win) {
         ANativeWindow_release(win);   /* the port holds its own reference */
     }
+#else
+    (void)surface;   /* nativeCreate(NULL, ...) is the legacy Canvas contract */
+#endif
     return (jlong)(intptr_t)a;
 }
 
@@ -5399,6 +5724,9 @@ Java_com_lucinhu_nj2me_GameActivity_nativeSetSurface(JNIEnv *env, jobject thiz,
                                                      jlong handle,
                                                      jobject surface)
 {
+#if NJ_ANDROID_LEGACY
+    (void)env; (void)thiz; (void)handle; (void)surface;
+#else
     android_app *a = (android_app *)(intptr_t)handle;
     ANativeWindow *win;
     (void)thiz;
@@ -5413,6 +5741,7 @@ Java_com_lucinhu_nj2me_GameActivity_nativeSetSurface(JNIEnv *env, jobject thiz,
     if (win) {
         ANativeWindow_release(win);
     }
+#endif
 }
 
 /*
@@ -5830,14 +6159,28 @@ Java_com_lucinhu_nj2me_GameActivity_nativeQuit(JNIEnv *env, jobject thiz,
                                                jlong handle)
 {
     android_app *a = (android_app *)(intptr_t)handle;
+#if !NJ_ANDROID_LEGACY
     nj_event ev;
+#endif
     (void)env; (void)thiz;
     if (!a) {
         return;
     }
+#if NJ_ANDROID_LEGACY
+    {
+        android_state *s = AS(a->port.ud);
+        pthread_mutex_lock(&s->lock);
+        s->quit = 1;
+        pthread_mutex_unlock(&s->lock);
+        pthread_mutex_lock(&s->audio->lock);
+        s->audio_finished = 1;
+        pthread_mutex_unlock(&s->audio->lock);
+    }
+#else
     memset(&ev, 0, sizeof(ev));
     ev.type = NJ_EV_QUIT;
     nj_port_android_push_event(&a->port, &ev);
+#endif
 }
 
 JNIEXPORT void JNICALL
@@ -5866,6 +6209,15 @@ Java_com_lucinhu_nj2me_GameActivity_nativeDestroy(JNIEnv *env, jobject thiz,
         pthread_join(a->thread, NULL);
         a->joined = 1;
     }
+#if NJ_ANDROID_LEGACY
+    /* Java has stopped and joined its audio thread before this call.  The run
+     * thread above is also finished, so no callback may touch this array. */
+    if (s && s->frame_pixels) {
+        (*env)->DeleteGlobalRef(env, s->frame_pixels);
+        s->frame_pixels = NULL;
+        s->frame_count = 0;
+    }
+#endif
     /* The Java reference belongs to this layer, so it is released here rather
      * than in the port's shutdown.  Releasing it is what makes "back out of the
      * game, start another" not leak an Activity class per game. */
