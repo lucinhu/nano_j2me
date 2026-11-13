@@ -1305,6 +1305,7 @@ enum {
     UI_SET_ROW_FPS,
     UI_SET_ROW_BINDS,
     UI_SET_ROW_HEAP,
+    UI_SET_ROW_HEAP_GROW,
     UI_SET_ROW_MUTE,
     UI_SET_ROW_NETWORK,
     UI_SET_ROW_UI_SCALE,
@@ -1324,6 +1325,7 @@ static const char *ui_setting_label(int row)
     case UI_SET_ROW_FPS: return "帧率上限";
     case UI_SET_ROW_BINDS: return "按键映射";
     case UI_SET_ROW_HEAP: return "堆大小";
+    case UI_SET_ROW_HEAP_GROW: return "自动扩展内存";
     case UI_SET_ROW_MUTE: return "静音";
     case UI_SET_ROW_NETWORK: return "网络";
     case UI_SET_ROW_UI_SCALE: return "界面缩放";
@@ -1390,6 +1392,10 @@ static void ui_settings_value(const nj_client_ui *ui, int row, char *out,
     case UI_SET_ROW_HEAP:
         if (s->heap_mb > 0) snprintf(out, (size_t)cap, "%d MB", s->heap_mb);
         else snprintf(out, (size_t)cap, "自动");
+        break;
+    case UI_SET_ROW_HEAP_GROW:
+        snprintf(out, (size_t)cap, "%s", s->heap_auto_grow
+                 ? "开启（上限128 MB）" : "关闭");
         break;
     case UI_SET_ROW_MUTE:
         snprintf(out, (size_t)cap, "%s", s->mute ? "静音" : "关");
@@ -1483,6 +1489,10 @@ static void ui_settings_cycle(nj_client_ui *ui, int dir)
         s->heap_mb = idx == 0 ? 0 : (8 << (idx - 1));
         break;
     }
+    case UI_SET_ROW_HEAP_GROW:
+        s->heap_auto_grow = s->heap_auto_grow ? 0 : 1;
+        ui_note_set(ui, "自动扩展内存：下次游戏启动生效");
+        break;
     case UI_SET_ROW_MUTE:
         s->mute = s->mute ? 0 : 1;
         break;
@@ -2593,7 +2603,9 @@ static void ui_draw_settings(nj_client_ui *ui, nj_gfx *g)
     }
     ui_draw_scrollbar(g, px + pw - 10, rows_y, vis * rh, count,
                       ui->settings_top, vis);
-    ui_draw_text(g, "↑↓ 选择 · ←→ 修改 · Enter 打开 · Esc 关闭", medium,
+    ui_draw_text(g, ui->settings_row == UI_SET_ROW_HEAP_GROW
+                  ? "内存不足时扩展 · 下次游戏启动生效"
+                  : "↑↓ 选择 · ←→ 修改 · Enter 打开 · Esc 关闭", medium,
                  UI_COL_ROW_SUB, px + 24, py + ph - 18,
                  NJ_ANCHOR_LEFT | NJ_ANCHOR_VCENTER, pw - 48, 0);
     ui_draw_panel_end(ui, g);

@@ -86,15 +86,23 @@ typedef struct nj_client_settings {
      * a name into a keycode with SDL_GetKeyFromName() before starting a game.
      */
     char binds[NJ_PORT_BIND_COUNT][NJ_CLIENT_BIND_NAME_MAX];
+    int heap_auto_grow;                  /* 0 = fixed; 1 = grow up to 128 MB */
 } nj_client_settings;
 
 /*
  * Defaults: games dir from nj_client_default_games_dir(), last_dir equal to
  * it, scale auto, on-screen keys on, fps uncapped, nearest-neighbour filter,
- * windowed, software renderer, runtime heap, sound on, network on, every key
+ * windowed, software renderer, fixed runtime heap, sound on, network on, every key
  * slot on its default.
  */
 void nj_client_settings_default(nj_client_settings *s);
+
+/* Heap growth for the next game: override 0 reads the current settings,
+ * negative forces off, positive forces on. Off returns 0; on returns a
+ * 128 MB limit, raised to the initial heap when that heap is already larger.
+ * The initial size (including 0 = NJ_MAX_HEAP) is never reduced. */
+nj_size nj_client_heap_limit(const nj_client_settings *s, int override,
+                             nj_size initial_bytes);
 
 /* Display name and default SDL key name for a bind slot ("上" and "Up", ...).
  * The display name may be NULL for an unknown slot; the key name likewise. */
@@ -297,6 +305,7 @@ typedef struct nj_client_run_options {
     const char *rms_dir;             /* NULL = per-game default */
     const char *fs_dir;              /* NULL = no filesystem */
     int launcher_width, launcher_height; /* 0 = 720x540 */
+    int heap_grow_override;              /* 0=settings, -1=off, +1=on */
 } nj_client_run_options;
 
 nj_status nj_client_run(const nj_client_run_options *options);

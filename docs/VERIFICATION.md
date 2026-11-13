@@ -29,6 +29,220 @@ repeated unless the code changed the path the verification used.
   (frames, logs and stitched screenshots are bulk); the row names the
   directory, and the commit carries the text that quotes it.
 
+## 2026-11-11 Four-JAR benchmark observation at e32374c
+
+VERIFIED four sequential runs using the published `e32374c37fe1ec56d79f4e5988f787fe2de35b96`
+runtime and CLI SHA-256
+`26b085867dba09839af6f65e361de16d7f6a5fd4d393ec52eb7ca27d30f8a65f`.
+These are desktop observations at 240x320, a fixed 16 MiB heap with growth
+explicitly disabled, CPU3 affinity, uncapped frames, speed 100%, SDL2 X11 and
+the software renderer. Each JAR uses private state, RMS and filesystem paths.
+See the [versioned benchmark record](notes/2026-11-11-jbenchmark-e32374c.md).
+
+| Original JAR | Actual result observed |
+|---|---|
+| JBenchmark 1.1.1 | OPEN: no Results within the 120-second limit; four late samples show the same cube frame. No score recorded. |
+| JBenchmark2 2.1.1 | Overall **8672**; Image 2155, Text **47290**, Sprites 59352, 3D Transform 2342, User Interface 2418. Components are not summed to obtain the overall score. |
+| JBenchmark3D 3.1.0 | HQ **12278**, LQ **34458**, triangles **4882425/s**, texture **1909412 kTexels/s**. |
+| JBenchmarkHD 4.0.3 | Bilinear Success 92%; trilinear Failed/Not supported; perspective Success 99%; Z-buffer Failure 7 bit; smooth 8309694, textured 6750051, Fill literal Failed, Gaming **9624 (320.8 fps)**. |
+
+HD's information screen displays M3G 1.0 and maximum viewport dimension 4096.
+It also reports Form dimensions **0x0**, Canvas **240x320** and Fullcanvas
+**240x320**; the zero values are retained as observed. JBenchmark3D's bottom
+version/dimension fields were not captured; its version above comes from the
+original JAR metadata. This cohort does not establish a before/after speed
+increase or Android performance.
+
+The first JBenchmark attempt was aborted after a stale X11 window ID caused
+`BadWindow`. Its logs remain separate. The observer was corrected to rediscover
+and validate the same process's visible window before screenshots and input;
+one explicitly authorized recovery followed. No other target was repeated.
+The first three completed runs ended through their deadline SIGTERM, with
+wall times 119.2165, 179.1192 and 299.2084 seconds. HD ended through one F10 at
+628.4776 seconds. Process exit zero is not used as proof of Results.
+
+OPEN JBenchmark diagnosis: the single logged division by zero lies inside the
+original Java `catch (Exception)` range. JB2 logs 54 analogous throws and still
+reaches Results. Read-only bytecode and bridge review has not established the
+cause of JBenchmark's missing Results; neither a caught exception nor cumulative
+paint counts prove a stalled Java thread. The Text digit in JB2 was resolved
+against matching glyph pixels in its original screenshot: **47290**.
+
+Independent offline review verifies all 210 protected inputs, four original
+JAR hashes, sequential run records, 154 artifact hashes and 115 screenshots at
+960x1280. Original games, saves and root build remain unchanged. Evidence:
+`.local-tools/debug-runs/jbenchmark-e32374c-20261111/` and the independent
+`jbenchmark-e32374c-20261111-lead/` review. The earlier 171-test and nine-group
+sanitizer results below retain their original validation identity.
+
+## 2026-11-11 GameCanvas flush ownership and restore boundaries
+
+Integrated upstream `a2e5ba84` through merge `1fe6a2a7`, retaining the viewport
+validation in `48bd7322`. Explicit GameCanvas flushes now own the displayed
+frame, so the adaptive paint pump and input do not publish an unfinished buffer
+between flushes. Explicit repaint requests and legacy non-flushing canvases
+retain their paint paths.
+
+VERIFIED two additional boundaries: both flush overloads are no-ops for a
+hidden GameCanvas, while offscreen `paint(Graphics)` remains usable; successful
+snapshot restore clears the four host-only paint ownership/cadence fields.
+An early CRC rejection preserves the running application's frame ownership.
+The same final fixture reports **14,214 checks, 15 failures** against each old
+library and **14,214 checks, zero failures** against each repaired library,
+using Release and strict sanitizer builds. The old failures are twelve hidden
+flush checks and three live-VM restore checks; fresh restore, startup and CRC
+rejection controls pass. See [boundary details](notes/2026-11-11-gamecanvas-state-boundaries.md).
+
+The merged normal suite passes all **171 registered tests**. The aggregate is
+153 complete first-pass results, 17 directed recoveries and the parallel M3G
+test, with each name counted once. Missing private game dependencies, three
+internal skip paths and two stale fixture assumptions were corrected before
+counting success. The Game fixture now displays its canvas through the public
+API before testing visible flushes; the device fixture expects an empty
+property key to throw `IllegalArgumentException`. Original pixel assertions
+remain. Three real-game FreeJ2ME frame comparisons pass (MAE 6.96, 4.86 and 1.82
+out of 255); the real M3G probe accepts 985 files with no refused objects.
+
+Strict ASan/UBSan/float-cast-overflow/leak checks pass nine groups: Save,
+GameCanvas flush, LCDUI, Display callbacks, Game, Form scroll, Form snapshot,
+M3G and VM lifecycle/properties. Warnings are errors and sanitizer recovery is
+disabled. Parallel M3G completes 234 forks and 117,504,000 compared bytes; the
+unchanged test uses a private `tmpfile` adapter for the host's `/tmp` quota.
+The default build has `NJ_ENABLE_ENGINE=0`, so the engine test performs zero
+engine checks. The static-source audit excludes an ESP32 example requiring its
+SDK and libretro's process-global ABI entry points; these coverage limits are
+not claims of extra coverage.
+
+VERIFIED original Minecraft JAR and preserved world resume at 240x320, 16 MiB
+initial heap with growth enabled. A paced 90-frame headless replay sends raw P
+(key 27) down at frame 20 and up at 24; the actual game menu appears over the
+world. Heap grows from 16 to 32 MiB under its 128 MiB cap, with no OOM or uncaught
+exception. Original JAR, world, RMS and root build remain unchanged. The 489
+caught datagram receive errors after restoring native handles remain a known
+limitation; they do not establish a networking fix. This replay is not a speed
+measurement, and earlier benchmark scores retain their original identities.
+
+Evidence: `.local-tools/debug-runs/gamecanvas-upstream-20261111-main/`,
+`gamecanvas-upstream-20261111-sanitize/` and
+`gamecanvas-upstream-20261111-scene/`. Final CLI SHA-256:
+`26b085867dba09839af6f65e361de16d7f6a5fd4d393ec52eb7ca27d30f8a65f`.
+
+## 2026-11-11 M3G viewport dimension validation
+
+VERIFIED `Graphics3D.setViewport` rejects nonpositive dimensions and dimensions
+above the declared 4096-pixel width or height limit with
+`IllegalArgumentException`, before writing any of the four viewport fields.
+Coordinates retain their full integer range, and the setter works without a
+bound render target.
+
+The same extended M3G fixture reports 1127 checks and 75 failures against each
+old library, and 1127 checks with zero failures against each repaired library.
+All 75 old failures belong to the 15 invalid-size cases: exception type and
+preservation of all four getter values. The existing 935 checks remain intact;
+the 192 added checks also cover six legal boundary combinations, extreme
+coordinates, no target and recovery after rejection.
+
+Both Release and strict builds pass. Strict validation uses ASan, UBSan,
+float-cast-overflow checking and leak detection with warnings treated as errors
+and sanitizer recovery disabled. The related VM fixture passes System/M3G
+property checks and its three create/run/destroy rounds in each build. Each
+archive retains its original 76-member order, with only the M3G object changed.
+See [viewport validation](notes/2026-11-11-m3g-viewport.md) and the retained
+`.local-tools/debug-runs/m3g-viewport-20261111-main/` evidence. This is a focused
+regression; the earlier full 170-test result and benchmark scores keep their
+original runtime identities.
+
+## 2026-11-11 M3G discovery and System properties
+
+The ordinary HD observation below exposed a missing discovery property. With
+M3G enabled, `System.getProperty("microedition.m3g.version")` now returns `1.0`.
+`Graphics3D.getProperties()` also includes `maxViewportDimension`, equal to the
+minimum of its existing width and height limits (4096). The same checkpoint
+corrects `System.getProperty("")` to throw `IllegalArgumentException`, as required
+by CLDC 1.1; null still throws `NullPointerException` and unknown nonempty keys
+still return null.
+
+The same extended VM fixture fails exactly these three checks against each old
+library and passes against each repaired library, in both Release and strict
+sanitizer builds. Its existing three load/run/destroy rounds remain intact.
+See [M3G discovery](notes/2026-11-11-m3g-version.md) for the focused regression
+results and normative references. There are still 170 registered tests; the
+previous full-suite result remains associated with its earlier runtime.
+
+This checkpoint repairs discovery and the property table. Its focused regression
+did not cover viewport size enforcement; that validation is recorded separately
+above. It does not establish M3G conformance or additional texture capabilities.
+The earlier benchmark scores retain their measured binary identity.
+
+## 2026-11-11 ordinary JBenchmark3D and HD observations
+
+These observations use source `51d784b`, ordinary Release CLI
+`213c576af70a48febd5b0123cbe49e87f3c3b30b4df4cd4449640ae6d3bc55f2`,
+CPU 3, 240×320, fixed 16 MiB heap, uncapped software SDL2 and 100% speed.
+Original JARs and private input directories retain their identities. The earlier
+runtime rows below remain historical observations.
+
+| area | verdict and evidence | detailed record |
+| --- | --- | --- |
+| JBenchmark3D | VERIFIED actual final Results: HQ 12658, LQ 36100, 4,989,297 triangles/s and 1,922,275 kTexels/s. Results appear by 105.274 seconds and remain identical through the 280-second capture; F10 exits normally. No observer or explicit frame budget. | [Versioned measurements](notes/2026-11-10-jbenchmark-baseline.md); `.local-tools/debug-runs/jbenchmark3d-51d784b/` |
+| JBenchmark HD | VERIFIED observed Results: Bilinear Success 92%, Trilinear Failed/Not supported, Perspective Success 99%, Z-buffer Failure 7 bit, Smooth 8,390,400 and Textured 7,078,325 triangles/s, Fill Failed, Gaming 10511 (350.4 fps), version 4.0.3. Individual Down presses expose Gaming and the system page. Final Results precede the supervisor's deadline SIGTERM at 598 seconds; the process handles quit/teardown and exits zero. | [Versioned measurements](notes/2026-11-10-jbenchmark-baseline.md); `.local-tools/debug-runs/jbenchmarkhd-51d784b/` |
+| HD capability and discovery paths | VERIFIED static cause: Trilinear requires mipmapping and Fill requires two texture units; the renderer declares false/one. The measured runtime also omits `microedition.m3g.version`, causing HD to display M3G No and skip its separate capability query. Blank fields are not zeros. | [Versioned measurements](notes/2026-11-10-jbenchmark-baseline.md) |
+
+These are single desktop observations, without an A/B speedup or Android FPS
+claim. JBenchmark 1/2 results retain their earlier runtime identities. The earlier
+3D failure to expose Results has no established cause; this successful run does
+not establish an SDL2, CPU-affinity or scheduler repair.
+
+## 2026-11-11 optional Java heap growth
+
+The isolated Release build passed all 170 registered tests. Five focused tests also passed with ASan, UBSan and leak checking, including 69 assertions for heap growth and restore. The original Minecraft JAR opened its own menu on P in both 90-frame runs from the same saved world. At 16 MiB fixed it logged an image OOM and reduced view distance; with growth enabled the same binary expanded to 32 MiB and showed neither symptom in the replay. See [heap growth](notes/2026-11-11-auto-heap.md) for the setup and limits.
+
+## 2026-11-11 platform Power key (historical, superseded)
+
+The following checkpoint records `7f2fca9`. Its event-consuming behavior has
+since been withdrawn at the user's request: the current code delivers raw 27
+to the original game's menu/back handler again. Avoiding that menu did not
+repair its image allocation failure. The recorded results below describe the
+old experiment, not the current intended behavior.
+
+The SDL2 overlay's `P` button represents the platform Power key. Its internal
+value, 27, previously reached Canvas callbacks through the raw-key fallback.
+The original Minecraft JAR explicitly treats 27 as Back. This checkpoint
+consumes canonical Power press, release and repeat events at the MIDP boundary;
+it does not implement a power, pause or quit action.
+
+| area | verdict and evidence | detailed record |
+| --- | --- | --- |
+| Power input | VERIFIED with the same extended LCDUI fixture: both previous libraries report 11202 passed and 81 failed; both repaired libraries report 11283 passed and zero failed. Canvas and both GameCanvas suppression modes retain callback counts, character, held/latch state, current displayable and running state across Power events. | [Power key](notes/2026-11-11-power-key.md); `.local-tools/debug-runs/power-key-20261111-main/` |
+| Normal input and regressions | VERIFIED: ordinary game keys, both soft-key conventions, raw printable keys and explicitly typed character 27 remain functional. Normal and strict LCDUI, Form and Game tests pass with three identical teardowns. | [Power key](notes/2026-11-11-power-key.md) |
+| Original Minecraft Power replay | VERIFIED in a separate pair using the original JAR and identical copies of a compatible saved world: 16 MiB, headless 240×320, 90 frames, canonical Power down/up at frames 20/24. The previous library opens Game menu and records one `Image.createImage(String)` OOM episode with “Render distance reduced by 1 chunk”; the repaired library retains the world/HUD image with no OOM. Both genuinely resume and exit normally, without startup fallback or signal. | `.local-tools/debug-runs/mc-power-oom-20261111/power-pair/` |
+| Image allocation cause | OPEN: this pair verifies that consuming Power avoids the unintended menu/OOM path in this scene. It does not establish the exact failed image, fragmentation or a general memory-allocation repair. Caught UDP receive errors after restoration occur in both runs and remain a separate known limitation. | [Power key](notes/2026-11-11-power-key.md) |
+
+Strict coverage includes ASan, UBSan, float-cast-overflow and leak detection,
+with warnings as errors. The test registration count remains 169; this is a
+focused regression checkpoint, not a new full-suite invocation. Built-in layouts,
+original JARs, RMS and worlds retain their identities.
+
+## 2026-11-11 ImageItem alternate text
+
+The [MIDP ImageItem contract](https://docs.oracle.com/javame/config/cldc/ref-impl/midp2.0/jsr118/javax/microedition/lcdui/ImageItem.html)
+permits null alternate text in both constructors and the setter. This checkpoint
+follows `fca2cd857a91d38e6cd26538871a92e00888ecb1`.
+There are now 169 registered tests. The new ImageItem fixture and four affected
+LCDUI/Form paths pass against both normal and strict sanitizer libraries.
+The preceding 168-test cohort remains recorded with its original runtime below.
+
+| area | verdict and evidence | detailed record |
+| --- | --- | --- |
+| Nullable alternate text | VERIFIED with the same fixture before and after the repair: each old library reports 348 checks and 16 failures; each repaired library reports 778 checks and zero failures. Both constructors accept null, the setter clears text repeatedly, empty text stays distinct from null, and illegal layout/appearance still throws IllegalArgumentException. Failed old constructors skip subsequent checks, explaining the different totals. | [ImageItem alternate text](notes/2026-11-10-imageitem-alttext.md); `.local-tools/debug-runs/imageitem-nullalt-20261110-main/` |
+| GC and getters | VERIFIED: the Item alone retains label, immutable Image and alternate text after temporary input roots are released and GC actually runs. Public getters preserve contents and image dimensions. | [ImageItem alternate text](notes/2026-11-10-imageitem-alttext.md) |
+| Focused regressions | VERIFIED in normal and strict builds: LCDUI 8826 checks with three identical teardowns; Form overflow, wrapping, chrome, focus and Gauge; snapshot roundtrip 752 checks with 2,119,650 serialized bytes; old-layout snapshot refusal followed by fresh startup 585 checks. | [ImageItem alternate text](notes/2026-11-10-imageitem-alttext.md) |
+
+Strict coverage uses ASan, UBSan, float-cast-overflow and leak detection with
+warnings as errors. It covers these focused tests. The repair removes three
+incorrect null checks and preserves built-in member layouts. Benchmark results
+remain associated with the earlier runtime identities in the versioned note.
+
 ## 2026-11-10 upstream Form integration
 
 Merge `b184dba01e0ed67180bff6ee631c6c305430690f` retains the callback,

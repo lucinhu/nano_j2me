@@ -2765,12 +2765,12 @@ static void gc_flush_region(nj_vm *vm, nj_ref self, nj_ref gobj,
          * its own loop, so the runner's paint landed in the middle of the next
          * frame every time.
          *
-         * The adaptive rule in the frame hook takes over if the title stops
-         * flushing (its thread dies, or it only flushes when something
-         * changed), so a quiet GameCanvas still gets its frames.
+         * Quiet frames retain this completed image. An adaptive timeout
+         * cannot tell a stopped producer from a slow one; explicit repaint
+         * and display changes remain supported by the frame hook.
          */
         vm->painted_in_frame = 1u;
-        vm->app_painted = 1u;
+        vm->app_painted |= 2u; /* Retain explicit buffer ownership across paints. */
         vm->app_painted_frame = 1u;
     }
     /* Publishing pixels is not a Canvas.repaint() request. The frame pump
@@ -2780,9 +2780,14 @@ static void gc_flush_region(nj_vm *vm, nj_ref self, nj_ref gobj,
 NJFN(gc_flushGraphics)
 {
     nj_ref self = NJ_THIS(args);
-    int w = (int)fgi(vm, self, NJ_C_CANVAS, NJ_F_C_WIDTH, D_INT);
-    int h = (int)fgi(vm, self, NJ_C_CANVAS, NJ_F_C_HEIGHT, D_INT);
+    int w, h;
 
+    /* MIDP: hidden flush is a no-op, including buffer creation/resizing. */
+    if (!self || nj_midp_current(vm) != self) {
+        return NJ_OK;
+    }
+    w = (int)fgi(vm, self, NJ_C_CANVAS, NJ_F_C_WIDTH, D_INT);
+    h = (int)fgi(vm, self, NJ_C_CANVAS, NJ_F_C_HEIGHT, D_INT);
     if (w <= 0 || h <= 0) {
         nj_ref buf = gc_buffer(vm, self, 1);
         int bw = 0, bh = 0;
@@ -2797,7 +2802,13 @@ NJFN(gc_flushGraphics)
 
 NJFN(gc_flushGraphics_rect)
 {
-    gc_flush_region(vm, NJ_THIS(args), NULL, NJ_ARG_INT(args, 0),
+    nj_ref self = NJ_THIS(args);
+
+    /* Keep this guard out of the shared off-screen paint(Graphics) path. */
+    if (!self || nj_midp_current(vm) != self) {
+        return NJ_OK;
+    }
+    gc_flush_region(vm, self, NULL, NJ_ARG_INT(args, 0),
                     NJ_ARG_INT(args, 1), NJ_ARG_INT(args, 2),
                     NJ_ARG_INT(args, 3));
     return NJ_OK;

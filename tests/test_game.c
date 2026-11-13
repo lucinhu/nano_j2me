@@ -1656,6 +1656,7 @@ static void test_layermanager(nj_vm *vm)
 /* ------------------------------------------------------------------ */
 static void test_gamecanvas(nj_vm *vm)
 {
+    nj_ref display = nj_midp_display(vm);
     nj_ref c = mk_gamecanvas(vm, 0);
     nj_ref buf, g1, g2;
     nj_surface *scr;
@@ -1664,6 +1665,16 @@ static void test_gamecanvas(nj_vm *vm)
     if (!c) {
         CHECK(0, "GameCanvas fixture");
         return;
+    }
+    /* flushGraphics publishes only the shown canvas. Complete its natural
+     * startup paint before constructing the pixel-level flush assertions. */
+    {
+        nj_value a[1];
+        a[0].r = c;
+        CHECK(nj_call(vm, display, NJ_C_DISPLAY, "setCurrent",
+                      "(Ljavax/microedition/lcdui/Displayable;)V", a, NULL)
+              == NJ_OK, "show the GameCanvas before flushing");
+        nj_midp_frame(vm);
     }
     buf = rget(vm, c, NJ_C_CANVAS, NJ_F_C_BUFFER, D_IMAGE);
     CHECK(buf != NULL, "the constructor creates the off-screen buffer");

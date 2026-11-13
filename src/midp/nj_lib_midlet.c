@@ -424,6 +424,20 @@ static void escape_trace(void *ud, const char *line)
     nj_logf(vm, 1, "    at %s", p);
 }
 
+/* A GameCanvas producer may need any number of scheduler slices to finish
+ * its next buffer. Silence after a flush is not permission to copy that
+ * work-in-progress image. Explicit repaint requests still take precedence. */
+static int gamecanvas_owns_frame(nj_vm *vm)
+{
+    nj_ref current;
+    nj_class *gamecanvas;
+    if (!(vm->app_painted & 2u)) return 0;
+    current = nj_midp_current(vm);
+    gamecanvas = nj_class_find(vm, NJ_C_GAMECANVAS);
+    return current && current->cls && gamecanvas &&
+           nj_class_is_subclass_of(current->cls, gamecanvas);
+}
+
 nj_status nj_midp_frame(nj_vm *vm)
 {
     nj_event ev;
@@ -585,7 +599,7 @@ nj_status nj_midp_frame(nj_vm *vm)
            serially_pending > 0)) ||
          (!vm->painted_in_frame &&
           (!vm->app_painted || vm->app_paint_idle > vm->app_paint_period ||
-           vm->app_paint_idle == 255u)))) {
+           vm->app_paint_idle == 255u) && !gamecanvas_owns_frame(vm)))) {
         (void)nj_midp_paint(vm);
     }
     /*

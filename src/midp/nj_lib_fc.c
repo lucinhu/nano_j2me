@@ -48,7 +48,11 @@
 #    include <io.h>              /* _chsize_s, _fileno */
 #  else
 #    include <sys/stat.h>
-#    include <sys/statvfs.h>       /* availableSize() */
+#    if defined(__ANDROID__) && defined(NJ_ANDROID_LEGACY) && NJ_ANDROID_LEGACY
+#      include <sys/vfs.h>         /* pre-API 9 bionic has statfs only */
+#    else
+#      include <sys/statvfs.h>     /* availableSize() */
+#    endif
 #    include <dirent.h>
 #    include <fcntl.h>
 #    include <unistd.h>
@@ -473,11 +477,20 @@ NJFN(fc_availableSize)
         char path[NJ_FC_PATHMAX];
         char host[NJ_FC_PATHMAX];
         nj_ref url = fget_ref(vm, NJ_THIS(args), F_URL, "Ljava/lang/String;");
+#if defined(__ANDROID__) && defined(NJ_ANDROID_LEGACY) && NJ_ANDROID_LEGACY
+        struct statfs vfs;
+#else
         struct statvfs vfs;
+#endif
         if (nj_string_to_utf8(url, path, (int)sizeof(path)) > 0 &&
             fc_resolve(vm, path, host, sizeof(host)) == 0 &&
+#if defined(__ANDROID__) && defined(NJ_ANDROID_LEGACY) && NJ_ANDROID_LEGACY
+            statfs(host, &vfs) == 0) {
+            ret->j = (nj_s8)vfs.f_bavail * (nj_s8)vfs.f_bsize;
+#else
             statvfs(host, &vfs) == 0) {
             ret->j = (nj_s8)vfs.f_bavail * (nj_s8)vfs.f_frsize;
+#endif
             return NJ_OK;
         }
     }

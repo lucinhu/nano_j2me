@@ -2225,22 +2225,23 @@ static void video_blit_rgb565(nj_vm *vm, nj_ref p, nj_surface *scr)
     }
 }
 
-void nj_media_video_overlay(nj_vm *vm)
+int nj_media_video_overlay(nj_vm *vm)
 {
     nj_ref cur, players;
     nj_s4 n, i;
     nj_surface *scr;
+    int active = 0;
 
     if (!vm || !vm->media_players || !vm->screen.pixels) {
-        return;
+        return 0;
     }
     cur = nj_midp_current(vm);
     if (!cur) {
-        return;
+        return 0;
     }
     scr = nj_midp_screen(vm);
     if (!scr || !scr->pixels) {
-        return;
+        return 0;
     }
     players = vm->media_players;
     n = vec_size(vm, players);
@@ -2263,13 +2264,16 @@ void nj_media_video_overlay(nj_vm *vm)
             continue;
         }
         video_blit_rgb565(vm, p, scr);
+        active = 1;
     }
+    return active;
 }
 
 #else /* !NJ_ENABLE_VIDEO */
-void nj_media_video_overlay(nj_vm *vm)
+int nj_media_video_overlay(nj_vm *vm)
 {
     (void)vm;
+    return 0;
 }
 #endif /* NJ_ENABLE_VIDEO */
 

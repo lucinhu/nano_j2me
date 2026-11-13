@@ -4,7 +4,7 @@
 
 [![latest release](https://img.shields.io/github/v/release/lucinhu/nano_j2me?sort=semver&label=release&color=blue)](https://github.com/lucinhu/nano_j2me/releases/latest)
 [![licence](https://img.shields.io/github/license/lucinhu/nano_j2me)](LICENSE)
-[![tests](https://img.shields.io/badge/tests-168%20passing-brightgreen)](docs/VERIFICATION.md)
+[![tests](https://img.shields.io/badge/tests-171%20passing-brightgreen)](docs/VERIFICATION.md)
 [![sanitized](https://img.shields.io/badge/sanitized-ASan%20%2B%20UBSan%20%2B%20LSan-brightgreen)](tools/run_sanitized_tests.sh)
 [![C99, no dependencies](https://img.shields.io/badge/C99-no%20dependencies-informational)](#design-commitments)
 
@@ -42,6 +42,157 @@ Android, an ESP32-S3, or whatever you are holding.
                     │  headless · SDL2 · Android · ESP32-S3    │
                     └──────────────────────────────────────────┘
 ```
+
+## Screenshots
+
+**Desktop, SDL2 port.** The full 12-key phone keypad, drawn by the port because a
+D-pad alone runs a platformer and nothing else.
+
+<p>
+<img src="docs/images/readme-sdl2-1942.png" width="240" height="320" alt="1942 Air Combat mid-mission over the English coast, with the on-screen keypad">
+<img src="docs/images/readme-sdl2-xianjian.png" width="240" height="320" alt="Chinese Paladin: an isometric inn scene with a dialogue box">
+<img src="docs/images/readme-sdl2-aoe.png" width="240" height="320" alt="Sango: the title screen with a fiery battlefield menu">
+</p>
+
+**Desktop client, new in 0.5.2.** The library window: icons and names come from
+the MIDlet itself, a broken archive stays in the list marked `bad`, and the
+footer hints are clickable buttons.
+
+<p>
+<img src="docs/images/readme-desktop-client.png" width="480" height="360" alt="The nano_j2me desktop client's library window with icon rows, Chinese game names and file names">
+</p>
+
+**Settings and key mapping, new in 0.5.2.** The settings page edits the display,
+the heap and the network; the 按键映射 page binds any of the twelve game keys,
+and the toast confirms the new key.
+
+<p>
+<img src="docs/images/readme-client-settings.png" width="360" height="270" alt="The client's settings page with rows for game directory, scale, filter, fullscreen and renderer">
+<img src="docs/images/readme-client-binds.png" width="360" height="270" alt="The key mapping page with the top action bound to W and a toast saying 上：W">
+</p>
+
+**Search and the shortcut sheet.** Typing filters the library by name, file or
+MIDlet class; `F1` lists every key the client accepts and where the settings
+file lives.
+
+<p>
+<img src="docs/images/readme-client-search.png" width="360" height="270" alt="The library window with a 1942 search filter and one matching game">
+<img src="docs/images/readme-client-help.png" width="360" height="270" alt="The F1 shortcut sheet listing library, game-window and settings keys">
+</p>
+
+**Recently played and starred.** The top section lists the last ten jars that
+ran; `F2` stars a row worth finding again, and the star survives a restart while
+the settings reset leaves it alone.
+
+<p>
+<img src="docs/images/readme-client-recent.png" width="360" height="270" alt="The library window with a 最近玩过 section above the full game list">
+<img src="docs/images/readme-client-favorite.png" width="360" height="270" alt="A favourite row with a star and the 已收藏 toast">
+</p>
+
+**Windows, new in 0.5.2.** The same client as `nj2me.exe`, captured under wine:
+the UTF-16 path handling makes the wide-path listing and Chinese game names
+work exactly as on Linux.
+
+<p>
+<img src="docs/images/readme-client-windows.png" width="480" height="360" alt="The nano_j2me Windows build's library window: icon rows with Chinese game names and a Windows path in the header">
+</p>
+
+**Android.** A launcher that shows each game's own name and icon, and the game
+running with one of the configurable floating keypads.
+
+<p>
+<img src="docs/images/readme-android-launcher.png" width="200" height="400" alt="Nano J2ME launcher listing four games">
+<img src="docs/images/readme-android-game.png" width="200" height="400" alt="1942 Air Combat on Android with the floating keypad, fire key held">
+</p>
+
+**RetroArch.** The same runtime as a libretro core, loaded in the RetroArch
+frontend.
+
+<p>
+<img src="docs/images/readme-retroarch.png" width="360" height="480" alt="RetroArch running the nano_j2me core with a game loaded">
+</p>
+
+**ESP32-S3.** A real MIDlet inside Espressif's `esp-emu`: the internal-RAM board
+profile, the frame path streamed over UART and decoded to this PNG.
+
+<p>
+<img src="docs/images/esp-emu-1942-menu.png" width="180" height="240" alt="1942 Air Combat running on the emulated ESP32-S3">
+</p>
+
+**Minecraft PE 0.6.1, new in 0.4.0.** A world the game generated itself, with
+the cloud layer textured out of the paletted `Image2D`, clean water, and the
+title's own frame cap keeping up.
+
+<p>
+<img src="docs/images/readme-minecraft.png" width="240" height="320" alt="Minecraft PE world with clouds, water and grass">
+<img src="docs/images/readme-android-minecraft.png" width="200" height="400" alt="Minecraft PE running on the Android build">
+</p>
+
+**Video, new in 0.3.0.** 1942's MPEG-4 intro, decoded frame by frame and drawn
+as a direct-video overlay over the Canvas; the movie's own AMR-NB track plays
+with it.
+
+<p>
+<img src="docs/images/readme-movie-1942.png" width="240" height="320" alt="1942 Air Combat's MPEG-4 intro movie playing in the emulator">
+</p>
+
+**Micro3D on real titles, new in 0.3.0.** 鬼泣3D's mission-1 combat and
+浴火银河's flight scene, rendered through the Mascot Capsule Micro3D command
+list and figures.
+
+<p>
+<img src="docs/images/dmc-micro3d-combat.png" width="240" height="320" alt="Devil May Cry 3D mission combat rendered by Micro3D">
+<img src="docs/images/gof-micro3d-flight.png" width="240" height="320" alt="Galaxy on Fire flight scene rendered by Micro3D">
+</p>
+
+## Platforms and portability
+
+nano_j2me is one portable C99 runtime, not a desktop-only emulator: the
+interpreter, class library, rasterizer, decoders and M3G/Micro3D pipelines are
+platform-neutral, and everything OS-specific lives behind a single `nj_port`
+implementation (about ten callbacks). Supporting a new target needs a
+framebuffer, a few hundred KiB of RAM and a new `nj_port` — nothing else. The
+runtime has no libc requirement (`NJ_USE_LIBC=0` for freestanding builds), no
+external libraries (DEFLATE, PNG and JPEG are in-tree), and keeps zero mutable
+global state, so several VMs can coexist in one process and be destroyed
+byte-for-byte. That is why the same core runs unchanged from a phone to a
+microcontroller.
+
+Currently supported and verified by the release pipeline:
+
+| Target | What you get |
+|---|---|
+| Linux x86_64 / aarch64 | SDL2 desktop client and CLI, portable builds for glibc 2.17 and newer |
+| Windows x86_64 | `nj2me.exe` (mingw-w64): library window plus console runner, verified under Wine |
+| Android 5.0+ (API 21) | universal APK for arm64-v8a, armeabi-v7a, x86 and x86_64, launcher and floating keypads |
+| RetroArch / libretro | native cores for Linux (x86_64, aarch64, armv7) and Android (arm64, armv7, x86_64), no JVM or subprocess |
+| ESP32-S3 (ESP-IDF) | full runtime and MIDlet on a 16 MB flash / 8 MB PSRAM board, exercised in `esp-emu` and QEMU |
+| ESP32-C3 (ESP-IDF, RISC-V) | builds, links and boots; needs PSRAM for the VM |
+| headless | the reference port used by the test suite, for embedding and CI |
+
+A separate **Android 2.0+ (API 5) legacy edition** targets ARMv5/`armeabi`
+phones, including Android 2.3, with a lightweight launcher, software display and
+AudioTrack sound. It supports browsing/importing JARs and opening them from file
+managers, and shares the standard edition's launcher icon. Build it with
+`tools/build_android_legacy.sh`; installation,
+old-toolchain requirements and limitations are in
+[docs/ANDROID_LEGACY.md](docs/ANDROID_LEGACY.md). Download the
+[0.5.7 legacy APK](https://github.com/lucinhu/nano_j2me/releases/download/v0.5.7/nj2me-0.5.7-android-legacy-armeabi.apk).
+
+The same desktop binary plays the 400-title
+[compatibility corpus](docs/CORPUS.md) with 398 running titles. Porting notes
+are in [docs/PORTING.md](docs/PORTING.md).
+
+**Arch Linux:** install it straight from the AUR. [`nano-j2me`](https://aur.archlinux.org/packages/nano-j2me)
+tracks the latest release, [`nano-j2me-git`](https://aur.archlinux.org/packages/nano-j2me-git)
+tracks master, and both install the desktop client, the static library and
+headers, the libretro core and a desktop entry:
+
+```sh
+yay -S nano-j2me     # or: paru -S nano-j2me, or the -git package
+```
+
+Other targets build from source in one command; see [Building](#building).
 
 ## What's new in 0.5.6
 
@@ -536,108 +687,6 @@ what one demanding title exposed - and the gates that keep it exposed.
 
 Full 0.4.0 changelog: [v0.4.0 release notes](https://github.com/lucinhu/nano_j2me/releases/tag/v0.4.0).
 
-## Screenshots
-
-**Desktop, SDL2 port.** The full 12-key phone keypad, drawn by the port because a
-D-pad alone runs a platformer and nothing else.
-
-<p>
-<img src="docs/images/readme-sdl2-1942.png" width="240" height="320" alt="1942 Air Combat mid-mission over the English coast, with the on-screen keypad">
-<img src="docs/images/readme-sdl2-xianjian.png" width="240" height="320" alt="Chinese Paladin: an isometric inn scene with a dialogue box">
-<img src="docs/images/readme-sdl2-aoe.png" width="240" height="320" alt="Sango: the title screen with a fiery battlefield menu">
-</p>
-
-**Desktop client, new in 0.5.2.** The library window: icons and names come from
-the MIDlet itself, a broken archive stays in the list marked `bad`, and the
-footer hints are clickable buttons.
-
-<p>
-<img src="docs/images/readme-desktop-client.png" width="480" height="360" alt="The nano_j2me desktop client's library window with icon rows, Chinese game names and file names">
-</p>
-
-**Settings and key mapping, new in 0.5.2.** The settings page edits the display,
-the heap and the network; the 按键映射 page binds any of the twelve game keys,
-and the toast confirms the new key.
-
-<p>
-<img src="docs/images/readme-client-settings.png" width="360" height="270" alt="The client's settings page with rows for game directory, scale, filter, fullscreen and renderer">
-<img src="docs/images/readme-client-binds.png" width="360" height="270" alt="The key mapping page with the top action bound to W and a toast saying 上：W">
-</p>
-
-**Search and the shortcut sheet.** Typing filters the library by name, file or
-MIDlet class; `F1` lists every key the client accepts and where the settings
-file lives.
-
-<p>
-<img src="docs/images/readme-client-search.png" width="360" height="270" alt="The library window with a 1942 search filter and one matching game">
-<img src="docs/images/readme-client-help.png" width="360" height="270" alt="The F1 shortcut sheet listing library, game-window and settings keys">
-</p>
-
-**Recently played and starred.** The top section lists the last ten jars that
-ran; `F2` stars a row worth finding again, and the star survives a restart while
-the settings reset leaves it alone.
-
-<p>
-<img src="docs/images/readme-client-recent.png" width="360" height="270" alt="The library window with a 最近玩过 section above the full game list">
-<img src="docs/images/readme-client-favorite.png" width="360" height="270" alt="A favourite row with a star and the 已收藏 toast">
-</p>
-
-**Windows, new in 0.5.2.** The same client as `nj2me.exe`, captured under wine:
-the UTF-16 path handling makes the wide-path listing and Chinese game names
-work exactly as on Linux.
-
-<p>
-<img src="docs/images/readme-client-windows.png" width="480" height="360" alt="The nano_j2me Windows build's library window: icon rows with Chinese game names and a Windows path in the header">
-</p>
-
-**Android.** A launcher that shows each game's own name and icon, and the game
-running with one of the configurable floating keypads.
-
-<p>
-<img src="docs/images/readme-android-launcher.png" width="200" height="400" alt="Nano J2ME launcher listing four games">
-<img src="docs/images/readme-android-game.png" width="200" height="400" alt="1942 Air Combat on Android with the floating keypad, fire key held">
-</p>
-
-**RetroArch.** The same runtime as a libretro core, loaded in the RetroArch
-frontend.
-
-<p>
-<img src="docs/images/readme-retroarch.png" width="360" height="480" alt="RetroArch running the nano_j2me core with a game loaded">
-</p>
-
-**ESP32-S3.** A real MIDlet inside Espressif's `esp-emu`: the internal-RAM board
-profile, the frame path streamed over UART and decoded to this PNG.
-
-<p>
-<img src="docs/images/esp-emu-1942-menu.png" width="180" height="240" alt="1942 Air Combat running on the emulated ESP32-S3">
-</p>
-
-**Minecraft PE 0.6.1, new in 0.4.0.** A world the game generated itself, with
-the cloud layer textured out of the paletted `Image2D`, clean water, and the
-title's own frame cap keeping up.
-
-<p>
-<img src="docs/images/readme-minecraft.png" width="240" height="320" alt="Minecraft PE world with clouds, water and grass">
-<img src="docs/images/readme-android-minecraft.png" width="200" height="400" alt="Minecraft PE running on the Android build">
-</p>
-
-**Video, new in 0.3.0.** 1942's MPEG-4 intro, decoded frame by frame and drawn
-as a direct-video overlay over the Canvas; the movie's own AMR-NB track plays
-with it.
-
-<p>
-<img src="docs/images/readme-movie-1942.png" width="240" height="320" alt="1942 Air Combat's MPEG-4 intro movie playing in the emulator">
-</p>
-
-**Micro3D on real titles, new in 0.3.0.** 鬼泣3D's mission-1 combat and
-浴火银河's flight scene, rendered through the Mascot Capsule Micro3D command
-list and figures.
-
-<p>
-<img src="docs/images/dmc-micro3d-combat.png" width="240" height="320" alt="Devil May Cry 3D mission combat rendered by Micro3D">
-<img src="docs/images/gof-micro3d-flight.png" width="240" height="320" alt="Galaxy on Fire flight scene rendered by Micro3D">
-</p>
-
 ## Design commitments
 
 These are not aspirations; each one is enforced by a test or a gate.
@@ -693,8 +742,8 @@ usually skip, and they are exactly the parts old games use.
 | Ports: Android (NDK + JNI) | **done** — one APK for Android 5.0 (API 21) and up, 4 ABIs, a launcher that shows each game's own name and icon and opens `.jar` files from a file manager, three configurable floating keypad layouts, sound through AAudio or OpenSL ES with MIDI handed to the phone's own synth, multi-touch, and auto-detected screen size; 2.79 MiB for all four ABIs (858 KiB for arm64 alone), runs on an API 21 emulator and an API 36 emulator |
 | Ports: ESP32-S3 (ESP-IDF, Xtensa) | **done** — real IDF build; boots the ROM, the full class library and a MIDlet on a 16 MB flash / 8 MB PSRAM board under Espressif's `esp-emu` (`tools/run_esp_emulator.sh`: `BENCH sum=-136042548`, 105,717,067 bytecodes — the desktop total), and runs the internal-RAM profile under QEMU. `tools/run_esp_emulator_ui.sh` also demonstrates the display, input and storage paths in the same emulator (240x320 frames decoded to PNG, keys injected over UART, JAR read from a mounted card). See [docs/PERFORMANCE.md](docs/PERFORMANCE.md#esp32-s3-measured-on-the-real-architecture) and [docs/FOOTPRINT.md](docs/FOOTPRINT.md#what-esp-emu-does-and-does-not-model-the-ui-demo) |
 | Ports: ESP32-C3 (ESP-IDF, RISC-V) | builds, links and boots; needs PSRAM for the VM |
-| Test suite | **140 tests** (`ctest`) |
-| Sanitized suite | **140/140 passing** under ASan + UBSan + LSan (`tools/run_sanitized_tests.sh`) |
+| Test suite | **171 registered tests passing** (`ctest`); configuration limits are recorded in [the verification ledger](docs/VERIFICATION.md) |
+| Focused sanitizer regressions | **9 groups passing** under ASan + UBSan + float-cast-overflow + leak detection; see [the verification ledger](docs/VERIFICATION.md) |
 
 Verified end to end: **Tumbleweed** (`net.frog_parrot.jump.Jump`, Apress 2004)
 plays on the headless port at 176x208 — scrolling ground, an animated sprite, a
@@ -878,7 +927,10 @@ of that file too - `map_up = W`, `map_fire = J` and so on, with the names
 `SDL_GetKeyName()` prints; an empty value means the default key. A direct
 `nj2me game.jar` run reads the same file for heap, filter, fullscreen,
 renderer, mute and network, while `--scale`, `--fps`, `--keys` and `--heap` on
-the command line still win. The launcher is drawn by the runtime's own
+the command line still win. Optional automatic heap growth is off by default
+and applies on the next game launch. Use `--heap-grow` or `--no-heap-grow` to
+explicitly override the setting. `--heap` still sets the initial size; the
+default growth limit is 128 MiB. The launcher is drawn by the runtime's own
 rasteriser and built-in faces, so Chinese game names render with no toolkit and
 no extra dependency. The window remembers the size it was left at
 (`window = 900x700`), a running game's window carries its display name, and

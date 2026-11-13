@@ -203,7 +203,19 @@ static nj_status vm_setup(nj_vm *vm, const nj_port *port, nj_size heap_bytes)
 
 nj_vm *nj_vm_create(const nj_port *port, nj_size heap_bytes)
 {
+    return nj_vm_create_with_heap_limit(port, heap_bytes, 0u);
+}
+
+nj_vm *nj_vm_create_with_heap_limit(const nj_port *port, nj_size heap_bytes,
+                                    nj_size heap_limit)
+{
     nj_vm *vm = NULL;
+    nj_size initial = heap_bytes ? heap_bytes : (nj_size)NJ_MAX_HEAP;
+
+    if (heap_limit && (heap_limit < initial ||
+        ((heap_limit | initial) & (NJ_OBJ_ALIGN - 1u)) != 0u)) {
+        return NULL;
+    }
 
     /* Bootstrap: the VM struct itself must be allocated before the registry
      * it lives in exists, so use the port allocator (or malloc) directly. */
@@ -221,6 +233,7 @@ nj_vm *nj_vm_create(const nj_port *port, nj_size heap_bytes)
     /* Real time until the player says otherwise. */
     vm->speed_percent = 100;
     vm->frame_cap = -1;
+    vm->heap_limit = heap_limit;
 
     if (vm_setup(vm, port, heap_bytes) != NJ_OK) {
         nj_vm_destroy(vm);

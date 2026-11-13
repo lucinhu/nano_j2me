@@ -237,9 +237,11 @@ void nj_midp_present(nj_vm *vm);
  * started video Player whose VideoControl asked for USE_DIRECT_VIDEO draws its
  * current RGB565 frame over the display at the requested location and size.
  * The media module owns the players; the display module owns the frame
- * boundary, and this is the one call between them.
+ * boundary, and this is the one call between them. Returns nonzero while a
+ * visible direct-video Player owns an overlay on the current Canvas, so the
+ * display must not treat a quiet GameCanvas as an unchanged screen.
  */
-void nj_media_video_overlay(nj_vm *vm);
+int nj_media_video_overlay(nj_vm *vm);
 
 /*
  * Decode a movie's AMR-NB sound track (a 'samr' track in an MP4/3GP container,

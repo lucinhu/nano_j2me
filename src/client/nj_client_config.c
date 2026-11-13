@@ -211,12 +211,23 @@ void nj_client_settings_default(nj_client_settings *s)
     s->fullscreen = 0;    /* a window, first */
     s->accel = 0;         /* software renderer: the one that always works */
     s->heap_mb = 0;       /* runtime default */
+    s->heap_auto_grow = 0; /* preserve fixed heaps unless explicitly enabled */
     s->mute = 0;          /* sound on */
     s->network = 1;       /* network on, as before this setting existed */
     s->gamepad = 1;       /* pads work without being asked, like the keys */
     s->launcher_w = 0;    /* the library window remembers its size once it has
                              been resized; 0 means "default 720 x 540"       */
     s->launcher_h = 0;
+}
+
+nj_size nj_client_heap_limit(const nj_client_settings *s, int override,
+                             nj_size initial_bytes)
+{
+    nj_size limit = (nj_size)128u * 1024u * 1024u;
+    int enabled = override > 0 || (override == 0 && s && s->heap_auto_grow);
+    if (!enabled) return 0;
+    if (initial_bytes == 0) initial_bytes = (nj_size)NJ_MAX_HEAP;
+    return initial_bytes > limit ? initial_bytes : limit;
 }
 
 /* The bind table, in NJ_PORT_BIND_* order.  The labels are what the key page
@@ -448,6 +459,8 @@ int nj_client_settings_load(nj_client_settings *s, const char *path)
         } else if (strcmp(key, "favorite") == 0) {
             (void)cfg_list_add(s->favorites, &s->favorite_count,
                                NJ_CLIENT_FAVORITE_MAX, val);
+        } else if (strcmp(key, "heap_auto_grow") == 0) {
+            s->heap_auto_grow = cfg_bool(val, s->heap_auto_grow);
         } else if (strcmp(key, "heap_mb") == 0) {
             int v = cfg_int(val, s->heap_mb);
             if (v < 0) v = 0;
@@ -527,6 +540,7 @@ int nj_client_settings_save(const nj_client_settings *s, const char *path)
     fprintf(f, "fullscreen = %d\n", s->fullscreen ? 1 : 0);
     fprintf(f, "accel = %d\n", s->accel ? 1 : 0);
     fprintf(f, "heap_mb = %d\n", s->heap_mb);
+    fprintf(f, "heap_auto_grow = %d\n", s->heap_auto_grow ? 1 : 0);
     fprintf(f, "mute = %d\n", s->mute ? 1 : 0);
     fprintf(f, "network = %d\n", s->network ? 1 : 0);
     fprintf(f, "gamepad = %d\n", s->gamepad ? 1 : 0);

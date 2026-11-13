@@ -12,6 +12,7 @@
  * Usage:  test_vm <app.jar> <main-class> [expected-substring]
  */
 #include "nj2me/nj.h"
+#include "nj_internal.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -155,6 +156,103 @@ done:
     return rc;
 }
 
+static int check_system_properties(void)
+{
+    static const char *const names[] = { "nano_j2me.unknown.test.key",
+                                         "microedition.m3g.version" };
+    const char *sig = "(Ljava/lang/String;)Ljava/lang/String;";
+    nj_vm *vm = nj_vm_create(NULL, 2u * 1024u * 1024u);
+    nj_value arg = {0}, ret = {0};
+    nj_ref exc;
+    unsigned i;
+    int failures = 0;
+
+    if (!vm) {
+        fprintf(stderr, "FAIL: property test VM creation\n");
+        return 1;
+    }
+    if (nj_call_static(vm, "java/lang/System", "getProperty", sig,
+                       &arg, &ret) == NJ_OK) {
+        fprintf(stderr, "FAIL: System.getProperty(null) succeeded\n");
+        failures++;
+    }
+    exc = nj_take_exception(vm);
+    if (!exc || strcmp(nj_ref_class_name(exc), "java/lang/NullPointerException") != 0) {
+        fprintf(stderr, "FAIL: System.getProperty(null) did not throw NPE\n");
+        failures++;
+    }
+    arg.r = nj_string_new(vm, "");
+    {
+        nj_status st = arg.r ? nj_call_static(vm, "java/lang/System", "getProperty",
+                                              sig, &arg, &ret) : NJ_OK;
+        exc = nj_take_exception(vm);
+        if (st == NJ_OK || !exc ||
+            strcmp(nj_ref_class_name(exc), "java/lang/IllegalArgumentException") != 0) {
+            fprintf(stderr, "FAIL: System.getProperty(empty) did not throw IAE\n");
+            failures++;
+        }
+    }
+    for (i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
+        char version[8];
+        int expect_version = NJ_ENABLE_M3G && i == 1u;
+        arg.r = nj_string_new(vm, names[i]);
+        ret.r = NULL;
+        if (!arg.r || nj_call_static(vm, "java/lang/System", "getProperty", sig,
+                                    &arg, &ret) != NJ_OK || nj_has_exception(vm) ||
+            (expect_version ? (!ret.r || nj_string_to_utf8(ret.r, version, sizeof(version)) != 3 ||
+                               strcmp(version, "1.0") != 0) : ret.r != NULL)) {
+            fprintf(stderr, "FAIL: System.getProperty(\"%s\") expected %s\n",
+                    names[i], expect_version ? "1.0" : "null");
+            nj_clear_exception(vm);
+            failures++;
+        }
+    }
+#if NJ_ENABLE_M3G
+    {
+        nj_u4 mark = nj_root_mark(vm);
+        static const char *const keys[] = { "maxLights", "maxViewportWidth",
+                                            "maxViewportHeight", "maxViewportDimension" };
+        nj_s4 values[4] = {0};
+        nj_value table = {0};
+        if (nj_call_static(vm, "javax/microedition/m3g/Graphics3D", "getProperties",
+                           "()Ljava/util/Hashtable;", NULL, &table) == NJ_OK && table.r) {
+            nj_root(vm, table.r);
+        }
+        if (vm->nroots != mark + 1u || nj_has_exception(vm)) {
+            fprintf(stderr, "FAIL: Graphics3D.getProperties() did not produce a rooted table\n");
+            failures++;
+        } else {
+            int all_present = 1;
+            for (i = 0; i < sizeof(keys) / sizeof(keys[0]); i++) {
+                nj_value boxed = {0};
+                arg.r = nj_string_new(vm, keys[i]);
+                if (!arg.r || nj_call(vm, table.r, "java/util/Hashtable", "get",
+                                      "(Ljava/lang/Object;)Ljava/lang/Object;", &arg, &boxed) != NJ_OK ||
+                    !boxed.r || strcmp(nj_ref_class_name(boxed.r), "java/lang/Integer") != 0 ||
+                    nj_call(vm, boxed.r, "java/lang/Integer", "intValue", "()I", NULL, &ret) != NJ_OK ||
+                    nj_has_exception(vm)) {
+                    fprintf(stderr, "FAIL: Graphics3D.getProperties() missing Integer %s\n", keys[i]);
+                    nj_clear_exception(vm);
+                    failures++;
+                    all_present = 0;
+                } else {
+                    values[i] = ret.i;
+                }
+            }
+            if (values[0] != 8 || values[1] != 4096 || values[2] != 4096 ||
+                (all_present && values[3] != (values[1] < values[2] ? values[1] : values[2]))) {
+                fprintf(stderr, "FAIL: Graphics3D.getProperties() unexpected capability values\n");
+                failures++;
+            }
+        }
+        nj_root_release(vm, mark);
+    }
+#endif
+    nj_vm_destroy(vm);
+    if (!failures) puts("PASS: System properties and M3G discovery");
+    return failures != 0;
+}
+
 int main(int argc, char **argv)
 {
     unsigned char *jar;
@@ -255,5 +353,5 @@ int main(int argc, char **argv)
            rounds);
     printf("      run under -fsanitize=address,leak for the process-level proof\n");
     free(jar);
-    return 0;
+    return check_system_properties();
 }

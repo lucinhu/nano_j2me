@@ -4,7 +4,7 @@
 
 [![最新发布](https://img.shields.io/github/v/release/lucinhu/nano_j2me?sort=semver&label=release&color=blue)](https://github.com/lucinhu/nano_j2me/releases/latest)
 [![许可](https://img.shields.io/github/license/lucinhu/nano_j2me)](LICENSE)
-[![测试](https://img.shields.io/badge/tests-168%20passing-brightgreen)](docs/VERIFICATION.md)
+[![测试](https://img.shields.io/badge/tests-171%20passing-brightgreen)](docs/VERIFICATION.md)
 [![sanitizer](https://img.shields.io/badge/sanitized-ASan%20%2B%20UBSan%20%2B%20LSan-brightgreen)](tools/run_sanitized_tests.sh)
 [![C99，零依赖](https://img.shields.io/badge/C99-no%20dependencies-informational)](#设计上的硬约束)
 
@@ -40,6 +40,136 @@
                     │  headless · SDL2 · Android · ESP32-S3    │
                     └──────────────────────────────────────────┘
 ```
+
+## 截图
+
+**桌面，SDL2 移植。** 完整的十二键手机键盘由移植层画出来——因为只有方向键的话，除了平台跳跃游戏什么都玩不了。
+
+<p>
+<img src="docs/images/readme-sdl2-1942.png" width="240" height="320" alt="1942 空战：英吉利海峡上空的空战，带屏幕按键">
+<img src="docs/images/readme-sdl2-xianjian.png" width="240" height="320" alt="仙剑奇侠传：客栈场景与对白框">
+<img src="docs/images/readme-sdl2-aoe.png" width="240" height="320" alt="傲世三国志：群雄争霸的标题菜单">
+</p>
+
+**桌面客户端，0.5.2 新增。** 游戏列表窗口：图标和名字来自 MIDlet 自己，
+坏掉的包留在列表里标成 `bad`，底部的提示同时也是可点的按钮。
+
+<p>
+<img src="docs/images/readme-desktop-client.png" width="480" height="360" alt="Nano J2ME 桌面客户端：游戏列表窗口，每行带图标、中文名和文件名">
+</p>
+
+**设置与按键映射，0.5.2 新增。** 设置页管显示、堆大小和网络；「按键映射」页
+可以把十二个游戏键改成任意键，右下角的提示确认新绑定。
+
+<p>
+<img src="docs/images/readme-client-settings.png" width="360" height="270" alt="客户端设置页：游戏目录、画面缩放、缩放滤镜、全屏、渲染加速等行">
+<img src="docs/images/readme-client-binds.png" width="360" height="270" alt="按键映射页：第一项绑定到 W，提示显示 上：W">
+</p>
+
+**搜索与快捷键表。** 直接输入即可按名字、文件名或 MIDlet 类名过滤列表；
+按 `F1` 会列出客户端接受的全部按键以及设置文件的位置。
+
+<p>
+<img src="docs/images/readme-client-search.png" width="360" height="270" alt="游戏列表窗口，搜索框里是 1942，只剩一个匹配的游戏">
+<img src="docs/images/readme-client-help.png" width="360" height="270" alt="F1 快捷键表，列出列表、游戏窗口和设置页的按键">
+</p>
+
+**最近玩过与收藏。** 列表顶部是最近运行的十个游戏，`F2` 给行加星；
+重启后星标还在，设置页的“恢复默认”也不会把它们清掉。
+
+<p>
+<img src="docs/images/readme-client-recent.png" width="360" height="270" alt="游戏列表窗口，全部游戏上方多了一段 最近玩过">
+<img src="docs/images/readme-client-favorite.png" width="360" height="270" alt="收藏的行前面有星标，并弹出 已收藏 提示">
+</p>
+
+**Windows，0.5.2 新增。** 同一个客户端编成 `nj2me.exe`，这是在 wine 下截的图：
+UTF-16 路径处理让宽字符目录扫描和中文游戏名与 Linux 上完全一致。
+
+<p>
+<img src="docs/images/readme-client-windows.png" width="480" height="360" alt="nano_j2me 的 Windows 构建：游戏列表窗口，每行带图标和中文名，标题栏是 Windows 路径">
+</p>
+
+**Android。** 启动器显示每个游戏自己的名字和图标；游戏里可以换用不同的悬浮按键布局。
+
+<p>
+<img src="docs/images/readme-android-launcher.png" width="200" height="400" alt="Nano J2ME 启动器列出四个游戏">
+<img src="docs/images/readme-android-game.png" width="200" height="400" alt="1942 空战在 Android 上，开火键被按下">
+</p>
+
+**RetroArch。** 同一个运行时以 libretro core 形式载入 RetroArch。
+
+<p>
+<img src="docs/images/readme-retroarch.png" width="360" height="480" alt="RetroArch 载入 nano_j2me core 并运行游戏">
+</p>
+
+**ESP32-S3。** 真实的 MIDlet 跑在 Espressif 的 `esp-emu` 里：内置 RAM 的板级配置，帧数据经 UART 流出并解码成这张 PNG。
+
+<p>
+<img src="docs/images/esp-emu-1942-menu.png" width="180" height="240" alt="1942 空战运行在模拟的 ESP32-S3 上">
+</p>
+
+**Minecraft PE 0.6.1，0.4.0 新增。** 游戏自己生成的世界：云层来自展开后的调色板 `Image2D`，水面干净，标题自己的限帧也跟得上。
+
+<p>
+<img src="docs/images/readme-minecraft.png" width="240" height="320" alt="Minecraft PE 的世界，有云、水和草地">
+<img src="docs/images/readme-android-minecraft.png" width="200" height="400" alt="Minecraft PE 跑在 Android 版本里">
+</p>
+
+**视频，0.3.0 新增。** 1942 空战的 MPEG-4 片头：一帧一帧解码，以 direct-video 叠加画在 Canvas 上；影片自带的 AMR-NB 音轨同步播放。
+
+<p>
+<img src="docs/images/readme-movie-1942.png" width="240" height="320" alt="1942 空战的 MPEG-4 片头在模拟器里播放">
+</p>
+
+**真实标题上的 Micro3D，0.3.0 新增。** 鬼泣3D 的任务一战斗与浴火银河的飞行场景，由 Mascot Capsule Micro3D 的命令表与 Figure 绘制。
+
+<p>
+<img src="docs/images/dmc-micro3d-combat.png" width="240" height="320" alt="鬼泣3D 任务战斗画面，由 Micro3D 绘制">
+<img src="docs/images/gof-micro3d-flight.png" width="240" height="320" alt="浴火银河飞行场景，由 Micro3D 绘制">
+</p>
+
+## 平台与可移植性
+
+nano_j2me 是一个用可移植 C99 写成的运行时，不是只能在桌面上跑的模拟器：
+解释器、类库、光栅化器、解码器以及 M3G/Micro3D 管线都与平台无关，所有和操作系统
+相关的东西都收在一个 `nj_port` 实现里（大约十个回调）。支持一个新目标只需要帧
+缓冲、几百 KB 内存和一份新的 `nj_port`，别的都不用动。运行时不要求 libc
+（`NJ_USE_LIBC=0` 可完全脱离），不依赖外部库（DEFLATE、PNG、JPEG 都在源码里），
+并且保持零可写全局状态——所以同一个进程里可以并存多个虚拟机，销毁时能精确归还
+全部字节。正因如此，同一个内核可以从手机一直跑到单片机上。
+
+当前支持并已由发布流程构建、验证的目标：
+
+| 目标平台 | 获得什么 |
+|---|---|
+| Linux x86_64 / aarch64 | SDL2 桌面客户端和 CLI，可移植构建面向 glibc 2.17 及更新 |
+| Windows x86_64 | `nj2me.exe`（mingw-w64）：游戏库窗口加命令行运行器，已在 Wine 下验证 |
+| Android 5.0+（API 21） | 通用 APK，覆盖 arm64-v8a、armeabi-v7a、x86、x86_64，启动器与悬浮按键 |
+| RetroArch / libretro | Linux（x86_64、aarch64、armv7）与 Android（arm64、armv7、x86_64）原生 core，不需要 JVM 或子进程 |
+| ESP32-S3（ESP-IDF） | 16 MB flash / 8 MB PSRAM 板上的完整运行时和 MIDlet，在 `esp-emu` 与 QEMU 中验证 |
+| ESP32-C3（ESP-IDF, RISC-V）| 可编译、链接并启动；VM 需要 PSRAM |
+| headless | 测试套件使用的参考移植，可用于嵌入和 CI |
+
+另提供 **Android 2.0+（API 5）旧机专版**，面向 ARMv5/`armeabi` 手机，
+包括 Android 2.3。使用轻量启动器、软件画面输出和 AudioTrack 声音，
+支持浏览导入 JAR、从文件管理器打开 JAR，并沿用标准安卓版的图标。
+运行 `tools/build_android_legacy.sh` 生成独立 APK；安装方式、旧工具链和
+功能限制见 [docs/ANDROID_LEGACY.md](docs/ANDROID_LEGACY.md)。
+[下载 0.5.7 旧机版 APK](https://github.com/lucinhu/nano_j2me/releases/download/v0.5.7/nj2me-0.5.7-android-legacy-armeabi.apk)。
+
+同一个桌面二进制跑了 400 款游戏的[兼容性语料](docs/CORPUS.md)，其中 398 款正常
+运行。移植说明见 [docs/PORTING.md](docs/PORTING.md)。
+
+**Arch Linux：** 可以直接从 AUR 安装。[`nano-j2me`](https://aur.archlinux.org/packages/nano-j2me)
+跟随最新发布版，[`nano-j2me-git`](https://aur.archlinux.org/packages/nano-j2me-git)
+跟随 master；两个包都会安装桌面客户端、静态库与头文件、libretro core 以及桌面
+入口：
+
+```sh
+yay -S nano-j2me     # 或者 paru -S nano-j2me，也可以装 -git 包
+```
+
+其他平台从源码构建只需一条命令，见[构建](#构建)。
 
 ## 0.5.6 的新内容
 
@@ -344,93 +474,6 @@ Java 监视器：有竞争的 `monitorenter` 会停到持有者离开为止，`O
 
 完整更新日志：[v0.4.0 发布说明](https://github.com/lucinhu/nano_j2me/releases/tag/v0.4.0)。
 
-## 截图
-
-**桌面，SDL2 移植。** 完整的十二键手机键盘由移植层画出来——因为只有方向键的话，除了平台跳跃游戏什么都玩不了。
-
-<p>
-<img src="docs/images/readme-sdl2-1942.png" width="240" height="320" alt="1942 空战：英吉利海峡上空的空战，带屏幕按键">
-<img src="docs/images/readme-sdl2-xianjian.png" width="240" height="320" alt="仙剑奇侠传：客栈场景与对白框">
-<img src="docs/images/readme-sdl2-aoe.png" width="240" height="320" alt="傲世三国志：群雄争霸的标题菜单">
-</p>
-
-**桌面客户端，0.5.2 新增。** 游戏列表窗口：图标和名字来自 MIDlet 自己，
-坏掉的包留在列表里标成 `bad`，底部的提示同时也是可点的按钮。
-
-<p>
-<img src="docs/images/readme-desktop-client.png" width="480" height="360" alt="Nano J2ME 桌面客户端：游戏列表窗口，每行带图标、中文名和文件名">
-</p>
-
-**设置与按键映射，0.5.2 新增。** 设置页管显示、堆大小和网络；「按键映射」页
-可以把十二个游戏键改成任意键，右下角的提示确认新绑定。
-
-<p>
-<img src="docs/images/readme-client-settings.png" width="360" height="270" alt="客户端设置页：游戏目录、画面缩放、缩放滤镜、全屏、渲染加速等行">
-<img src="docs/images/readme-client-binds.png" width="360" height="270" alt="按键映射页：第一项绑定到 W，提示显示 上：W">
-</p>
-
-**搜索与快捷键表。** 直接输入即可按名字、文件名或 MIDlet 类名过滤列表；
-按 `F1` 会列出客户端接受的全部按键以及设置文件的位置。
-
-<p>
-<img src="docs/images/readme-client-search.png" width="360" height="270" alt="游戏列表窗口，搜索框里是 1942，只剩一个匹配的游戏">
-<img src="docs/images/readme-client-help.png" width="360" height="270" alt="F1 快捷键表，列出列表、游戏窗口和设置页的按键">
-</p>
-
-**最近玩过与收藏。** 列表顶部是最近运行的十个游戏，`F2` 给行加星；
-重启后星标还在，设置页的“恢复默认”也不会把它们清掉。
-
-<p>
-<img src="docs/images/readme-client-recent.png" width="360" height="270" alt="游戏列表窗口，全部游戏上方多了一段 最近玩过">
-<img src="docs/images/readme-client-favorite.png" width="360" height="270" alt="收藏的行前面有星标，并弹出 已收藏 提示">
-</p>
-
-**Windows，0.5.2 新增。** 同一个客户端编成 `nj2me.exe`，这是在 wine 下截的图：
-UTF-16 路径处理让宽字符目录扫描和中文游戏名与 Linux 上完全一致。
-
-<p>
-<img src="docs/images/readme-client-windows.png" width="480" height="360" alt="nano_j2me 的 Windows 构建：游戏列表窗口，每行带图标和中文名，标题栏是 Windows 路径">
-</p>
-
-**Android。** 启动器显示每个游戏自己的名字和图标；游戏里可以换用不同的悬浮按键布局。
-
-<p>
-<img src="docs/images/readme-android-launcher.png" width="200" height="400" alt="Nano J2ME 启动器列出四个游戏">
-<img src="docs/images/readme-android-game.png" width="200" height="400" alt="1942 空战在 Android 上，开火键被按下">
-</p>
-
-**RetroArch。** 同一个运行时以 libretro core 形式载入 RetroArch。
-
-<p>
-<img src="docs/images/readme-retroarch.png" width="360" height="480" alt="RetroArch 载入 nano_j2me core 并运行游戏">
-</p>
-
-**ESP32-S3。** 真实的 MIDlet 跑在 Espressif 的 `esp-emu` 里：内置 RAM 的板级配置，帧数据经 UART 流出并解码成这张 PNG。
-
-<p>
-<img src="docs/images/esp-emu-1942-menu.png" width="180" height="240" alt="1942 空战运行在模拟的 ESP32-S3 上">
-</p>
-
-**Minecraft PE 0.6.1，0.4.0 新增。** 游戏自己生成的世界：云层来自展开后的调色板 `Image2D`，水面干净，标题自己的限帧也跟得上。
-
-<p>
-<img src="docs/images/readme-minecraft.png" width="240" height="320" alt="Minecraft PE 的世界，有云、水和草地">
-<img src="docs/images/readme-android-minecraft.png" width="200" height="400" alt="Minecraft PE 跑在 Android 版本里">
-</p>
-
-**视频，0.3.0 新增。** 1942 空战的 MPEG-4 片头：一帧一帧解码，以 direct-video 叠加画在 Canvas 上；影片自带的 AMR-NB 音轨同步播放。
-
-<p>
-<img src="docs/images/readme-movie-1942.png" width="240" height="320" alt="1942 空战的 MPEG-4 片头在模拟器里播放">
-</p>
-
-**真实标题上的 Micro3D，0.3.0 新增。** 鬼泣3D 的任务一战斗与浴火银河的飞行场景，由 Mascot Capsule Micro3D 的命令表与 Figure 绘制。
-
-<p>
-<img src="docs/images/dmc-micro3d-combat.png" width="240" height="320" alt="鬼泣3D 任务战斗画面，由 Micro3D 绘制">
-<img src="docs/images/gof-micro3d-flight.png" width="240" height="320" alt="浴火银河飞行场景，由 Micro3D 绘制">
-</p>
-
 ## 设计上的硬约束
 
 这些不是愿望，每一条都有测试或门禁守着。
@@ -473,8 +516,8 @@ UTF-16 路径处理让宽字符目录扫描和中文游戏名与 Linux 上完全
 | 移植：Android（NDK + JNI） | **完成** —— 一个 APK 支持 Android 5.0（API 21）及以上、四种 ABI；启动器会显示每个游戏自己的名字和图标，也能从文件管理器直接打开 `.jar`；三套可配置的悬浮按键布局；AAudio 或 OpenSL ES 出声，MIDI 交给手机自带的合成器；多点触控；自动识别游戏分辨率。四种 ABI 合计 2.79 MiB（仅 arm64 的包 858 KiB），在 API 21 模拟器和 API 36 模拟器上都跑过 |
 | 移植：ESP32-S3（ESP-IDF，Xtensa） | **完成** —— 真实的 IDF 构建；在 16 MB flash / 8 MB PSRAM 的板级配置下，通过 Espressif 的 `esp-emu` 跑起 ROM、完整类库和一个 MIDlet（`tools/run_esp_emulator.sh`：`BENCH sum=-136042548`，105,717,067 条字节码——桌面版的总数），内置 RAM 配置在 QEMU 下也能跑。`tools/run_esp_emulator_ui.sh` 还在同一个模拟器里演示了显示、输入和存储路径（240x320 帧解码成 PNG，按键经 UART 注入，JAR 从挂载的存储卡读取）。见 [docs/PERFORMANCE.md](docs/PERFORMANCE.md#esp32-s3-measured-on-the-real-architecture) 和 [docs/FOOTPRINT.md](docs/FOOTPRINT.md#what-esp-emu-does-and-does-not-model-the-ui-demo) |
 | 移植：ESP32-C3（ESP-IDF，RISC-V） | 能编译、链接、启动；跑虚拟机需要 PSRAM |
-| 测试套件 | **140 项测试**（`ctest`） |
-| Sanitizer 套件 | **140/140 通过**（ASan + UBSan + LSan，`tools/run_sanitized_tests.sh`） |
+| 测试套件 | **171 项注册测试通过**（`ctest`）；构建配置的覆盖限制见[验证记录](docs/VERIFICATION.md) |
+| 定向 Sanitizer 回归 | **9 组通过**（ASan + UBSan + float-cast-overflow + 泄漏检查）；见[验证记录](docs/VERIFICATION.md) |
 
 端到端验证过的：**Tumbleweed**（`net.frog_parrot.jump.Jump`，Apress 2004）在 headless 移植上以 176x208 跑起来——滚动的地面、会动的精灵、实时分数和倒计时。详见 [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)。收集到的真实游戏语料共 400 个，其中 **398 个正常跑**，2 个失败都是标题自身原因（JAR 被截断、授权过期）；见 [docs/CORPUS.md](docs/CORPUS.md)。
 
@@ -621,7 +664,7 @@ build/nj2me --print-library          # 看看列表看到了什么
 的行——`map_up = W`、`map_fire = J` 之类，值就是 `SDL_GetKeyName()` 打印的
 键名，留空表示默认键。直接 `nj2me game.jar` 运行会读取同一份文件里的堆、
 滤镜、全屏、渲染、静音和网络设置，命令行上的 `--scale`、`--fps`、`--keys`
-和 `--heap` 仍然优先。启动器由运行时自己的光栅器和内置字体绘制，所以不依赖
+和 `--heap` 仍然优先。桌面设置的“自动扩展内存”默认关闭，在下次启动游戏时生效；也可用 `--heap-grow` 开启，或用 `--no-heap-grow` 覆盖已保存的设置。`--heap` 仍决定初始大小，开启扩展后的默认上限为 128 MiB。启动器由运行时自己的光栅器和内置字体绘制，所以不依赖
 任何界面工具包也能显示中文游戏名。窗口会记住上次拖动到的尺寸
 （`window = 900x700`），运行中的游戏窗口标题带游戏名；同一份文件里的
 `recent =`、`favorite =` 行保存最近玩过的游戏和加了星的行，设置页的“恢复默认”

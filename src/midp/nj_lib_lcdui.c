@@ -630,6 +630,7 @@ void nj_midp_repaint(nj_vm *vm)
 
 void nj_midp_present(nj_vm *vm)
 {
+    int video_active;
 
     if (!vm) {
         return;
@@ -673,7 +674,20 @@ void nj_midp_present(nj_vm *vm)
      * video overlay also sits.  A no-op unless a started video Player asked
      * for it and this displayable is the Canvas it registered.
      */
-    nj_media_video_overlay(vm);
+    video_active = nj_media_video_overlay(vm);
+    /* A producer-owned GameCanvas cannot change the committed screen between
+     * flushes. Keep input/audio/frame pacing and the host HUD ticking, without
+     * making the port compare the same large framebuffer on every VM slice.
+     * Ordinary Canvas and legacy GameCanvas still require their old presents;
+     * direct video also bypasses this optimization. Ports opt in explicitly. */
+    if (vm->port && vm->port->display_idle && !video_active &&
+        !vm->painted_in_frame && (vm->app_painted & 2u)) {
+        nj_ref current = nj_midp_current(vm);
+        if (current && isa(vm, current, NJ_C_GAMECANVAS)) {
+            vm->port->display_idle(vm->port->ud);
+            return;
+        }
+    }
     if (vm->port && vm->port->display_present && vm->screen.pixels) {
         vm->port->display_present(vm->port->ud, 0, 0, vm->screen.width,
                                   vm->screen.height);
@@ -5484,7 +5498,10 @@ static int nj_midp_key_char_inner(nj_vm *vm, int key, int down, nj_u4 ch)
     if (vm->exception) {
         return consumed;
     }
-    if (consumed) {
+    /* A self-flushing GameCanvas publishes after its input-driven rendering
+     * is complete. Do not turn input delivery into an implicit buffer copy;
+     * a repaint explicitly queued by the callback remains pending. */
+    if (consumed && !((vm->app_painted & 2u) && isa(vm, d, NJ_C_GAMECANVAS))) {
         nj_midp_repaint(vm);
     }
     return consumed;
@@ -5577,7 +5594,8 @@ static int nj_midp_pointer_inner(nj_vm *vm, int x, int y, int kind)
             fput(vm, d, NJ_C_CANVAS, F_C_PRESSED, D_BOOL,
                  (kind == NJ_POINTER_DOWN) ? 1 : 0);
         }
-        nj_midp_repaint(vm);
+        if (!((vm->app_painted & 2u) && isa(vm, d, NJ_C_GAMECANVAS)))
+            nj_midp_repaint(vm);
         return 1;
     }
     /* Built-in editors must focus the row under the finger. Treating a tap
@@ -5684,7 +5702,7 @@ static nj_status nj_midp_paint_body(nj_vm *vm)
      * whatever the application did only when the application did not paint
      * itself (see the frame hook in nj_lib_midlet.c). */
     if (vm->in_paint) {
-        vm->app_painted = 1u;   /* serviceRepaints() asked for this one */
+        vm->app_painted |= 1u;   /* serviceRepaints() asked for this one */
         vm->app_painted_frame = 1u;
     }
     vm->painted_in_frame = 1u;
@@ -7097,10 +7115,6 @@ NJFN(ii_init)
     if (!item_layout_valid(layout)) {
         return nj_throw(vm, "java/lang/IllegalArgumentException", "unknown layout directives");
     }
-    if (!alt) {
-        return nj_throw(vm, "java/lang/NullPointerException",
-                        "altText is null");
-    }
     rput(vm, self, NJ_C_ITEM, "itLabel", D_STR, label);
     rput(vm, self, NJ_C_IMAGEITEM, "iiImage", D_IMAGE, img);
     rput(vm, self, NJ_C_IMAGEITEM, "iiAlt", D_STR, alt);
@@ -7132,10 +7146,6 @@ NJFN(ii_init_app)
     (void)item_init(vm, th, args, ret);
     if (!item_layout_valid(layout)) {
         return nj_throw(vm, "java/lang/IllegalArgumentException", "unknown layout directives");
-    }
-    if (!alt) {
-        return nj_throw(vm, "java/lang/NullPointerException",
-                        "altText is null");
     }
     if (mode < 0 || mode > 2) {
         return nj_throw(vm, "java/lang/IllegalArgumentException",
@@ -7177,9 +7187,6 @@ NJFN(ii_setAltText)
 {
     nj_ref self = NJ_THIS(args);
     nj_ref s = NJ_ARG_REF(args, 0);
-    if (!s) {
-        return nj_throw(vm, "java/lang/NullPointerException", "altText is null");
-    }
     rput(vm, self, NJ_C_IMAGEITEM, "iiAlt", D_STR, s);
     return NJ_OK;
 }

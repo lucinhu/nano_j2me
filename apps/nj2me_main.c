@@ -9,6 +9,8 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <errno.h>
+#include <limits.h>
 
 #if defined(_WIN32)
 #  ifndef WIN32_LEAN_AND_MEAN
@@ -21,8 +23,7 @@
 #  include <shellapi.h>     /* CommandLineToArgvW */
 #endif
 
-#define NJ_CLI_HEAP_MB ((NJ_MAX_HEAP / (1024u * 1024u)) < 64u \
-                        ? 64u : (NJ_MAX_HEAP / (1024u * 1024u)))
+#define NJ_CLI_HEAP_MB (NJ_MAX_HEAP / (1024u * 1024u))
 
 static void usage(const char *argv0)
 {
@@ -35,7 +36,9 @@ static void usage(const char *argv0)
 "  --port <name>        headless | sdl2        (default: sdl2 if built in)\n"
 "  --midlet <class>     run a specific MIDlet class instead of MIDlet-1\n"
 "  --font <file>        draw text with a TrueType face (default: built-in)\n"
-"  --heap <mb>          Java heap size in megabytes (default: %u)\n"
+"  --heap <mb>          initial Java heap MB (saved setting; runtime default: %u)\n"
+"  --heap-grow          expand after GC when needed, up to 128 MB or --heap\n"
+"  --no-heap-grow       keep the Java heap fixed (overrides the saved switch)\n"
 "  --scale <n>          integer upscale for the window (sdl2, default: auto)\n"
 "  --size <WxH>         screen size, e.g. 240x320 (default: %dx%d)\n"
 "  --rms-dir <path>     where RecordStore files are kept\n"
@@ -153,6 +156,8 @@ typedef struct cli {
     int         height;
     unsigned    heap_mb;
     int         heap_given;     /* --heap wins over client.conf's heap_mb */
+    int         heap_grow;
+    int         grow_given;     /* explicit on/off wins over saved settings */
     int         stats;
     int         network;
     int         where;
@@ -388,6 +393,7 @@ static int run_client_mode(const cli *c, const nj_run_opts *opts)
     co.keys_visible = -1; /* the port's own default */
     co.rms_dir = c->rms_dir;
     co.fs_dir = c->fs_dir;
+    co.heap_grow_override = c->grow_given ? (c->heap_grow ? 1 : -1) : 0;
     st = nj_client_run(&co);
     if (c->stats) {
         fprintf(stderr, "nano_j2me: exit status %d\n", (int)st);
@@ -508,8 +514,26 @@ int main(int argc, char **argv)
         } else if (strcmp(a, "--font") == 0 && i + 1 < argc) {
             c.font = argv[++i];
         } else if (strcmp(a, "--heap") == 0 && i + 1 < argc) {
-            c.heap_mb = (unsigned)atoi(argv[++i]);
+            char *end;
+            const char *value = argv[++i];
+            unsigned long mb;
+            errno = 0;
+            mb = strtoul(value, &end, 10);
+            if (value[0] == '-' || end == value || *end != '\0' ||
+                errno == ERANGE || mb > UINT_MAX ||
+                mb > (unsigned long)((nj_size)-1) /
+                                           (1024u * 1024u)) {
+                fprintf(stderr, "bad --heap (expected nonnegative MB)\n");
+                return 2;
+            }
+            c.heap_mb = (unsigned)mb;
             c.heap_given = 1;
+        } else if (strcmp(a, "--heap-grow") == 0) {
+            c.heap_grow = 1;
+            c.grow_given = 1;
+        } else if (strcmp(a, "--no-heap-grow") == 0) {
+            c.heap_grow = 0;
+            c.grow_given = 1;
         } else if (strcmp(a, "--scale") == 0 && i + 1 < argc) {
             c.scale = atoi(argv[++i]);
         } else if (strcmp(a, "--fps") == 0 && i + 1 < argc) {
@@ -651,6 +675,9 @@ int main(int argc, char **argv)
     if (!c.heap_given) {
         opts.heap_bytes = (nj_size)settings.heap_mb * 1024u * 1024u;
     }
+    opts.heap_limit = nj_client_heap_limit(&settings,
+                         c.grow_given ? (c.heap_grow ? 1 : -1) : 0,
+                         opts.heap_bytes);
 
     if (c.print_library) {
         return print_library(&c);

@@ -731,6 +731,7 @@ struct nj_vm {
      * a frame of its own.  A title that paints itself is left to paint itself:
      * the runner's extra paint would show a frame the title never asked for.
      */
+    /* Bit 0: synchronous paint; bit 1: explicit GameCanvas buffer flush. */
     nj_u1         app_painted;
     /* ... and that it painted THIS frame: the frame hook ages the silence. */
     nj_u1         app_painted_frame;
@@ -742,6 +743,8 @@ struct nj_vm {
      * paint in between (合金弹头2013BT版_678's flicker), while a title that
      * painted twice at startup and then went quiet gets its frames back
      * (开心农场BT版_6075).
+     * This fallback applies to Canvas; a self-flushing GameCanvas retains
+     * its last complete frame until another flush or explicit repaint.
      */
     nj_u1         app_paint_period;
     /* Frames since the application last painted one of its own. */
@@ -884,6 +887,11 @@ struct nj_vm {
     nj_u4      scratch_u2_len;
 
     void      *loader_ud;
+
+    /* Host reservation and caller policy. Never serialize these: a snapshot
+     * adopts the receiving VM's limit. Keep outside heap (heap_init resets it). */
+    nj_size    heap_capacity;
+    nj_size    heap_limit;
 };
 
 /* VM states */
@@ -1023,6 +1031,7 @@ static inline void nj_frame_pop_fast(nj_thread *th)
 }
 
 nj_status nj_heap_init(nj_vm *vm, void *block, nj_size size);
+void *nj_heap_reserve(nj_vm *vm, nj_size size, nj_size *capacity);
 void      nj_heap_destroy(nj_vm *vm);
 void     *nj_alloc(nj_vm *vm, nj_size bytes);         /* raw, zeroed */
 nj_ref    nj_new_instance(nj_vm *vm, nj_class *cls);

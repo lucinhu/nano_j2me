@@ -17,7 +17,7 @@
 #  built and is what the tests use).
 # =====================================================================
 cmake_minimum_required(VERSION 3.16)
-project(nano_j2me VERSION 0.5.6 LANGUAGES C)
+project(nano_j2me VERSION 0.5.7 LANGUAGES C)
 
 set(CMAKE_C_STANDARD 99)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -808,6 +808,7 @@ if(NJ_BUILD_TESTS)
   # ---- the memory contract and the class library ----
   nj_add_test(test_lifecycle tests/test_lifecycle.c)
   nj_add_test(test_heap_bounds tests/test_heap_bounds.c)
+  nj_add_test(test_heap_growth tests/test_heap_growth.c)
   nj_add_test(test_string_intern tests/test_string_intern.c)
   nj_add_test(test_util tests/test_util.c)
   nj_add_test(test_math_edges tests/test_math_edges.c)
@@ -1556,7 +1557,7 @@ nj_add_test(test_clip tests/test_clip.c)
       ${CMAKE_CURRENT_SOURCE_DIR}/tests)
   endif()
 
-  foreach(extra_test test_font_png test_jpeg test_lcdui test_form_scroll test_display_serially test_game test_lib
+  foreach(extra_test test_font_png test_jpeg test_lcdui test_form_scroll test_imageitem_alttext test_display_serially test_gamecanvas_flush test_game test_lib
                       test_ioapi test_resolution test_sax test_rms test_rms_enumeration
                       test_rms_lookup test_run_archive
                       test_nokia_sound test_nokia_touch test_datagram test_bluetooth_property)

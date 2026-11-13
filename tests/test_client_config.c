@@ -85,6 +85,7 @@ static void test_defaults(const char *data_home)
     CHECK(s.fullscreen == 0, "games start in a window");
     CHECK(s.accel == 0, "the software renderer is the default");
     CHECK(s.heap_mb == 0, "the heap defaults to the runtime size");
+    CHECK(s.heap_auto_grow == 0, "heap growth is opt-in");
     CHECK(s.mute == 0, "sound starts on");
     CHECK(s.network == 1, "the network starts on");
     CHECK(s.gamepad == 1, "game controllers start enabled");
@@ -174,6 +175,7 @@ static void test_round_trip(const char *config_home)
     a.fullscreen = 1;
     a.accel = 1;
     a.heap_mb = 32;
+    a.heap_auto_grow = 1;
     a.mute = 1;
     a.network = 0;
     a.gamepad = 0;
@@ -198,6 +200,7 @@ static void test_round_trip(const char *config_home)
     CHECK(b.fullscreen == 1, "fullscreen survives");
     CHECK(b.accel == 1, "the accelerated renderer survives");
     CHECK(b.heap_mb == 32, "the heap size survives");
+    CHECK(b.heap_auto_grow == 1, "heap growth survives independently");
     CHECK(b.mute == 1, "mute survives");
     CHECK(b.network == 0, "the network switch survives");
     CHECK(b.gamepad == 0, "a disabled gamepad survives");
@@ -429,6 +432,66 @@ static void test_recent_and_favorites(const char *config_home)
     CHECK(strstr(buf, "favorite =") == NULL, "an empty favorite list is not written");
 }
 
+static void test_heap_growth(const char *config_home)
+{
+    nj_client_settings s;
+    char path[1024], text[256];
+    static const char *invalid[] = { "-1", "2", "true", "nonsense", "", "999999999999999" };
+    static const int heaps[] = { 0, 8, 16, 32, 64 };
+    size_t i;
+    nj_size mb = 1024u * 1024u;
+    int n = snprintf(path, sizeof(path), "%s/heap-growth.conf", config_home);
+
+    printf("-- opt-in heap growth, old config and explicit launch overrides --\n");
+    CHECK(n > 0 && (size_t)n < sizeof(path), "heap growth test path fits");
+    write_file(path, "heap_mb = 32\n");
+    CHECK(nj_client_settings_load(&s, path) == 1 && s.heap_mb == 32 &&
+              s.heap_auto_grow == 0,
+          "old config preserves initial heap and leaves growth off");
+    for (i = 0; i < sizeof(invalid) / sizeof(invalid[0]); ++i) {
+        snprintf(text, sizeof(text), "heap_mb = 16\nheap_auto_grow = %s\n", invalid[i]);
+        write_file(path, text);
+        CHECK(nj_client_settings_load(&s, path) == 1 && s.heap_mb == 16 &&
+                  s.heap_auto_grow == 0,
+              "invalid growth boolean preserves off and selected heap");
+    }
+    write_file(path, "heap_auto_grow = 1\nheap_auto_grow = nonsense\nheap_mb = 8\n");
+    CHECK(nj_client_settings_load(&s, path) == 1 && s.heap_auto_grow == 1 &&
+              s.heap_mb == 8,
+          "invalid duplicate keeps a valid growth boolean");
+    for (i = 0; i < sizeof(heaps) / sizeof(heaps[0]); ++i) {
+        snprintf(text, sizeof(text), "heap_mb = %d\nheap_auto_grow = 1\n", heaps[i]);
+        write_file(path, text);
+        CHECK(nj_client_settings_load(&s, path) == 1 && s.heap_mb == heaps[i] &&
+                  s.heap_auto_grow == 1,
+              "growth does not change any initial heap choice");
+        CHECK(nj_client_heap_limit(&s, 0, (nj_size)heaps[i] * mb) ==
+                  ((nj_size)NJ_MAX_HEAP > 128u * mb && heaps[i] == 0
+                   ? (nj_size)NJ_MAX_HEAP : 128u * mb),
+              "enabled launch uses the bounded growth limit");
+        CHECK(nj_client_heap_limit(&s, -1, (nj_size)heaps[i] * mb) == 0,
+              "explicit off beats enabled config for each initial heap");
+    }
+    CHECK(nj_client_heap_limit(&s, 0, 192u * mb) == 192u * mb,
+          "growth never shrinks an already larger initial heap");
+    s.heap_auto_grow = 0;
+    CHECK(nj_client_heap_limit(&s, 0, 16u * mb) == 0,
+          "the next launch sees growth disabled in current settings");
+    CHECK(nj_client_heap_limit(&s, 1, 16u * mb) == 128u * mb,
+          "explicit on beats disabled config");
+    CHECK(nj_client_heap_limit(NULL, 0, 16u * mb) == 0 &&
+              nj_client_heap_limit(NULL, 1, 16u * mb) == 128u * mb,
+          "absent settings stay off unless explicitly enabled");
+    s.heap_auto_grow = -7;
+    CHECK(nj_client_settings_save(&s, path) == 1 &&
+              nj_client_settings_load(&s, path) == 1 && s.heap_auto_grow == 1,
+          "save normalizes a nonzero growth flag to one");
+    s.heap_auto_grow = 0;
+    CHECK(nj_client_settings_save(&s, path) == 1 &&
+              nj_client_settings_load(&s, path) == 1 && s.heap_auto_grow == 0,
+          "disabled growth survives save and reload");
+}
+
 int main(void)
 {
     char root[] = "/tmp/njclient-cfg-XXXXXX";
@@ -458,6 +521,7 @@ int main(void)
     test_defaults(data_home);
     test_paths(config_home, home);
     test_round_trip(config_home);
+    test_heap_growth(config_home);
     test_bad_files(config_home);
     test_recent_and_favorites(config_home);
 

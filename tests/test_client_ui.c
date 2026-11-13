@@ -1420,6 +1420,29 @@ int main(void)
     key(ui, NJ_CLIENT_KEY_LEFT);
     CHECK(settings.heap_mb == 64, "heap LEFT wraps to 64 MB");
 
+    /* 自动扩展内存 is independent of the selected initial heap. */
+    key(ui, NJ_CLIENT_KEY_DOWN);
+    CHECK(settings.heap_auto_grow == 0, "heap growth starts off");
+    key(ui, NJ_CLIENT_KEY_RIGHT);
+    CHECK(settings.heap_auto_grow == 1, "RIGHT enables heap growth");
+    CHECK(settings.heap_mb == 64, "growth toggle preserves initial heap");
+    draw_dump(ui, s, env.out, "05e_settings_heap_growth.ppm");
+    {
+        nj_client_settings saved;
+        CHECK(nj_client_settings_load(&saved, NULL) == 1 &&
+                  saved.heap_auto_grow == 1 && saved.heap_mb == 64,
+              "growth toggle immediately saves independently of heap size");
+    }
+    key(ui, NJ_CLIENT_KEY_LEFT);
+    CHECK(settings.heap_auto_grow == 0, "LEFT disables heap growth");
+    key(ui, NJ_CLIENT_KEY_RIGHT);
+    CHECK(settings.heap_auto_grow == 1, "RIGHT re-enables heap growth");
+    CHECK(nj_client_heap_limit(&settings, 0, 64u * 1024u * 1024u) ==
+              128u * 1024u * 1024u,
+          "a launch reads the current enabled library setting");
+    CHECK(nj_client_heap_limit(&settings, -1, 64u * 1024u * 1024u) == 0,
+          "explicit CLI off wins over the changed library setting");
+
     /* 静音 */
     key(ui, NJ_CLIENT_KEY_DOWN);
     key(ui, NJ_CLIENT_KEY_RIGHT);
@@ -1453,6 +1476,7 @@ int main(void)
               "load kept fullscreen");
         CHECK(loaded.accel == settings.accel, "load kept accel");
         CHECK(loaded.heap_mb == settings.heap_mb, "load kept heap size");
+        CHECK(loaded.heap_auto_grow == 1, "load kept enabled heap growth");
         CHECK(loaded.mute == settings.mute, "load kept mute");
         CHECK(loaded.network == settings.network, "load kept network");
         CHECK(loaded.gamepad == settings.gamepad, "load kept gamepad");
@@ -1535,6 +1559,7 @@ int main(void)
     key(ui, NJ_CLIENT_KEY_END);
     key(ui, NJ_CLIENT_KEY_ENTER);
     CHECK(settings.ui_scale == 0, "reset restores automatic desktop scaling");
+    CHECK(settings.heap_auto_grow == 0, "reset disables opt-in heap growth");
     CHECK(settings.game_scale == 0, "reset restores auto scale");
     CHECK(settings.keys_visible == 1, "reset restores on-screen keys");
     CHECK(settings.gamepad == 1, "reset restores the gamepad default");
