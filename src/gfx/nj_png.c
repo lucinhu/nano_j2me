@@ -722,6 +722,29 @@ static const char *png_reconstruct(const png_info *info, nj_u1 *raw,
     int passes = info->interlace ? 7 : 1;
     int has_alpha = 0;
     int pass;
+    int shared_pixels = (void *)img->pixels == (void *)raw;
+
+    /* A non-interlaced source with at least 32 bits per pixel can be
+     * compacted into its own allocation. Defilter the WHOLE image first:
+     * converting a row to ARGB would otherwise destroy the preceding row
+     * still needed by the next row's Up/Average/Paeth filter. */
+    if (shared_pixels) {
+        nj_u4 row_bytes = (info->width * (nj_u4)info->bpp_bits + 7u) / 8u;
+        nj_u1 *previous = NULL;
+        nj_u4 y;
+        for (y = 0; y < info->height; ++y) {
+            if ((nj_size)(end - p) < (nj_size)row_bytes + 1u) {
+                return "PNG image data ended early";
+            }
+            if (*p > 4u) {
+                return "unknown PNG scanline filter type";
+            }
+            unfilter_row(p + 1, previous, row_bytes, info->filter_bpp, *p);
+            previous = p + 1;
+            p += row_bytes + 1u;
+        }
+        p = raw;
+    }
 
     for (pass = 0; pass < passes; pass++) {
         nj_u4 pw;
@@ -761,7 +784,9 @@ static const char *png_reconstruct(const png_info *info, nj_u1 *raw,
                 return "unknown PNG scanline filter type";
             }
             row = p + 1;
-            unfilter_row(row, prev, row_bytes, info->filter_bpp, filter);
+            if (!shared_pixels) {
+                unfilter_row(row, prev, row_bytes, info->filter_bpp, filter);
+            }
             prev = row;
 
             dst = img->pixels + (nj_size)(y0 + y * dy) * (nj_size)info->width +
@@ -955,7 +980,12 @@ nj_image *nj_png_decode(const void *data, nj_u4 size,
     img->height = (int)info.height;
     img->format = NJ_PIXFMT_ARGB8888;
     img->has_alpha = 0;
-    img->pixels = (nj_u4 *)png_mem_alloc(
+    /* Each source row is at least as wide as its ARGB destination, so a
+     * forward conversion cannot overwrite a later source row. Adam7 and
+     * lower-bit-depth sources retain the separate output allocation. */
+    int shared_pixels = !info.interlace && info.bpp_bits >= 32 &&
+        ((uintptr_t)raw % sizeof(nj_u4)) == 0u;
+    img->pixels = shared_pixels ? (nj_u4 *)raw : (nj_u4 *)png_mem_alloc(
         &mem, (nj_size)info.width * (nj_size)info.height * (nj_size)4u);
     if (img->pixels == NULL) {
         png_mem_free(&mem, img);
@@ -967,7 +997,9 @@ nj_image *nj_png_decode(const void *data, nj_u4 size,
     }
 
     e = png_reconstruct(&info, raw, raw_len, img);
-    png_mem_free(&mem, raw);
+    if (!shared_pixels) {
+        png_mem_free(&mem, raw);
+    }
     if (e != NULL) {
         png_mem_free(&mem, img->pixels);
         png_mem_free(&mem, img);
