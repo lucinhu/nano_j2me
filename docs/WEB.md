@@ -91,8 +91,10 @@ be served with or without a build:
   `Displayable` exists, then pause/resume, speed (100/150/200 %), mute and a
   volume slider (the host-side WebAudio gain; touching the slider also
   unmutes, like a phone volume key),
-  three save states per game (each exportable as a `.njst` file and importable
-  back into any slot), a **Game memory** selector (16/32/64/128 MiB) that
+  three save states per game (local saves carry a 96×128 PNG preview of the
+  saved screen; each is exportable as a `.njst` file and importable back into
+  any slot — an imported blob shows no preview until it is saved again), a
+  **Game memory** selector (16/32/64/128 MiB) that
   reaches `NJW_OPT_HEAP_BYTES` at the next launch for heavy titles, a
   **Screen size** selector (auto/176×208/176×220/128×160/320×240) that sets
   `NJW_OPT_SCREEN_WIDTH`/`NJW_OPT_SCREEN_HEIGHT` at the next launch, a
@@ -342,7 +344,10 @@ user: each slot has **Export** (download `<title>-slot<N>-<time>.njst`) and
 **Import** (pick a `.njst`, validate it through the loader, then store + apply
 it). Exported files work in any port build that runs the same title. **A failed `njw_load_state()` leaves the VM unusable** — the same rule as
 the native API — so the shell reports "save incompatible, restart required" and
-requires a fresh `njw_start()`.
+requires a fresh `njw_start()`. Each local save also keeps a 96×128 PNG
+preview of the screen at save time (`.slot__thumb` in the slot list); a `.njst`
+import has no pixels, so its preview appears only after the restored state is
+saved again.
 
 ## Persistence
 
@@ -434,13 +439,14 @@ opt-in: it measures four titles and writes `perf-summary.json` next to the log.
   `午夜台球圣诞中文版_8677.jar` installs its `Canvas` in the MIDlet constructor
   and starts its game thread there, which is what caught the runner skipping
   `startApp()`.
-- **Browser test** (`tools/web_test/web_browser_test.mjs`, 31 checks) — serves
+- **Browser test** (`tools/web_test/web_browser_test.mjs`, 32 checks) — serves
   `build/web/` on an ephemeral port and drives the real shell in headless Firefox
   through Playwright: the real engine (`kind=wasm`, API 1, runtime 0.5.7),
   zh-CN UI, import `hello.jar` → metadata and icon in IndexedDB, 240×320
   non-blank canvas, keyboard input (nj_key 15/16/17/6) with advancing frame
   numbers, auto-pause on panel open (frames frozen) and resume, a 329,724-byte
-  save-state slot written and loaded without a restart, exported to a `.njst`
+  save-state slot written and loaded without a restart (with its 96×128 PNG
+  thumbnail decoded in the slot list; empty slots stay hidden), exported to a `.njst`
   download and imported back into another slot (blob size verified), exit →
   library, reload
   keeps the game and the slot, and a wasm-less copy of the site falls back to the
@@ -492,7 +498,7 @@ opt-in: it measures four titles and writes `perf-summary.json` next to the log.
 
 Measured on the reference build (Emscripten 7.0.0, `include/nj2me/nj_web.h`
 0.5.7): the API suite passes **36/36 checks in 0.4 s**, the corpus suite
-**47/47 checks (42 titles) in 8.7 s**, the browser suite **31/31 checks in about
+**47/47 checks (42 titles) in 8.7 s**, the browser suite **32/32 checks in about
 13–15 s** (a loaded host slows the page test down; every check is bounded), and
 the perf suite **9/9 checks in about 0.5 s** — `tools/check_web.sh --all` is
 **23–26 s** end to end. The sweep suite needs about 2 min for all 403

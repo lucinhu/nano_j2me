@@ -165,7 +165,8 @@ Open `http://localhost:8000/`, drop a `.jar` in, play. Input is the keyboard, th
 on-screen keypad or a standard gamepad (Gamepad API); JARs that ship several
 MIDlets get a startup chooser in the tools panel. The shell keeps the game
 library, save files and up to three save states per game in IndexedDB (each
-state can be exported as a `.njst` file and imported back), and ships
+state keeps a thumbnail of the saved screen and can be exported as a `.njst`
+file and imported back), and ships
 a manifest plus a service worker, so after one visit it works as an installed
 app and reopens offline (engine included). The
 JavaScript⇄C API, persistence layout and limits are in

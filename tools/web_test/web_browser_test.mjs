@@ -11,7 +11,8 @@
  *      127.0.0.1 port.
  *   2. Drives it with headless Firefox through Playwright.  The public shell is
  *      used exactly like a player would: file input -> library tile -> game
- *      canvas, keyboard, tools panel, save slot, exit, reload.
+ *      canvas, keyboard, tools panel, save slot (with its thumbnail preview),
+ *      exit, reload.
  *   3. Serves a copy of the same site *without* nj2me.js/nj2me.wasm and checks
  *      that the shell degrades to the friendly MOCK fallback instead of
  *      throwing (no uncaught errors, banner tells the user how to build it).
@@ -902,6 +903,40 @@ async function runRealShellChecks() {
     assert(slot, `slot 1 missing: ${JSON.stringify(states)}`);
     assert(slot.size > 1000, `saved blob is only ${slot.size} bytes`);
     return `slot 1: ${slot.size} B at frame ${slot.frames}`;
+  });
+
+  await check('save slot shows a thumbnail preview', async () => {
+    const probe = () => realPage.evaluate(() => {
+      const img = document.querySelector('.slot[data-slot="1"] .slot__thumb');
+      if (!img) { return null; }
+      return {
+        src: img.getAttribute('src') || '',
+        hidden: img.hidden === true,
+        complete: img.complete,
+        width: img.naturalWidth,
+        height: img.naturalHeight
+      };
+    });
+    const shot = await probe();
+    assert(shot, 'slot 1 has no .slot__thumb element');
+    assert(!shot.hidden, 'saved slot 1 hides its thumbnail');
+    assert(shot.src.startsWith('data:image/png;base64,') || shot.src.startsWith('data:image/jpeg;base64,'),
+      `thumbnail is not an embedded image: ${JSON.stringify(String(shot.src).slice(0, 24))}`);
+    assert(shot.src.length > 500, `thumbnail data URL is only ${shot.src.length} chars`);
+    await realPage.waitForFunction(() => {
+      const img = document.querySelector('.slot[data-slot="1"] .slot__thumb');
+      return !!img && img.complete && img.naturalWidth > 0;
+    }, undefined, { timeout: 5000, polling: 100 });
+    const size = await probe();
+    /* The capture down-scales the 240x320 canvas to 96x128 (same 3:4 aspect). */
+    assert(size.width === 96 && size.height === 128,
+      `thumbnail decodes as ${size.width}x${size.height}, expected 96x128`);
+    const empty = await realPage.evaluate(() => {
+      const img = document.querySelector('.slot[data-slot="2"] .slot__thumb');
+      return { present: !!img, hidden: !!img && img.hidden === true };
+    });
+    assert(empty.present && empty.hidden, 'empty slot 2 shows a thumbnail');
+    return `96x128 PNG preview (${shot.src.length} chars), empty slot hidden`;
   });
 
   await check('load slot 1 round-trips without restarting', async () => {

@@ -331,6 +331,13 @@ export class GameView {
     for (let slot = 1; slot <= SAVE_SLOTS; slot++) {
       const name = el('span', { className: 'slot__name' });
       const time = el('span', { className: 'slot__time' });
+      /* Live preview of the saved screen; hidden until a slot holds a save
+       * captured in this browser (imported .njst files carry no pixels). */
+      const thumb = el('img', {
+        className: 'slot__thumb',
+        attrs: { alt: '', width: '48', height: '64', loading: 'lazy' }
+      });
+      thumb.hidden = true;
       const save = el('button', {
         className: 'btn btn--small slot__save',
         attrs: { type: 'button' }
@@ -348,6 +355,7 @@ export class GameView {
         attrs: { type: 'button' }
       });
       const row = el('div', { className: 'slot', attrs: { 'data-slot': String(slot) } }, [
+        thumb,
         el('div', { className: 'slot__info' }, [name, time]),
         el('div', { className: 'slot__actions' }, [save, load, exportBtn, importBtn])
       ]);
@@ -357,7 +365,7 @@ export class GameView {
       importBtn.addEventListener('click', () => this.importSlot(slot));
       container.append(row);
       this._slotRows.push({
-        slot, row, name, time, save, load, export: exportBtn, import: importBtn
+        slot, row, name, time, thumb, save, load, export: exportBtn, import: importBtn
       });
     }
   }
@@ -867,6 +875,13 @@ export class GameView {
         delete row.row.dataset.filled;
         row.time.textContent = t('game.slotEmpty');
       }
+      if (record && record.thumb) {
+        row.thumb.src = record.thumb;
+        row.thumb.hidden = false;
+      } else {
+        row.thumb.removeAttribute('src');
+        row.thumb.hidden = true;
+      }
       row.name.textContent = t('game.slot', { n: row.slot });
       row.save.textContent = t('game.save');
       row.load.textContent = t('game.load');
@@ -876,6 +891,30 @@ export class GameView {
       row.load.disabled = !record;
       row.export.disabled = !record;
       row.import.disabled = !canSave;
+    }
+  }
+
+  /* Down-scale the live canvas into a data URL for the slot list.  The screen
+   * is the visible frame; keeping a 96 px-wide PNG per slot costs a few KB in
+   * IndexedDB and lets the player recognise a save at a glance. */
+  _captureSlotThumbnail() {
+    if (!this.canvas || !this.canvas.width || !this.canvas.height) { return ''; }
+    try {
+      const maxWidth = 96;
+      const scale = Math.min(1, maxWidth / this.canvas.width);
+      const width = Math.max(1, Math.round(this.canvas.width * scale));
+      const height = Math.max(1, Math.round(this.canvas.height * scale));
+      const scratch = document.createElement('canvas');
+      scratch.width = width;
+      scratch.height = height;
+      const ctx = scratch.getContext('2d', { alpha: false });
+      if (!ctx) { return ''; }
+      ctx.drawImage(this.canvas, 0, 0, width, height);
+      const url = scratch.toDataURL('image/png');
+      return url.length > 32 ? url : '';
+    } catch (error) {
+      console.warn('[game] could not capture a save thumbnail', error);
+      return '';
     }
   }
 
@@ -900,7 +939,8 @@ export class GameView {
         bytes: result.bytes,
         frames: this.runtime.frames(),
         title: this.game.title || '',
-        engineApi: this._engineApi
+        engineApi: this._engineApi,
+        thumb: this._captureSlotThumbnail()
       });
       toast(t('game.saveOk', { n: slot }), { kind: 'success' });
     } catch (error) {
@@ -997,7 +1037,10 @@ export class GameView {
           bytes: bytes,
           frames: this.runtime.frames(),
           title: this.game.title || '',
-          engineApi: this._engineApi
+          engineApi: this._engineApi,
+          /* A .njst blob is engine memory, not pixels: no preview until the
+           * restored state is saved again from this browser. */
+          thumb: ''
         });
         toast(t('game.importOk', { n: slot }), { kind: 'success' });
         await this._renderSlots();
