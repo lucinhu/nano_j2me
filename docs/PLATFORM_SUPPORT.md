@@ -178,14 +178,23 @@ tools/check_web.sh --node --corpus             # 另有 --browser（Playwright F
 | `.local-tools/debug-runs/gfx-full-20261113/windows/nj2me.exe` | 4044256 | `3c89894bf893966d919ab35e137cab07fbf658dee6e2f937bca65266c477868a` |
 | `.local-tools/debug-runs/gfx-full-20261113/linux/libretro/nano_j2me_libretro.so` | 4083224 | `49d7c61da6e21f2943a6a7984bee365a4387fae604779658637033cf80b1f24e` |
 | `.local-tools/debug-runs/gfx-full-20261113/linux/nj2me` | 4015104 | `cf047c9bddbe97f22afd414d7d7976021f8322a0c1048c1f0fabb8332601e5f0` |
-| `.local-tools/debug-runs/gfx-full-20261113/android-legacy/nj2me-legacy.apk` | 694454 | `4fcae0408bb83b34a9a4e097e8c61124881973900d48c559520ca48ad396446d` |
+| `.local-tools/debug-runs/gfx-full-20261113/android-legacy/nj2me-legacy.apk` | 694718 | `0352c5fe4764747d910b98bf6cdd430bdf537e113beca1f82d92d784247139d7` |
 | `build/web/js/nj2me.js` | 93889 | `77652b2e6c8ef1a2e22e95eeec54e66530a1fe069728cf9a7bf6944ef424885f` |
 | `build/web/js/nj2me.wasm` | 2144424 | `fd431b04b0fd895f367bdc928725830bf7ca60f4b09b4af112225fcfdcda06d4` |
 
-以上产物均由同一份当前源码构建（含 2026-11-14 的 journal 批处理与持久
-GPU 会话改动；Windows/Android/libretro 在最后一次修改后重新构建）。legacy
-APK 未重建：旧版构建 `NJ_ENABLE_GFX_ACCEL=0`，会话代码不参与编译，产物
-仍对应其软件路径。源码已提交；Windows/Android/libretro 产物由同一份源码在提交前构建，
+以上产物均由同一份当前源码构建（含 2026-11-14 的 journal 批处理、持久
+GPU 会话与 2026-11-15 的自动选择改动）。legacy APK 也已用恢复的旧工具链重建：
+NDK r10e 解压到 `.local-tools/android-legacy/android-ndk-r10e`，API 5 平台包解压到
+`.local-tools/android-legacy/sdk5/android-2.0_r01-linux/android.jar`（脚本内置回退路径），
+`tools/build_android_legacy.sh` 直接可用。重建产物的静态检查：versionName
+`0.5.7-legacy`、sdkVersion/targetSdkVersion 5、`lib/armeabi/libnj2me.so` 为 ARM
+EABI5 v5TE、无 VFP 标记（软浮点）、不含加速校准字符串（`NJ_ENABLE_GFX_ACCEL=0`
+按预期编译排除）。运行时复验目前不可行：本机已无 API 5/7/10 AVD 与旧系统镜像，
+现代 emulator 36 已移除 32 位 ARM 支持（`CPU Architecture 'arm' is not supported
+by the QEMU2 emulator`），旧版 emulator 29.2.1 可以下载但其 AVD 系统路径校验失败。
+因此 legacy 的运行时证据仍是 v0.5.7 早期构建在 API 5/7/10 上的历史记录
+（见 `.local-tools/release-v0.5.7-legacy/api5/`），新构建只做了构建期与静态验证。
+源码已提交；Windows/Android/libretro 产物由同一份源码在提交前构建，
 Web 产物也在提交前重新构建并重新跑过 `tools/check_web.sh --all`。
 
 ## 证据
