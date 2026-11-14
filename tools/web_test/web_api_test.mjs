@@ -392,6 +392,35 @@ async function main() {
         return error;
     });
 
+    await t.check('NJW_OPT_MIDLET_CLASS starts a chosen MIDlet in a multi-MIDlet JAR', () => {
+        // book6.jar ships Dungeon / Checkers / Messenger; the runner used to
+        // always start the first MIDlet.  The shared MIDlet-Name makes the
+        // engine log useless here, so the framebuffer hash is the signal.
+        const jarPath = path.join(repoRoot, 'tests/games/book6.jar');
+        configureRunner(m, { id: 'midlet-default' });
+        assertEqual(startJar(m, installJar(m, jarPath)), 0, 'njw_start(book6, default)');
+        const baseRun = pumpFrames(m, 60);
+        assert(!baseRun.fatal, `default MIDlet hit a fatal error: ${describePump(baseRun)}`);
+        assert(baseRun.drew > 0, 'default MIDlet drew frames');
+        const baseHash = framebufferStats(m).hash;
+        njwStop(m);
+
+        configureRunner(m, { id: 'midlet-checkers' });
+        const fsPath = installJar(m, jarPath);
+        assertEqual(withCString(m, 'net.frog_parrot.checkers.Checkers',
+            (p) => m._njw_option_string(NJW_OPT_MIDLET_CLASS, p)), 0, 'set MIDlet class');
+        assertEqual(startJar(m, fsPath), 0, 'njw_start(book6, Checkers)');
+        const run = pumpFrames(m, 60);
+        assert(!run.fatal, `Checkers hit a fatal error: ${describePump(run)}`);
+        assertEqual(run.drew, 60, 'Checkers drew every pumped frame');
+        const stats = framebufferStats(m);
+        assert(stats.nonBlack > 1000, `Checkers framebuffer blank (${stats.nonBlack} non-black)`);
+        assert(stats.hash !== baseHash,
+            `selected MIDlet rendered the same picture as the default one (0x${stats.hash.toString(16)})`);
+        njwStop(m);
+        return `default 0x${baseHash.toString(16)}, Checkers 0x${stats.hash.toString(16)}`;
+    });
+
     await t.check('options/state are reset after failed starts (hello starts)', () => {
         const cfg = configureRunner(m, { id: 'after-failures' });
         assertEqual(cfg.rcW, 0, 'SCREEN_WIDTH option');

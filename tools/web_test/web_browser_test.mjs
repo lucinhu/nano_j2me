@@ -809,6 +809,83 @@ async function runRealShellChecks() {
 
   await screenshot(realPage, 'browser-06-library-after-exit.png');
 
+  await check('multi-MIDlet JAR: startup selector switches the running MIDlet', async () => {
+    /* Isolated context: fresh IndexedDB, so the single-game expectations of
+       the checks around this one are not disturbed. */
+    const book6 = path.join(REPO_ROOT, 'tests', 'games', 'book6.jar');
+    const ctx = await browser.newContext();
+    const page = await ctx.newPage();
+    try {
+      attachDiagnostics(page, 'midlet');
+      await page.goto(realServer.origin + '/', { waitUntil: 'load', timeout: timeoutMs });
+      await waitReady(page);
+      await page.setInputFiles('#file-input', book6);
+      await page.waitForFunction(
+        () => [...document.querySelectorAll('.game-tile__title')]
+          .some((node) => node.textContent.trim() === 'Dungeon'),
+        undefined,
+        { timeout: timeoutMs, polling: 100 }
+      );
+      await page.click('.game-tile:has-text("Dungeon")');
+      await page.waitForFunction(
+        () => !!(window.__nj2me.game && window.__nj2me.game.game),
+        undefined,
+        { timeout: timeoutMs, polling: 100 }
+      );
+      await waitFrames(page, 12, timeoutMs);
+      await page.click('#panel-handle');
+      await page.waitForSelector('#game-panel.is-open', { timeout: 5000 });
+
+      const selector = await page.evaluate(() => {
+        const field = document.querySelector('#midlet-field');
+        const select = document.querySelector('#midlet-select');
+        return {
+          visible: !!field && !field.hidden,
+          options: select ? [...select.options].map((option) => option.textContent.trim()) : [],
+          value: select ? select.value : '',
+        };
+      });
+      assert(selector.visible, 'MIDlet selector is hidden for a 3-MIDlet JAR');
+      assert(selector.options.join(',') === 'Dungeon,Checkers,Messenger',
+        `probed MIDlet labels: ${JSON.stringify(selector.options)}`);
+
+      const digest = () => page.evaluate(() => {
+        const canvas = document.querySelector('#game-canvas');
+        const data = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height).data;
+        let hash = 2166136261 >>> 0;
+        for (let i = 0; i < data.length; i += 97) {
+          hash ^= data[i];
+          hash = Math.imul(hash, 16777619) >>> 0;
+        }
+        return hash;
+      });
+
+      const before = await digest();
+      await page.selectOption('#midlet-select', '1');
+      await waitToast(page, 'MIDlet');
+      await page.click('#btn-restart');
+      await waitFrames(page, 12, timeoutMs);
+      await page.waitForFunction(
+        () => document.querySelector('#loading-overlay').hidden === true,
+        undefined,
+        { timeout: timeoutMs, polling: 100 }
+      );
+      const after = await digest();
+      assert(after !== before, `switching the MIDlet did not change the picture (0x${after.toString(16)})`);
+
+      const stored = await page.evaluate(async () => {
+        const saves = await import('/js/saves.js');
+        const games = await saves.listGames();
+        return games.map((game) => ({ title: game.title, midletIndex: game.midletIndex }));
+      });
+      assert(stored.length === 1 && stored[0].midletIndex === 1,
+        `MIDlet choice not persisted: ${JSON.stringify(stored)}`);
+      return `Dungeon 0x${before.toString(16)} -> Checkers 0x${after.toString(16)}, persisted`;
+    } finally {
+      await ctx.close();
+    }
+  });
+
   await check('reload keeps the library and the save slot', async () => {
     await realPage.reload({ waitUntil: 'load', timeout: timeoutMs });
     await waitReady(realPage);

@@ -48,6 +48,7 @@ import {
   listStates,
   getState,
   putState,
+  putGame,
   markPlayed
 } from './saves.js';
 import { AudioOutput } from './audio.js';
@@ -217,6 +218,23 @@ export class GameView {
       });
     }
 
+    // A JAR can contain several MIDlets; the choice is stored with the game
+    // record and applies on the next start, exactly like the heap setting.
+    const midlet = $('#midlet-select');
+    if (midlet) {
+      midlet.addEventListener('change', () => {
+        const classes = Array.isArray(this.game?.midletClasses) ? this.game.midletClasses : [];
+        const index = Number(midlet.value);
+        if (!this.game || !Number.isInteger(index) || index < 0 || index >= classes.length) { return; }
+        if (this._midletIndex() === index) { return; }
+        this.game.midletIndex = index;
+        void putGame(this.game).catch((error) => {
+          console.warn('[game] could not persist the MIDlet choice', error);
+        });
+        toast(t('game.midletNextLaunch'), { kind: 'info' });
+      });
+    }
+
     $('#stop-exit')?.addEventListener('click', () => this.close());
     $('#stop-replay')?.addEventListener('click', () => this.restart());
     $('#error-back')?.addEventListener('click', () => this.close());
@@ -316,6 +334,7 @@ export class GameView {
     document.body.classList.add('in-game');
     document.body.classList.remove('in-library');
     this._applySettingsToUi();
+    this._refreshMidletSelect();
 
     this._engineVersion = '';
     try { this._engineVersion = this.runtime.runtimeVersion() || ''; } catch (error) { this._engineVersion = ''; }
@@ -423,8 +442,9 @@ export class GameView {
       runtime.optionInt(NJW.OPT_HEAP_BYTES, this.settings.heapMb * 1024 * 1024);
       runtime.optionString(NJW.OPT_RMS_DIR, savesDir);
       runtime.optionString(NJW.OPT_FS_DIR, filesDir);
-      const midlet = Array.isArray(game.midletClasses) && game.midletClasses.length
-        ? String(game.midletClasses[0])
+      const midletClasses = Array.isArray(game.midletClasses) ? game.midletClasses : [];
+      const midlet = midletClasses.length
+        ? String(midletClasses[this._midletIndex()] || midletClasses[0])
         : '';
       if (midlet) { runtime.optionString(NJW.OPT_MIDLET_CLASS, midlet); }
 
@@ -692,6 +712,35 @@ export class GameView {
       }
     }
     void opts;
+  }
+
+  /** Selected MIDlet index, clamped to the probed list. */
+  _midletIndex() {
+    const classes = Array.isArray(this.game?.midletClasses) ? this.game.midletClasses : [];
+    const raw = Number(this.game?.midletIndex);
+    return Number.isInteger(raw) && raw >= 0 && raw < classes.length ? raw : 0;
+  }
+
+  /** Populate the startup-MIDlet selector; hidden for single-MIDlet JARs. */
+  _refreshMidletSelect() {
+    const field = $('#midlet-field');
+    const select = $('#midlet-select');
+    if (!field || !select) { return; }
+    const classes = Array.isArray(this.game?.midletClasses) ? this.game.midletClasses : [];
+    if (classes.length < 2) {
+      field.hidden = true;
+      select.replaceChildren();
+      return;
+    }
+    field.hidden = false;
+    select.replaceChildren();
+    for (let i = 0; i < classes.length; i++) {
+      const full = String(classes[i]);
+      const short = full.slice(full.lastIndexOf('.') + 1) || full;
+      const option = el('option', { text: short, attrs: { value: String(i), title: full } });
+      select.append(option);
+    }
+    select.value = String(this._midletIndex());
   }
 
   _updatePanelUi() {
