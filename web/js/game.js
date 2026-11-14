@@ -291,6 +291,17 @@ export class GameView {
     $('#stop-replay')?.addEventListener('click', () => this.restart());
     $('#error-back')?.addEventListener('click', () => this.close());
     $('#error-retry')?.addEventListener('click', () => this.restart());
+    // One click out of the commonest fatal error: rebuild the engine with the
+    // next heap step instead of making the player back out to the panel first.
+    $('#error-heap')?.addEventListener('click', () => {
+      const button = $('#error-heap');
+      const mb = Number(button?.dataset.mb);
+      if (!Number.isFinite(mb) || mb <= 0) { return; }
+      this.settings.heapMb = mb;
+      saveSettings(this.settings);
+      this._applySettingsToUi();
+      void this.restart();
+    });
 
     this._buildSlotRows();
 
@@ -1281,6 +1292,8 @@ export class GameView {
     if (stop) { stop.hidden = true; }
     const error = $('#error-overlay');
     if (error) { error.hidden = true; }
+    const errorHeap = $('#error-heap');
+    if (errorHeap) { errorHeap.hidden = true; }
     const pause = $('#pause-indicator');
     if (pause) { pause.hidden = true; }
     this._showLoading(true);
@@ -1308,14 +1321,15 @@ export class GameView {
     this._showLoading(false);
     const overlay = $('#error-overlay');
     const messageEl = $('#error-message');
+    const detail = message || t('game.errorDefault');
+    // The engine appends its last error-level line to fatal errors, so an
+    // out-of-memory failure is recognisable; point at the memory selector and
+    // offer the one-click restart with the next heap step.
+    const outOfMemory = /outofmemory|out of memory|内存/i.test(detail);
     if (messageEl) {
-      const detail = message || t('game.errorDefault');
-      // The engine appends its last error-level line to fatal errors, so an
-      // out-of-memory failure is recognisable; point at the memory selector.
-      const heapHint = /outofmemory|out of memory|内存/i.test(detail)
-        ? ' ' + t('game.heapHint') : '';
-      messageEl.textContent = detail + heapHint;
+      messageEl.textContent = detail + (outOfMemory ? ' ' + t('game.heapHint') : '');
     }
+    this._showHeapRetry(outOfMemory);
     if (overlay) { overlay.hidden = false; }
     const retry = $('#error-retry');
     if (retry) { retry.textContent = t('game.retry'); }
@@ -1323,6 +1337,32 @@ export class GameView {
     if (back) { back.textContent = t('game.back'); }
     const title = $('#error-title');
     if (title) { title.textContent = t('game.errorTitle'); }
+  }
+
+  /*
+   * Out-of-memory failures get an extra overlay action: restarting with the
+   * next heap step (16/32 -> 64, 64 -> 128 MB).  It is hidden for every other
+   * failure and when the shell is already offering the largest heap.
+   */
+  _showHeapRetry(outOfMemory) {
+    const button = $('#error-heap');
+    if (!button) { return; }
+    const suggested = outOfMemory ? this._suggestHeapMb() : 0;
+    if (!suggested) {
+      button.hidden = true;
+      delete button.dataset.mb;
+      return;
+    }
+    button.dataset.mb = String(suggested);
+    button.textContent = t('game.retryWithHeap', { mb: suggested });
+    button.hidden = false;
+  }
+
+  _suggestHeapMb() {
+    const current = Number(this.settings.heapMb) || HEAP_CHOICES_MB[0];
+    if (current < 64) { return 64; }
+    if (current < 128) { return 128; }
+    return 0;
   }
 
   _onGesture() {

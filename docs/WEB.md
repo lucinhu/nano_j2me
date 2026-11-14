@@ -99,7 +99,8 @@ be served with or without a build:
   **Screen size** selector (auto/176×208/176×220/128×160/320×240) that sets
   `NJW_OPT_SCREEN_WIDTH`/`NJW_OPT_SCREEN_HEIGHT` at the next launch, a
   **Startup MIDlet** selector for JARs that ship several MIDlets (stored with
-  the game record, applies on the next launch), PNG
+  the game record, applies on the next launch), a one-click **larger-heap restart** on
+  out-of-memory errors, PNG
   screenshot download, fullscreen, restart and exit-to-library. The same panel
   has a **Diagnostics** section (heap used/capacity, frames/paints, GC runs and
   bytecode rate) that reads `njw_stats()` — the counters the native `--stats`
@@ -439,7 +440,7 @@ opt-in: it measures four titles and writes `perf-summary.json` next to the log.
   `午夜台球圣诞中文版_8677.jar` installs its `Canvas` in the MIDlet constructor
   and starts its game thread there, which is what caught the runner skipping
   `startApp()`.
-- **Browser test** (`tools/web_test/web_browser_test.mjs`, 32 checks) — serves
+- **Browser test** (`tools/web_test/web_browser_test.mjs`, 33 checks) — serves
   `build/web/` on an ephemeral port and drives the real shell in headless Firefox
   through Playwright: the real engine (`kind=wasm`, API 1, runtime 0.5.7),
   zh-CN UI, import `hello.jar` → metadata and icon in IndexedDB, 240×320
@@ -457,7 +458,7 @@ opt-in: it measures four titles and writes `perf-summary.json` next to the log.
   library footer reports offline ready, reloading with the static server stopped
   still boots the shell with `kind=wasm`, and an imported game then starts and
   keeps drawing with no server at all (76,800 non-black pixels, frame counter
-  advancing). One check covers the game panel's memory selector: picking 64 MiB
+  advancing). Another makes `愤怒的小鸟_383.jar` die with an out-of-memory error at the default 16 MiB heap, clicks the error overlay's **restart with 64 MB** action, and asserts the game comes back at 64 MiB and keeps drawing. One check covers the game panel's memory selector: picking 64 MiB
   persists it in `nj2me.settings` (localStorage) for the next launch and shows
   the "applies on the next launch" toast. Another opens the diagnostics section
   and checks the heap, frame/paint, GC and bytecode-rate lines look like real
@@ -498,10 +499,10 @@ opt-in: it measures four titles and writes `perf-summary.json` next to the log.
 
 Measured on the reference build (Emscripten 7.0.0, `include/nj2me/nj_web.h`
 0.5.7): the API suite passes **36/36 checks in 0.4 s**, the corpus suite
-**47/47 checks (42 titles) in 8.7 s**, the browser suite **32/32 checks in about
-13–15 s** (a loaded host slows the page test down; every check is bounded), and
+**47/47 checks (42 titles) in 8.7 s**, the browser suite **33/33 checks in about
+14–16 s** (a loaded host slows the page test down; every check is bounded), and
 the perf suite **9/9 checks in about 0.5 s** — `tools/check_web.sh --all` is
-**23–26 s** end to end. The sweep suite needs about 2 min for all 403
+**24–27 s** end to end. The sweep suite needs about 2 min for all 403
 titles, the perf suite about 1 s. All 40
 playable titles draw 120/120 frames (the audiodemo and bench fixtures exit on
 their own, as expected), there are no engine `[nj2me] error:` lines,
@@ -612,7 +613,9 @@ node tools/web_test/web_smoke_test.mjs --evidence .local-tools/debug-runs/web-de
   exactly as they do in the native build at the default heap; 64 MiB is enough
   for both. The shell's game panel exposes this as a "Game memory" selector
   (16/32/64/128 MiB) applies to the next launch; it is one shell-wide setting,
-  not a per-game one, just like the speed and volume controls.
+  not a per-game one, just like the speed and volume controls. An out-of-memory
+  error adds a one-click restart with the next heap step (16/32 → 64, 64 →
+  128 MiB) to the error overlay and persists the choice.
 - **One engine per browser profile.** Tabs coordinate through a
   `BroadcastChannel` lease, so a second tab cannot start a game while another
   one owns the engine (two engines would fight over the same IDBFS records).
@@ -635,7 +638,7 @@ node tools/web_test/web_smoke_test.mjs --evidence .local-tools/debug-runs/web-de
 | No sound | browsers need a user gesture before audio; click once, check `njw_audio_available()` and the shell's mute/gain path |
 | Saves vanish after reload | IndexedDB blocked (private mode) or IDBFS fallback not syncing; check the shell's console warning and `navigator.storage.persist()` |
 | `redefinition of typedef 'nj_vm' is a C11 feature` while building | don't use `-DNJ_WERROR=ON` on the wasm target (pre-existing header style) |
-| `the display loop failed ... last error: thrown: java/lang/OutOfMemoryError` | the game needs more Java heap: pick a bigger "Game memory" in the tools panel (default 16 MiB, try 64/128 MiB) and restart the game; `njw_error()` appends the last escaped exception for exactly this reason |
+| `the display loop failed ... last error: thrown: java/lang/OutOfMemoryError` | the game needs more Java heap: pick a bigger "Game memory" in the tools panel (default 16 MiB, try 64/128 MiB) and restart the game, or click the error overlay's one-click larger-heap action (next step: 16/32 → 64, 64 → 128 MiB); `njw_error()` appends the last escaped exception for exactly this reason |
 | Out of memory / `RangeError` in wasm | game needs more heap: raise `NJW_OPT_HEAP_BYTES` (max 1 GiB wasm memory) or lower screen size |
 | Build picks up the wrong Emscripten | `source .local-tools/emsdk/emsdk_env.sh` or run `tools/build_web.sh` (it locates the SDK itself) |
 | A redeployed shell still shows the old page | the cache-first service worker kept the previous shell: bump `CACHE` in `web/sw.js` (or open once with `?nosw=1`) |

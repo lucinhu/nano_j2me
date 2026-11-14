@@ -12,7 +12,7 @@
  *   2. Drives it with headless Firefox through Playwright.  The public shell is
  *      used exactly like a player would: file input -> library tile -> game
  *      canvas, keyboard, tools panel, save slot (with its thumbnail preview),
- *      exit, reload.
+ *      one-click recovery from an out-of-memory failure, exit, reload.
  *   3. Serves a copy of the same site *without* nj2me.js/nj2me.wasm and checks
  *      that the shell degrades to the friendly MOCK fallback instead of
  *      throwing (no uncaught errors, banner tells the user how to build it).
@@ -50,6 +50,8 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '..', '..');
 const BUILD_WEB = path.join(REPO_ROOT, 'build', 'web');
 const HELLO_JAR = path.join(REPO_ROOT, 'tests', 'games', 'hello.jar');
+// Needs more Java heap than the shell default; used by the OOM recovery check.
+const HEAVY_JAR = path.join(REPO_ROOT, 'tests', 'games', '愤怒的小鸟_383.jar');
 const SITE_JS = path.join(BUILD_WEB, 'js', 'nj2me.js');
 const SITE_WASM = path.join(BUILD_WEB, 'js', 'nj2me.wasm');
 
@@ -1104,6 +1106,56 @@ async function runRealShellChecks() {
       assert(stored.length === 1 && stored[0].midletIndex === 1,
         `MIDlet choice not persisted: ${JSON.stringify(stored)}`);
       return `Dungeon 0x${before.toString(16)} -> Checkers 0x${after.toString(16)}, persisted`;
+    } finally {
+      await ctx.close();
+    }
+  });
+
+  await check('out-of-memory error offers a bigger heap and recovers', async () => {
+    const ctx = await browser.newContext();
+    const page = await ctx.newPage();
+    try {
+      attachDiagnostics(page, 'oom');
+      await page.goto(realServer.origin + '/', { waitUntil: 'load', timeout: timeoutMs });
+      await waitReady(page);
+      await page.setInputFiles('#file-input', HEAVY_JAR);
+      await page.waitForFunction(
+        () => document.querySelectorAll('.game-tile').length === 1,
+        undefined,
+        { timeout: 120000, polling: 100 }
+      );
+      await page.click('.game-tile');
+      await page.waitForSelector('#error-overlay:not([hidden])', { timeout: timeoutMs });
+      const failure = await page.evaluate(() => ({
+        message: (document.querySelector('#error-message') || {}).textContent || '',
+        heapHidden: document.querySelector('#error-heap').hidden,
+        heapLabel: (document.querySelector('#error-heap') || {}).textContent || '',
+        heapMb: Number(document.querySelector('#heap-select').value) || 0,
+      }));
+      assert(/OutOfMemory|out of memory|内存/i.test(failure.message),
+        `expected an out-of-memory failure, got ${JSON.stringify(failure.message.slice(0, 200))}`);
+      assert(!failure.heapHidden, 'the larger-heap restart button is hidden after an out-of-memory failure');
+      assert(/64 MB/.test(failure.heapLabel), `suggested heap label is ${JSON.stringify(failure.heapLabel)}`);
+      assert(failure.heapMb === 16, `default heap before the retry is ${failure.heapMb}`);
+      const before = await frames(page);
+      await page.click('#error-heap');
+      await page.waitForFunction(
+        () => {
+          const game = window.__nj2me && window.__nj2me.game;
+          return !!game && !!game.game && !game._paused
+            && document.querySelector('#error-overlay').hidden === true;
+        },
+        undefined,
+        { timeout: timeoutMs, polling: 100 }
+      );
+      await waitFrames(page, Math.max(12, before + 12), timeoutMs);
+      const recovered = await page.evaluate(() => ({
+        heapMb: Number((window.__nj2me.game.settings || {}).heapMb) || 0,
+        storedHeapMb: Number(JSON.parse(localStorage.getItem('nj2me.settings') || '{}').heapMb) || 0,
+      }));
+      assert(recovered.heapMb === 64, `heap after the retry is ${recovered.heapMb}`);
+      assert(recovered.storedHeapMb === 64, `persisted heap after the retry is ${recovered.storedHeapMb}`);
+      return `out of memory at 16 MB, retried at ${recovered.heapMb} MB and kept drawing`;
     } finally {
       await ctx.close();
     }
