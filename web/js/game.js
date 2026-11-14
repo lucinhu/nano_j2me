@@ -68,6 +68,7 @@ const SCREEN_PRESETS = Object.freeze({
 const DEFAULT_SETTINGS = Object.freeze({
   speedPercent: 100,
   heapMb: 16,           // Java heap for the next start; heavy titles need 64+
+  autoResume: false,    // restarting a game continues from its newest save
   muted: false,
   volume: 0.8,
   showPad: true,
@@ -129,6 +130,9 @@ export class GameView {
     this.onExit = opts.onExit;
     this.onStopped = opts.onStopped || null;
     this.settings = loadSettings();
+    /* The setting was persisted as JSON: normalise the optional toggle so a
+       hand-edited value or a pre-toggle profile still means "off". */
+    this.settings.autoResume = this.settings.autoResume === true;
 
     this.view = $('#game-view');
     this.screen = $('#game-screen');
@@ -167,6 +171,7 @@ export class GameView {
     this._slotRows = [];
     this._slotsToken = 0;
     this._panelOpen = false;
+    this._autoResumeRetried = false;
 
     this.audio = new AudioOutput(this.runtime);
     this.audio.setMuted(this.settings.muted);
@@ -204,6 +209,19 @@ export class GameView {
     $('#btn-fit')?.addEventListener('click', () => this.toggleFit());
     $('#btn-pad')?.addEventListener('click', () => this.togglePad());
     $('#btn-mute')?.addEventListener('click', () => this.toggleMute());
+
+    // Auto-resume is applied when the next game starts, so the checkbox only
+    // persists the preference and tells the user when it takes effect.
+    const autoResume = $('#auto-resume');
+    if (autoResume) {
+      autoResume.addEventListener('change', () => {
+        const on = autoResume.checked === true;
+        if (on === this.settings.autoResume) { return; }
+        this.settings.autoResume = on;
+        saveSettings(this.settings);
+        toast(t('game.autoResumeNextLaunch'), { kind: 'info' });
+      });
+    }
 
     // Volume is the host-side WebAudio gain.  Dragging the slider also unmutes,
     // like the volume keys on a phone; the value is persisted with the rest of
@@ -553,6 +571,11 @@ export class GameView {
 
     try { runtime.setSpeed(this.settings.speedPercent); } catch (error) { /* optional */ }
     void markPlayed(game.id).catch(() => {});
+
+    /* Continue from the newest save when the user asked for it.  The engine has
+       just started and the frame loop has not begun pumping, which is exactly
+       the state a manual "load slot" works from. */
+    await this._autoResumeState();
 
     this._loading = true;
     this._stopShown = false;
@@ -933,6 +956,44 @@ export class GameView {
       console.warn('[game] could not capture a save thumbnail', error);
       return '';
     }
+  }
+
+  /**
+   * Restart a game from its newest save when "auto-resume" is on.
+   *
+   * A failed njw_load_state leaves the VM unusable (documented in
+   * include/nj2me/nj_web.h), so a rejected save is not just ignored: the game
+   * is restarted cleanly once, with auto-resume suppressed for that restart.
+   */
+  async _autoResumeState() {
+    if (!this.settings.autoResume || !this.game) { return null; }
+    let states = null;
+    try { states = await listStates(this.game.id); } catch (error) { return null; }
+    if (!states || !states.size) { return null; }
+    let newest = null;
+    for (const record of states.values()) {
+      if (!record || !record.bytes) { continue; }
+      if (!newest || (Number(record.frames) || 0) > (Number(newest.frames) || 0)) {
+        newest = record;
+      }
+    }
+    if (!newest) { return null; }
+    let result = null;
+    try { result = this.runtime.loadState(newest.bytes); } catch (error) {
+      result = { ok: false, error: error && error.message ? error.message : String(error) };
+    }
+    if (result && result.ok) {
+      toast(t('game.autoResumed', { n: newest.slot, frames: newest.frames }), { kind: 'success' });
+      return newest;
+    }
+    console.warn('[game] auto-resume failed', result && result.error);
+    toast(t('game.autoResumeFailed'), { kind: 'warn' });
+    if (!this._autoResumeRetried) {
+      this._autoResumeRetried = true;
+      this.settings.autoResume = false;
+      try { await this.restart(); } finally { this.settings.autoResume = true; }
+    }
+    return null;
   }
 
   async saveSlot(slot) {
@@ -1399,6 +1460,8 @@ export class GameView {
     if (speed) { speed.value = String(this.settings.speedPercent); }
     const heap = $('#heap-select');
     if (heap) { heap.value = String(this.settings.heapMb); }
+    const autoResume = $('#auto-resume');
+    if (autoResume) { autoResume.checked = this.settings.autoResume === true; }
     const screenSize = $('#screen-select');
     if (screenSize) { screenSize.value = this._screenPreset(); }
     this._updateVolumeUi();

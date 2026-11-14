@@ -793,6 +793,8 @@ body.in-game .app-header { display: none; }
 .url-dialog .overlay__actions { justify-content: flex-end; margin-top: 0; }
 
 .field__note { margin: -4px 0 4px; color: var(--text-faint); font-size: 11.5px; }
+.field--check { gap: 8px; }
+.field__check { width: 16px; height: 16px; flex: 0 0 auto; accent-color: var(--accent); }
 
 .loading-title {
   max-width: 80%;

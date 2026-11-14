@@ -854,6 +854,83 @@ async function runRealShellChecks() {
     }
   });
 
+  await check('auto-resume continues from the newest save on the next launch', async () => {
+    const ctx = await browser.newContext({ viewport: { width: 960, height: 840 }, locale: 'zh-CN' });
+    try {
+      const page = await ctx.newPage();
+      attachDiagnostics(page, 'resume');
+      await page.goto(realServer.origin + '/');
+      await waitReady(page);
+      await page.setInputFiles('#file-input', HELLO_JAR);
+      await page.waitForFunction(
+        () => document.querySelectorAll('.game-tile').length >= 1,
+        undefined,
+        { timeout: timeoutMs, polling: 100 });
+      await page.locator('.game-tile').first().click();
+      await page.waitForFunction(
+        () => !!(window.__nj2me.game && window.__nj2me.game.game),
+        undefined,
+        { timeout: timeoutMs, polling: 100 });
+      await waitFrames(page, 90, timeoutMs);
+      const gameId = (await readLibrary(page))[0].id;
+
+      await page.click('#panel-handle');
+      if (!(await page.evaluate(() => window.__nj2me.game._paused === true))) {
+        await page.click('#btn-pause');
+        await waitPaused(page, true);
+      }
+      await page.click('.slot[data-slot="2"] .slot__save');
+      await waitToast(page, await t(page, 'game.saveOk', { n: 2 }));
+      const states = await readStates(page, gameId);
+      const slot = states.find((entry) => entry.slot === 2);
+      assert(slot, `slot 2 missing: ${JSON.stringify(states)}`);
+      const savedFrames = Number(slot.frames) || 0;
+      assert(savedFrames > 10, `saved frame counter looks wrong: ${savedFrames}`);
+
+      await page.check('#auto-resume');
+      const stored = await page.evaluate(() => JSON.parse(localStorage.getItem('nj2me.settings') || '{}'));
+      assert(stored.autoResume === true,
+        `autoResume should persist as true, got ${JSON.stringify(stored.autoResume)}`);
+
+      /* The panel scrim covers the chrome; close it before exiting. */
+      await page.click('#panel-close');
+      await page.waitForFunction(
+        () => document.querySelector('#game-panel').getAttribute('aria-hidden') === 'true',
+        undefined,
+        { timeout: timeoutMs });
+      await page.click('#game-back');
+      await page.waitForFunction(
+        () => window.getComputedStyle(document.querySelector('#library-view')).display !== 'none',
+        undefined,
+        { timeout: timeoutMs });
+      await page.reload();
+      await waitReady(page);
+      await page.waitForFunction(
+        () => document.querySelectorAll('.game-tile').length >= 1,
+        undefined,
+        { timeout: timeoutMs, polling: 100 });
+      await page.locator('.game-tile').first().click();
+      await page.waitForFunction(
+        () => !!(window.__nj2me.game && window.__nj2me.game.game),
+        undefined,
+        { timeout: timeoutMs, polling: 100 });
+      /* The resume toast carries the slot and frame count the engine restored;
+         its presence is proof that njw_load_state accepted the blob (a failed
+         load has its own warning toast). */
+      await waitToast(page, await t(page, 'game.autoResumed', { n: 2, frames: savedFrames }));
+      await waitFrames(page, 24, timeoutMs);
+      const resumed = await page.evaluate(() => {
+        const canvas = document.querySelector('#game-canvas');
+        return canvas ? [canvas.width, canvas.height] : [0, 0];
+      });
+      assert(resumed[0] === 240 && resumed[1] === 320,
+        `unexpected canvas size after resume: ${resumed[0]}x${resumed[1]}`);
+      return `save slot 2 at frame ${savedFrames}; after a reload the title auto-resumed from it and kept drawing`;
+    } finally {
+      await ctx.close();
+    }
+  });
+
   await check('a second tab cannot run the engine while another tab owns it', async () => {
     /* Two pages in one context share IndexedDB and the BroadcastChannel, so
        this is exactly the user situation: a second tab opened while a game is
