@@ -8,6 +8,7 @@
 #   tools/check_web.sh --browser            browser page test (Playwright Firefox)
 #   tools/check_web.sh --sweep              slow full-corpus audit over tests/games/
 #   tools/check_web.sh --perf               wasm throughput smoke test (4 light titles)
+#   tools/check_web.sh --smoke              minimal post-build module smoke test
 #   tools/check_web.sh --build --node --corpus   rebuild first, then test
 #
 # Suites (default when no suite flag is given: --node --corpus; --all means
@@ -48,6 +49,12 @@
 #               regressions without failing slow CI hosts; the measured numbers
 #               are written to perf-summary.{txt,json}.  Well under a second,
 #               and not part of --all.
+#   --smoke     node tools/web_test/web_smoke_test.mjs
+#               Post-build sanity without the private corpus: module load and
+#               export list, runtime identity, option API + MEMFS round-trip,
+#               and a 60-frame hello.jar render when tests/games/ happens to be
+#               present (skipped otherwise).  This is what the GitHub Pages
+#               workflow runs after tools/build_web.sh.
 #
 # Options:
 #   --build         run tools/build_web.sh (rebuild build/web/ + site) first;
@@ -82,6 +89,7 @@ run_corpus=0
 run_browser=0
 run_sweep=0
 run_perf=0
+run_smoke=0
 do_build=0
 corpus_frames=120
 started_at=$(date +%s)
@@ -106,6 +114,7 @@ while [ $# -gt 0 ]; do
     --browser) run_browser=1 ;;
     --sweep)   run_sweep=1 ;;
     --perf)    run_perf=1 ;;
+    --smoke)   run_smoke=1 ;;
     --all)     run_node=1; run_corpus=1; run_browser=1 ;;
     --build)   do_build=1 ;;
     --evidence)
@@ -123,7 +132,7 @@ while [ $# -gt 0 ]; do
 done
 
 if [ "$run_node" = 0 ] && [ "$run_corpus" = 0 ] && [ "$run_browser" = 0 ] && [ "$run_sweep" = 0 ] &&
-    [ "$run_perf" = 0 ]; then
+    [ "$run_perf" = 0 ] && [ "$run_smoke" = 0 ]; then
     run_node=1
     run_corpus=1
 fi
@@ -152,7 +161,7 @@ say_err() { echo "$*" >&2; echo "$*" >> "$log"; }
 say "== nano_j2me web verification"
 say "   repository: $here"
 say "   evidence:   $evidence"
-say "   suites:     node=$run_node corpus=$run_corpus browser=$run_browser sweep=$run_sweep perf=$run_perf build=$do_build"
+say "   suites:     node=$run_node corpus=$run_corpus browser=$run_browser sweep=$run_sweep perf=$run_perf smoke=$run_smoke build=$do_build"
 
 # ---- prerequisites ----------------------------------------------------------
 
@@ -191,11 +200,13 @@ rc_corpus=0
 rc_browser=0
 rc_sweep=0
 rc_perf=0
+rc_smoke=0
 status_node="SKIP"
 status_corpus="SKIP"
 status_browser="SKIP"
 status_sweep="SKIP"
 status_perf="SKIP"
+status_smoke="SKIP"
 
 if [ "$run_node" = 1 ]; then
     say ""
@@ -254,6 +265,14 @@ if [ "$run_perf" = 1 ]; then
     if [ "$rc_perf" -eq 0 ]; then status_perf="PASS"; else status_perf="FAIL"; fi
 fi
 
+if [ "$run_smoke" = 1 ]; then
+    say ""
+    say "== suite: module smoke test"
+    node "$here/tools/web_test/web_smoke_test.mjs" --evidence "$evidence" 2>&1 | tee -a "$log"
+    rc_smoke=${PIPESTATUS[0]}
+    if [ "$rc_smoke" -eq 0 ]; then status_smoke="PASS"; else status_smoke="FAIL"; fi
+fi
+
 # ---- summary ----------------------------------------------------------------
 
 finished_at=$(date +%s)
@@ -275,11 +294,14 @@ fi
 if [ "$run_perf" = 1 ]; then
     say "   perf:    $status_perf"
 fi
+if [ "$run_smoke" = 1 ]; then
+    say "   smoke:   $status_smoke"
+fi
 say "   evidence: $evidence"
 say "   elapsed:  ${elapsed}s"
 
 if [ "$rc_node" -ne 0 ] || [ "$rc_corpus" -ne 0 ] || [ "$rc_browser" -ne 0 ] || [ "$rc_sweep" -ne 0 ] ||
-    [ "$rc_perf" -ne 0 ]; then
+    [ "$rc_perf" -ne 0 ] || [ "$rc_smoke" -ne 0 ]; then
     say "== RESULT: FAIL"
     exit 1
 fi

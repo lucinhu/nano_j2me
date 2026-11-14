@@ -371,6 +371,7 @@ tools/check_web.sh --node --corpus   # API contract + pinned corpus, about 10 s
 tools/check_web.sh --all             # those two plus the Playwright page test
 tools/check_web.sh --sweep           # full-corpus audit, 403 titles, about 2 min
 tools/check_web.sh --perf            # wasm throughput smoke test, about 1 s
+tools/check_web.sh --smoke           # minimal module smoke test, no corpus needed
 tools/check_web.sh --build --node    # rebuild build/web/ first
 ```
 
@@ -513,6 +514,33 @@ mount MEMFS instead of IDBFS) — the harnesses are the reference. Evidence
 (screenshots, PNG dumps, logs) goes to `.local-tools/debug-runs/`, never into the
 repository.
 
+## Publish the demo (GitHub Pages)
+
+`.github/workflows/web-demo.yml` builds the port and publishes `build/web/` as
+a playable demo: it runs on every push to `main` that touches the wasm build
+inputs (sources, shell, build scripts) and can be started by hand with
+*Actions → Web demo (GitHub Pages) → Run workflow*. The job is a straight
+reproduction of the local steps - check out, Node 20, Emscripten 7.0.0,
+`tools/build_web.sh`, `tools/web_test/web_smoke_test.mjs` (module, option and
+MEMFS checks, plus a 60-frame `hello.jar` render when the private corpus is
+present), upload the site, deploy - and a concurrency group cancels superseded
+deployments.
+
+One-time setup: in the repository, *Settings → Pages → Build and deployment →
+Source* choose **GitHub Actions**. The demo then lives at
+`https://<owner>.github.io/nano_j2me/` (custom domains work through the same
+environment). No game JARs are shipped; visitors import their own files into
+the local library, and because the site is a PWA it keeps working offline after
+the first visit. Builds are path-reproducible, so the deployed wasm should
+match a local `tools/build_web.sh` byte for byte.
+
+Emulate the CI job locally with:
+
+```sh
+tools/build_web.sh
+node tools/web_test/web_smoke_test.mjs --evidence .local-tools/debug-runs/web-demo
+```
+
 ## Limitations
 
 - **No networking/sockets/Bluetooth/sensors** in this build: the optional hooks
@@ -568,7 +596,9 @@ repository.
 | `web/assets/icon*.png` | 192/512/maskable icons generated from `icon.svg` |
 | `tools/build_web.sh` | SDK discovery, `emcmake` build, `build/web/` assembly |
 | `tools/emsdk_setup.sh` | installs the Emscripten SDK into `.local-tools/emsdk` |
-| `tools/check_web.sh`, `tools/web_test/` | Node API/corpus, full-corpus sweep and Playwright browser verification |
+| `tools/check_web.sh`, `tools/web_test/` | Node API/corpus, full-corpus sweep, throughput and module-smoke suites, Playwright browser verification |
+| `tools/web_test/web_smoke_test.mjs` | corpus-free post-build smoke test used by the Pages workflow |
+| `.github/workflows/web-demo.yml` | builds the port and publishes `build/web/` to GitHub Pages |
 | `build/web/` | served directory: shell + `js/nj2me.js` + `js/nj2me.wasm` (git-ignored) |
 
 The C API is versioned (`NJW_API_VERSION`); the shell checks it at load time and

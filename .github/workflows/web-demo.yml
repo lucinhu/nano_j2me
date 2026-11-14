@@ -1,0 +1,84 @@
+# Build the Emscripten/WASM browser port and publish it as a playable demo on
+# GitHub Pages.
+#
+# This workflow is intentionally self-contained: the only external download is
+# the pinned Emscripten SDK.  It runs tools/build_web.sh (the same script
+# developers use), smoke-tests the freshly built module with Node, then
+# uploads build/web/ as the Pages artifact and deploys it.
+#
+# One-time setup for a fork or a new clone of this repository: Settings ->
+# Pages -> Build and deployment -> Source: "GitHub Actions".  The deployed URL
+# is https://<owner>.github.io/nano_j2me/ (custom domains work the same way).
+#
+# The demo ships no game JARs - users import their own files into the local
+# library.  The site is a full PWA, so once opened it also works offline.
+
+name: Web demo (GitHub Pages)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'CMakeLists.txt'
+      - 'cmake/**'
+      - 'include/**'
+      - 'src/**'
+      - 'web/**'
+      - 'tools/build_web.sh'
+      - 'tools/web_test/**'
+      - '.github/workflows/web-demo.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: build and smoke-test
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Set up Emscripten
+        uses: mymindstorm/setup-emsdk@v14
+        with:
+          # The version tools/emsdk_setup.sh installs for local builds; keep
+          # them in sync so a CI artifact matches a local one byte for byte
+          # (the wasm build is path-reproducible since the prefix-map fix).
+          version: 7.0.0
+          actions-cache-folder: emsdk-cache
+
+      - name: Build the browser port
+        run: tools/build_web.sh
+
+      - name: Smoke-test the built module
+        run: node tools/web_test/web_smoke_test.mjs --evidence .local-tools/debug-runs/web-demo
+
+      - name: Upload the Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: build/web
+
+  deploy:
+    name: deploy to Pages
+    needs: build
+    runs-on: ubuntu-24.04
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@v4
