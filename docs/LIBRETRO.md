@@ -268,6 +268,17 @@ Scheduling and external resources still prevent a deterministic execution
 contract. Load-time clock advancement avoids waiting real seconds for some
 splash screens; it is bounded and does not guarantee every MIDlet boots.
 
+Each `retro_run()` advances that clock by one 60 Hz frame, while the VM worker
+runs on the host CPU at its own pace. A frontend that calls `retro_run()` far
+faster than real time (an unthrottled loop, or a fast-forward mode) can consume
+frames faster than the VM finishes their paint work, so titles that animate on
+wall-time timers may present blank or stale frames until the frontend returns
+to its normal cadence. Keep the frontend at 60 Hz for display-accurate
+playback, and treat unthrottled playback as a speed mode rather than a
+rendering-correctness mode. The mock harness shows the effect directly:
+`3D激爆拳击_8805.jar` presents only black frames with `--pace-us 0`, and draws
+its logo with `--pace-us 16666`.
+
 The default runtime includes WAV, MIDI, tone sequences, MP3 Layer III, AMR
 narrowband and supported H.263/MPEG-4 Part 2 paths. This port routes decoded PCM
 and video through its libretro callbacks; it does not universally support every

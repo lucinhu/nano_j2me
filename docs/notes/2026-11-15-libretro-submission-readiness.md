@@ -67,7 +67,14 @@ HEAD `6b1e9e2` (tree containing `dda4fc2` graphics work), see item 5.
    frontend PASS (36 checks, 120 frames, visual required); real RetroArch
    1.22.2 LoopDemo 120 frames and TextDemo 180 frames PASS; windows-x86_64
    Wine fixtures 4/4 PASS. Android/ARM cores were ABI/dependency-checked only
-   in this rebuild (no device run available).
+   in this rebuild (no device run available). Seven M3G titles were also
+   checked through the mock frontend at the real-time cadence
+   (`--pace-us 16666`): 浴火银河2完整版, 蓝牙真3D格斗, 急速狂飙完美破解版,
+   浴火银河2瓦尔基里, 极品飞车16：亡命狂飙, 3D激爆拳击 and 3D跳台滑雪2011
+   all pass 120-frame visual checks, and the two slow starters also pass at
+   600 frames. The same harness run unpaced (`--pace-us 0`) starves the VM
+   worker and shows blank frames for 3D激爆拳击; that run-pacing limitation is
+   documented in `docs/LIBRETRO.md`.
 7. **Local test suite**: isolated RelWithDebInfo build (CLI + libretro + tests,
    SDL2/embedded/web/GLES2-accelerated port off) passed **183/183** CTest tests
    in **338.26 s** at `bc49c46`, and again **183/183** in **344.82 s** after the

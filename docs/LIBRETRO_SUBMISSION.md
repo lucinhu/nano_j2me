@@ -92,11 +92,18 @@ steps only. Working HEAD for this check: `bc49c46` (`v0.5.7-9-gbc49c46`).
 - **Artifact validation**. The fresh linux-x86_64 core passed the mock-frontend
   matrix (20 passed, 0 failed, 0 skipped), and real RetroArch 1.22.2 ran
   LoopDemo (120 frames) and TextDemo (180 frames) to a clean exit. The fresh
-  windows-x86_64 DLL passed the Wine fixture suite 4/4. Android and ARM-Linux
-  cores were rebuilt and ABI/dependency-checked in this pass; their runtime
-  behavior was previously proven on the same source line (including a real
-  Android RetroArch 1.19.1 device run), but that historical device evidence is
-  not re-created by this artifact check. Logs are under
+  windows-x86_64 DLL passed the Wine fixture suite 4/4. Seven M3G titles were
+  checked through the mock frontend at the real-time cadence
+  (`--pace-us 16666`): 浴火银河2完整版, 蓝牙真3D格斗, 急速狂飙完美破解版,
+  浴火银河2瓦尔基里, 极品飞车16：亡命狂飙, 3D激爆拳击 and 3D跳台滑雪2011 all
+  pass 120-frame visual checks (two slow starters also at 600 frames). An
+  unpaced (`--pace-us 0`) run of the same harness starves the VM worker and
+  shows blank frames for 3D激爆拳击; the run-pacing limitation is documented in
+  [LIBRETRO.md](LIBRETRO.md#timing-media-and-limitations). Android and
+  ARM-Linux cores were rebuilt and ABI/dependency-checked in this pass; their
+  runtime behavior was previously proven on the same source line (including a
+  real Android RetroArch 1.19.1 device run), but that historical device
+  evidence is not re-created by this artifact check. Logs are under
   `.local-tools/debug-runs/submission-20261115/`.
 - **Remaining external steps**. Upstream CI pipeline execution and artifact
   collection, the `libretro-super` metadata pull request, the `libretro/docs`
