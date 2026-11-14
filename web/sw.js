@@ -13,7 +13,7 @@
  */
 'use strict';
 
-const CACHE = 'nj2me-shell-2026-11-15g';
+const CACHE = 'nj2me-shell-2026-11-15h';
 const scope = self.registration.scope;
 const url = (path) => new URL(path, scope).href;
 

@@ -472,7 +472,10 @@ async function readLibrary(page) {
       jarBytes: game.jar
         ? (game.jar.byteLength !== undefined ? game.jar.byteLength : game.jar.length)
         : 0,
-      screenPreset: game.screenPreset || null
+      screenPreset: game.screenPreset || null,
+      autoFrames: game.autoState && Number.isFinite(Number(game.autoState.frames))
+        ? Number(game.autoState.frames)
+        : null
     }));
   });
 }
@@ -926,6 +929,69 @@ async function runRealShellChecks() {
       assert(resumed[0] === 240 && resumed[1] === 320,
         `unexpected canvas size after resume: ${resumed[0]}x${resumed[1]}`);
       return `save slot 2 at frame ${savedFrames}; after a reload the title auto-resumed from it and kept drawing`;
+    } finally {
+      await ctx.close();
+    }
+  });
+
+  await check('auto-save on exit gives the next launch something to resume', async () => {
+    /* Auto-save happens the moment the player leaves the game; auto-resume then
+       picks the newest of the manual slots and this record.  Keeping the pair in
+       an isolated context avoids dragging the preference into other checks. */
+    const ctx = await browser.newContext({ viewport: { width: 960, height: 840 }, locale: 'zh-CN' });
+    try {
+      const page = await ctx.newPage();
+      attachDiagnostics(page, 'autosave');
+      await page.goto(realServer.origin + '/', { waitUntil: 'load', timeout: timeoutMs });
+      await waitReady(page);
+      await page.setInputFiles('#file-input', HELLO_JAR);
+      await page.waitForFunction(
+        () => document.querySelectorAll('.game-tile').length >= 1,
+        undefined,
+        { timeout: timeoutMs, polling: 100 });
+      await page.locator('.game-tile').first().click();
+      await page.waitForFunction(
+        () => !!(window.__nj2me.game && window.__nj2me.game.game),
+        undefined,
+        { timeout: timeoutMs, polling: 100 });
+      await waitFrames(page, 60, timeoutMs);
+      await page.click('#panel-handle');
+      await page.check('#auto-save');
+      await page.check('#auto-resume');
+      await page.click('#panel-close');
+      await page.waitForFunction(
+        () => document.querySelector('#game-panel').getAttribute('aria-hidden') === 'true',
+        undefined,
+        { timeout: timeoutMs, polling: 50 });
+      await page.click('#game-back');
+      await page.waitForFunction(
+        () => window.getComputedStyle(document.querySelector('#library-view')).display !== 'none',
+        undefined,
+        { timeout: timeoutMs });
+      /* Leaving the game stores the state asynchronously; poll the record. */
+      await page.waitForFunction(async () => {
+        const saves = await import('/js/saves.js');
+        const games = await saves.listGames();
+        const record = games[0];
+        return !!(record && record.autoState && (Number(record.autoState.frames) || 0) > 10);
+      }, undefined, { timeout: timeoutMs, polling: 150 });
+      const [record] = await readLibrary(page);
+      assert(record.autoFrames && record.autoFrames > 10,
+        `the exit auto-save should be stored on the game record, got ${JSON.stringify(record.autoFrames)}`);
+      await page.reload();
+      await waitReady(page);
+      await page.waitForFunction(
+        () => document.querySelectorAll('.game-tile').length >= 1,
+        undefined,
+        { timeout: timeoutMs, polling: 100 });
+      await page.locator('.game-tile').first().click();
+      await page.waitForFunction(
+        () => !!(window.__nj2me.game && window.__nj2me.game.game),
+        undefined,
+        { timeout: timeoutMs, polling: 100 });
+      await waitToast(page, await t(page, 'game.autoResumedAuto', { frames: record.autoFrames }));
+      await waitFrames(page, 12, timeoutMs);
+      return `exit auto-save stored at frame ${record.autoFrames}; the reloaded launch resumed from it`;
     } finally {
       await ctx.close();
     }

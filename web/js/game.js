@@ -69,6 +69,7 @@ const DEFAULT_SETTINGS = Object.freeze({
   speedPercent: 100,
   heapMb: 16,           // Java heap for the next start; heavy titles need 64+
   autoResume: false,    // restarting a game continues from its newest save
+  autoSave: false,      // leaving a game keeps its newest state for the next launch
   muted: false,
   volume: 0.8,
   showPad: true,
@@ -133,6 +134,7 @@ export class GameView {
     /* The setting was persisted as JSON: normalise the optional toggle so a
        hand-edited value or a pre-toggle profile still means "off". */
     this.settings.autoResume = this.settings.autoResume === true;
+    this.settings.autoSave = this.settings.autoSave === true;
 
     this.view = $('#game-view');
     this.screen = $('#game-screen');
@@ -220,6 +222,19 @@ export class GameView {
         this.settings.autoResume = on;
         saveSettings(this.settings);
         toast(t('game.autoResumeNextLaunch'), { kind: 'info' });
+      });
+    }
+
+    // Saving on exit gives the next launch something to continue from; pair it
+    // with auto-resume to make "quit and come back" pick up where you stopped.
+    const autoSave = $('#auto-save');
+    if (autoSave) {
+      autoSave.addEventListener('change', () => {
+        const on = autoSave.checked === true;
+        if (on === this.settings.autoSave) { return; }
+        this.settings.autoSave = on;
+        saveSettings(this.settings);
+        toast(t('game.autoSaveHint'), { kind: 'info' });
       });
     }
 
@@ -456,6 +471,10 @@ export class GameView {
     this.input.setEnabled(false);
     this.input.releaseAll();
     this.audio.suspend();
+    /* Opt-in: keep a state on the record so the next launch (with auto-resume
+       on) can continue where the player stopped.  Must run before the VM is
+       disposed; a MIDlet that exited on its own fails canSave and is skipped. */
+    if (this.settings.autoSave) { await this._autoSaveOnExit(); }
     try { this.runtime.stop(); } catch (error) { /* already stopped */ }
     if (document.fullscreenElement && document.exitFullscreen) {
       try { await document.exitFullscreen(); } catch (error) { /* ignore */ }
@@ -965,14 +984,60 @@ export class GameView {
    * include/nj2me/nj_web.h), so a rejected save is not just ignored: the game
    * is restarted cleanly once, with auto-resume suppressed for that restart.
    */
+  /* Store the state the player leaves behind as part of the game record.  The
+     blob is the same engine memory a save slot holds; the record keeps it out
+     of the three manual slots so a quick quit does not overwrite deliberate
+     saves.  Failures are warnings: leaving the game must not be blocked. */
+  async _autoSaveOnExit() {
+    const game = this.game;
+    if (!game || !this.runtime) { return; }
+    let canSave = false;
+    try { canSave = !!this.runtime.canSave(); } catch (error) { canSave = false; }
+    if (!canSave) { return; }
+    let result = null;
+    try { result = this.runtime.saveState(); } catch (error) {
+      result = { ok: false, error: error && error.message ? error.message : String(error) };
+    }
+    if (!result || !result.ok) {
+      console.warn('[game] auto-save on exit failed', result && result.error);
+      return;
+    }
+    const autoState = {
+      bytes: result.bytes,
+      frames: this.runtime.frames(),
+      title: game.title || '',
+      engineApi: this._engineApi,
+      thumb: this._captureSlotThumbnail(),
+      savedAt: Date.now()
+    };
+    try {
+      await putGame(Object.assign({}, game, { autoState }));
+    } catch (error) {
+      console.warn('[game] could not store the exit auto-save', error);
+    }
+  }
+
   async _autoResumeState() {
     if (!this.settings.autoResume || !this.game) { return null; }
+    /* The newest state may live in a manual slot or in the exit auto-save on
+       the game record; "newest" is the largest frame count, which is what the
+       player perceives as the furthest point. */
+    const candidates = [];
     let states = null;
-    try { states = await listStates(this.game.id); } catch (error) { return null; }
-    if (!states || !states.size) { return null; }
+    try { states = await listStates(this.game.id); } catch (error) { states = null; }
+    if (states) {
+      for (const record of states.values()) {
+        if (record && record.bytes) {
+          candidates.push({ slot: record.slot, frames: record.frames, bytes: record.bytes, auto: false });
+        }
+      }
+    }
+    const autoState = this.game.autoState;
+    if (autoState && autoState.bytes) {
+      candidates.push({ slot: 'auto', frames: autoState.frames, bytes: autoState.bytes, auto: true });
+    }
     let newest = null;
-    for (const record of states.values()) {
-      if (!record || !record.bytes) { continue; }
+    for (const record of candidates) {
       if (!newest || (Number(record.frames) || 0) > (Number(newest.frames) || 0)) {
         newest = record;
       }
@@ -983,7 +1048,11 @@ export class GameView {
       result = { ok: false, error: error && error.message ? error.message : String(error) };
     }
     if (result && result.ok) {
-      toast(t('game.autoResumed', { n: newest.slot, frames: newest.frames }), { kind: 'success' });
+      if (newest.auto) {
+        toast(t('game.autoResumedAuto', { frames: newest.frames }), { kind: 'success' });
+      } else {
+        toast(t('game.autoResumed', { n: newest.slot, frames: newest.frames }), { kind: 'success' });
+      }
       return newest;
     }
     console.warn('[game] auto-resume failed', result && result.error);
@@ -1462,6 +1531,8 @@ export class GameView {
     if (heap) { heap.value = String(this.settings.heapMb); }
     const autoResume = $('#auto-resume');
     if (autoResume) { autoResume.checked = this.settings.autoResume === true; }
+    const autoSave = $('#auto-save');
+    if (autoSave) { autoSave.checked = this.settings.autoSave === true; }
     const screenSize = $('#screen-select');
     if (screenSize) { screenSize.value = this._screenPreset(); }
     this._updateVolumeUi();
