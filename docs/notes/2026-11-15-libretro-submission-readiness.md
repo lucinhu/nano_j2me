@@ -70,7 +70,8 @@ HEAD `6b1e9e2` (tree containing `dda4fc2` graphics work), see item 5.
    in this rebuild (no device run available).
 7. **Local test suite**: isolated RelWithDebInfo build (CLI + libretro + tests,
    SDL2/embedded/web/GLES2-accelerated port off) passed **183/183** CTest tests
-   in **338.26 s** at this revision, including `test_libretro_frontend` and
+   in **338.26 s** at `bc49c46`, and again **183/183** in **344.82 s** after the
+   artifact refresh at `6b1e9e2`, including `test_libretro_frontend` and
    `no_statics`. A separate build directory under `/var/tmp` is used so the
    user's in-progress `build/` trees are not touched.
 
