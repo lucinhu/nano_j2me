@@ -170,3 +170,38 @@ Re-checks after the fix:
   `build/libretro-dist/`; CI template simulation re-run for all three templates
   (Linux 3,969,632 B, Windows 3,537,295 B, Android arm64 11,543,776 B).
 - Commit `dd39c1c` pushed to origin/main.
+
+## Update, 2026-11-15 (save clock assistance and r13 artifact refresh)
+
+A 30-title libretro visual probe through the mock frontend (sample chosen from
+the r9 sweep rows, `--frames 240 --pace-us 16667 --visual-required --static-ok
+--min-nonblack 8`, seed 13) passed 29/30. The failure was
+`僵尸危机2_4349`: `serialize_writes_state: retro_serialize(140816448) returned
+0` with the core logging `save-state request refused (-8)`.
+
+Root cause: this title runs a `callSerially` Runnable at the frame boundary that
+busy-waits on `System.currentTimeMillis()`. While the frontend is blocked inside
+`retro_serialize()` it cannot call `retro_run()`, so the virtual clock stays
+frozen; the worker spins inside one `nj_midp_frame()` (gdb `SIGSTOP` capture;
+about 300,000 `port_idle` calls in 30 s) and the request times out after 4 s.
+
+Fix: while a SAVE request is pending, `lr_idle()` and `lr_frame_hook()` advance
+the virtual clock by at most `LR_STATE_CLOCK_MAX_FRAMES` (300 frames, about 5 s)
+so the frame can finish and the snapshot is taken at the next boundary. The
+snapshot may include that much additional game time; the timeout and refusal
+fallback are unchanged. Documented in `docs/LIBRETRO.md` and
+`docs/notes/2026-11-15-libretro-save-while-paused.md`.
+
+Re-checks after the fix (commit `db276f8`):
+
+- `僵尸危机2_4349` mock frontend: 35 checks, 0 failed (1 skipped by
+  `--static-ok`); `电子宠物蛋_11972` load-after-reset still 34/34.
+- `tools/check_libretro_states.py` 20-title probe: 20/20 round trips.
+- 30-title visual probe: 30/30 (was 29/30).
+- Mock frontend matrix 20/20; real RetroArch 1.22.2 LoopDemo 120 and TextDemo
+  180 frames PASS; Windows Wine 4/4.
+- Full CTest 183/183 in 327.03 s.
+- All eight release targets rebuilt at `db276f8` (`--out
+  /var/tmp/nj2me-submission-dist-r13`), `.info` byte-identical, tree copied to
+  `build/libretro-dist/`; CI template simulation re-run for all three templates
+  (Linux 3,969,632 B, Windows 3,537,295 B, Android arm64 11,543,984 B).

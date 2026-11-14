@@ -38,9 +38,10 @@ version is currently 0.5.7; refresh the metadata version whenever that changes.
 
 This section records the concrete preparation checks run against the current
 tree; the unchecked boxes in [Validation](#validation) remain the external
-steps only. Working HEAD for this check: `dd39c1c` (the state-load fix; the
-metadata/CI/docs checks below were first run at `bc49c46`, and the release
-artifacts were refreshed after the fix as recorded in the hash table).
+steps only. Working HEAD for this check: `db276f8` (state save/load clock
+assistance; the metadata/CI/docs checks below were first run at `bc49c46`, and
+the release artifacts were refreshed after each libretro fix as recorded in the
+hash table).
 
 - **Metadata**. `src/port/libretro/nano_j2me_libretro.info`
   (SHA-256 `c0f30aeae22150208034202986b3db77fd2f423874e2f2bcc1ce7b07c82723c6`)
@@ -72,28 +73,28 @@ artifacts were refreshed after the fix as recorded in the hash table).
     and produced `libretro/nano_j2me_libretro.dll` (3,537,295 bytes), i.e. the
     path the template's post-build step expects.
   All three land at `$BUILD_DIR/$EXTRA_PATH/$LIBNAME`, where the templates
-  collect them. Re-run after the state-load fix with
-  `tools/simulate_ci_builds.sh --out /var/tmp/ci-sim-r12`: all three
+  collect them. Re-run after the save clock-assist fix with
+  `tools/simulate_ci_builds.sh --out /var/tmp/ci-sim-r13`: all three
   contracts pass (Linux 3,969,632 B, Windows 3,537,295 B, Android arm64
-  11,543,776 B at `/var/tmp/ci-sim-r12/...`). `tools/simulate_ci_builds.sh` reproduces these template commands
+  11,543,984 B at `/var/tmp/ci-sim-r13/...`). `tools/simulate_ci_builds.sh` reproduces these template commands
   (and reads `CORE_ARGS` straight out of `.gitlab-ci.yml` so the simulation
   cannot drift from the committed CI file). No upstream pipeline has been
   executed; that requires maintainer registration.
 - **Fresh eight-target build**. `tools/build_libretro_cores.sh --jobs 12
-  --out /var/tmp/nj2me-submission-dist-r12 all` rebuilt every default-feature
-  target from this revision (with the state-load fix) and the tree was copied
-  into `build/libretro-dist/`. Per-core SHA-256:
+  --out /var/tmp/nj2me-submission-dist-r13 all` rebuilt every default-feature
+  target from this revision (state load and save clock assistance) and the tree
+  was copied into `build/libretro-dist/`. Per-core SHA-256:
 
   | Target | SHA-256 |
   | --- | --- |
-  | linux-x86_64 | `abb0fe2318e73d90ac98ed335308c8f77238ce46b0e96ebc00ee9a6940430c67` |
-  | linux-aarch64 | `9a004a97d122b89ed9ad10db7deab12d4ed7854e1d0b42f87dd158084c712dab` |
-  | linux-armv7 | `2e09267721fcf74e3305e3148a5a4f4137a5a102e27d63586a9847056a48f6e2` |
-  | android-arm64 | `29b74966e3b47968844daffc66ca1914a5992a70e9bca125809a32e7f48175e5` |
-  | android-armv7 | `b3b9a141cef62f782500353949102b806044e41ade658f9e28ca7905e6211fe8` |
-  | android-x86_64 | `b49c4580fbfdc0ed638905780bf44eed88c1f870d3be5b52bacb5391042cbe45` |
-  | windows-i686 | `d7f8c6a56d6e1d4b93c48b71dc3ea3f6a4822c7dddb7db22c3bee1fbd04feb9f` |
-  | windows-x86_64 | `84c2e57be5e2f4f72e21c109f87f957d034973929920e77014620815661966af` |
+  | linux-x86_64 | `e93c459930b8576a90fd39e45a66c48c8317c8cecb2dbf4f9d3a545e14e1d8ba` |
+  | linux-aarch64 | `c26f7fe708eaf2891995b5de4c147d5eb5ff5c4065b10c034ee5f6c4ec531ada` |
+  | linux-armv7 | `2b56cc5fe14331a9560540ec63deb3bd384b37769501046840bc1be2902d1b66` |
+  | android-arm64 | `e771075081ec8ab2aab425ff25096db10919fd455bab2b9ec0fd1833d67e7b57` |
+  | android-armv7 | `47d0f579d97eca870ef6db141c17d4c9cffcfc97a52eaf988563d3be9c8e27d4` |
+  | android-x86_64 | `0ab0cdae49b0dda70853f04f579ea450f2059d7dd5e1fe41da703996674c8460` |
+  | windows-i686 | `f1a50bc7184c468da3ae3c109f1c5541ebc072843c3bad23f7a4e241464bffc9` |
+  | windows-x86_64 | `986cdcc4c1a809dc093b5e164a16fc0d64fc6eee5bfc0618a9ac880c61cf1ed4` |
 
   Every target directory contains the same `.info`, license/notice set and
   `BUILD_STATUS.txt`; no external test font is bundled.
@@ -102,10 +103,14 @@ artifacts were refreshed after the fix as recorded in the hash table).
   LoopDemo (120 frames) and TextDemo (180 frames) to a clean exit. The fresh
   windows-x86_64 DLL passed the Wine fixture suite 4/4. The corpus-level
   libretro state probe (`tools/check_libretro_states.py`, 20 titles, 120
-  frames) now reports **20/20 save/restore round trips**, including state
-  load after `retro_reset` in a title that boots inside a blocking frame
-  (电子宠物蛋_11972); see the 2026-11-15 load-state note. The full local CTest
-  suite passed **183/183 in 328.80 s** at this revision. Seven M3G titles were
+  frames) reports **20/20 save/restore round trips**, including state load
+  after `retro_reset` in a title that boots inside a blocking frame
+  (电子宠物蛋_11972) and titles whose save needed the bounded paused-frontend
+  clock assistance (see the 2026-11-15 load-state and save-while-paused notes).
+  A 30-title visual probe through the mock frontend at the real-time cadence
+  passed 30/30 (it exposed the save-while-paused defect and now covers the
+  fix). The full local CTest suite passed **183/183 in 327.03 s** at this
+  revision. Seven M3G titles were
   checked through the mock frontend at the real-time cadence
   (`--pace-us 16666`): 浴火银河2完整版, 蓝牙真3D格斗, 急速狂飙完美破解版,
   浴火银河2瓦尔基里, 极品飞车16：亡命狂飙, 3D激爆拳击 and 3D跳台滑雪2011 all
