@@ -162,7 +162,8 @@ export class GameView {
       controls: $('#game-controls'),
       textarea: $('#text-bridge'),
       textIndicator: $('#text-indicator'),
-      onGesture: () => this._onGesture()
+      onGesture: () => this._onGesture(),
+      onGamepad: (connected) => this._onGamepad(connected)
     });
 
     this._bindUi();
@@ -483,6 +484,8 @@ export class GameView {
     this._lastTs = timestamp;
     if (!Number.isFinite(dt) || dt < 0) { dt = 0; }
     dt = clamp(dt, 0, 250);
+
+    this.input.pollGamepads();
 
     let flags = 0;
     try {
@@ -1007,6 +1010,14 @@ export class GameView {
   _onGesture() {
     this.audio.ensureContext();
     if (!this._paused) { this.audio.resume(); }
+  }
+
+  _onGamepad(connected) {
+    if (!this._running) { return; }
+    toast(connected ? t('game.gamepadConnected') : t('game.gamepadDisconnected'), {
+      kind: 'info',
+      timeout: 2600
+    });
   }
 
   _applySettingsToUi() {

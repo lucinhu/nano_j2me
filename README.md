@@ -161,7 +161,8 @@ tools/build_web.sh                      # -> build/web/ (shell + nj2me.js + nj2m
 python3 -m http.server -d build/web 8000
 ```
 
-Open `http://localhost:8000/`, drop a `.jar` in, play. The shell keeps the game
+Open `http://localhost:8000/`, drop a `.jar` in, play. Input is the keyboard, the
+on-screen keypad or a standard gamepad (Gamepad API). The shell keeps the game
 library, save files and up to three save states per game in IndexedDB, and ships
 a manifest plus a service worker, so after one visit it works as an installed
 app and reopens offline (engine included). The

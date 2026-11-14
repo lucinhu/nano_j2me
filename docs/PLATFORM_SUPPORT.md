@@ -112,7 +112,8 @@ RGB565 展开成 RGBA8888 交给 `<canvas>`。虚拟时钟由宿主驱动：加�
 | 真实浏览器冒烟（headless Firefox + `build/web` 静态服务） | 导入 hello.jar → 库条目显示 "Hello World / frog-parrot.net" → 点击出画 240x320（内容为 "Hello World!"）→ 方向键/Enter 无异常 → 返回库；无 page error，截图 `.local-tools/debug-runs/web-manual-smoke/` |
 | 与原生帧对照 | `1942空战_10403.jar` 的标题屏（"¿SONIDO?" 选择音效）在浏览器里与原生 headless `--dump-frames` 的 240x320 帧逐像素一致；该标题在原生与 wasm 上都抛同一个 `ArrayIndexOutOfBoundsException`（商品自身行为，不是端口回归） |
 | 真实游戏浏览器实测（Playwright Firefox，可玩性） | `蹦球传说美化版_2959.jar`（Bounce Tales 修改版，自动演示画面）在真实页面中：rAF pump **60.1 次/秒**、6 秒内 9 个不同画面帧（30 次采样）、方向键/Enter 后画面改变且 pump 不停、打开工具面板后画面冻结（自动暂停）并在关闭后恢复、退出回库后刷新游戏仍在库中；同一页面运行 `audiodemo.jar` 3 秒，引擎日志出现 10 行音频事件（`wav=200000`、`amr=80000`、`adpcm=252500`、state=400，`http=unsupported` 符合无网络预期）；0 console/page error，证据 `.local-tools/debug-runs/web-playtest/` |
-| 浏览器页面（Playwright Firefox + `tools/check_web.sh --browser`） | 24/24 检查通过（约 6.3 s）：静态服务 `build/web` → 真实引擎 `kind=wasm`、API 1、版本 0.5.7 → zh-CN 界面 → 导入 hello.jar（元数据/图标进 IndexedDB）→ 画布 240x320 非黑（4 色）→ 方向键/Enter（nj_key 15/16/17/6）帧号推进 → 面板自动暂停（帧冻结）+ 继续 → 存档槽 1 blob 329,724 字节、读档往返不重启 → 游戏面板内存选择 64 MiB 持久化并弹提示 → 退出回库 → 刷新后游戏与存档仍在 → 缺 wasm 时降级 mock 并显示指向 `tools/build_web.sh` 的横幅；0 page/console error、0 外部请求；证据 `.local-tools/debug-runs/web-round8-clean/browser-0*-*.png` |
+| 浏览器页面（Playwright Firefox + `tools/check_web.sh --browser`） | 25/25 检查通过（约 6.5 s）：静态服务 `build/web` → 真实引擎 `kind=wasm`、API 1、版本 0.5.7 → zh-CN 界面 → 导入 hello.jar（元数据/图标进 IndexedDB）→ 画布 240x320 非黑（4 色）→ 方向键/Enter（nj_key 15/16/17/6）帧号推进 → 面板自动暂停（帧冻结）+ 继续 → 存档槽 1 blob 329,724 字节、读档往返不重启 → 游戏面板内存选择 64 MiB 持久化并弹提示 → 模拟标准手柄（`navigator.getGamepads` + `gamepadconnected`）：A→nj_key 17、左摇杆→16、B→21，断开后全部释放 → 退出回库 → 刷新后游戏与存档仍在 → 缺 wasm 时降级 mock 并显示指向 `tools/build_web.sh` 的横幅；0 page/console error、0 外部请求；证据 `.local-tools/debug-runs/web-round8-clean/browser-0*-*.png` |
+| 手柄（Gamepad API） | 游戏循环每帧轮询 `navigator.getGamepads()`（浏览器只给状态、不给事件），按边沿差分发 `njw_key`；标准映射 A=Fire(17)、B/X/Y/LB=GAME_A..D(21..24)、RB=Clear(20)、LT/Start=SOFT_LEFT(18)、RT/Back=SOFT_RIGHT(19)、十字键 12..15 与左摇杆（0.45 死区）→13..16；`gamepadconnected`/`gamepaddisconnected` 显示 toast 并在断开时 `releaseAll`；浏览器套件用假手柄验证按下/释放 |
 | PWA / 离线（service worker） | `manifest.json` 可解析（`display=standalone`，4 个图标含 maskable）→ `sw.js` 接管页面 → 缓存含 `js/nj2me.js` 与 `js/nj2me.wasm`（20 项）→ 库页脚显示“离线可用”（`#library-engine[data-offline=1]`、`body[data-offline=ready]`）→ **停掉静态服务器后重载**仍 boot shell 且 `kind=wasm` → 断网从库启动已导入的 `hello.jar`，240×320 画面非黑且帧号 13→38 继续推进；证据 `.local-tools/debug-runs/web-offline-badge/browser-09-offline.png`、`browser-10-offline-game.png` 与 `browser-shell-test.json`；注意 Playwright Firefox 的 `context.set_offline()` 对 service worker 不生效，离线用停服务器模拟 |
 
 性能（600 帧空跑，两边都是 Release；原生用 `--fps 0` 即 uncapped）：
@@ -223,8 +224,10 @@ Web 产物也在提交前重新构建并重新跑过 `tools/check_web.sh --all` 
 - libretro 真实 EGL：`.local-tools/debug-runs/gfx-full-20261113/libretro-live/`（`mc-current`、`bounce-current`、`REPORT.md`）
 - Windows/Wine：`.local-tools/debug-runs/gfx-full-20261113/windows-audit/`（`frames/`、`sdl2-mc-window.png`、`sdl2-mc.log`、`win-gles2-maze.log`、`wine-wgl.log`）
 - AMR/编解码报告：`.local-tools/debug-runs/gfx-full-20261113/amr/`、`.local-tools/debug-runs/gfx-full-20261113/codec-audit/`
-- 网页版：`.local-tools/debug-runs/web-round8-clean/`（轮 8 干净 worktree 重建后的最新
-  `--all`：node 34/34、语料 47/47、浏览器 24/24、check-web.log、10 张页面截图）、
+- 网页版：`.local-tools/debug-runs/web-round10-all/`（手柄支持后的最新 `--all`：
+  node 34/34、语料 47/47、浏览器 25/25、check-web.log、页面截图）、
+  `.local-tools/debug-runs/web-round10-browser3/`（加入手柄检查后的浏览器套件 25/25）、
+  `.local-tools/debug-runs/web-round8-clean/`（轮 8 干净 worktree 重建后的 `--all`）、
   `.local-tools/debug-runs/web-round8-sweep-clean/`（新自动化 403 标题审计：`sweep-403.jsonl` +
   `sweep-summary.txt`，392/8/1/1/1、117 s、RESULT PASS）、
   `.local-tools/debug-runs/web-clean-build/`（上一轮干净 worktree `--all`）、

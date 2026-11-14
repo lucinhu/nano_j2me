@@ -93,10 +93,12 @@ be served with or without a build:
   reaches `NJW_OPT_HEAP_BYTES` at the next launch for heavy titles, PNG
   screenshot download, fullscreen, restart and exit-to-library.
 - **Input** — keyboard (arrows = D-pad, Enter/Space = Fire, F1/F2 = soft keys,
-  Backspace = Clear, digits, `*`/`#`), an on-screen phone keypad for touch devices
-  with multi-touch and slide-off cancel, pointer pass-through for games that use
-  canvas pointers, and a hidden textarea bridge for MIDlet text fields using the
-  native-editor callbacks (`njw_text_*`).
+  Backspace = Clear, digits, `*`/`#`), a standard-mapping gamepad (A = fire,
+  B/X/Y/LB = GAME_A..D, RB = clear, LT/Start = soft left, RT/Back = soft right,
+  D-pad and left stick with a 0.45 deadzone), an on-screen phone keypad for touch
+  devices with multi-touch and slide-off cancel, pointer pass-through for games
+  that use canvas pointers, and a hidden textarea bridge for MIDlet text fields
+  using the native-editor callbacks (`njw_text_*`).
 - **Audio** — a pull loop drains `njw_audio_read()` into Web Audio buffers
   scheduled roughly 100–150 ms ahead, resumes the `AudioContext` on the first
   user gesture, and suspends it on pause.
@@ -396,7 +398,7 @@ for release/CI runs, while `--all` stays a ~16 s edit loop.
   `午夜台球圣诞中文版_8677.jar` installs its `Canvas` in the MIDlet constructor
   and starts its game thread there, which is what caught the runner skipping
   `startApp()`.
-- **Browser test** (`tools/web_test/web_browser_test.mjs`, 24 checks) — serves
+- **Browser test** (`tools/web_test/web_browser_test.mjs`, 25 checks) — serves
   `build/web/` on an ephemeral port and drives the real shell in headless Firefox
   through Playwright: the real engine (`kind=wasm`, API 1, runtime 0.5.7),
   zh-CN UI, import `hello.jar` → metadata and icon in IndexedDB, 240×320
@@ -411,9 +413,12 @@ for release/CI runs, while `--all` stays a ~16 s edit loop.
   library footer reports offline ready, reloading with the static server stopped
   still boots the shell with `kind=wasm`, and an imported game then starts and
   keeps drawing with no server at all (76,800 non-black pixels, frame counter
-  advancing). One further check covers the game panel's memory selector: picking
-  64 MiB persists it in `nj2me.settings` (localStorage) for the next launch and
-  shows the "applies on the next launch" toast.
+  advancing). One check covers the game panel's memory selector: picking 64 MiB
+  persists it in `nj2me.settings` (localStorage) for the next launch and shows
+  the "applies on the next launch" toast. Another fakes a standard gamepad
+  (`navigator.getGamepads` stub + `gamepadconnected` event): A maps to `nj_key`
+  17, the left stick to 16, B to 21, and every press is released again on
+  disconnect.
 - **Sweep suite** (`tools/web_test/web_sweep_test.mjs`, 403 titles) — the
   full-corpus audit: every JAR under `tests/games/` except the known-bad
   `1945空战英雄_6105.jar` is started in its own Node child process for 90 frames
@@ -428,8 +433,8 @@ for release/CI runs, while `--all` stays a ~16 s edit loop.
 
 Measured on the reference build (Emscripten 7.0.0, `include/nj2me/nj_web.h`
 0.5.7): the API suite passes **34/34 checks in 0.4 s**, the corpus suite
-**47/47 checks (42 titles) in 8.7 s**, and the browser suite **24/24 checks in
-about 6.3 s** — `tools/check_web.sh --all` is **16 s** end to end. The sweep
+**47/47 checks (42 titles) in 8.7 s**, and the browser suite **25/25 checks in
+about 6.5 s** — `tools/check_web.sh --all` is **16 s** end to end. The sweep
 suite needs about 2 min for all 403 titles. All 40
 playable titles draw 120/120 frames (the audiodemo and bench fixtures exit on
 their own, as expected), there are no engine `[nj2me] error:` lines,

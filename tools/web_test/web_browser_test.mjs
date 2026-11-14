@@ -583,6 +583,69 @@ async function runRealShellChecks() {
     return `downs ${JSON.stringify(downs)}; frames ${before}->${after}`;
   });
 
+  await check('gamepad buttons reach the engine and release', async () => {
+    await realPage.evaluate(() => {
+      window.__fakePad = {
+        connected: true,
+        id: 'Test Pad (STANDARD GAMEPAD)',
+        index: 0,
+        mapping: 'standard',
+        buttons: Array.from({ length: 17 }, () => ({ pressed: false, value: 0 })),
+        axes: [0, 0]
+      };
+      window.__realGetGamepads = navigator.getGamepads ? navigator.getGamepads.bind(navigator) : null;
+      Object.defineProperty(navigator, 'getGamepads', {
+        configurable: true,
+        value: () => [window.__fakePad]
+      });
+      window.dispatchEvent(new Event('gamepadconnected'));
+      const runtime = window.__nj2me.runtime;
+      const original = runtime.key.bind(runtime);
+      window.__padKeyLog = [];
+      runtime.key = (code, down) => {
+        window.__padKeyLog.push([code, !!down]);
+        return original(code, down);
+      };
+    });
+    const waitForPadKey = async (code, down) => {
+      await realPage.waitForFunction(
+        ([wanted, wantDown]) => (window.__padKeyLog || [])
+          .some((entry) => entry[0] === wanted && entry[1] === wantDown),
+        [code, down],
+        { timeout: 5000, polling: 50 }
+      );
+    };
+    /* A -> FIRE, left stick right -> RIGHT, B -> GAME_A. */
+    await realPage.evaluate(() => { window.__fakePad.buttons[0].pressed = true; });
+    await waitForPadKey(17, true);
+    await realPage.evaluate(() => { window.__fakePad.buttons[0].pressed = false; });
+    await waitForPadKey(17, false);
+    await realPage.evaluate(() => { window.__fakePad.axes[0] = 0.9; });
+    await waitForPadKey(16, true);
+    await realPage.evaluate(() => { window.__fakePad.axes[0] = 0; window.__fakePad.buttons[1].pressed = true; });
+    await waitForPadKey(21, true);
+    await realPage.evaluate(() => {
+      window.__fakePad.buttons[1].pressed = false;
+      window.dispatchEvent(new Event('gamepaddisconnected'));
+      if (window.__realGetGamepads) {
+        Object.defineProperty(navigator, 'getGamepads', { configurable: true, value: window.__realGetGamepads });
+      }
+      delete window.__fakePad;
+    });
+    await waitForPadKey(21, false);
+    const downs = await realPage.evaluate(() => window.__padKeyLog
+      .filter((entry) => entry[1]).map((entry) => entry[0]));
+    for (const expected of [17, 16, 21]) {
+      assert(downs.includes(expected), `missing pad key ${expected} in ${JSON.stringify(downs)}`);
+    }
+    const released = await realPage.evaluate(() => window.__padKeyLog
+      .filter((entry) => !entry[1]).map((entry) => entry[0]));
+    for (const expected of [17, 16, 21]) {
+      assert(released.includes(expected), `missing pad release ${expected} in ${JSON.stringify(released)}`);
+    }
+    return `pad key downs ${JSON.stringify(downs)}, releases ${JSON.stringify(released)}`;
+  });
+
   await check('tools panel pauses, frames freeze, and resume works', async () => {
     await realPage.click('#panel-handle');
     await realPage.waitForSelector('#game-panel.is-open', { timeout: 5000 });

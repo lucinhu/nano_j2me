@@ -63,6 +63,39 @@ const CODE_MAP = new Map([
   ['AudioVolumeDown', NJ_KEYS.VOLDOWN]
 ]);
 
+/*
+ * Standard-mapping gamepad (kept in one table too).  The shell polls
+ * navigator.getGamepads() once per game frame; buttons map to the same nj_key
+ * codes as the keyboard and on-screen pad, so a controller behaves like the
+ * phone keypad:
+ *
+ *   A                  FIRE 17
+ *   B X Y LB           GAME_A..D 21..24   (B is a game key, not soft-right,
+ *                                          which exits several MIDlets)
+ *   RB                 CLEAR 20
+ *   LT / Start         SOFT_LEFT 18
+ *   RT / Back          SOFT_RIGHT 19
+ *   D-pad / left stick UP DOWN LEFT RIGHT 13..16 (deadzone 0.45)
+ */
+const GAMEPAD_BUTTON_MAP = new Map([
+  [0, NJ_KEYS.FIRE],        /* A */
+  [1, NJ_KEYS.GAME_A],      /* B: a game key, not "soft right" (which exits
+                               several MIDlets, e.g. the Hello World demo) */
+  [2, NJ_KEYS.GAME_B],      /* X */
+  [3, NJ_KEYS.GAME_C],      /* Y */
+  [4, NJ_KEYS.GAME_D],      /* LB */
+  [5, NJ_KEYS.CLEAR],       /* RB */
+  [6, NJ_KEYS.SOFT_LEFT],   /* LT */
+  [7, NJ_KEYS.SOFT_RIGHT],  /* RT */
+  [8, NJ_KEYS.SOFT_RIGHT],  /* Back / select */
+  [9, NJ_KEYS.SOFT_LEFT],   /* Start */
+  [12, NJ_KEYS.UP],
+  [13, NJ_KEYS.DOWN],
+  [14, NJ_KEYS.LEFT],
+  [15, NJ_KEYS.RIGHT]
+]);
+const GAMEPAD_STICK_DEADZONE = 0.45;
+
 const DIGIT_CODE = /^(?:Digit|Numpad)([0-9])$/;
 
 /** Map a KeyboardEvent to nj_key, or null when the shell should ignore it. */
@@ -121,6 +154,7 @@ export class GameInput {
     this.textIndicator = opts.textIndicator;
     this.onGesture = typeof opts.onGesture === 'function' ? opts.onGesture : null;
     this.onKey = typeof opts.onKey === 'function' ? opts.onKey : null;
+    this.onGamepad = typeof opts.onGamepad === 'function' ? opts.onGamepad : null;
 
     this.enabled = false;
     this.textActive = false;
@@ -129,6 +163,7 @@ export class GameInput {
     this._gestureSeen = false;
 
     this._heldCodes = new Map();      // physical event.code -> nj_key
+    this._gamepadHeld = new Set();    // nj_key currently pressed on a pad
     this._controlPointers = new Map(); // pointerId -> { code, button }
     this._canvasPointer = null;       // { id, x, y }
 
@@ -144,6 +179,8 @@ export class GameInput {
     this._onTextKeyDown = this._onTextKeyDown.bind(this);
     this._onTextBlur = this._onTextBlur.bind(this);
     this._onTextDone = this._onTextDone.bind(this);
+    this._onGamepadConnected = this._onGamepadConnected.bind(this);
+    this._onGamepadDisconnected = this._onGamepadDisconnected.bind(this);
     this._attached = false;
   }
 
@@ -153,6 +190,8 @@ export class GameInput {
     window.addEventListener('keydown', this._onKeyDown, { capture: true });
     window.addEventListener('keyup', this._onKeyUp, { capture: true });
     window.addEventListener('blur', this._onWindowBlur);
+    window.addEventListener('gamepadconnected', this._onGamepadConnected);
+    window.addEventListener('gamepaddisconnected', this._onGamepadDisconnected);
 
     if (this.controls) {
       this.controls.addEventListener('pointerdown', this._onControlsDown, { passive: false });
@@ -186,6 +225,8 @@ export class GameInput {
     window.removeEventListener('keydown', this._onKeyDown, { capture: true });
     window.removeEventListener('keyup', this._onKeyUp, { capture: true });
     window.removeEventListener('blur', this._onWindowBlur);
+    window.removeEventListener('gamepadconnected', this._onGamepadConnected);
+    window.removeEventListener('gamepaddisconnected', this._onGamepadDisconnected);
     if (this.controls) {
       this.controls.removeEventListener('pointerdown', this._onControlsDown);
       this.controls.removeEventListener('pointerup', this._onControlsRelease);
@@ -228,6 +269,10 @@ export class GameInput {
       this._emit(key, false);
     }
     this._heldCodes.clear();
+    for (const key of Array.from(this._gamepadHeld)) {
+      this._gamepadHeld.delete(key);
+      this._emit(key, false);
+    }
     for (const [pointerId, record] of this._controlPointers) {
       void pointerId;
       record.button.classList.remove('is-pressed');
@@ -238,6 +283,65 @@ export class GameInput {
     if (this._canvasPointer) {
       this._emitPointer(NJW.POINTER_UP, this._canvasPointer.x, this._canvasPointer.y);
       this._canvasPointer = null;
+    }
+  }
+
+  /**
+   * Poll attached game pads once per game frame.
+   *
+   * The browser does not deliver button events, only the current state, so we
+   * diff it against what the previous poll sent and emit one key-down/key-up
+   * pair per edge.  D-pad buttons and the left stick both feed the D-pad.
+   */
+  pollGamepads() {
+    if (!this.enabled || typeof navigator.getGamepads !== 'function') { return; }
+    let pads;
+    try {
+      pads = navigator.getGamepads();
+    } catch (error) {
+      return;
+    }
+    if (!pads) { return; }
+    const pressed = new Set();
+    for (const pad of pads) {
+      if (!pad || !pad.connected) { continue; }
+      for (const [index, key] of GAMEPAD_BUTTON_MAP) {
+        const button = pad.buttons && pad.buttons[index];
+        if (button && button.pressed) { pressed.add(key); }
+      }
+      const axes = pad.axes || [];
+      const x = axes[0] || 0;
+      const y = axes[1] || 0;
+      if (x <= -GAMEPAD_STICK_DEADZONE) { pressed.add(NJ_KEYS.LEFT); }
+      if (x >= GAMEPAD_STICK_DEADZONE) { pressed.add(NJ_KEYS.RIGHT); }
+      if (y <= -GAMEPAD_STICK_DEADZONE) { pressed.add(NJ_KEYS.UP); }
+      if (y >= GAMEPAD_STICK_DEADZONE) { pressed.add(NJ_KEYS.DOWN); }
+    }
+    for (const key of pressed) {
+      if (!this._gamepadHeld.has(key)) {
+        this._gamepadHeld.add(key);
+        this._notifyGesture();
+        this._emit(key, true);
+      }
+    }
+    for (const key of Array.from(this._gamepadHeld)) {
+      if (!pressed.has(key)) {
+        this._gamepadHeld.delete(key);
+        this._emit(key, false);
+      }
+    }
+  }
+
+  _onGamepadConnected(event) {
+    if (this.onGamepad) {
+      this.onGamepad(true, event && event.gamepad ? event.gamepad.id : '');
+    }
+  }
+
+  _onGamepadDisconnected(event) {
+    this.releaseAll();
+    if (this.onGamepad) {
+      this.onGamepad(false, event && event.gamepad ? event.gamepad.id : '');
     }
   }
 

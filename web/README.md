@@ -17,7 +17,7 @@ web/
     ├── mock-module.js  没有 wasm 时的模拟引擎（240×320 动画 + 假存档）
     ├── library.js      游戏库：导入/搜索/排序/删除/封面
     ├── game.js         游戏页：rAF 泵、canvas、面板、存档槽、截图、全屏
-    ├── input.js        键盘/触屏按键、指针透传、MIDlet 文本框桥
+    ├── input.js        键盘/触屏按键、手柄（Gamepad API）、指针透传、文本框桥
     ├── audio.js        WebAudio 拉取/调度（njw_audio_read）
     ├── saves.js        IndexedDB（游戏 JAR + 元数据 + 3 个存档槽）
     ├── ui.js           toast / banner / 进度条 / 确认框 / DOM 辅助
@@ -126,11 +126,13 @@ mock 脚本会：先验证“没有 wasm 时静默回退到 mock” → 加载�
 键盘、触屏、指针、文本桥 → 打开面板暂停、截图下载、保存/读档、速度/静音/适应/按键
 开关 → 退出 → 刷新验证 IndexedDB 持久化 → 删除并确认 → 390×844 移动端截图。
 
-官方浏览器套件（`node tools/web_test/web_browser_test.mjs`，24 项）在真实 Firefox
+官方浏览器套件（`node tools/web_test/web_browser_test.mjs`，25 项）在真实 Firefox
 里跑完整流程，并额外验证 PWA：manifest 可解析（4 个图标、standalone）、
 service worker 接管页面、引擎已进缓存、库页脚显示“离线可用”、停止静态服务器后
 离线重载仍是 wasm 引擎，以及断网状态从库启动已导入的游戏（12 帧内出画面且帧号继续推进）；
-游戏面板的「游戏内存」选择（16/32/64/128 MiB）会写入 `nj2me.settings` 并在下次启动生效。
+游戏面板的「游戏内存」选择（16/32/64/128 MiB）会写入 `nj2me.settings` 并在下次启动生效；
+游戏页每帧轮询 `navigator.getGamepads()`，标准手柄布局按 A=Fire、B/X/Y/LB=GAME_A..D、
+RB=Clear、LT/Start=左软键、RT/Back=右软键、十字键/左摇杆（0.45 死区）映射，连接/断开有 toast。
 
 全语料审计（403 个 JAR，每款 90 帧）现已自动化：
 
