@@ -166,8 +166,9 @@ http(s) link — the host must allow CORS), play. Input is the keyboard, the
 on-screen keypad or a standard gamepad (Gamepad API); JARs that ship several
 MIDlets get a startup chooser in the tools panel. The shell keeps the game
 library (search, sort and a favourites filter), save files and up to three save states per game in IndexedDB (each
-state keeps a thumbnail of the saved screen and can be exported as a `.njst`
-file and imported back), a continue card above the grid opens the last played title, an optional save-on-exit (shown in the panel as a loadable/clearable auto-save row) plus auto-resume continues a title from its
+state keeps a thumbnail of the saved screen, can be given a name that survives
+a reload and names its exported file, and can be exported as a `.njst` file and
+imported back), a continue card above the grid opens the last played title, an optional save-on-exit (shown in the panel as a loadable/clearable auto-save row) plus auto-resume continues a title from its
 newest save, and the shell ships
 a manifest plus a service worker, so after one visit it works as an installed
 app and reopens offline (engine included). The

@@ -245,7 +245,7 @@ export async function getState(gameId, slot) {
  * Store a save-state blob in one slot.  bytes may be Uint8Array or ArrayBuffer.
  * Returns the stored record (with at/size/frames).
  */
-export async function putState(gameId, slot, { bytes, frames = 0, title = '', engineApi = 0, thumb = '' }) {
+export async function putState(gameId, slot, { bytes, frames = 0, title = '', engineApi = 0, thumb = '', name = '' }) {
   const view = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
   /* Copy into a standalone ArrayBuffer: the caller may keep using its view
    * (the wasm heap) and IndexedDB must not see a detached buffer. */
@@ -262,7 +262,10 @@ export async function putState(gameId, slot, { bytes, frames = 0, title = '', en
     engineApi: engineApi || 0,
     /* Small PNG data URL of the screen at save time, for the slot list.
      * Older saves and .njst imports have no thumbnail (empty string). */
-    thumb: typeof thumb === 'string' ? thumb : ''
+    thumb: typeof thumb === 'string' ? thumb : '',
+    /* Optional player-chosen name shown in the slot list and used as the
+     * export filename base. Older saves have no name (empty string). */
+    name: typeof name === 'string' ? name.slice(0, 24) : ''
   };
   await withStore(STORE_STATES, 'readwrite', (store) => store.put(record));
   return record;

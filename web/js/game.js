@@ -380,6 +380,19 @@ export class GameView {
     for (let slot = 1; slot <= SAVE_SLOTS; slot++) {
       const name = el('span', { className: 'slot__name' });
       const time = el('span', { className: 'slot__time' });
+      /* Optional display name for this slot: it is stored with the save and
+       * also becomes the export filename base.  Empty slots keep it disabled. */
+      const label = el('input', {
+        className: 'slot__label',
+        attrs: {
+          type: 'text', maxlength: '24', autocomplete: 'off',
+          spellcheck: 'false', 'aria-label': ''
+        }
+      });
+      label.addEventListener('change', () => this.saveSlotName(slot));
+      label.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter') { event.preventDefault(); label.blur(); }
+      });
       /* Live preview of the saved screen; hidden until a slot holds a save
        * captured in this browser (imported .njst files carry no pixels). */
       const thumb = el('img', {
@@ -405,7 +418,7 @@ export class GameView {
       });
       const row = el('div', { className: 'slot', attrs: { 'data-slot': String(slot) } }, [
         thumb,
-        el('div', { className: 'slot__info' }, [name, time]),
+        el('div', { className: 'slot__info' }, [name, time, label]),
         el('div', { className: 'slot__actions' }, [save, load, exportBtn, importBtn])
       ]);
       save.addEventListener('click', () => this.saveSlot(slot));
@@ -414,7 +427,8 @@ export class GameView {
       importBtn.addEventListener('click', () => this.importSlot(slot));
       container.append(row);
       this._slotRows.push({
-        slot, row, name, time, thumb, save, load, export: exportBtn, import: importBtn
+        slot, row, name, time, label, thumb, save, load,
+        export: exportBtn, import: importBtn
       });
     }
 
@@ -925,6 +939,9 @@ export class GameView {
       row.export.textContent = t('game.export');
       row.import.textContent = t('game.import');
       row.name.textContent = t('game.slot', { n: row.slot });
+      row.label.placeholder = t('game.slotNameHint');
+      row.label.disabled = !row.row.dataset.filled;
+      row.label.setAttribute('aria-label', t('game.slotName', { n: row.slot }));
       row.save.disabled = !canSave;
       row.load.disabled = !row.row.dataset.filled;
       row.export.disabled = !row.row.dataset.filled;
@@ -974,6 +991,10 @@ export class GameView {
         row.thumb.hidden = true;
       }
       row.name.textContent = t('game.slot', { n: row.slot });
+      row.label.value = record && typeof record.name === 'string' ? record.name : '';
+      row.label.placeholder = t('game.slotNameHint');
+      row.label.disabled = !record;
+      row.label.setAttribute('aria-label', t('game.slotName', { n: row.slot }));
       row.save.textContent = t('game.save');
       row.load.textContent = t('game.load');
       row.export.textContent = t('game.export');
@@ -1177,13 +1198,16 @@ export class GameView {
       toast(t('game.saveFailed') + (result && result.error ? ': ' + result.error : ''), { kind: 'error' });
       return;
     }
+    const row = this._slotRows.find((entry) => entry.slot === slot);
+    const name = row && row.label ? row.label.value.trim().slice(0, 24) : '';
     try {
       await putState(this.game.id, slot, {
         bytes: result.bytes,
         frames: this.runtime.frames(),
         title: this.game.title || '',
         engineApi: this._engineApi,
-        thumb: this._captureSlotThumbnail()
+        thumb: this._captureSlotThumbnail(),
+        name
       });
       toast(t('game.saveOk', { n: slot }), { kind: 'success' });
     } catch (error) {
@@ -1228,6 +1252,29 @@ export class GameView {
    * ABI), so the file can be imported into any browser or desktop build that
    * can run the same title.
    */
+  async saveSlotName(slot) {
+    if (!this.game) { return; }
+    const row = this._slotRows.find((entry) => entry.slot === slot);
+    if (!row) { return; }
+    if (row.label.disabled) { row.label.value = ''; return; }
+    const name = row.label.value.trim().slice(0, 24);
+    let record = null;
+    try { record = await getState(this.game.id, slot); } catch (error) { record = null; }
+    if (!record || !record.bytes) { row.label.value = ''; return; }
+    if ((record.name || '') === name) { return; }
+    try {
+      await putState(this.game.id, slot, {
+        bytes: record.bytes, frames: record.frames, title: record.title,
+        engineApi: record.engineApi, thumb: record.thumb, name
+      });
+      toast(t('game.slotNameSaved'), { kind: 'success', timeout: 1600 });
+    } catch (error) {
+      toast(t('game.slotNameFailed') + ': ' + (error && error.message ? error.message : error),
+        { kind: 'error' });
+    }
+    await this._renderSlots();
+  }
+
   async exportSlot(slot) {
     if (!this.game) { return; }
     let record = null;
@@ -1237,7 +1284,9 @@ export class GameView {
       return;
     }
     const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-    const base = slugify(this.game.title || this.game.id || 'game');
+    /* The player's name for the slot is the friendliest filename; fall back to
+       the title when the slot is unnamed. */
+    const base = slugify(record.name || this.game.title || this.game.id || 'game');
     const name = base + '-slot' + slot + '-' + stamp + '.njst';
     downloadBlob(new Blob([record.bytes], { type: 'application/octet-stream' }), name);
     toast(t('game.exportOk', { name: name }), { kind: 'success' });
@@ -1656,6 +1705,8 @@ export class GameView {
     }
     for (const row of this._slotRows) {
       row.name.textContent = t('game.slot', { n: row.slot });
+      row.label.placeholder = t('game.slotNameHint');
+      row.label.setAttribute('aria-label', t('game.slotName', { n: row.slot }));
       row.save.textContent = t('game.save');
       row.load.textContent = t('game.load');
     }

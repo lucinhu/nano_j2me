@@ -997,6 +997,74 @@ async function runRealShellChecks() {
     }
   });
 
+  await check('save slots can be named and the name survives a reload', async () => {
+    /* The player can label a slot; the label lives in IndexedDB, drives the
+       .njst export filename and must still be there after a page reload. */
+    const ctx = await browser.newContext({ viewport: { width: 960, height: 840 }, locale: 'zh-CN' });
+    try {
+      const page = await ctx.newPage();
+      attachDiagnostics(page, 'slotname');
+      await page.goto(realServer.origin + '/', { waitUntil: 'load', timeout: timeoutMs });
+      await waitReady(page);
+      await page.setInputFiles('#file-input', HELLO_JAR);
+      await page.waitForFunction(
+        () => document.querySelectorAll('.game-tile').length >= 1,
+        undefined,
+        { timeout: timeoutMs, polling: 100 });
+      await page.locator('.game-tile').first().click();
+      await page.waitForFunction(
+        () => !!(window.__nj2me.game && window.__nj2me.game.game),
+        undefined,
+        { timeout: timeoutMs, polling: 100 });
+      await waitFrames(page, 20, timeoutMs);
+      await page.click('#panel-handle');
+      await page.click('.slot[data-slot="1"] .slot__save');
+      await waitToast(page, await t(page, 'game.saveOk', { n: 1 }));
+      const label = page.locator('.slot[data-slot="1"] .slot__label');
+      await label.fill('Boss 战');
+      await label.blur();
+      await waitToast(page, await t(page, 'game.slotNameSaved'));
+      const saved = await page.evaluate(async () => {
+        const saves = await import('/js/saves.js');
+        const games = await saves.listGames();
+        const record = await saves.getState(games[0].id, 1);
+        return record ? record.name : null;
+      });
+      assert(saved === 'Boss 战',
+        `the state record should keep the slot name, got ${JSON.stringify(saved)}`);
+      const downloads = path.join(evidenceDir, 'downloads');
+      fs.mkdirSync(downloads, { recursive: true });
+      const [download] = await Promise.all([
+        page.waitForEvent('download', { timeout: 10000 }),
+        page.click('.slot[data-slot="1"] .slot__export')
+      ]);
+      const filename = download.suggestedFilename();
+      assert(/boss/.test(filename) && /slot1/.test(filename) && /\.njst$/.test(filename),
+        `the export filename should use the slot name, got ${filename}`);
+      await download.saveAs(path.join(downloads, filename));
+      /* Reload the page: the name lives in IndexedDB, not in the DOM. */
+      await page.reload({ waitUntil: 'load', timeout: timeoutMs });
+      await waitReady(page);
+      await page.locator('.game-tile').first().click();
+      await page.waitForFunction(
+        () => !!(window.__nj2me.game && window.__nj2me.game.game),
+        undefined,
+        { timeout: timeoutMs, polling: 100 });
+      await waitFrames(page, 10, timeoutMs);
+      await page.click('#panel-handle');
+      await page.waitForFunction(
+        () => !document.querySelector('.slot[data-slot="1"] .slot__label').disabled,
+        undefined,
+        { timeout: timeoutMs, polling: 100 });
+      const restored = await page.inputValue('.slot[data-slot="1"] .slot__label');
+      assert(restored === 'Boss 战',
+        `the slot name should come back after a reload, got ${JSON.stringify(restored)}`);
+      return `slot name ${JSON.stringify(saved)} persisted; export used ${filename}`;
+    } finally {
+      await ctx.close();
+    }
+  });
+
   await check('the exit auto-save is visible in the panel and can be loaded or cleared', async () => {
     /* Save on exit writes a snapshot on the game record; the panel resurfaces
        it as a read-only row next to the manual slots so the player can see when
