@@ -159,8 +159,9 @@ python3 -m http.server -d build/web 8000
 每游戏最多三个存档点保存在 IndexedDB 里；页面带有 manifest 和 service worker，
 首次访问后可安装为应用，断网也能打开（引擎一并缓存）。JavaScript⇄C 的接口、持久化目录布局和
 限制见 [docs/WEB.md](docs/WEB.md)；验证脚本
-（`tools/check_web.sh --all`）会运行 Node API 测试、41 个游戏的语料和真实 Firefox
-页面测试。
+（`tools/check_web.sh --all`）会运行 Node API 测试、42 款语料和真实 Firefox
+页面测试，`tools/check_web.sh --sweep` 则审计全部 403 个标题；内存吃紧的
+游戏可以在游戏内工具面板里调高 Java 堆。
 
 ## 其它构建
 

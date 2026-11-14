@@ -65,6 +65,12 @@ clear error. Building with `-DNJ_WERROR=ON` is not supported on the wasm target
 because the existing headers intentionally repeat a few `typedef`s that clang
 diagnoses as a C11 extension — leave `NJ_WERROR` off (the default).
 
+The wasm artifact is reproducible: the build maps the absolute checkout path out
+of `__FILE__` (`-ffile-prefix-map`/`-fmacro-prefix-map` in `CMakeLists.txt`), so
+rebuilding the same commit from any directory yields the same `nj2me.wasm`
+byte-for-byte — the save-state diagnostics in `src/core/nj_save.c` would
+otherwise embed the path.
+
 The shell opens the game library first. Use **导入游戏 / Add games** (file picker
 or drag and drop), pick a `.jar` with a `MIDlet-1` manifest entry, and click it.
 There is no JAD, firmware or BIOS step — the same rule as every other port.
@@ -424,8 +430,9 @@ Measured on the reference build (Emscripten 7.0.0, `include/nj2me/nj_web.h`
 0.5.7): the API suite passes **34/34 checks in 0.4 s**, the corpus suite
 **47/47 checks (42 titles) in 8.7 s**, and the browser suite **24/24 checks in
 about 6.3 s** — `tools/check_web.sh --all` is **16 s** end to end. The sweep
-suite needs about 2 min for all 403 titles. All 42
-playable titles draw 120/120 frames, there are no engine `[nj2me] error:` lines,
+suite needs about 2 min for all 403 titles. All 40
+playable titles draw 120/120 frames (the audiodemo and bench fixtures exit on
+their own, as expected), there are no engine `[nj2me] error:` lines,
 and the wasm heap stays at 64 MiB.
 The known-bad `1945空战英雄_6105.jar` is excluded because it fails natively too.
 A real-page smoke run (headless Firefox, `build/web/` served on a local port)
@@ -505,7 +512,8 @@ repository.
   to the wasm memory limit). Heavy titles such as `愤怒的小鸟_383.jar` exhaust it
   exactly as they do in the native build at the default heap; 64 MiB is enough
   for both. The shell's game panel exposes this as a "Game memory" selector
-  (16/32/64/128 MiB) per title, applied on the next launch.
+  (16/32/64/128 MiB) applies to the next launch; it is one shell-wide setting,
+  not a per-game one, just like the speed and volume controls.
 - **Not yet verified**: iOS Safari, very large heap games (>512 MiB), true
   multi-tab use of the same IDBFS prefix (last writer wins), and WebKitGTK.
 - The wasm target cannot be built with `NJ_ENABLE_JIT`/threaded dispatch enabled

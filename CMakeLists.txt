@@ -676,6 +676,17 @@ if(NJ_BUILD_WEB)
     "-lidbfs.js"
     "-sEXPORTED_FUNCTIONS=${NJ_WEB_EXPORTS_STR}"
     "-sEXPORTED_RUNTIME_METHODS=FS,IDBFS,MEMFS,HEAPU8,HEAP16,HEAP32,HEAPU16,HEAPU32,UTF8ToString,stringToUTF8,lengthBytesUTF8,getValue")
+  # Reproducible artifacts: some runtime diagnostics embed __FILE__ (e.g. the
+  # save-state verification in src/core/nj_save.c), which would otherwise put
+  # the checkout path into the wasm and make two builds of the same commit
+  # differ.  Map the absolute source prefix to "." for the whole runtime, not
+  # just for the web target, so the artifact does not depend on where the tree
+  # happens to live.
+  foreach(nj_web_target nj2me nj2me-web)
+    target_compile_options(${nj_web_target} PRIVATE
+      "-ffile-prefix-map=${CMAKE_CURRENT_SOURCE_DIR}=."
+      "-fmacro-prefix-map=${CMAKE_CURRENT_SOURCE_DIR}=.")
+  endforeach()
   message(STATUS "Web port: enabled (Emscripten; output ${NJ_WEB_OUTPUT_DIR}/nj2me.js)")
 endif()
 

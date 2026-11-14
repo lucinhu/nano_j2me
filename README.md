@@ -167,7 +167,9 @@ a manifest plus a service worker, so after one visit it works as an installed
 app and reopens offline (engine included). The
 JavaScript⇄C API, persistence layout and limits are in
 [docs/WEB.md](docs/WEB.md); the harness (`tools/check_web.sh --all`) runs the
-Node API tests, a 41-title corpus and a real-Firefox page test.
+Node API tests, a 42-title corpus and a real-Firefox page test, and
+`tools/check_web.sh --sweep` audits the whole 403-title corpus. Heap-hungry
+titles can raise their Java heap from the in-game tools panel.
 
 ## Other builds
 
