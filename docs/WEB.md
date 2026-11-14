@@ -84,7 +84,7 @@ be served with or without a build:
 
 - **Library** — imports JAR files, reads manifest metadata through `njw_probe()`
   (title, vendor, version, icon, MIDlet list), stores them in IndexedDB, offers
-  search, sorting, deletion and a settings page (language, default screen size).
+  search, sorting, deletion and a language toggle that persists the choice.
 - **Game view** — a `<canvas>` sized to `njw_width()`×`njw_height()` and scaled
   with `image-rendering: pixelated`, an `requestAnimationFrame` loop that calls
   `njw_frame(dt_ms)` exactly once per frame, a loading overlay until the first
@@ -94,6 +94,8 @@ be served with or without a build:
   three save states per game (each exportable as a `.njst` file and importable
   back into any slot), a **Game memory** selector (16/32/64/128 MiB) that
   reaches `NJW_OPT_HEAP_BYTES` at the next launch for heavy titles, a
+  **Screen size** selector (auto/176×208/176×220/128×160/320×240) that sets
+  `NJW_OPT_SCREEN_WIDTH`/`NJW_OPT_SCREEN_HEIGHT` at the next launch, a
   **Startup MIDlet** selector for JARs that ship several MIDlets (stored with
   the game record, applies on the next launch), PNG
   screenshot download, fullscreen, restart and exit-to-library.
@@ -397,7 +399,7 @@ flags: `--evidence DIR` (default
 frames per title, default 120, range 30–2000 — the first frames are needed for
 the render assertions to settle). `--sweep` is deliberately **not** part of
 `--all`: it starts all 403 corpus titles in fresh child processes (~2 min) and is
-for release/CI runs, while `--all` stays a ~18 s edit loop. `--perf` is likewise
+for release/CI runs, while `--all` stays a ~21 s edit loop. `--perf` is likewise
 opt-in: it measures four titles and writes `perf-summary.json` next to the log.
 
 - **API test** (`tools/web_test/web_api_test.mjs`) — module load, version,
@@ -415,7 +417,7 @@ opt-in: it measures four titles and writes `perf-summary.json` next to the log.
   `午夜台球圣诞中文版_8677.jar` installs its `Canvas` in the MIDlet constructor
   and starts its game thread there, which is what caught the runner skipping
   `startApp()`.
-- **Browser test** (`tools/web_test/web_browser_test.mjs`, 29 checks) — serves
+- **Browser test** (`tools/web_test/web_browser_test.mjs`, 30 checks) — serves
   `build/web/` on an ephemeral port and drives the real shell in headless Firefox
   through Playwright: the real engine (`kind=wasm`, API 1, runtime 0.5.7),
   zh-CN UI, import `hello.jar` → metadata and icon in IndexedDB, 240×320
@@ -434,7 +436,10 @@ opt-in: it measures four titles and writes `perf-summary.json` next to the log.
   keeps drawing with no server at all (76,800 non-black pixels, frame counter
   advancing). One check covers the game panel's memory selector: picking 64 MiB
   persists it in `nj2me.settings` (localStorage) for the next launch and shows
-  the "applies on the next launch" toast. Another fakes a standard gamepad
+  the "applies on the next launch" toast. Another starts a game in an
+  isolated context, switches the panel to 176×220, restarts, and asserts the
+  engine really hands back a 176×220 canvas (and that the preset was
+  persisted). Another fakes a standard gamepad
   (`navigator.getGamepads` stub + `gamepadconnected` event): A maps to `nj_key`
   17, the left stick to 16, B to 21, and every press is released again on
   disconnect. Another check imports the three-MIDlet `book6.jar` in an isolated
@@ -467,10 +472,10 @@ opt-in: it measures four titles and writes `perf-summary.json` next to the log.
 
 Measured on the reference build (Emscripten 7.0.0, `include/nj2me/nj_web.h`
 0.5.7): the API suite passes **35/35 checks in 0.4 s**, the corpus suite
-**47/47 checks (42 titles) in 8.7 s**, the browser suite **29/29 checks in about
-8–14 s** (a loaded host slows the page test down; every check is bounded), and
+**47/47 checks (42 titles) in 8.7 s**, the browser suite **30/30 checks in about
+12–14 s** (a loaded host slows the page test down; every check is bounded), and
 the perf suite **9/9 checks in about 0.5 s** — `tools/check_web.sh --all` is
-**18–22 s** end to end. The sweep suite needs about 2 min for all 403
+**21–24 s** end to end. The sweep suite needs about 2 min for all 403
 titles, the perf suite about 1 s. All 40
 playable titles draw 120/120 frames (the audiodemo and bench fixtures exit on
 their own, as expected), there are no engine `[nj2me] error:` lines,

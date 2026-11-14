@@ -691,6 +691,57 @@ async function runRealShellChecks() {
     return `heapMb ${before} -> 64 with a toast, then back to ${before}`;
   });
 
+  await check('screen size preset restarts the canvas at the chosen device size', async () => {
+    /* Own context: the setting persists in localStorage, and a failed restore
+       must not leak a smaller canvas into the PWA/offline checks. */
+    const ctx = await browser.newContext();
+    const page = await ctx.newPage();
+    try {
+      attachDiagnostics(page, 'screen');
+      await page.goto(realServer.origin + '/', { waitUntil: 'load', timeout: timeoutMs });
+      await waitReady(page);
+      await page.setInputFiles('#file-input', HELLO_JAR);
+      await page.waitForFunction(
+        () => document.querySelectorAll('.game-tile').length === 1,
+        undefined, { timeout: timeoutMs, polling: 100 });
+      await page.click('.game-tile');
+      await page.waitForFunction(
+        () => !!(window.__nj2me.game && window.__nj2me.game.game),
+        undefined, { timeout: timeoutMs, polling: 100 });
+      await waitFrames(page, 6, timeoutMs);
+
+      const initial = await page.evaluate(() => {
+        const canvas = document.querySelector('#game-canvas');
+        return canvas ? [canvas.width, canvas.height] : [0, 0];
+      });
+      assert(initial[0] === 240 && initial[1] === 320,
+        `default canvas should be 240x320, got ${initial[0]}x${initial[1]}`);
+
+      await page.click('#panel-handle');
+      await page.waitForSelector('#game-panel.is-open', { timeout: 5000 });
+      await page.selectOption('#screen-select', '176x220');
+      const saved = await page.evaluate(() => {
+        const raw = JSON.parse(localStorage.getItem('nj2me.settings') || '{}');
+        return raw.screenPreset;
+      });
+      assert(saved === '176x220', `screenPreset should persist as 176x220, got ${JSON.stringify(saved)}`);
+
+      /* Restarting also closes the panel, which is fine here: the assertion is
+         about the canvas the engine hands back with the stored preset. */
+      await page.click('#btn-restart');
+      await page.waitForFunction(
+        () => {
+          const canvas = document.querySelector('#game-canvas');
+          return !!canvas && canvas.width === 176 && canvas.height === 220;
+        },
+        undefined, { timeout: timeoutMs, polling: 100 });
+      await waitFrames(page, 6, timeoutMs);
+      return `240x320 default, then 176x220 after restart (persisted ${JSON.stringify(saved)})`;
+    } finally {
+      await ctx.close().catch(() => {});
+    }
+  });
+
   await check('a second tab cannot run the engine while another tab owns it', async () => {
     /* Two pages in one context share IndexedDB and the BroadcastChannel, so
        this is exactly the user situation: a second tab opened while a game is

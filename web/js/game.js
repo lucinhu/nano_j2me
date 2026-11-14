@@ -56,8 +56,18 @@ import { GameInput } from './input.js';
 
 const LS_SETTINGS = 'nj2me.settings';
 const HEAP_CHOICES_MB = [16, 32, 64, 128];
+/* Device screen presets.  'auto' leaves the engine on its 240x320 default;
+ * the rest are common J2ME resolutions that titles were drawn for. */
+const SCREEN_PRESETS = Object.freeze({
+  auto: null,
+  '176x208': [176, 208],
+  '176x220': [176, 220],
+  '128x160': [128, 160],
+  '320x240': [320, 240]
+});
 const DEFAULT_SETTINGS = Object.freeze({
   speedPercent: 100,
+  screenPreset: 'auto', // device screen for the next start; read by _prepare()
   heapMb: 16,           // Java heap for the next start; heavy titles need 64+
   muted: false,
   volume: 0.8,
@@ -84,6 +94,9 @@ function loadSettings() {
   settings.heapMb = HEAP_CHOICES_MB.includes(Number(settings.heapMb))
     ? Number(settings.heapMb)
     : 16;
+  if (!Object.prototype.hasOwnProperty.call(SCREEN_PRESETS, settings.screenPreset)) {
+    settings.screenPreset = 'auto';
+  }
   settings.showPad = !!settings.showPad;
   settings.muted = !!settings.muted;
   settings.volume = Math.max(0, Math.min(1, Number(settings.volume) || 0));
@@ -226,6 +239,21 @@ export class GameView {
 
     // The Java heap is fixed when the VM is created, so this only takes effect
     // on the next start; the hint tells the user instead of silently ignoring it.
+    // The screen preset is a device-profile choice: it must be applied before
+    // the engine starts, so it only reaches the runtime on the next launch.
+    const screenSize = $('#screen-select');
+    if (screenSize) {
+      screenSize.addEventListener('change', () => {
+        const value = Object.prototype.hasOwnProperty.call(SCREEN_PRESETS, screenSize.value)
+          ? screenSize.value
+          : 'auto';
+        if (this.settings.screenPreset === value) { return; }
+        this.settings.screenPreset = value;
+        saveSettings(this.settings);
+        toast(t('game.screenNextLaunch'), { kind: 'info' });
+      });
+    }
+
     const heap = $('#heap-select');
     if (heap) {
       heap.value = String(this.settings.heapMb);
@@ -461,6 +489,13 @@ export class GameView {
       runtime.optionsReset();
       runtime.optionInt(NJW.OPT_SPEED_PERCENT, this.settings.speedPercent);
       runtime.optionInt(NJW.OPT_HEAP_BYTES, this.settings.heapMb * 1024 * 1024);
+      /* 'auto' leaves the engine's 240x320 default in place; an explicit
+         option value is clamped by the port, so 0 would mean 32x32. */
+      const screenPreset = SCREEN_PRESETS[this.settings.screenPreset] || null;
+      if (screenPreset) {
+        runtime.optionInt(NJW.OPT_SCREEN_WIDTH, screenPreset[0]);
+        runtime.optionInt(NJW.OPT_SCREEN_HEIGHT, screenPreset[1]);
+      }
       runtime.optionString(NJW.OPT_RMS_DIR, savesDir);
       runtime.optionString(NJW.OPT_FS_DIR, filesDir);
       const midletClasses = Array.isArray(game.midletClasses) ? game.midletClasses : [];
@@ -1204,6 +1239,8 @@ export class GameView {
     if (speed) { speed.value = String(this.settings.speedPercent); }
     const heap = $('#heap-select');
     if (heap) { heap.value = String(this.settings.heapMb); }
+    const screenSize = $('#screen-select');
+    if (screenSize) { screenSize.value = this.settings.screenPreset; }
     this._updateVolumeUi();
     this.view.classList.toggle('controls-hidden', !this.settings.showPad);
     this._updateSpeedChip();
