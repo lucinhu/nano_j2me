@@ -182,6 +182,8 @@ Web 产物也在提交前重新构建并重新跑过 `tools/check_web.sh --all`�
 
 - Linux 构建与全量测试：`.local-tools/debug-runs/gfx-full-20261113/linux/`（作者构建含 fixtures 与 GLES2 加速注册项，197 项 197/197 通过；默认构建 190 项，190/190 通过）
 - 持久会话后端测试（本机 GLES2 加速构建）：9 项全部通过，含 `test_gfx_triangles_gles2`（会话输出与无状态提交逐字节一致、重复 begin/end 被拒、abort 后 CPU 缓冲不变）、`test_m3g_triangles`（begin 拒绝时回退无状态路径并软件重放）、`test_sdl2_gles2`、`test_gfx_gles2`、`test_gfx_raster_gles2` 等
+- 2026-11-15 事务开销复测（journal 描述符复用）：GPU 会话 7140/7162 ms，纯软件 5512/5477 ms
+  （600 帧 MC，比值约 1.30×）；上限分析见 `docs/GLES2_3D.md`：CPU 像素权威契约下桌面 MC 只能接近 parity。
 - 持久会话 A/B 与截图：`.local-tools/debug-runs/gfx-full-20261113/sdl-mc-journal/`（`fin-gpu*.log`、`fin-sw*.log`、`fin-session.png`）
 - Android 最终 APK 安装/启动冒烟（API 36 模拟器）：`.local-tools/debug-runs/gfx-full-20261113/android/final-build/shot-api36-launch.png`。
   本轮未在 Android 上跑游戏：原 API 21 AVD 已被删除，API 36 镜像为 production 构建无法 root，
