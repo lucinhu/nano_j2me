@@ -96,6 +96,16 @@ HEAD `6b1e9e2` (tree containing `dda4fc2` graphics work), see item 5.
    `site/library/nano_j2me/index.html`; the only warning is the plugin's
    missing-git-log note for the freshly added file. Evidence:
    `.local-tools/debug-runs/submission-20261115/libretro-docs-mkdocs-build.log`.
+9. **Wider content sampling with the shipped core**: eight 2D corpus titles
+   (超级马里奥, 三国杀, 拳皇98, 街霸2, 仙剑奇侠传, 雷霆战机, 灵异村庄,
+   美女滑雪胜地) passed mock-frontend visual checks at 60 Hz cadence over 300
+   frames (2-100 distinct sampled frames, content in 314-316/316 frames).
+   A 24-title CLI motion sample (`tools/check_corpus_motion.py --count 24
+   --frames 300 --seed 21`) reported 24/24 titles changing frames and 0
+   static/black titles, and an eight-title WAV-audio sample found 5/8 delivering
+   PCM in a 240-frame window (the other three are menu/early-game sections).
+   Evidence logs are in `.local-tools/debug-runs/submission-20261115/`
+   (`2d-titles-mock-paced.log`, `motion-sample-24.log`, `audio-probe-wav.log`).
 
 ## Remaining external steps (not performed)
 
