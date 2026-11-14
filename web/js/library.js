@@ -86,6 +86,7 @@ export class LibraryView {
     this.countEl = $('#library-count');
     this.searchInput = $('#search-input');
     this.sortSelect = $('#sort-select');
+    this.favouritesToggle = $('#favourites-toggle');
     this.fileInput = $('#file-input');
     this.importBtn = $('#import-btn');
     this.dropZone = $('#drop-zone');
@@ -97,6 +98,7 @@ export class LibraryView {
     this.games = [];
     this.query = '';
     this.sort = loadSort();
+    this.onlyFavourites = false;
     this._objectUrls = [];
     this._dragDepth = 0;
     this._importing = false;
@@ -137,6 +139,14 @@ export class LibraryView {
         this.render();
       });
     }
+    if (this.favouritesToggle) {
+      this.favouritesToggle.addEventListener('click', () => {
+        this.onlyFavourites = !this.onlyFavourites;
+        this._updateFavouritesToggle();
+        this.render();
+      });
+      this._updateFavouritesToggle();
+    }
     this._bindDragAndDrop();
     this._updateEngineLabel();
 
@@ -176,6 +186,9 @@ export class LibraryView {
         return haystack.includes(needle);
       });
     }
+    if (this.onlyFavourites) {
+      games = games.filter((game) => !!game.favourite);
+    }
     switch (this.sort) {
       case 'name':
         games.sort((a, b) => collator.compare(a.title || a.fileName || '', b.title || b.fileName || ''));
@@ -209,7 +222,7 @@ export class LibraryView {
 
     const total = this.games.length;
     if (this.countEl) {
-      if (this.query) {
+      if (this.query || this.onlyFavourites) {
         this.countEl.textContent = t('library.count', { n: games.length, m: total });
       } else {
         this.countEl.textContent = t('library.countAll', { m: total });
@@ -226,9 +239,16 @@ export class LibraryView {
           if (this.emptyHint) { this.emptyHint.textContent = t('library.emptyHint'); }
           if (this.emptyImport) { this.emptyImport.hidden = false; }
         } else {
-          if (this.emptyTitle) { this.emptyTitle.textContent = t('library.searchEmpty', { q: this.query }); }
+          const favouritesOnly = this.onlyFavourites && !this.query;
+          if (this.emptyTitle) {
+            this.emptyTitle.textContent = favouritesOnly
+              ? t('library.emptyFavourites') : t('library.searchEmpty', { q: this.query });
+          }
           if (this.emptyBody) { this.emptyBody.textContent = ''; }
-          if (this.emptyHint) { this.emptyHint.textContent = t('library.clearSearch'); }
+          if (this.emptyHint) {
+            this.emptyHint.textContent = favouritesOnly
+              ? t('library.favouritesHint') : t('library.clearSearch');
+          }
           if (this.emptyImport) { this.emptyImport.hidden = true; }
         }
       }
@@ -240,7 +260,7 @@ export class LibraryView {
   _buildTile(game) {
     const title = game.title || game.fileName || t('common.unknown');
     const tile = el('div', {
-      className: 'game-tile',
+      className: 'game-tile' + (game.favourite ? ' is-favourite' : ''),
       attrs: {
         role: 'button',
         tabindex: '0',
@@ -270,6 +290,22 @@ export class LibraryView {
     if (game.probeSource === 'mock') {
       cover.append(el('span', { className: 'game-tile__tag', text: 'MOCK' }));
     }
+
+    const starLabel = (game.favourite ? t('library.unfavourite') : t('library.favourite')) + ': ' + title;
+    const star = el('button', {
+      className: 'game-tile__star',
+      attrs: {
+        type: 'button',
+        'aria-pressed': game.favourite ? 'true' : 'false',
+        'aria-label': starLabel,
+        title: starLabel
+      }
+    }, game.favourite ? '★' : '☆');
+    star.addEventListener('click', (event) => {
+      event.stopPropagation();
+      void this.toggleFavourite(game);
+    });
+    cover.append(star);
 
     const meta = el('div', { className: 'game-tile__meta' }, [
       el('div', { className: 'game-tile__title', text: title }),
@@ -316,6 +352,20 @@ export class LibraryView {
     placeholder.style.background =
       'linear-gradient(145deg, hsl(' + hue + ', 62%, 46%), hsl(' + ((hue + 42) % 360) + ', 66%, 24%))';
     return placeholder;
+  }
+
+  async toggleFavourite(game) {
+    const previous = !!game.favourite;
+    game.favourite = !previous;
+    try {
+      await putGame(game);
+    } catch (error) {
+      game.favourite = previous;
+      console.warn('[library] could not save the favourite mark', error);
+      toast(t('library.favouriteFailed'), { kind: 'error' });
+      return;
+    }
+    this.render();
   }
 
   _play(game) {
@@ -532,6 +582,13 @@ export class LibraryView {
   }
 
   /* Called once the service worker has cached the engine (main.js). */
+  _updateFavouritesToggle() {
+    const button = this.favouritesToggle;
+    if (!button) { return; }
+    button.classList.toggle('is-active', this.onlyFavourites);
+    button.setAttribute('aria-pressed', this.onlyFavourites ? 'true' : 'false');
+  }
+
   setOfflineReady(ready) {
     this.offlineReady = !!ready;
     this._updateEngineLabel();

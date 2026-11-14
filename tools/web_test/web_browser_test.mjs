@@ -11,8 +11,9 @@
  *      127.0.0.1 port.
  *   2. Drives it with headless Firefox through Playwright.  The public shell is
  *      used exactly like a player would: file input -> library tile -> game
- *      canvas, keyboard, tools panel, save slot (with its thumbnail preview),
- *      one-click recovery from an out-of-memory failure, exit, reload.
+ *      canvas, keyboard, library favourites, tools panel, save slot (with its
+ *      thumbnail preview), one-click recovery from an out-of-memory failure,
+ *      exit, reload.
  *   3. Serves a copy of the same site *without* nj2me.js/nj2me.wasm and checks
  *      that the shell degrades to the friendly MOCK fallback instead of
  *      throwing (no uncaught errors, banner tells the user how to build it).
@@ -52,6 +53,7 @@ const BUILD_WEB = path.join(REPO_ROOT, 'build', 'web');
 const HELLO_JAR = path.join(REPO_ROOT, 'tests', 'games', 'hello.jar');
 // Needs more Java heap than the shell default; used by the OOM recovery check.
 const HEAVY_JAR = path.join(REPO_ROOT, 'tests', 'games', '愤怒的小鸟_383.jar');
+const GAME15_JAR = path.join(REPO_ROOT, 'tests', 'games', 'game15.jar');
 const SITE_JS = path.join(BUILD_WEB, 'js', 'nj2me.js');
 const SITE_WASM = path.join(BUILD_WEB, 'js', 'nj2me.wasm');
 
@@ -1156,6 +1158,79 @@ async function runRealShellChecks() {
       assert(recovered.heapMb === 64, `heap after the retry is ${recovered.heapMb}`);
       assert(recovered.storedHeapMb === 64, `persisted heap after the retry is ${recovered.storedHeapMb}`);
       return `out of memory at 16 MB, retried at ${recovered.heapMb} MB and kept drawing`;
+    } finally {
+      await ctx.close();
+    }
+  });
+
+  await check('favourites can be starred, filtered and survive a reload', async () => {
+    const ctx = await browser.newContext();
+    const page = await ctx.newPage();
+    try {
+      attachDiagnostics(page, 'favourites');
+      await page.goto(realServer.origin + '/', { waitUntil: 'load', timeout: timeoutMs });
+      await waitReady(page);
+      await page.setInputFiles('#file-input', [HELLO_JAR, GAME15_JAR]);
+      await page.waitForFunction(
+        () => document.querySelectorAll('.game-tile').length === 2,
+        undefined,
+        { timeout: timeoutMs, polling: 100 }
+      );
+      await page.click('.game-tile:has-text("Hello World") .game-tile__star');
+      const starred = await page.evaluate(() => {
+        const tiles = [...document.querySelectorAll('.game-tile')];
+        const tile = tiles.find((node) => (node.querySelector('.game-tile__title') || {}).textContent?.trim() === 'Hello World');
+        const star = tile ? tile.querySelector('.game-tile__star') : null;
+        return {
+          favourite: !!tile && tile.classList.contains('is-favourite'),
+          pressed: star ? star.getAttribute('aria-pressed') : null,
+          glyph: star ? star.textContent.trim() : null,
+        };
+      });
+      assert(starred.favourite && starred.pressed === 'true',
+        `the star did not stick: ${JSON.stringify(starred)}`);
+      await page.click('#favourites-toggle');
+      await page.waitForFunction(
+        () => document.querySelectorAll('.game-tile').length === 1,
+        undefined,
+        { timeout: timeoutMs, polling: 100 }
+      );
+      const filtered = await page.evaluate(() => ({
+        title: (document.querySelector('.game-tile__title') || {}).textContent.trim(),
+        pressed: document.querySelector('#favourites-toggle').getAttribute('aria-pressed'),
+        count: (document.querySelector('#library-count') || {}).textContent.trim(),
+      }));
+      assert(filtered.title === 'Hello World' && filtered.pressed === 'true',
+        `filtered view: ${JSON.stringify(filtered)}`);
+      assert(/1/.test(filtered.count) && /2/.test(filtered.count),
+        `filtered count does not mention 1 of 2: ${JSON.stringify(filtered.count)}`);
+      await page.reload({ waitUntil: 'load', timeout: timeoutMs });
+      await waitReady(page);
+      await page.waitForFunction(
+        () => document.querySelectorAll('.game-tile').length === 2,
+        undefined,
+        { timeout: timeoutMs, polling: 100 }
+      );
+      const afterReload = await page.evaluate(() => {
+        const tiles = [...document.querySelectorAll('.game-tile')];
+        const tile = tiles.find((node) => (node.querySelector('.game-tile__title') || {}).textContent?.trim() === 'Hello World');
+        return { favourite: !!tile && tile.classList.contains('is-favourite'), total: tiles.length };
+      });
+      assert(afterReload.favourite && afterReload.total === 2,
+        `the star did not survive a reload: ${JSON.stringify(afterReload)}`);
+      await page.click('#favourites-toggle');
+      await page.waitForFunction(
+        () => document.querySelectorAll('.game-tile').length === 1,
+        undefined,
+        { timeout: timeoutMs, polling: 100 }
+      );
+      await page.click('.game-tile .game-tile__star');
+      await page.waitForSelector('#library-empty:not([hidden])', { timeout: timeoutMs });
+      const emptyText = await page.evaluate(() =>
+        (document.querySelector('#library-empty-title') || {}).textContent.trim());
+      assert(/收藏|favourite/i.test(emptyText),
+        `unexpected empty state: ${JSON.stringify(emptyText)}`);
+      return `starred, filtered ${JSON.stringify(filtered.count)}, survived reload, empty state ${JSON.stringify(emptyText)}`;
     } finally {
       await ctx.close();
     }
