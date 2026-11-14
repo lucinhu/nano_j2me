@@ -253,11 +253,16 @@ Native playback handles and device queues are cleared; encoded/native-only
 media may stop or need the game to restart it. External RecordStore files,
 FileConnection contents and other host resources are **not rewound**. Loading a state can therefore pair old Java state
 with newer on-disk data. A busy VM that cannot reach a safe point can still
-reject a save request; a load request made while the VM is inside a blocking
+reject a save request. A load request made while the VM is inside a blocking
 native call is completed by fast-forwarding the virtual clock so the VM reaches
 the next frame boundary (the load replaces the VM, so this cannot alter the
-restored state). This also makes loading a state immediately after a reset work
-for titles whose startup sleeps in a splash screen.
+restored state); this also makes loading a state immediately after a reset work
+for titles whose startup sleeps in a splash screen. A save requested while the
+frontend is paused may likewise advance the virtual clock by up to about five
+seconds of game time (300 virtual frames) so that a frame which busy-waits on
+the clock can finish; the snapshot is then taken at the next frame boundary and
+includes that additional progress. If the frame still cannot finish, the save
+is refused as before.
 
 There is no determinism claim. Rewind, runahead and netplay are not advertised
 or validated; use manual states and the game's own save system. Snapshot sizes

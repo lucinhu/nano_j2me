@@ -255,6 +255,15 @@ static int lr_thread_equal(lr_thread_id a, lr_thread_id b) { return pthread_equa
  * The frontend is blocked while it waits, so this may not be forever: a
  * MIDlet stuck inside a native call must not hang RetroArch. */
 #define LR_STATE_TIMEOUT_MS 4000u
+/* A save requested while the frontend is paused cannot be served until the
+ * current frame ends.  Titles that busy-wait on System.currentTimeMillis() at
+ * a frame boundary only finish that frame when the virtual clock advances,
+ * and the frontend cannot tick it while it is blocked in retro_serialize().
+ * While a save is pending the worker may therefore advance the clock by at
+ * most this many virtual frames (~5 s at 60 Hz); the snapshot is then taken
+ * at the next frame boundary.  A load replaces the whole VM, so its clock
+ * advance is not bounded by this budget. */
+#define LR_STATE_CLOCK_MAX_FRAMES 300u
 /* Snapshot envelope: explicit little-endian fields, CRC over header + payload.
  * The VM's snapshot format still enforces its own architecture/ABI checks. */
 #define LR_REQ_LOAD 2
@@ -421,6 +430,7 @@ typedef struct nj_lr {
     nj_size        req_size;
     nj_u4          jar_crc;
     nj_size        state_bound;   /* retro_serialize_size() answer          */
+    unsigned       clock_budget;  /* frames a pending SAVE may clock-assist */
 
     /* ---- paths ---- */
     char save_dir[1024];
@@ -2256,6 +2266,20 @@ static void lr_idle(void *ud)
         s->load_ms += 1;
     } else if (s->phase == LR_PHASE_RUN) {
         unsigned long long target = lr_virtual_ms(s) + 1;
+        /* A pending request blocks the frontend: advance the clock a bounded
+         * amount so a frame that busy-waits on the virtual clock can reach
+         * its boundary and the request gets served (LR_STATE_CLOCK_MAX_FRAMES).
+         * A load discards the VM, so it may advance without that budget. */
+        if (s->req_kind == LR_REQ_SAVE && s->clock_budget > 0u) {
+            s->clock_budget--;
+            s->vclock_frames++;
+            lr_cond_broadcast(&s->cond);
+            target = lr_virtual_ms(s) + 1;
+        } else if (s->req_kind == LR_REQ_LOAD) {
+            s->vclock_frames++;
+            lr_cond_broadcast(&s->cond);
+            target = lr_virtual_ms(s) + 1;
+        }
         while (!s->stop && s->req_kind == LR_REQ_NONE &&
                lr_virtual_ms(s) < target) {
 #if NJ_LIBRETRO_HW
@@ -2622,6 +2646,7 @@ static int lr_request_state(nj_lr *s, int kind, const void *input,
     s->req_kind = kind;
     s->req_done = 0;
     s->req_busy = 0;
+    s->clock_budget = (kind == LR_REQ_SAVE) ? LR_STATE_CLOCK_MAX_FRAMES : 0u;
     s->req_blob = copy;
     s->req_size = input_size;
     lr_cond_broadcast(&s->cond);
@@ -2690,16 +2715,22 @@ static int lr_frame_hook(nj_vm *vm, void *ud)
      */
     (void)nj_midp_frame(vm);
     /*
-     * A frontend blocked inside retro_unserialize() cannot drive retro_run(),
-     * so a MIDlet parked in a blocking native that waits for virtual time
-     * (a splash screen sleeping a few seconds, for example) would keep the VM
-     * thread inside its frame forever and the load would time out.  A pending
-     * LOAD replaces the whole VM, so advancing the clock here is safe: it
-     * lets the blocking native finish, the frame reach its boundary and
-     * lr_run_frames() serve the request.  Save requests never do this.
+     * A frontend blocked inside retro_unserialize() or retro_serialize()
+     * cannot drive retro_run(), so a MIDlet parked in a blocking native that
+     * waits for virtual time (a splash screen sleeping a few seconds, for
+     * example) would keep the VM thread inside its frame forever and the
+     * request would time out.  A pending LOAD replaces the whole VM, so its
+     * clock may advance freely.  A pending SAVE may advance at most
+     * LR_STATE_CLOCK_MAX_FRAMES virtual frames: the snapshot then reflects
+     * that much additional game time, which is the documented trade-off for
+     * saving while the frontend is paused.
      */
     lr_mutex_lock(&s->lock);
     if (s->req_kind == LR_REQ_LOAD) {
+        s->vclock_frames++;
+        lr_cond_broadcast(&s->cond);
+    } else if (s->req_kind == LR_REQ_SAVE && s->clock_budget > 0u) {
+        s->clock_budget--;
         s->vclock_frames++;
         lr_cond_broadcast(&s->cond);
     }
