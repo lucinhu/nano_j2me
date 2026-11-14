@@ -1,12 +1,14 @@
 # libretro submission kit
 
 This is a **local preparation kit**, not an announcement of upstream acceptance.
-No commit, push or pull request is part of this preparation. Runtime code is
-MIT licensed, built-in AMR numeric data are separately Apache-2.0, and bundled
-font data are SIL OFL 1.1. The identified codec source replacements and bounded
-implementation reviews are complete, and final local combined-candidate
-validation passed as recorded below. Package the final notices/metadata and
-complete the external steps below before publication.
+This project repository is committed and pushed as part of routine work, but no
+pull request, upload or other interaction with libretro upstream is performed
+without further explicit authorization. Runtime code is MIT licensed, built-in
+AMR numeric data are separately Apache-2.0, and bundled font data are SIL OFL
+1.1. The identified codec source replacements and bounded implementation
+reviews are complete, and final local combined-candidate validation passed as
+recorded below. Package the final notices/metadata and complete the external
+steps below before publication.
 
 ## Local materials
 
@@ -28,10 +30,74 @@ existing J2ME metadata. Libraries use `nano_j2me_libretro.so`, `.dll` or `.dylib
 The Android CI template publishes the `_libretro_android.so` suffix. The source
 version is currently 0.5.7; refresh the metadata version whenever that changes.
 
-## Upstream procedure, checked 2026-11-12
+## Readiness status, checked 2026-11-15
 
-The upstream [Developing Cores guide](https://github.com/libretro/docs/blob/master/docs/development/cores/developing-cores.md)
-identifies the following steps:
+This section records the concrete preparation checks run against the current
+tree; the unchecked boxes in [Validation](#validation) remain the external
+steps only. Working HEAD for this check: `bc49c46` (`v0.5.7-9-gbc49c46`).
+
+- **Metadata**. `src/port/libretro/nano_j2me_libretro.info`
+  (SHA-256 `c0f30aeae22150208034202986b3db77fd2f423874e2f2bcc1ce7b07c82723c6`)
+  is the exact file intended for `libretro-super/dist/info`. Its
+  `database = "Mobile - J2ME"` names an existing libretro-database platform
+  folder (checked against the live repository), its file name matches the core
+  name, `supported_extensions = "jar"` matches JAR-only loading, and
+  `needs_fullpath = "true"` matches the core opening the JAR itself. RetroArch
+  1.22.2 scanned the packaged `.info` from `libretro_info_path` and generated
+  its core-info cache without parse errors (evidence:
+  `.local-tools/debug-runs/submission-20261115/retroarch-coreinfo-scan.log`);
+  the same file was installed next to the core on an Android RetroArch 1.19.1
+  device that loaded and ran it, and it ships byte-identically in every local
+  package.
+- **CI configuration**. The root `.gitlab-ci.yml` extends the current
+  libretro-infrastructure templates (`linux-cmake.yml`,
+  `windows-cmake-mingw.yml`, `android-cmake.yml`) and sets the variables those
+  templates expect (`CORENAME`, `EXTRA_PATH=libretro`, `CORE_ARGS`). The exact
+  template commands were simulated locally at this revision:
+  - Linux template command (plain CMake generator):
+    `/tmp/ci-sim/build/linux-x86_64/libretro/nano_j2me_libretro.so`,
+    3,969,632 bytes.
+  - Android template command (NDK 30.0.16248370, `arm64-v8a`):
+    `/tmp/ci-sim-ndk/build/android-arm64-v8a/libretro/nano_j2me_libretro.so`,
+    renamed to `nano_j2me_libretro_android.so` by the template's `after_script`.
+  Both artifacts land at `$BUILD_DIR/$EXTRA_PATH/$LIBNAME`, where the templates
+  collect them. No upstream pipeline has been executed; that requires maintainer
+  registration.
+- **Fresh eight-target build**. `tools/build_libretro_cores.sh --jobs 12
+  --out /var/tmp/nj2me-submission-dist all` rebuilt every default-feature target
+  from this revision. Per-core SHA-256:
+
+  | Target | SHA-256 |
+  | --- | --- |
+  | linux-x86_64 | `b9be275017d35a9a84badf78142b89a9080f1430b694cae89d0c224948c6cf0f` |
+  | linux-aarch64 | `37be7db883464ea834b6ef3a4beef22dafb441c85812e3cb571812c2d5c05391` |
+  | linux-armv7 | `8884d957c4361920f6596697d0de0a3d0d19f2b34b48281fded5957db9ccfc80` |
+  | android-arm64 | `babc55b38ac24174c36114fef21ac6609ba4cb0c09f16d6b5ac8874a209ae45e` |
+  | android-armv7 | `38c1afa540482e12c817772e9ced0cd81e7681c68f0294f33515168249746fe2` |
+  | android-x86_64 | `ec802324cac38137d7659d53041562edaacbef3513fc0b0ec9e7fd5cf52b1355` |
+  | windows-i686 | `b2d01aa6930379a33756082f14efceb31dcff1b120511f5a865fc0c421701ad7` |
+  | windows-x86_64 | `a74e87b322c19803158b895ec42d9b77d35b9db7074eb888b45086ddda2d5f25` |
+
+  Every target directory contains the same `.info`, license/notice set and
+  `BUILD_STATUS.txt`; no external test font is bundled.
+- **Artifact validation**. The fresh linux-x86_64 core passed the mock-frontend
+  matrix (20 passed, 0 failed, 0 skipped), and real RetroArch 1.22.2 ran
+  LoopDemo (120 frames) and TextDemo (180 frames) to a clean exit. The fresh
+  windows-x86_64 DLL passed the Wine fixture suite 4/4. Android and ARM-Linux
+  cores were rebuilt and ABI/dependency-checked in this pass; their runtime
+  behavior was previously proven on the same source line (including a real
+  Android RetroArch 1.19.1 device run), but that historical device evidence is
+  not re-created by this artifact check. Logs are under
+  `.local-tools/debug-runs/submission-20261115/`.
+- **Remaining external steps**. Upstream CI pipeline execution and artifact
+  collection, the `libretro-super` metadata pull request, the `libretro/docs`
+  pull request with a real `mkdocs build`, and optional assets/database entries
+  are all upstream decisions and are not performed here.
+
+## Upstream procedure, checked 2026-11-15
+
+Re-verified against the live [Developing Cores guide](https://github.com/libretro/docs/blob/master/docs/development/cores/developing-cores.md);
+the steps below are unchanged.
 
 1. Submit the `.info` file to [libretro-super/dist/info](https://github.com/libretro/libretro-super/tree/master/dist/info).
    Test it in RetroArch's configured `libretro_info_path` and inspect *Information
@@ -185,6 +251,11 @@ requires its fixture/tool dependencies.
   actual candidate, including the current AMR provider and snapshot changes.
 - [x] Final platform artifacts rebuilt from the same candidate; dependencies,
   exports, hashes, matching metadata and all license/notice files checked.
+- [x] Offline simulations of the upstream Linux and Android CMake template
+  commands produce the artifact path (`$BUILD_DIR/$EXTRA_PATH/$LIBNAME`) the
+  buildbot collects; see the 2026-11-15 readiness section.
+- [x] Metadata `database` value verified against libretro-database, and the same
+  `.info` ships byte-identically in every local package.
 - [ ] Upstream CI runs and collects the correct output library in `libretro/`.
 - [ ] Info parsed/displayed by RetroArch; upstream docs `mkdocs build` passes.
 
@@ -306,9 +377,11 @@ notice cites [Adobe's upstream license](https://github.com/adobe-fonts/source-ha
 
 ## Draft PR descriptions (local only)
 
-Do not submit these until the packaging and final validation checkboxes above
-are complete. Replace the evidence paragraph with the final candidate's commands,
-results, commit and artifact hashes; do not turn pending checks into passed ones.
+Do not submit these without explicit authorization. Replace the evidence
+paragraph with the final candidate's commands, results, commit and artifact
+hashes; do not turn pending checks into passed ones. The 2026-11-15 readiness
+section above supplies the current metadata hash, CI-template simulations and
+eight-target artifact hashes.
 
 ### libretro-super metadata PR
 

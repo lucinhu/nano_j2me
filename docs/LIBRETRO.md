@@ -70,12 +70,15 @@ Use `--no-strip` to retain symbols. `all` selects the script's supported targets
 and requires all of their toolchains.
 
 The eight candidates currently in `build/libretro-dist/` were rebuilt on
-2026-11-14 from the current tree, so they include the load-lifecycle fix, the
-monitor and repaint-blocking fixes, the input-bitmask/rumble support and the
-`nano_j2me_screen`/`nano_j2me_locale` options. `build/libretro-final-report-20261114.md`
-records sizes, SHA-256 values and what was run per target: linux-x86_64 in the
-mock frontend and real RetroArch, windows-x86_64 under Wine, and ABI/dependency
-checks only for the Android and ARM-Linux cores (no device run in this rebuild).
+2026-11-15 from the `bc49c46` tree, so they include the load-lifecycle fix, the
+monitor and repaint-blocking fixes, the CLI/manual-state boundary work, the
+input-bitmask/rumble support and the `nano_j2me_screen`/`nano_j2me_locale`
+options. `build/libretro-final-report-20261115.md` records sizes, SHA-256 values
+and what was run per target: linux-x86_64 in the mock frontend and real
+RetroArch, windows-x86_64 under Wine, and ABI/dependency checks only for the
+Android and ARM-Linux cores (no device run in this rebuild). That report also
+records the offline simulations of the libretro GitLab CI template commands for
+Linux and Android, which are part of the upstream submission preparation.
 
 | Target | Toolchain / artifact baseline | Verification scope |
 | --- | --- | --- |
