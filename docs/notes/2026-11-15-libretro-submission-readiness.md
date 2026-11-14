@@ -239,3 +239,19 @@ Wider evidence and diagnostics were added on top of the save clock assistance:
   /var/tmp/nj2me-submission-dist-r14`, `.info` byte-identical) and the tree
   copied to `build/libretro-dist/` (previous tree backed up to
   `/var/tmp/libretro-dist-20261115-r13-backup.tgz`).
+
+## Update, 2026-11-15 (long-run and option-matrix probes)
+
+Two wider probes were added after the r14 refresh, with tracked tools so the
+evidence is reproducible; see
+`docs/notes/2026-11-15-long-run-and-option-matrix-probes.md` for commands and
+raw numbers.
+
+- `tools/check_corpus_deep.py`: titles that the sweep marked `ok` run for 1800
+  frames at 30 fps (60 s of emulated time each). 24-title sample: 24/24 passed;
+  48-title sample: 46 passed + 2 key-script/menu early exits, 0 failed.
+- `tools/check_libretro_option_matrix.py`: eight real titles × eleven
+  non-default core-option profiles through the mock frontend: 88/88 passed
+  (screen 176x208/320x240, rotation 90/180, heap 32, builtin font, sound off,
+  pointer off, Nokia 6230 device, zh-CN locale), each also running the harness's
+  save-state round-trip checks.
