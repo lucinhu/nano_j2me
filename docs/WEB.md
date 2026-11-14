@@ -89,7 +89,10 @@ be served with or without a build:
   link, deletion and a language toggle that persists the choice. Above the grid
   a **continue card** names the newest played title (with the exit auto-save's
   thumbnail and frame count when that toggle is on) and opens it in one click;
-  the card disappears while the library is being searched or filtered.
+  the card disappears while the library is being searched or filtered. Cards
+  of titles covered by the last full-corpus audit carry its result: a green
+  "verified" badge, or an amber warning whose tooltip gives the reason (needs a
+  bigger heap, first frames are black, constructor refusal).
 - **Game view** — a `<canvas>` sized to `njw_width()`×`njw_height()` and scaled
   with `image-rendering: pixelated`, an `requestAnimationFrame` loop that calls
   `njw_frame(dt_ms)` exactly once per frame, a loading overlay until the first
@@ -460,7 +463,7 @@ opt-in: it measures four titles and writes `perf-summary.json` next to the log.
   `午夜台球圣诞中文版_8677.jar` installs its `Canvas` in the MIDlet constructor
   and starts its game thread there, which is what caught the runner skipping
   `startApp()`.
-- **Browser test** (`tools/web_test/web_browser_test.mjs`, 41 checks) — serves
+- **Browser test** (`tools/web_test/web_browser_test.mjs`, 42 checks) — serves
   `build/web/` on an ephemeral port and drives the real shell in headless Firefox
   through Playwright: the real engine (`kind=wasm`, API 1, runtime 0.5.7),
   zh-CN UI, import `hello.jar` → metadata and icon in IndexedDB, 240×320
@@ -489,7 +492,10 @@ opt-in: it measures four titles and writes `perf-summary.json` next to the log.
   purpose, clears it, and verifies the record no longer carries the snapshot.
   One more check names a save slot "Boss 战", confirms the name lands on the
   IndexedDB record (and therefore names the `.njst` download `boss-战-slot1-…`),
-  reloads the page and finds the name still in the slot's input. One check covers
+  reloads the page and finds the name still in the slot's input. Another imports
+  two audited JARs and asserts the compatibility badges: a green "verified" one
+  on `hello.jar` and an amber "needs more heap" one on `愤怒的小鸟_383.jar`,
+  whose tooltip explains the out-of-memory class of the failure. One check covers
   the game panel's memory selector: picking 64 MiB
   persists it in `nj2me.settings` (localStorage) for the next launch and shows
   the "applies on the next launch" toast. Another opens the diagnostics section
@@ -531,7 +537,7 @@ opt-in: it measures four titles and writes `perf-summary.json` next to the log.
 
 Measured on the reference build (Emscripten 7.0.0, `include/nj2me/nj_web.h`
 0.5.7): the API suite passes **36/36 checks in 0.4 s**, the corpus suite
-**47/47 checks (42 titles) in 8.7 s**, the browser suite **41/41 checks in about
+**47/47 checks (42 titles) in 8.7 s**, the browser suite **42/42 checks in about
 22–38 s** (a loaded host slows the page test down; every check is bounded), and
 the perf suite **9/9 checks in about 0.5 s** — `tools/check_web.sh --all` is
 **34–48 s** end to end. The sweep suite needs about 2 min for all 403
@@ -592,6 +598,22 @@ above (wall-clock fold, unconditional `startApp()`, bounded constructor).
 Evidence: `.local-tools/debug-runs/web-round8-sweep-clean/` (`sweep-403.jsonl`,
 `sweep-summary.txt`).
 
+The audit is also productised into the shell. `tools/gen_web_compat_data.mjs`
+turns the newest sweep JSONL into the committed `web/data/compat.json`
+(schema 1: `generatedAt`, `source`, `frames`, stage counts, and one entry per
+audited title keyed by `file name|byte size` with the stage plus an explanation
+for non-ok titles):
+
+```sh
+node tools/gen_web_compat_data.mjs \
+  --from .local-tools/debug-runs/web-round8-sweep-clean/sweep-403.jsonl
+```
+
+The library matches an imported JAR by file name and exact byte size, so a
+different rip of the same title stays unbadged; the report ships inside the
+PWA shell, is precached by the service worker and validated by the module smoke
+test. Regenerate it whenever a new `--sweep` run changes the classification.
+
 The same scenarios can be driven by hand with `node` (Node has no IndexedDB, so
 mount MEMFS instead of IDBFS) — the harnesses are the reference. Evidence
 (screenshots, PNG dumps, logs) goes to `.local-tools/debug-runs/`, never into the
@@ -604,9 +626,9 @@ a playable demo: it runs on every push to `main` that touches the wasm build
 inputs (sources, shell, build scripts) and can be started by hand with
 *Actions → Web demo (GitHub Pages) → Run workflow*. The job is a straight
 reproduction of the local steps - check out, Node 20, Emscripten 7.0.0,
-`tools/build_web.sh`, `tools/web_test/web_smoke_test.mjs` (module, option and
-MEMFS checks, plus a 60-frame `hello.jar` render when the private corpus is
-present), upload the site, deploy - and a concurrency group cancels superseded
+`tools/build_web.sh`, `tools/web_test/web_smoke_test.mjs` (module, option,
+MEMFS and compatibility-report checks, plus a 60-frame `hello.jar` render when
+the private corpus is present), upload the site, deploy - and a concurrency group cancels superseded
 deployments.
 
 One-time setup: in the repository, *Settings → Pages → Build and deployment →
@@ -689,6 +711,8 @@ node tools/web_test/web_smoke_test.mjs --evidence .local-tools/debug-runs/web-de
 | `tools/emsdk_setup.sh` | installs the Emscripten SDK into `.local-tools/emsdk` |
 | `tools/check_web.sh`, `tools/web_test/` | Node API/corpus, full-corpus sweep, throughput and module-smoke suites, Playwright browser verification |
 | `tools/web_test/web_smoke_test.mjs` | corpus-free post-build smoke test used by the Pages workflow |
+| `tools/gen_web_compat_data.mjs` | turns a `--sweep` JSONL report into `web/data/compat.json` |
+| `web/data/compat.json` | committed audit results that badge known titles in the library |
 | `.github/workflows/web-demo.yml` | builds the port and publishes `build/web/` to GitHub Pages |
 | `build/web/` | served directory: shell + `js/nj2me.js` + `js/nj2me.wasm` (git-ignored) |
 

@@ -112,6 +112,12 @@ export const STRINGS = {
     'library.classes': 'MIDlet 类',
     'library.moreInfo': '详情',
     'library.duplicate': '「{title}」已经在游戏库里，已更新。',
+    'library.compatOk': '已验证',
+    'library.compatBlack': '前 90 帧黑屏',
+    'library.compatOom': '需更大内存',
+    'library.compatStart': '浏览器不支持',
+    'library.compatProbe': 'JAR 异常',
+    'library.compatTimeout': '加载超时',
 
     /* ---- engine / module loading ------------------------------------- */
     'engine.loading': '正在初始化引擎…',
@@ -360,6 +366,12 @@ export const STRINGS = {
     'library.classes': 'MIDlet classes',
     'library.moreInfo': 'Details',
     'library.duplicate': '“{title}” is already in the library; updated.',
+    'library.compatOk': 'Verified',
+    'library.compatBlack': 'Black first frames',
+    'library.compatOom': 'Needs more heap',
+    'library.compatStart': 'Not supported here',
+    'library.compatProbe': 'Unusable JAR',
+    'library.compatTimeout': 'Load timeout',
 
     /* ---- engine / module loading ------------------------------------- */
     'engine.loading': 'Starting the engine…',

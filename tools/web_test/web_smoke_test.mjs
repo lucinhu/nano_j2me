@@ -56,6 +56,23 @@ async function main() {
             `nj2me.wasm ${fs.statSync(moduleWasmPath).size} B`;
     });
 
+    await t.check('compatibility report is present and well formed', () => {
+        const reportPath = path.join(repoRoot, 'build', 'web', 'data', 'compat.json');
+        assert(fs.existsSync(reportPath),
+            `missing ${path.relative(repoRoot, reportPath)}; run tools/build_web.sh`);
+        const report = JSON.parse(fs.readFileSync(reportPath, 'utf8'));
+        assert(report.schema === 1, `unexpected compat report schema: ${report.schema}`);
+        assert(report.entries && typeof report.entries === 'object',
+            'compat report has no entries object');
+        assert(report.stages && typeof report.stages === 'object',
+            'compat report has no stage counts');
+        const badged = Object.keys(report.entries).length;
+        assert(badged === Number(report.titles || 0),
+            `every audited title should have an entry (${badged}/${report.titles})`);
+        const warns = badged - Number((report.stages || {}).ok || 0);
+        return `${report.titles} titles audited (${warns} flagged)`;
+    });
+
     await t.check('ES module instantiates with the JS<->C exports', async () => {
         m = await loadModule();
         assert(Boolean(m.HEAPU8 && m.FS), 'Emscripten runtime handles are missing');

@@ -476,6 +476,25 @@ body.in-game .app-header { display: none; }
   text-shadow: 0 2px 12px rgba(0, 0, 0, 0.35);
 }
 
+.game-tile__compat {
+  position: absolute;
+  left: 8px;
+  top: 8px;
+  max-width: calc(100% - 48px);
+  overflow: hidden;
+  padding: 1px 7px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: rgba(10, 14, 20, 0.86);
+  color: var(--text-dim);
+  font-size: 10.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  pointer-events: none;
+}
+.game-tile__compat.is-ok { color: #7fe3a1; border-color: rgba(127, 227, 161, 0.45); }
+.game-tile__compat.is-warn { color: #ffcf7a; border-color: rgba(255, 207, 122, 0.5); }
 .game-tile__tag {
   position: absolute;
   top: 6px;

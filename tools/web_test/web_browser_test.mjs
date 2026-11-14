@@ -1134,6 +1134,45 @@ async function runRealShellChecks() {
     }
   });
 
+  await check('library badges known titles from the compatibility report', async () => {
+    /* web/data/compat.json ships the results of the 403-title audit: an
+       audited title gets a "verified" badge, a known-tricky one gets a warning
+       with the reason in its tooltip. */
+    const ctx = await browser.newContext({ viewport: { width: 960, height: 840 }, locale: 'zh-CN' });
+    try {
+      const page = await ctx.newPage();
+      attachDiagnostics(page, 'compat');
+      await page.goto(realServer.origin + '/', { waitUntil: 'load', timeout: timeoutMs });
+      await waitReady(page);
+      await page.setInputFiles('#file-input', [HELLO_JAR, HEAVY_JAR]);
+      await page.waitForFunction(
+        () => document.querySelectorAll('.game-tile').length >= 2,
+        undefined,
+        { timeout: 120000, polling: 100 });
+      const hello = page.locator('.game-tile').filter({ hasText: 'Hello World' });
+      const okBadge = hello.locator('.game-tile__compat');
+      assert(await okBadge.count() === 1, 'hello.jar should carry one compatibility badge');
+      assert(await okBadge.evaluate((node) => node.classList.contains('is-ok')),
+        'the audited title should be marked as verified');
+      const okText = (await okBadge.textContent()) || '';
+      assert(/已验证|Verified/.test(okText), `unexpected verified badge text: ${okText}`);
+      const angry = page.locator('.game-tile').filter({ hasText: 'Angry Birds' });
+      const warnBadge = angry.locator('.game-tile__compat');
+      assert(await warnBadge.count() === 1, 'Angry Birds should carry one compatibility badge');
+      assert(await warnBadge.evaluate((node) => node.classList.contains('is-warn')),
+        'the failing title should be marked with a warning');
+      const warnText = (await warnBadge.textContent()) || '';
+      assert(/需更大内存|Needs more heap/.test(warnText),
+        `unexpected warning badge text: ${warnText}`);
+      const note = await warnBadge.getAttribute('title');
+      assert(/内存|heap/.test(note || ''),
+        `the badge tooltip should explain the heap issue, got ${JSON.stringify(note)}`);
+      return 'verified badge on hello.jar, heap warning on 愤怒的小鸟_383.jar';
+    } finally {
+      await ctx.close();
+    }
+  });
+
   await check('library offers a continue card for the last played game', async () => {
     /* The card is the quick way back into the newest game; it appears only on
        the unfiltered library and its meta line reflects the exit auto-save. */
