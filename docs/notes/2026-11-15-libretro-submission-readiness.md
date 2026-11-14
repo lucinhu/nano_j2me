@@ -5,7 +5,9 @@ steps (metadata, CI configuration, artifacts, documentation drafts), and record
 the remaining external actions. No upstream pull request, upload or maintainer
 contact was made.
 
-Tree under test: `bc49c46` (`v0.5.7-9-gbc49c46`).
+Tree under test: `bc49c46` (`v0.5.7-9-gbc49c46`) for the metadata/CI/docs
+checks below; the release artifacts were later refreshed on the same day at
+HEAD `6b1e9e2` (tree containing `dda4fc2` graphics work), see item 5.
 
 ## What was checked against live upstream sources
 
@@ -52,11 +54,17 @@ Tree under test: `bc49c46` (`v0.5.7-9-gbc49c46`).
    templates collect it. The CI-simulated Linux core also passed the mock
    frontend matrix (20/20), and the shipping Windows static build is separately
    validated by the Wine fixture suite (4/4).
-5. **Fresh eight-target build** at HEAD into `/var/tmp/nj2me-submission-dist`
-   (copied to `build/libretro-dist/`), 16 files per directory, identical
-   `.info`, license/notice set and `BUILD_STATUS.txt`. Sizes and SHA-256 values
-   are in `build/libretro-final-report-20261115.md`.
-6. **Artifact validation**: linux-x86_64 mock frontend 20/20; real RetroArch
+5. **Fresh eight-target build**: first at HEAD `bc49c46` into
+   `/var/tmp/nj2me-submission-dist`, then refreshed at tree `6b1e9e2` into
+   `/var/tmp/nj2me-submission-dist-r9` and copied to `build/libretro-dist/`
+   (previous tree backed up to
+   `/var/tmp/libretro-dist-20261115-bc49c46-backup.tgz`). 16 files per
+   directory, identical `.info`, license/notice set and `BUILD_STATUS.txt`; the
+   three Linux cores are byte-identical between the two builds. Sizes and
+   SHA-256 values are in `build/libretro-final-report-20261115.md`.
+6. **Artifact validation** (refreshed build at `6b1e9e2`): linux-x86_64 mock
+   frontend 20/20; real 3D corpus title 浴火银河2完整版 through the mock
+   frontend PASS (36 checks, 120 frames, visual required); real RetroArch
    1.22.2 LoopDemo 120 frames and TextDemo 180 frames PASS; windows-x86_64
    Wine fixtures 4/4 PASS. Android/ARM cores were ABI/dependency-checked only
    in this rebuild (no device run available).
