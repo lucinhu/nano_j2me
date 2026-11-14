@@ -38,10 +38,10 @@ version is currently 0.5.7; refresh the metadata version whenever that changes.
 
 This section records the concrete preparation checks run against the current
 tree; the unchecked boxes in [Validation](#validation) remain the external
-steps only. Working HEAD for this check: `db276f8` (state save/load clock
-assistance; the metadata/CI/docs checks below were first run at `bc49c46`, and
-the release artifacts were refreshed after each libretro fix as recorded in the
-hash table).
+steps only. Working HEAD for this check: `30e9c83` (state save/load clock
+assistance plus level-3 Player-start diagnostics; the metadata/CI/docs checks
+below were first run at `bc49c46`, and the release artifacts were refreshed
+after each libretro change as recorded in the hash table).
 
 - **Metadata**. `src/port/libretro/nano_j2me_libretro.info`
   (SHA-256 `c0f30aeae22150208034202986b3db77fd2f423874e2f2bcc1ce7b07c82723c6`)
@@ -73,28 +73,29 @@ hash table).
     and produced `libretro/nano_j2me_libretro.dll` (3,537,295 bytes), i.e. the
     path the template's post-build step expects.
   All three land at `$BUILD_DIR/$EXTRA_PATH/$LIBNAME`, where the templates
-  collect them. Re-run after the save clock-assist fix with
-  `tools/simulate_ci_builds.sh --out /var/tmp/ci-sim-r13`: all three
-  contracts pass (Linux 3,969,632 B, Windows 3,537,295 B, Android arm64
-  11,543,984 B at `/var/tmp/ci-sim-r13/...`). `tools/simulate_ci_builds.sh` reproduces these template commands
+  collect them. Re-run at the r14 tree with
+  `tools/simulate_ci_builds.sh --out /var/tmp/ci-sim-r14`: all three
+  contracts pass (Linux 3,969,648 B, Windows 3,537,310 B, Android arm64
+  11,546,848 B at `/var/tmp/ci-sim-r14/...`). `tools/simulate_ci_builds.sh` reproduces these template commands
   (and reads `CORE_ARGS` straight out of `.gitlab-ci.yml` so the simulation
   cannot drift from the committed CI file). No upstream pipeline has been
   executed; that requires maintainer registration.
-- **Fresh eight-target build**. `tools/build_libretro_cores.sh --jobs 12
-  --out /var/tmp/nj2me-submission-dist-r13 all` rebuilt every default-feature
-  target from this revision (state load and save clock assistance) and the tree
-  was copied into `build/libretro-dist/`. Per-core SHA-256:
+- **Fresh eight-target build**. `tools/build_libretro_cores.sh --jobs 6
+  --out /var/tmp/nj2me-submission-dist-r14 all` rebuilt every default-feature
+  target from this revision (state load/save clock assistance and the level-3
+  Player-start media diagnostics) and the tree was copied into
+  `build/libretro-dist/`. Per-core SHA-256:
 
   | Target | SHA-256 |
   | --- | --- |
-  | linux-x86_64 | `e93c459930b8576a90fd39e45a66c48c8317c8cecb2dbf4f9d3a545e14e1d8ba` |
-  | linux-aarch64 | `c26f7fe708eaf2891995b5de4c147d5eb5ff5c4065b10c034ee5f6c4ec531ada` |
-  | linux-armv7 | `2b56cc5fe14331a9560540ec63deb3bd384b37769501046840bc1be2902d1b66` |
-  | android-arm64 | `e771075081ec8ab2aab425ff25096db10919fd455bab2b9ec0fd1833d67e7b57` |
-  | android-armv7 | `47d0f579d97eca870ef6db141c17d4c9cffcfc97a52eaf988563d3be9c8e27d4` |
-  | android-x86_64 | `0ab0cdae49b0dda70853f04f579ea450f2059d7dd5e1fe41da703996674c8460` |
-  | windows-i686 | `f1a50bc7184c468da3ae3c109f1c5541ebc072843c3bad23f7a4e241464bffc9` |
-  | windows-x86_64 | `986cdcc4c1a809dc093b5e164a16fc0d64fc6eee5bfc0618a9ac880c61cf1ed4` |
+  | linux-x86_64 | `1565eee2e76fa38bf8efd683d0d92787583090ccd3d24fac08ba6216db6b9bc0` |
+  | linux-aarch64 | `6c0da4021d88c82128b262b31660fc5df9d271ec67fec283a4aaec6c3dbfa9d1` |
+  | linux-armv7 | `3fdd26d463918c0da5a8a18c0f81111f5fd94c8fc888c849702b834ee3b7cc8f` |
+  | android-arm64 | `7e98520b6b0259b855f87789cd52b1b840c4258f22c193b84ae280612d19e899` |
+  | android-armv7 | `b4eb709c8735016c91f5d118089244d81649261d700444c30717dfecf6d8d15d` |
+  | android-x86_64 | `b4cdf8b3b8f47c8d1ef84b4148640e4f32c3f5855707b0ff315be74c7edda356` |
+  | windows-i686 | `d18ab3651036f1faa18ae550c8870cd17fd224417f23278f8444d0f6b28a0c42` |
+  | windows-x86_64 | `4f66f83a08d8040b1ea1c538b9c331b86aa12e75e86827cdbc4f837173a51c5f` |
 
   Every target directory contains the same `.info`, license/notice set and
   `BUILD_STATUS.txt`; no external test font is bundled.
@@ -107,10 +108,13 @@ hash table).
   after `retro_reset` in a title that boots inside a blocking frame
   (电子宠物蛋_11972) and titles whose save needed the bounded paused-frontend
   clock assistance (see the 2026-11-15 load-state and save-while-paused notes).
-  A 30-title visual probe through the mock frontend at the real-time cadence
-  passed 30/30 (it exposed the save-while-paused defect and now covers the
-  fix). The full local CTest suite passed **183/183 in 327.03 s** at this
-  revision. Seven M3G titles were
+  A 50-title visual probe through the mock frontend at the real-time cadence
+  passed 49/50; the single refusal (`火影忍者汉化版_10735`) is the documented
+  paused-save nested-paint limitation described in
+  [LIBRETRO.md](LIBRETRO.md#timing-media-and-limitations), not a visual defect,
+  and every sampled title rendered and animated. A wider 50-title state probe
+  also reported 50/50 save/restore round trips. The full local CTest suite
+  passed **183/183 in 332.37 s** at this revision. Seven M3G titles were
   checked through the mock frontend at the real-time cadence
   (`--pace-us 16666`): 浴火银河2完整版, 蓝牙真3D格斗, 急速狂飙完美破解版,
   浴火银河2瓦尔基里, 极品飞车16：亡命狂飙, 3D激爆拳击 and 3D跳台滑雪2011 all

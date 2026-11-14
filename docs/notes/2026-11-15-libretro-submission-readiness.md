@@ -205,3 +205,37 @@ Re-checks after the fix (commit `db276f8`):
   /var/tmp/nj2me-submission-dist-r13`), `.info` byte-identical, tree copied to
   `build/libretro-dist/`; CI template simulation re-run for all three templates
   (Linux 3,969,632 B, Windows 3,537,295 B, Android arm64 11,543,984 B).
+
+## Update, 2026-11-15 (r14: media diagnostics and wider probes)
+
+Wider evidence and diagnostics were added on top of the save clock assistance:
+
+- Level-3 `media: started Player ...` diagnostic in `player_start`
+  (`src/midp/nj_lib_media.c`), so audio probes can separate "the title created a
+  Player but never started it in the sampled window" from "the title never
+  created a Player". `tools/check_corpus_audio.py` now passes `--verbose 3` and
+  reports `started=N` with `sound` / `silent-started` / `silent-nostart`
+  classes. Re-running the MIDI sample at 600 frames: 3 titles delivered audio,
+  the 5 silent ones are all `silent-nostart` (two create the built-in MIDI
+  renderer but never start it; three never create a Player). A broader 12-title
+  600-frame sample: 9 delivered audio, 3 `silent-nostart`.
+- A known remaining save limitation was isolated and documented: a save
+  requested while the frontend is paused cannot be served when the current frame
+  is a nested native paint that waits on the virtual clock
+  (`火影忍者汉化版_10735`). gdb capture shows `k.paint(...)` sleeping with
+  `in_c_call=1`, `in_paint=1`, so `nj_vm_can_save()` refuses and the
+  between-frames serve point is never reached; throwing more virtual frames at
+  it only slows the nested pump. Recorded in `docs/LIBRETRO.md` and the
+  "Known remaining case" section of
+  `2026-11-15-libretro-save-while-paused.md`. The 50-title visual probe result is
+  49/50 on this title and 0 visual failures elsewhere.
+- r14 re-validation (commit `30e9c83`): mock frontend matrix 20/20; real
+  RetroArch 1.22.2 LoopDemo 120 and TextDemo 180 frames PASS; Windows Wine 4/4;
+  CI template simulation all three contracts PASS
+  (`/var/tmp/ci-sim-r14`, Linux 3,969,648 B, Windows 3,537,310 B, Android arm64
+  11,546,848 B); 20-title libretro state probe 20/20; full CTest 183/183 in
+  332.37 s.
+- All eight release targets rebuilt at `30e9c83` (`--out
+  /var/tmp/nj2me-submission-dist-r14`, `.info` byte-identical) and the tree
+  copied to `build/libretro-dist/` (previous tree backed up to
+  `/var/tmp/libretro-dist-20261115-r13-backup.tgz`).
