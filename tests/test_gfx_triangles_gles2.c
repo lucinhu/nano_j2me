@@ -844,6 +844,85 @@ static void lists(nj_gles2 *s)
     cases++;
 }
 
+/* Persistent session must equal the same packets submitted one at a time, and
+ * abort() must leave the CPU surface and depth untouched. */
+static void sessions(nj_gles2 *s)
+{
+    canvas one,all,saved;
+    nj_gfx_triangle_cmd tri2;
+    nj_gfx_triangles p0,p1,q1;
+    const nj_gfx_triangles *packets[2];
+    nj_gfx_triangles_list list;
+    nj_gfx_triangles_session sess;
+    nj_u4 submitted;
+    stage="session";
+    init(&one,NJ_PIXFMT_ARGB8888);
+    init(&all,NJ_PIXFMT_ARGB8888);
+    p0=all.packet;
+    p1=p0;
+    triangle(&tri2,0xff2a6b3cu,0.6);
+    p1.triangles=&tri2;
+    p1.x=4; p1.y=4; p1.width=13; p1.height=11;
+    packets[0]=&p0;
+    packets[1]=&p1;
+    list.version=NJ_GFX_TRIANGLES_LIST_VERSION;
+    list.surface=&all.surface;
+    list.depth=all.z+5;
+    list.depth_stride=ZS;
+    list.packets=packets;
+    list.count=2;
+    /* Reference: exactly the stateless single-packet path, one call each. */
+    submitted=0;
+    CHECK(nj_gles2_triangles(s,&one.packet,&submitted)==NJ_GFX_ACCEL_DONE);
+    q1=p1;
+    q1.surface=&one.surface;
+    q1.depth=one.z+5;
+    submitted=0;
+    CHECK(nj_gles2_triangles(s,&q1,&submitted)==NJ_GFX_ACCEL_DONE);
+    /* Session: begin seeds, the ordered list submits, end commits. */
+    sess.version=NJ_GFX_TRIANGLES_SESSION_VERSION;
+    sess.surface=&all.surface;
+    sess.depth=all.z+5;
+    sess.depth_stride=ZS;
+    sess.x=0; sess.y=0; sess.width=W; sess.height=H;
+    submitted=0;
+    CHECK(nj_gles2_triangles_begin(s,&sess)==NJ_GFX_ACCEL_DONE);
+    CHECK(nj_gles2_triangles_begin(s,&sess)==NJ_GFX_ACCEL_DECLINE);
+    CHECK(nj_gles2_triangles_list(s,&list,&submitted)==NJ_GFX_ACCEL_DONE);
+    CHECK(submitted==2);
+    submitted=0;
+    CHECK(nj_gles2_triangles_end(s,&submitted)==NJ_GFX_ACCEL_DONE);
+    CHECK(submitted==2);
+    CHECK(nj_gles2_triangles_end(s,&submitted)==NJ_GFX_ACCEL_DECLINE);
+    CHECK(memcmp(one.bytes,all.bytes,sizeof one.bytes)==0);
+    CHECK(memcmp(one.z,all.z,sizeof all.z)==0);
+    /* Invalid begin requests decline and never start a session. */
+    submitted=0;
+    CHECK(nj_gles2_triangles_begin(NULL,&sess)==NJ_GFX_ACCEL_DECLINE);
+    sess.version=NJ_GFX_TRIANGLES_SESSION_VERSION+1u;
+    CHECK(nj_gles2_triangles_begin(s,&sess)==NJ_GFX_ACCEL_DECLINE);
+    sess.version=NJ_GFX_TRIANGLES_SESSION_VERSION;
+    sess.x=W; CHECK(nj_gles2_triangles_begin(s,&sess)==NJ_GFX_ACCEL_DECLINE);
+    sess.x=0; sess.width=W+1;
+    CHECK(nj_gles2_triangles_begin(s,&sess)==NJ_GFX_ACCEL_DECLINE);
+    sess.width=W;
+    /* A packet outside the session rect declines; abort() keeps the CPU state. */
+    saved=all;
+    CHECK(nj_gles2_triangles_begin(s,&sess)==NJ_GFX_ACCEL_DONE);
+    p1.x=0; p1.y=0; p1.width=W; p1.height=H;
+    submitted=0;
+    CHECK(nj_gles2_triangles_list(s,&list,&submitted)==NJ_GFX_ACCEL_DONE);
+    nj_gles2_triangles_abort(s);
+    CHECK(memcmp(saved.bytes,all.bytes,sizeof all.bytes)==0);
+    CHECK(memcmp(saved.z,all.z,sizeof all.z)==0);
+    /* After abort the stateless path still works and matches the reference. */
+    p1.x=4; p1.y=4; p1.width=13; p1.height=11;
+    submitted=0;
+    CHECK(nj_gles2_triangles(s,&all.packet,&submitted)==NJ_GFX_ACCEL_DONE);
+    CHECK(memcmp(one.bytes,all.bytes,sizeof one.bytes)==0);
+    cases++;
+}
+
 int main(void)
 {
     context e;
@@ -858,7 +937,8 @@ int main(void)
     }
     bind_context(&e,0); basic_and_geometry(s[0]); textures(s[0]); compositing(s[0]);
     packed_compositing(s[0]); depths(s[0]); transparency(s[0]); exact_mix(s[0]); invalid(s[0]);
-    faults(&e,g,s[0]); warm_uploads(s[0]); lists(s[0]); lifecycle(&e,g,s);
+    faults(&e,g,s[0]); warm_uploads(s[0]); lists(s[0]); sessions(s[0]);
+    lifecycle(&e,g,s);
     for (i=0;i<2;++i) {
         CHECK(g[i].calls>0);
         if (s[i]) { bind_context(&e,i); CHECK(nj_gles2_destroy(s[i])); gl_ok(); }

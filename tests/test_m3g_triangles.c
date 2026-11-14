@@ -16,6 +16,7 @@ typedef struct batch_probe {
     nj_u4 gc_count, primitive_count;
     unsigned calls;
     unsigned list_calls, list_max_packets;
+    unsigned session_begins, session_ends, session_aborts;
     nj_u4 list_packets, list_triangles;
     int accept, list_accept, journal_mode, expected_fog, expected_mips;
     int texture_first, width[4], height[4], roi[4];
@@ -145,6 +146,27 @@ static int journal_list(void *ud, const nj_gfx_triangles_list *list,
     if (!b->list_accept) return NJ_GFX_ACCEL_DECLINE;
     *submitted = total;
     return NJ_GFX_ACCEL_DONE;
+}
+/* Session backend that always declines at begin: the core must abort and
+ * replay every queued packet in software, matching the software reference. */
+static int session_begin_decline(void *ud, const nj_gfx_triangles_session *s)
+{
+    batch_probe *b = ud;
+    CHECK(!worker_depth && s && s->version == NJ_GFX_TRIANGLES_SESSION_VERSION);
+    ++b->session_begins;
+    return NJ_GFX_ACCEL_DECLINE;
+}
+static int session_end_never(void *ud, nj_u4 *submitted)
+{
+    batch_probe *b = ud;
+    (void)submitted;
+    ++b->session_ends;
+    return NJ_GFX_ACCEL_DECLINE;
+}
+static void session_abort(void *ud)
+{
+    batch_probe *b = ud;
+    ++b->session_aborts;
 }
 static void attach(target *t, batch_probe *b)
 {
@@ -517,6 +539,22 @@ static void journal_cases(int format)
     CHECK(a.vm->tris == before + probe.list_triangles);
     CHECK(a.vm->m3g_renders == renders + 2);
     unchanged(&probe); /* DONE backend wrote nothing: no software replay either */
+    /* A session backend that declines at begin must fall back to the stateless
+     * path (and software), never leaving a half-open session behind. */
+    a.port.gfx_triangles_begin = session_begin_decline;
+    a.port.gfx_triangles_end = session_end_never;
+    a.port.gfx_triangles_abort = session_abort;
+    a.port.gfx_triangles_session_ud = &probe;
+    probe.list_accept = 0;
+    probe.session_begins = probe.session_ends = probe.session_aborts = 0;
+    a.vm->tris = b.vm->tris = 0;
+    a.vm->m3g_renders = b.vm->m3g_renders = 0;
+    clear(&a); clear(&b); snapshot(&probe);
+    render(&a); render(&a);
+    nj_m3g_flush(a.vm);
+    render(&b); render(&b);
+    same(&a, &b);
+    CHECK(probe.session_begins == 0); /* flush() uses the stateless fallback */
     guards(&a);
     detach(&probe); destroy(&a); destroy(&b);
 }

@@ -14874,6 +14874,38 @@ static int jr_triangle_roi(nj_gfx_triangles *p)
  */
 #define M3G_JOURNAL_TEXTURE_MAX ((nj_size)16u * 1024u * 1024u)
 
+/* Dev-only profiling for the optional GPU journal (never in release builds). */
+#ifndef NJ_M3G_PROFILE
+#define NJ_M3G_PROFILE 0
+#endif
+#if NJ_M3G_PROFILE
+struct m3g_timeval { long tv_sec; long tv_usec; };
+extern int gettimeofday(struct m3g_timeval *tv, void *tz);
+static double m3g_now(void)
+{
+    struct m3g_timeval tv;
+    gettimeofday(&tv, 0);
+    return (double)tv.tv_sec * 1000000.0 + (double)tv.tv_usec;
+}
+static struct m3g_prof {
+    unsigned long long walks, appends, pumps, commits, texcount;
+    nj_size texbytes;
+    double walk, append, pump, commit;
+} m3g_prof;
+static void m3g_prof_print(const char *when)
+{
+    fprintf(stderr,
+            "M3GPROF %s walks=%llu walk=%.1fms appends=%llu append=%.1fms "
+            "pumps=%llu pump=%.1fms commits=%llu commit=%.1fms "
+            "tex=%llu/%.1fKB\n",
+            when, m3g_prof.walks, m3g_prof.walk/1000.0, m3g_prof.appends,
+            m3g_prof.append/1000.0, m3g_prof.pumps, m3g_prof.pump/1000.0,
+            m3g_prof.commits, m3g_prof.commit/1000.0,
+            m3g_prof.texcount, (double)m3g_prof.texbytes/1024.0);
+    fflush(stderr);
+}
+#endif
+
 typedef struct m3g_journal_tex {
     const nj_u1 *source;   /* texture pointer when the call was collected */
     nj_size offset;        /* into the journal's pool */
@@ -14904,6 +14936,11 @@ typedef struct m3g_journal {
     int session;
     nj_u4 submitted;
     int sx, sy, sw, sh;
+    /* Scratch descriptor arrays reused across pump/commit so a barrier does
+     * not allocate two host blocks per transaction. */
+    nj_gfx_triangles *descriptors;
+    const nj_gfx_triangles **packets;
+    nj_u4 scratch;
 } m3g_journal;
 
 static void m3g_journal_destroy(nj_vm *vm)
@@ -14922,6 +14959,8 @@ static void m3g_journal_destroy(nj_vm *vm)
     if (j->entries) nj_host_free(vm, j->entries);
     if (j->textures) nj_host_free(vm, j->textures);
     if (j->pool) nj_host_free(vm, j->pool);
+    if (j->descriptors) nj_host_free(vm, j->descriptors);
+    if (j->packets) nj_host_free(vm, j->packets);
     nj_host_free(vm, j);
     vm->m3g_journal = NULL;
 }
@@ -15043,7 +15082,334 @@ static int m3g_journal_reserve(nj_vm *vm, m3g_journal *j, nj_u4 entries,
 }
 
 static void m3g_journal_flush(nj_vm *vm);
+static void m3g_journal_commit(nj_vm *vm);
 static void m3g_journal_pump(nj_vm *vm);
+static int m3g_journal_append(m3g_jr *r, const nj_gfx_triangles *p);
+static void m3g_journal_replay_all(nj_vm *vm);
+static int m3g_journal_end(nj_vm *vm);
+static void m3g_journal_abort(nj_vm *vm);
+
+/* Drop the first n entries; their effect is already committed. */
+static void m3g_journal_drop(nj_vm *vm, m3g_journal *j, nj_u4 n)
+{
+    nj_u4 i;
+    if (!n || n > j->count) return;
+    for (i = 0; i < n; ++i) {
+        if (j->entries[i].triangles) nj_host_free(vm, j->entries[i].triangles);
+        j->total -= j->entries[i].count;
+    }
+    if (n < j->count) {
+        memmove(j->entries, j->entries + n,
+                (nj_size)(j->count - n) * sizeof(*j->entries));
+    }
+    j->count -= n;
+    j->submitted = j->submitted > n ? j->submitted - n : 0u;
+}
+
+static void m3g_journal_abort(nj_vm *vm)
+{
+    m3g_journal *j = (m3g_journal *)vm->m3g_journal;
+    if (!j) return;
+    if (j->session && vm->port && vm->port->gfx_triangles_abort) {
+        vm->port->gfx_triangles_abort(vm->port->gfx_triangles_session_ud);
+        j->session = 0;
+    }
+}
+
+/* Replay every collected packet through the software rasteriser.  Only valid
+ * while the CPU buffers still hold the pre-session state, i.e. after a port
+ * that never committed anything (begin/end decline or abort). */
+static void m3g_journal_replay_all(nj_vm *vm)
+{
+    m3g_journal *j = (m3g_journal *)vm->m3g_journal;
+    nj_u4 i;
+    if (!j) return;
+    for (i = 0; i < j->count; ++i) {
+        m3g_journal_entry *e = &j->entries[i];
+        nj_gfx_triangles d;
+        memset(&d, 0, sizeof(d));
+        d.version = NJ_GFX_TRIANGLES_VERSION;
+        d.surface = j->surface;
+        d.depth = j->depth;
+        d.depth_stride = j->depth_stride;
+        d.x = e->x; d.y = e->y;
+        d.width = e->width; d.height = e->height;
+        d.triangles = e->triangles;
+        d.count = e->count;
+        vm->tris += m3g_replay_packet(vm, &d);
+    }
+    m3g_journal_destroy(vm);
+}
+
+/* Close the open session: read back and commit the queued packets, then drop
+ * them from the journal.  Returns 1 on success; on failure the CPU buffers are
+ * unchanged and the caller must abort and replay. */
+static int m3g_journal_end(nj_vm *vm)
+{
+    m3g_journal *j = (m3g_journal *)vm->m3g_journal;
+    nj_u4 done = 0u;
+    int rc;
+    if (!j || !j->session) return 1;
+    if (!vm->port || !vm->port->gfx_triangles_end) {
+        m3g_journal_abort(vm);
+        return 0;
+    }
+    rc = vm->port->gfx_triangles_end(vm->port->gfx_triangles_session_ud, &done);
+    j->session = 0;
+    if (rc != NJ_GFX_ACCEL_DONE) return 0;
+    vm->tris += done;
+    m3g_journal_drop(vm, j, j->submitted);
+    return 1;
+}
+
+/* Grow the descriptor scratch arrays to hold `need` packets. */
+static int m3g_journal_scratch(nj_vm *vm, m3g_journal *j, nj_u4 need)
+{
+    nj_gfx_triangles *descriptors;
+    const nj_gfx_triangles **packets;
+    if (j->scratch >= need && j->descriptors && j->packets) return 1;
+    descriptors = (nj_gfx_triangles *)nj_host_alloc(
+        vm, (nj_size)need * sizeof(*descriptors));
+    packets = (const nj_gfx_triangles **)nj_host_alloc(
+        vm, (nj_size)need * sizeof(*packets));
+    if (!descriptors || !packets) {
+        if (descriptors) nj_host_free(vm, descriptors);
+        if (packets) nj_host_free(vm, packets);
+        return 0;
+    }
+    if (j->descriptors) nj_host_free(vm, j->descriptors);
+    if (j->packets) nj_host_free(vm, j->packets);
+    j->descriptors = descriptors;
+    j->packets = packets;
+    j->scratch = need;
+    return 1;
+}
+
+/* Submit the pending entries into the open (or a new) session.  Entries are
+ * retained until end() so a later decline can replay them in software. */
+static void m3g_journal_pump(nj_vm *vm)
+{
+    m3g_journal *j = (m3g_journal *)vm->m3g_journal;
+    nj_u4 i;
+    if (!j || !j->count || j->submitted >= j->count) return;
+    if (!vm->port || !vm->port->gfx_triangles_begin ||
+        !vm->port->gfx_triangles_end) {
+        m3g_journal_commit(vm);
+        return;
+    }
+    while (j->submitted < j->count) {
+        if (j->session) {
+            int fits = 1;
+            for (i = j->submitted; i < j->count; ++i) {
+                m3g_journal_entry *e = &j->entries[i];
+                if (e->x < j->sx || e->y < j->sy ||
+                    e->x + e->width > j->sx + j->sw ||
+                    e->y + e->height > j->sy + j->sh) {
+                    fits = 0;
+                    break;
+                }
+            }
+            if (fits) break;
+            if (!m3g_journal_end(vm)) {
+                m3g_journal_abort(vm);
+                m3g_journal_replay_all(vm);
+                return;
+            }
+            j = (m3g_journal *)vm->m3g_journal;
+            if (!j) return;
+            continue;
+        }
+        {
+            nj_gfx_triangles_session desc;
+            int x0, y0, x1, y1;
+            x0 = j->entries[j->submitted].x;
+            y0 = j->entries[j->submitted].y;
+            x1 = x0 + j->entries[j->submitted].width;
+            y1 = y0 + j->entries[j->submitted].height;
+            for (i = j->submitted + 1u; i < j->count; ++i) {
+                m3g_journal_entry *e = &j->entries[i];
+                if (e->x < x0) x0 = e->x;
+                if (e->y < y0) y0 = e->y;
+                if (e->x + e->width > x1) x1 = e->x + e->width;
+                if (e->y + e->height > y1) y1 = e->y + e->height;
+            }
+            memset(&desc, 0, sizeof(desc));
+            desc.version = NJ_GFX_TRIANGLES_SESSION_VERSION;
+            desc.surface = j->surface;
+            desc.depth = j->depth;
+            desc.depth_stride = j->depth_stride;
+            desc.x = x0; desc.y = y0;
+            desc.width = x1 - x0; desc.height = y1 - y0;
+            if (vm->port->gfx_triangles_begin(
+                    vm->port->gfx_triangles_session_ud, &desc) !=
+                NJ_GFX_ACCEL_DONE) {
+                /* No persistent session: use the stateless list transaction. */
+                m3g_journal_commit(vm);
+                return;
+            }
+            j->session = 1;
+            j->sx = x0; j->sy = y0; j->sw = desc.width; j->sh = desc.height;
+        }
+    }
+    {
+        nj_gfx_triangles *descriptors;
+        const nj_gfx_triangles **packets;
+        nj_u4 pending = j->count - j->submitted;
+        nj_u4 submitted = 0u;
+        int done = 0;
+        if (m3g_journal_scratch(vm, j, pending)) {
+            descriptors = j->descriptors;
+            packets = j->packets;
+            nj_gfx_triangles_list list;
+            for (i = 0; i < pending; ++i) {
+                m3g_journal_entry *e = &j->entries[j->submitted + i];
+                nj_gfx_triangles *d = &descriptors[i];
+                memset(d, 0, sizeof(*d));
+                d->version = NJ_GFX_TRIANGLES_VERSION;
+                d->surface = j->surface;
+                d->depth = j->depth;
+                d->depth_stride = j->depth_stride;
+                d->x = e->x; d->y = e->y;
+                d->width = e->width; d->height = e->height;
+                d->triangles = e->triangles;
+                d->count = e->count;
+                packets[i] = d;
+            }
+            memset(&list, 0, sizeof(list));
+            list.version = NJ_GFX_TRIANGLES_LIST_VERSION;
+            list.surface = j->surface;
+            list.depth = j->depth;
+            list.depth_stride = j->depth_stride;
+            list.packets = packets;
+            list.count = pending;
+            if (nj_gfx_triangles_list_validate(&list, &submitted)) {
+                int rc = vm->port->gfx_triangles_list(
+                    vm->port->gfx_triangles_list_ud, &list, &submitted);
+                done = rc == NJ_GFX_ACCEL_DONE;
+            }
+        }
+        if (!done) {
+            m3g_journal_abort(vm);
+            m3g_journal_replay_all(vm);
+            return;
+        }
+        j->submitted = j->count;
+    }
+}
+
+/* Commit the collected packets in order and release the journal.  The caller
+ * must already have made the target unobservable (no packet may run after a
+ * Java read of the same pixels). */
+static void m3g_journal_commit(nj_vm *vm)
+{
+    m3g_journal *j = (m3g_journal *)vm->m3g_journal;
+    nj_gfx_triangles *descriptors = NULL;
+    const nj_gfx_triangles **packets = NULL;
+    nj_u4 i, submitted = 0u;
+    int done = 0;
+    if (!j) return;
+    if (j->session) {
+        m3g_journal_pump(vm);
+        j = (m3g_journal *)vm->m3g_journal;
+        if (!j) return;
+        if (!m3g_journal_end(vm)) {
+            m3g_journal_abort(vm);
+            m3g_journal_replay_all(vm);
+            return;
+        }
+        j = (m3g_journal *)vm->m3g_journal;
+        if (!j) return;
+        if (!j->count) {
+            m3g_journal_destroy(vm);
+            return;
+        }
+    }
+    if (j->count && vm->port && vm->port->gfx_triangles_list) {
+        if (m3g_journal_scratch(vm, j, j->count)) {
+            descriptors = j->descriptors;
+            packets = j->packets;
+            nj_gfx_triangles_list list;
+            for (i = 0; i < j->count; ++i) {
+                m3g_journal_entry *e = &j->entries[i];
+                nj_gfx_triangles *d = &descriptors[i];
+                memset(d, 0, sizeof(*d));
+                d->version = NJ_GFX_TRIANGLES_VERSION;
+                d->surface = j->surface;
+                d->depth = j->depth;
+                d->depth_stride = j->depth_stride;
+                d->x = e->x; d->y = e->y;
+                d->width = e->width; d->height = e->height;
+                d->triangles = e->triangles;
+                d->count = e->count;
+                packets[i] = d;
+            }
+            memset(&list, 0, sizeof(list));
+            list.version = NJ_GFX_TRIANGLES_LIST_VERSION;
+            list.surface = j->surface;
+            list.depth = j->depth;
+            list.depth_stride = j->depth_stride;
+            list.packets = packets;
+            list.count = j->count;
+            if (nj_gfx_triangles_list_validate(&list, &submitted)) {
+                int rc = vm->port->gfx_triangles_list(
+                    vm->port->gfx_triangles_list_ud, &list, &submitted);
+                done = rc == NJ_GFX_ACCEL_DONE;
+            }
+        }
+    }
+    if (done) {
+        vm->tris += submitted;
+    } else if (j->count && vm->port && vm->port->gfx_triangles) {
+        /* A port without a list hook (or a failed list transaction) keeps the
+         * original per-packet contract; a declined packet falls back to the
+         * software rasteriser for exactly the packets that were collected. */
+        for (i = 0; i < j->count; ++i) {
+            m3g_journal_entry *e = &j->entries[i];
+            nj_gfx_triangles d;
+            nj_u4 got = 0u;
+            memset(&d, 0, sizeof(d));
+            d.version = NJ_GFX_TRIANGLES_VERSION;
+            d.surface = j->surface;
+            d.depth = j->depth;
+            d.depth_stride = j->depth_stride;
+            d.x = e->x; d.y = e->y;
+            d.width = e->width; d.height = e->height;
+            d.triangles = e->triangles;
+            d.count = e->count;
+            if (nj_gfx_triangles_validate(&d, &got)) {
+                int rc = vm->port->gfx_triangles(vm->port->gfx_triangles_ud,
+                                                 &d, &got);
+                if (rc == NJ_GFX_ACCEL_DONE) {
+                    vm->tris += got <= e->count ? got : e->count;
+                    continue;
+                }
+            }
+            vm->tris += m3g_replay_packet(vm, &d);
+        }
+    } else {
+        for (i = 0; i < j->count; ++i) {
+            nj_gfx_triangles d;
+            m3g_journal_entry *e = &j->entries[i];
+            memset(&d, 0, sizeof(d));
+            d.version = NJ_GFX_TRIANGLES_VERSION;
+            d.surface = j->surface;
+            d.depth = j->depth;
+            d.depth_stride = j->depth_stride;
+            d.x = e->x; d.y = e->y;
+            d.width = e->width; d.height = e->height;
+            d.triangles = e->triangles;
+            d.count = e->count;
+            vm->tris += m3g_replay_packet(vm, &d);
+        }
+    }
+    m3g_journal_destroy(vm);
+}
+
+static void m3g_journal_flush(nj_vm *vm)
+{
+    if (!vm || !vm->m3g_journal) return;
+    m3g_journal_commit(vm);
+}
 static int m3g_journal_append(m3g_jr *r, const nj_gfx_triangles *p)
 {
     nj_vm *vm = r->vm;
@@ -15177,7 +15543,13 @@ static int jr_draw_accel(m3g_jr *r)
     collector.drawn = 0u;
     /* surf may point at r->scratch. It stays alive throughout this synchronous
      * call, and collection only reads it. All mutable mip state is in the copy. */
+#if NJ_M3G_PROFILE
+    double tw = m3g_now();
+#endif
     jr_draw_walk(&collector);
+#if NJ_M3G_PROFILE
+    ++m3g_prof.walks; m3g_prof.walk += m3g_now() - tw;
+#endif
     memset(&packet, 0, sizeof(packet));
     packet.version = NJ_GFX_TRIANGLES_VERSION;
     packet.surface = r->sw.surf;
@@ -15195,6 +15567,9 @@ static int jr_draw_accel(m3g_jr *r)
             if (roi == 0) {
                 result = NJ_GFX_ACCEL_DONE; /* Entire batch outside the clip. */
             } else if (roi > 0 && nj_gfx_triangles_validate(&packet, &submitted)) {
+#if NJ_M3G_PROFILE
+                double ta = m3g_now();
+#endif
                 if (journaled && m3g_journal_append(r, &packet)) {
                     c.triangles = NULL;   /* the journal owns the copy */
                     deferred = 1;
@@ -15205,6 +15580,10 @@ static int jr_draw_accel(m3g_jr *r)
                     result = r->vm->port->gfx_triangles(
                         r->vm->port->gfx_triangles_ud, &packet, &submitted);
                 }
+#if NJ_M3G_PROFILE
+                ++m3g_prof.appends; m3g_prof.append += m3g_now() - ta;
+                if ((m3g_prof.appends % 600u) == 0u) m3g_prof_print("600");
+#endif
             }
         }
     }
@@ -16757,7 +17136,13 @@ nj_status nj_m3g_late_init(nj_vm *vm)
 void nj_m3g_flush(nj_vm *vm)
 {
 #if NJ_ENABLE_M3G && NJ_ENABLE_GFX_ACCEL
+#if NJ_M3G_PROFILE
+    double t0 = m3g_now();
     m3g_journal_flush(vm);
+    ++m3g_prof.commits; m3g_prof.commit += m3g_now() - t0;
+#else
+    m3g_journal_flush(vm);
+#endif
 #else
     (void)vm;
 #endif
@@ -16769,7 +17154,13 @@ void nj_m3g_flush(nj_vm *vm)
 void nj_m3g_pump(nj_vm *vm)
 {
 #if NJ_ENABLE_M3G && NJ_ENABLE_GFX_ACCEL
+#if NJ_M3G_PROFILE
+    double t0 = m3g_now();
     m3g_journal_pump(vm);
+    ++m3g_prof.pumps; m3g_prof.pump += m3g_now() - t0;
+#else
+    m3g_journal_pump(vm);
+#endif
 #else
     (void)vm;
 #endif

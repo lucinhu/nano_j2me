@@ -38,6 +38,15 @@
   软件 8.67 s、单 packet GPU 13.89 s、journal GPU 9.85 s（1.57× 于单
   packet，仍比软件慢约 14%）。libretro 因 2 ms 硬件门会拒绝绝大多数提交，
   明确不接入 list 钩子（详见 `docs/GLES2_3D.md`）。
+- 持久 GPU 会话（2026-11-14 架构改动）：新增 begin/end/abort 会话契约，
+  屏障之间 FBO/颜色/深度 key 常驻 GPU，只在 CPU 观察点（2D 绘制、present、
+  `getRGB`/`getPixels`、clear、目标切换、软件回退）一次回读并只提交被提交
+  packet 的矩形。SDL2/Android 已接线，libretro 保持单 packet。会话语义与
+  无状态路径逐像素一致（`test_gfx_triangles_gles2` 新增 session 等价测试）。
+  实测 MC 600 帧：会话 GPU 7414 ms vs 软件 5824 ms（启动 663/692 ms），
+  即 ≈11.25 vs ≈8.55 ms/帧——**会话对 MC 仍无净收益**，因为 MC 每帧 3D/2D
+  交替约 9 次，每次 2D 绘制都强制结束会话并回读（commit 合计 ≈1.9 ms/帧）。
+  纯软件路径不执行任何会话代码，新增钩子为空指针检查（0.88 ns/次）。
 
 ## 音视频与图像格式
 
@@ -116,8 +125,10 @@ RGB565 展开成 RGBA8888 交给 `<canvas>`。虚拟时钟由宿主驱动：加�
 4. AAC 只在 Android 5+ 平台可用；其他平台遇到 AAC 会按“不支持的格式”拒绝。
 5. B 帧（重排）视频容器被拒绝；Simple Profile 解码器不支持。
 6. 视频无音轨且端口 uncapped 时，仍按 pump 步进（片头可能快于实时）。
-7. journal 批处理在 SDL2 上仍慢于软件（约 14%）；libretro 的硬件门模型
-   会拒绝 VM 线程的提交，因此该平台不启用批处理；Android 模拟器因缺
+7. journal 批处理 + 持久会话在 SDL2 上仍慢于软件（MC 约 2.7 ms/帧，
+   ≈31%）；原因是每帧 3D/2D 交替会强制结束会话并同步回读，只有把 2D 也留在
+   GPU 或直接从 GPU 纹理 present 才可能扭转。libretro 的硬件门模型会拒绝
+   VM 线程的提交，因此该平台不启用批处理；Android 模拟器因缺
    `EXT_frag_depth` 只能走 DECLINE→软件重放。
 8. Windows 只在 Wine 下验证。
 9. 网页版没有网络、套接字、蓝牙、传感器和 JIT 钩子；iOS Safari、WebKitGTK、
@@ -148,25 +159,32 @@ tools/build_web.sh
 tools/check_web.sh --node --corpus             # 另有 --browser（Playwright Firefox）
 ```
 
-本轮产物（工作树未提交，`git status` 仍保留全部既有脏改动）：
+本轮产物（源码已提交，下列哈希对应当前提交）：
 
 | 产物 | 大小 | SHA256 |
 | --- | --- | --- |
-| `.local-tools/debug-runs/gfx-full-20261113/android/final-build/nj2me.apk` | 1784034 | `3c536b91919529e40f5292e958392b5d612006a27061c13c22950f71cabf634d` |
-| `.local-tools/debug-runs/gfx-full-20261113/windows/nj2me.exe` | 4025246 | `4c2440a43d0aec5b670b3cde26b53e471645c05637618a28ffac968511698e7c` |
-| `.local-tools/debug-runs/gfx-full-20261113/linux/libretro/nano_j2me_libretro.so` | 4061992 | `c9fccfdd3b1863ec7750f8d0094827561b7878ca7a3bad13e6b3472d55a2db3f` |
-| `.local-tools/debug-runs/gfx-full-20261113/linux/nj2me` | — | `6f83ecf62b30be9399d4a9098da78498489c78cfb52adc8313f6d26c806ade99` |
+| `.local-tools/debug-runs/gfx-full-20261113/android/final-build/nj2me.apk` | 1792226 | `7291fceb84fb372e3dd297dbe6b1661dcce8a94e2fb75d213d511fab68643152` |
+| `.local-tools/debug-runs/gfx-full-20261113/windows/nj2me.exe` | 4039535 | `e5b9f30cb383ad88f8c15a93d6502b37d83708c88897c73bd1e9bdac8b2d8ce2` |
+| `.local-tools/debug-runs/gfx-full-20261113/linux/libretro/nano_j2me_libretro.so` | 4074864 | `b3c10489601b274ba8da40408546f72dda0ee7c7c335278bc8df4879abfc6449` |
+| `.local-tools/debug-runs/gfx-full-20261113/linux/nj2me` | 4010888 | `f375c84a2201b7714a455354423e1935acbe0ce6bbaffa53b7ab0b41fa1ca6a6` |
 | `.local-tools/debug-runs/gfx-full-20261113/android-legacy/nj2me-legacy.apk` | 694454 | `4fcae0408bb83b34a9a4e097e8c61124881973900d48c559520ca48ad396446d` |
 | `build/web/js/nj2me.js` | 93864 | `5f0919d8cc7286832e3e777225b3cd93969bd944b388606084aee018488d6be9` |
-| `build/web/js/nj2me.wasm` | 2143771 | `5ed9f715d889945edd529f45647c27206cd0479f327fd574c5d2f1ce1fad050b` |
+| `build/web/js/nj2me.wasm` | 2143992 | `337335f383854ad4808334c29a5bce1e79f9443a3a435830c4f95d430c65e2e7` |
 
-以上产物均由同一份当前源码构建（含 2026-11-14 的 journal 批处理改动；
-Windows 目标在最后一次修改后增量构建，`ninja` 报告无待编译对象）。源码树
-未提交，哈希只对应本轮工作树。
+以上产物均由同一份当前源码构建（含 2026-11-14 的 journal 批处理与持久
+GPU 会话改动；Windows/Android/libretro 在最后一次修改后重新构建）。legacy
+APK 未重建：旧版构建 `NJ_ENABLE_GFX_ACCEL=0`，会话代码不参与编译，产物
+仍对应其软件路径。源码已提交；Windows/Android/libretro 产物由同一份源码在提交前构建，
+Web 产物也在提交前重新构建并重新跑过 `tools/check_web.sh --all`。
 
 ## 证据
 
-- Linux 构建与全量测试：`.local-tools/debug-runs/gfx-full-20261113/linux/`（195 项 ctest，本轮 195/195 通过）
+- Linux 构建与全量测试：`.local-tools/debug-runs/gfx-full-20261113/linux/`（作者构建含 fixtures 与 GLES2 加速注册项，197 项 197/197 通过；默认构建 190 项，190/190 通过）
+- 持久会话后端测试（本机 GLES2 加速构建）：9 项全部通过，含 `test_gfx_triangles_gles2`（会话输出与无状态提交逐字节一致、重复 begin/end 被拒、abort 后 CPU 缓冲不变）、`test_m3g_triangles`（begin 拒绝时回退无状态路径并软件重放）、`test_sdl2_gles2`、`test_gfx_gles2`、`test_gfx_raster_gles2` 等
+- 持久会话 A/B 与截图：`.local-tools/debug-runs/gfx-full-20261113/sdl-mc-journal/`（`fin-gpu*.log`、`fin-sw*.log`、`fin-session.png`）
+- Android 最终 APK 安装/启动冒烟（API 36 模拟器）：`.local-tools/debug-runs/gfx-full-20261113/android/final-build/shot-api36-launch.png`。
+  本轮未在 Android 上跑游戏：原 API 21 AVD 已被删除，API 36 镜像为 production 构建无法 root，
+  不能推送测试 JAR；持久会话的运行时正确性由 SDL2 真实 MC 运行与后端会话等价测试覆盖。
 - journal 批处理 A/B：`.local-tools/debug-runs/gfx-full-20261113/sdl-mc-journal/`（`replay.sh`、`shot-off.png`、`final-on.png`）
 - Android journal 回放（模拟器无 `EXT_frag_depth`）：`.local-tools/debug-runs/gfx-full-20261113/android/final-build/shot-mc-journal4.png`、`shot-maze4.png`
 - Android 媒体：`.local-tools/debug-runs/gfx-full-20261113/android-media-demo/`（截图、视频快照、图像解码日志）

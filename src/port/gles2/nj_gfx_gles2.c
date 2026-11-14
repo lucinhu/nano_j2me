@@ -42,6 +42,12 @@ struct nj_gles2 {
     nj_s4 *tri_session_depth;
     int tri_session_stride;
     int tri_session_x, tri_session_y, tri_session_w, tri_session_h;
+    int tri_session_cx0, tri_session_cy0, tri_session_cx1, tri_session_cy1;
+    int tri_session_have;
+    /* One rectangle per submitted packet, in submission order: only these
+     * pixels may be committed, exactly like the stateless per-packet path. */
+    int tri_session_rects[NJ_GFX_TRIANGLES_LIST_MAX_PACKETS][4];
+    int tri_session_nrects;
     int tri_session_write;
     GLuint tri_session_fbo;
     nj_u4 tri_session_triangles;

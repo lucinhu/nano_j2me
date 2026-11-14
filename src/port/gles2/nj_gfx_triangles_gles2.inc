@@ -456,6 +456,16 @@ static void tri_prof_print(const char *when)
 }
 #endif /* NJ_GLES2_PROFILE */
 
+#if NJ_GLES2_PROFILE
+/* Session phases feed the same counters as the stateless transaction. */
+static double tri_sess_tp;
+#define SESS_START() do{tri_sess_tp=tri_now();}while(0)
+#define SESS_MARK(f) do{double _sn=tri_now();tri_prof.f+=_sn-tri_sess_tp;tri_sess_tp=_sn;}while(0)
+#else
+#define SESS_START() do{}while(0)
+#define SESS_MARK(f) do{}while(0)
+#endif
+
 /* One transaction over an ordered list of packets. The union of the packet
  * ROIs is imported once, seeded once, drawn in packet order, read back once and
  * committed once. No CPU write happens before the commit point. */
@@ -729,6 +739,23 @@ static int triangle_session_submit(nj_gles2 *s,
            r->depth_stride!=s->tri_session_stride)return decline(s);
         if(r->x<sx||r->y<sy||r->x+r->width>sx+sw||r->y+r->height>sy+sh)
             return decline(s);
+        if(s->tri_session_nrects>=(int)NJ_GFX_TRIANGLES_LIST_MAX_PACKETS)
+            return decline(s);
+        s->tri_session_rects[s->tri_session_nrects][0]=r->x;
+        s->tri_session_rects[s->tri_session_nrects][1]=r->y;
+        s->tri_session_rects[s->tri_session_nrects][2]=r->width;
+        s->tri_session_rects[s->tri_session_nrects][3]=r->height;
+        ++s->tri_session_nrects;
+        if(!s->tri_session_have) {
+            s->tri_session_have=1;
+            s->tri_session_cx0=r->x;s->tri_session_cx1=r->x+r->width;
+            s->tri_session_cy0=r->y;s->tri_session_cy1=r->y+r->height;
+        } else {
+            if(r->x<s->tri_session_cx0)s->tri_session_cx0=r->x;
+            if(r->y<s->tri_session_cy0)s->tri_session_cy0=r->y;
+            if(r->x+r->width>s->tri_session_cx1)s->tri_session_cx1=r->x+r->width;
+            if(r->y+r->height>s->tri_session_cy1)s->tri_session_cy1=r->y+r->height;
+        }
         if(total>NJ_GFX_TRIANGLES_LIST_MAX_TOTAL-r->count)return decline(s);
         total+=r->count;
         for(i=0;i<r->count;++i)any_write|=r->triangles[i].depth_write;
@@ -737,6 +764,7 @@ static int triangle_session_submit(nj_gles2 *s,
         *submitted=0u;
         return NJ_GFX_ACCEL_DONE;
     }
+    SESS_START();
     if(base>NJ_GFX_TRIANGLES_LIST_MAX_TOTAL-total)return decline(s);
     while(table_size<total*2u)table_size*=2u;
     views=(triangle_view *)calloc(total,sizeof *views);
@@ -754,6 +782,7 @@ static int triangle_session_submit(nj_gles2 *s,
     if(!triangle_views(s,packets,npackets,offsets,total,views,indices,table,
                        table_size,&nviews))goto finish;
     (void)nviews;
+    SESS_MARK(views);
     for(p=0;p<npackets;++p) {
         const nj_gfx_triangles *r=packets[p];
         for(i=0;i<r->count;++i)for(j=0;j<3;++j) {
@@ -772,6 +801,7 @@ static int triangle_session_submit(nj_gles2 *s,
     }
     s->gl.UseProgram(t->draw_program);s->gl.Uniform1i(t->image,0);
     triangle_arrays(s,1);arrays=1;
+    SESS_MARK(vbuf);
     for(pass=0;pass<(any_write?2:1);++pass) {
         if(pass)s->gl.BindFramebuffer(GL_FRAMEBUFFER,s->tri_session_fbo);
         else s->gl.BindFramebuffer(GL_FRAMEBUFFER,s->framebuffer);
@@ -793,6 +823,7 @@ static int triangle_session_submit(nj_gles2 *s,
         }
         if(!clean_errors(s)||!current(s))goto finish;
     }
+    SESS_MARK(draw);
     s->gl.BindFramebuffer(GL_FRAMEBUFFER,s->framebuffer);
     triangle_arrays(s,0);arrays=0;
     if(!clean_errors(s)||!current(s))goto finish;
@@ -822,6 +853,7 @@ int nj_gles2_triangles_begin(void *ud,const nj_gfx_triangles_session *session)
        session->y+session->height>session->surface->height)
         return decline(s);
     if(!current(s)||s->tri_session)return decline(s);
+    SESS_START();
     if(!clean_errors(s)||!triangles_init(s))return decline(s);
     t=s->geometry;
     bytes=(size_t)session->width*(size_t)session->height*4u;
@@ -829,7 +861,9 @@ int nj_gles2_triangles_begin(void *ud,const nj_gfx_triangles_session *session)
        !reserve(&s->readback,&s->readback_size,bytes)||
        !reserve(&s->depth_readback,&s->depth_readback_size,bytes))
         return decline(s);
+    SESS_MARK(alloc);
     if(!prepare(s,session->width,session->height))return decline(s);
+    SESS_MARK(prep);
     if(!triangle_storage(s,session->width,session->height))return decline(s);
     if(!s->tri_session_fbo) {
         s->gl.GenFramebuffers(1,&s->tri_session_fbo);
@@ -844,12 +878,16 @@ int nj_gles2_triangles_begin(void *ud,const nj_gfx_triangles_session *session)
         return decline(s);
     }
     s->gl.BindFramebuffer(GL_FRAMEBUFFER,s->framebuffer);
+    SESS_MARK(setup);
     s->tri_session_surface=session->surface;
     s->tri_session_depth=session->depth;
     s->tri_session_stride=session->depth_stride;
     s->tri_session_x=session->x;s->tri_session_y=session->y;
     s->tri_session_w=session->width;s->tri_session_h=session->height;
     s->tri_session_write=0;s->tri_session_triangles=0u;
+    s->tri_session_have=0;s->tri_session_nrects=0;
+    s->tri_session_cx0=s->tri_session_cx1=session->x;
+    s->tri_session_cy0=s->tri_session_cy1=session->y;
     s->tri_session=1;
     if(!triangle_session_seed(s,session->width,session->height)) {
         s->tri_session=0;
@@ -857,6 +895,7 @@ int nj_gles2_triangles_begin(void *ud,const nj_gfx_triangles_session *session)
         (void)clean_errors(s);
         return decline(s);
     }
+    SESS_MARK(seed);
     return NJ_GFX_ACCEL_DONE;
 }
 
@@ -865,13 +904,23 @@ int nj_gles2_triangles_end(void *ud,nj_u4 *submitted)
     nj_gles2 *s=(nj_gles2 *)ud;
     nj_surface *surf;
     nj_s4 *depth;
-    int w,h,x,y,stride,i,j;
+    int x,y,stride,i,j,w,h,rect;
     size_t bytes;
     if(!s||!s->tri_session)return decline(s);
     surf=s->tri_session_surface;depth=s->tri_session_depth;
     stride=s->tri_session_stride;x=s->tri_session_x;y=s->tri_session_y;
-    w=s->tri_session_w;h=s->tri_session_h;
     if(!current(s)) { s->tri_session=0;return decline(s); }
+    SESS_START();
+    /* Only the union of the submitted packet rectangles was drawn, so only
+     * that rectangle may be read back and committed; pixels outside keep the
+     * caller's pre-session values. */
+    if(!s->tri_session_have) {
+        *submitted=s->tri_session_triangles;
+        s->tri_session=0;
+        return NJ_GFX_ACCEL_DONE;
+    }
+    x=s->tri_session_cx0;y=s->tri_session_cy0;
+    w=s->tri_session_cx1-x;h=s->tri_session_cy1-y;
     bytes=(size_t)w*(size_t)h*4u;
     if(!reserve(&s->readback,&s->readback_size,bytes)||
        (s->tri_session_write&&!reserve(&s->depth_readback,&s->depth_readback_size,bytes))) {
@@ -879,10 +928,14 @@ int nj_gles2_triangles_end(void *ud,nj_u4 *submitted)
         return decline(s);
     }
     s->gl.BindFramebuffer(GL_FRAMEBUFFER,s->framebuffer);
-    s->gl.ReadPixels(0,0,w,h,GL_RGBA,GL_UNSIGNED_BYTE,s->readback);
+    s->gl.ReadPixels(x-s->tri_session_x,y-s->tri_session_y,w,h,GL_RGBA,
+                     GL_UNSIGNED_BYTE,s->readback);
+    SESS_MARK(read_c);
     if(s->tri_session_write) {
         s->gl.BindFramebuffer(GL_FRAMEBUFFER,s->tri_session_fbo);
-        s->gl.ReadPixels(0,0,w,h,GL_RGBA,GL_UNSIGNED_BYTE,s->depth_readback);
+        s->gl.ReadPixels(x-s->tri_session_x,y-s->tri_session_y,w,h,GL_RGBA,
+                         GL_UNSIGNED_BYTE,s->depth_readback);
+        SESS_MARK(read_d);
     }
     s->gl.BindFramebuffer(GL_FRAMEBUFFER,s->framebuffer);
     if(!clean_errors(s)||!current(s)) { s->tri_session=0;return decline(s); }
@@ -893,16 +946,35 @@ int nj_gles2_triangles_end(void *ud,nj_u4 *submitted)
                 return decline(s);
             }
     }
-    /* No failure-capable operation occurs after the first CPU destination write. */
-    for(i=0;i<h;++i)for(j=0;j<w;++j) {
-        const nj_u1 *q=s->readback+((size_t)i*(size_t)w+(size_t)j)*4u;
-        nj_u4 c=((nj_u4)q[3]<<24)|((nj_u4)q[0]<<16)|((nj_u4)q[1]<<8)|q[2];
-        nj_surface_set(surf,x+j,y+i,c);
-        if(s->tri_session_write&&depth)
-            depth[(size_t)(y+i)*(size_t)stride+(size_t)(x+j)]=
-                (nj_s4)unpack_key(s->depth_readback+
-                                  ((size_t)i*(size_t)w+(size_t)j)*4u);
+    /* No failure-capable operation occurs after the first CPU destination write.
+     * Commit exactly the submitted packet rectangles (their bounding box was
+     * read back above); pixels outside them keep their pre-session values. */
+    for(rect=0;rect<s->tri_session_nrects;++rect) {
+        int rx=s->tri_session_rects[rect][0]-x;
+        int ry=s->tri_session_rects[rect][1]-y;
+        int rw=s->tri_session_rects[rect][2];
+        int rh=s->tri_session_rects[rect][3];
+        int px=s->tri_session_rects[rect][0];
+        int py=s->tri_session_rects[rect][1];
+        for(i=0;i<rh;++i)for(j=0;j<rw;++j) {
+            const nj_u1 *q=s->readback+
+                ((size_t)(ry+i)*(size_t)w+(size_t)(rx+j))*4u;
+            nj_u4 c=((nj_u4)q[3]<<24)|((nj_u4)q[0]<<16)|((nj_u4)q[1]<<8)|q[2];
+            nj_surface_set(surf,px+j,py+i,c);
+            if(s->tri_session_write&&depth)
+                depth[(size_t)(py+i)*(size_t)stride+(size_t)(px+j)]=
+                    (nj_s4)unpack_key(s->depth_readback+
+                        ((size_t)(ry+i)*(size_t)w+(size_t)(rx+j))*4u);
+        }
     }
+    SESS_MARK(commit);
+#if NJ_GLES2_PROFILE
+    ++tri_prof.flushes;
+    tri_prof.pixels+=(unsigned long long)w*(unsigned long long)h;
+    tri_prof.triangles+=s->tri_session_triangles;
+    ++tri_prof.lists;
+    if((tri_prof.flushes%100u)==0u)tri_prof_print("sess100");
+#endif
     *submitted=s->tri_session_triangles;
     s->tri_session=0;
     return NJ_GFX_ACCEL_DONE;
