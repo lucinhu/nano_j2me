@@ -255,3 +255,29 @@ raw numbers.
   (screen 176x208/320x240, rotation 90/180, heap 32, builtin font, sound off,
   pointer off, Nokia 6230 device, zh-CN locale), each also running the harness's
   save-state round-trip checks.
+
+## Update, 2026-11-15 (r15: corpus rendering fixes)
+
+The whole-corpus libretro rendering probe
+(`tools/check_libretro_corpus_visual.py`, 373 sweep-ok titles through the mock
+frontend) found six titles painting a black screen. Three real bugs were fixed
+(paint waiters held by `callSerially` dispatch, `Displayable` sizes returning 0
+before `show()`, and the libretro startup grace being shorter than a slow
+loader); details in `docs/notes/2026-11-15-libretro-black-frames.md`. The load
+clock assistance is now bounded by the same budget as saves.
+
+Re-validation at revision `88b4e5d`:
+
+- Whole-corpus visual probe: 373 titles, **362 passed, 11 failed**; the
+  remaining failures are the documented paused-save limitation, two
+  `serialize_after_refused_restore` edge cases, harness watchdog on heavy
+  titles, and two titles that need `nano_j2me_device=nokia6230`.
+- Mock frontend matrix on the r15 linux core 20/20; RetroArch LoopDemo 120 and
+  TextDemo 180 PASS; Windows Wine 4/4; libretro state probe 20/20; full CTest
+  183/183 in 344.55 s.
+- CI template simulation `/var/tmp/ci-sim-r15`: all three contracts pass
+  (Linux 3,969,648 B, Windows 3,540,116 B, Android arm64 11,551,400 B).
+- All eight release targets rebuilt at `88b4e5d` (`--out
+  /var/tmp/nj2me-submission-dist-r15`, `.info` byte-identical) and the tree
+  copied to `build/libretro-dist/` (previous tree backed up to
+  `/var/tmp/libretro-dist-20261115-r14-backup.tgz`).

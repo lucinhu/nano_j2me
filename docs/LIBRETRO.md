@@ -70,11 +70,13 @@ Use `--no-strip` to retain symbols. `all` selects the script's supported targets
 and requires all of their toolchains.
 
 The eight candidates currently in `build/libretro-dist/` were rebuilt on
-2026-11-15 at revision `30e9c83`, so they include the load-lifecycle fix, the
+2026-11-15 at revision `88b4e5d`, so they include the load-lifecycle fix, the
 monitor and repaint-blocking fixes, the CLI/manual-state boundary work, the
 input-bitmask/rumble support and the `nano_j2me_screen`/`nano_j2me_locale`
-options, the state load/save clock assistance, and the level-3 Player-start
-diagnostics. `build/libretro-final-report-20261115.md` records sizes, SHA-256 values
+options, bounded load/save state clock assistance, the level-3 Player-start
+diagnostics, and three corpus rendering fixes (stray paint waiters, pre-show
+`Displayable` sizes, longer startup grace). The report also records the
+whole-corpus rendering probe, which is what found those rendering bugs. `build/libretro-final-report-20261115.md` records sizes, SHA-256 values
 and what was run per target: linux-x86_64 in the mock frontend and real
 RetroArch, windows-x86_64 under Wine, and ABI/dependency checks only for the
 Android and ARM-Linux cores (no device run in this rebuild). That report also

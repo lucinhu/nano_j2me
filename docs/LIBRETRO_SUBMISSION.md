@@ -38,8 +38,9 @@ version is currently 0.5.7; refresh the metadata version whenever that changes.
 
 This section records the concrete preparation checks run against the current
 tree; the unchecked boxes in [Validation](#validation) remain the external
-steps only. Working HEAD for this check: `30e9c83` (state save/load clock
-assistance plus level-3 Player-start diagnostics; the metadata/CI/docs checks
+steps only. Working HEAD for this check: `88b4e5d` (three corpus rendering fixes - paint
+waiter, pre-show Displayable size, longer startup grace - plus bounded state
+clock assistance and the whole-corpus visual probe; the metadata/CI/docs checks
 below were first run at `bc49c46`, and the release artifacts were refreshed
 after each libretro change as recorded in the hash table).
 
@@ -73,29 +74,29 @@ after each libretro change as recorded in the hash table).
     and produced `libretro/nano_j2me_libretro.dll` (3,537,295 bytes), i.e. the
     path the template's post-build step expects.
   All three land at `$BUILD_DIR/$EXTRA_PATH/$LIBNAME`, where the templates
-  collect them. Re-run at the r14 tree with
-  `tools/simulate_ci_builds.sh --out /var/tmp/ci-sim-r14`: all three
-  contracts pass (Linux 3,969,648 B, Windows 3,537,310 B, Android arm64
-  11,546,848 B at `/var/tmp/ci-sim-r14/...`). `tools/simulate_ci_builds.sh` reproduces these template commands
+  collect them. Re-run at the r15 tree with
+  `tools/simulate_ci_builds.sh --out /var/tmp/ci-sim-r15`: all three
+  contracts pass (Linux 3,969,648 B, Windows 3,540,116 B, Android arm64
+  11,551,400 B at `/var/tmp/ci-sim-r15/...`). `tools/simulate_ci_builds.sh` reproduces these template commands
   (and reads `CORE_ARGS` straight out of `.gitlab-ci.yml` so the simulation
   cannot drift from the committed CI file). No upstream pipeline has been
   executed; that requires maintainer registration.
-- **Fresh eight-target build**. `tools/build_libretro_cores.sh --jobs 6
-  --out /var/tmp/nj2me-submission-dist-r14 all` rebuilt every default-feature
-  target from this revision (state load/save clock assistance and the level-3
-  Player-start media diagnostics) and the tree was copied into
-  `build/libretro-dist/`. Per-core SHA-256:
+- **Fresh eight-target build**. `tools/build_libretro_cores.sh --jobs 12
+  --out /var/tmp/nj2me-submission-dist-r15 all` rebuilt every default-feature
+  target from this revision (corpus rendering fixes, bounded state clock
+  assistance) and the tree was copied into `build/libretro-dist/`. Per-core
+  SHA-256:
 
   | Target | SHA-256 |
   | --- | --- |
-  | linux-x86_64 | `1565eee2e76fa38bf8efd683d0d92787583090ccd3d24fac08ba6216db6b9bc0` |
-  | linux-aarch64 | `6c0da4021d88c82128b262b31660fc5df9d271ec67fec283a4aaec6c3dbfa9d1` |
-  | linux-armv7 | `3fdd26d463918c0da5a8a18c0f81111f5fd94c8fc888c849702b834ee3b7cc8f` |
-  | android-arm64 | `7e98520b6b0259b855f87789cd52b1b840c4258f22c193b84ae280612d19e899` |
-  | android-armv7 | `b4eb709c8735016c91f5d118089244d81649261d700444c30717dfecf6d8d15d` |
-  | android-x86_64 | `b4cdf8b3b8f47c8d1ef84b4148640e4f32c3f5855707b0ff315be74c7edda356` |
-  | windows-i686 | `d18ab3651036f1faa18ae550c8870cd17fd224417f23278f8444d0f6b28a0c42` |
-  | windows-x86_64 | `4f66f83a08d8040b1ea1c538b9c331b86aa12e75e86827cdbc4f837173a51c5f` |
+  | linux-x86_64 | `07cfa70b0bc2adaf2403f733020c8c40740b6ec013627d0a1e79b9d24f2a5422` |
+  | linux-aarch64 | `987c6a419847fc08ffb0399904da0be618d1516b9a1fab2b684ce2a88b3d8ade` |
+  | linux-armv7 | `c9f5c37d3c8a7c45841a602c9a0c3fdfc9da507aa22064a3295132a5d92d69a7` |
+  | android-arm64 | `c6a140acba4dac2d96108ef8cb771ccd90daa4fb0d4475c4a36de67eaaa85aa6` |
+  | android-armv7 | `133e9b82e3e7d2a999548c5bd677f3ad75244bb17938f47015463fd986375e59` |
+  | android-x86_64 | `3e417db6320510a3897a2f411be8baa67a43bc8b05ee927de78d5e6324ae4180` |
+  | windows-i686 | `2d85a37db19ad5d459daed20e23224f470f14841eb8d4d31fc4aef57b5a97e92` |
+  | windows-x86_64 | `e7b5bb07d4d9438860f6ead4508ccb6b43c86c698645fc33c429a7cd8d92fade` |
 
   Every target directory contains the same `.info`, license/notice set and
   `BUILD_STATUS.txt`; no external test font is bundled.
@@ -108,13 +109,16 @@ after each libretro change as recorded in the hash table).
   after `retro_reset` in a title that boots inside a blocking frame
   (电子宠物蛋_11972) and titles whose save needed the bounded paused-frontend
   clock assistance (see the 2026-11-15 load-state and save-while-paused notes).
-  A 50-title visual probe through the mock frontend at the real-time cadence
-  passed 49/50; the single refusal (`火影忍者汉化版_10735`) is the documented
-  paused-save nested-paint limitation described in
-  [LIBRETRO.md](LIBRETRO.md#timing-media-and-limitations), not a visual defect,
-  and every sampled title rendered and animated. A wider 50-title state probe
-  also reported 50/50 save/restore round trips. The full local CTest suite
-  passed **183/183 in 332.37 s** at this revision. Seven M3G titles were
+  The whole-corpus rendering probe on the r15 core
+  (`tools/check_libretro_corpus_visual.py`, 373 sweep-ok titles, 300 frames,
+  real-time cadence) reported **362 passed, 11 failed**, and the remaining
+  failures are not visual: the documented paused-save limitation, two
+  `serialize_after_refused_restore` cases in an artificial refused-restore
+  sequence, harness watchdog on heavy titles, and two titles that need the
+  documented `nano_j2me_device=nokia6230` profile (they render with it). The
+  six black-frame failures found by the previous run are gone; details in
+  `docs/notes/2026-11-15-libretro-black-frames.md`. The full local CTest suite
+  passed **183/183 in 344.55 s** at this revision. Seven M3G titles were
   checked through the mock frontend at the real-time cadence
   (`--pace-us 16666`): 浴火银河2完整版, 蓝牙真3D格斗, 急速狂飙完美破解版,
   浴火银河2瓦尔基里, 极品飞车16：亡命狂飙, 3D激爆拳击 and 3D跳台滑雪2011 all
