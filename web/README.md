@@ -126,10 +126,20 @@ mock 脚本会：先验证“没有 wasm 时静默回退到 mock” → 加载�
 键盘、触屏、指针、文本桥 → 打开面板暂停、截图下载、保存/读档、速度/静音/适应/按键
 开关 → 退出 → 刷新验证 IndexedDB 持久化 → 删除并确认 → 390×844 移动端截图。
 
-官方浏览器套件（`node tools/web_test/web_browser_test.mjs`，23 项）在真实 Firefox
+官方浏览器套件（`node tools/web_test/web_browser_test.mjs`，24 项）在真实 Firefox
 里跑完整流程，并额外验证 PWA：manifest 可解析（4 个图标、standalone）、
 service worker 接管页面、引擎已进缓存、库页脚显示“离线可用”、停止静态服务器后
-离线重载仍是 wasm 引擎，以及断网状态从库启动已导入的游戏（12 帧内出画面且帧号继续推进）。
+离线重载仍是 wasm 引擎，以及断网状态从库启动已导入的游戏（12 帧内出画面且帧号继续推进）；
+游戏面板的「游戏内存」选择（16/32/64/128 MiB）会写入 `nj2me.settings` 并在下次启动生效。
+
+全语料审计（403 个 JAR，每款 90 帧）现已自动化：
+
+```sh
+tools/check_web.sh --sweep   # 或 node tools/web_test/web_sweep_test.mjs --evidence DIR
+```
+
+每标题独立子进程 + 25 s 超时，输出 `sweep-403.jsonl` 与 `sweep-summary.txt`；
+`black`（采样帧全黑）只作警告，已知的构造器拒绝/堆不足/无效 JAR 固定为预期项。
 
 wasm 脚本会：断言 `WasmRuntime` 已加载（apiVersion=1、runtimeVersion）、真实
 `njw_probe` 读到 `Hello World`/`frog-parrot.net`、启动后 240×320 画面持续提交帧、

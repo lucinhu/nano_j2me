@@ -103,12 +103,13 @@ RGB565 展开成 RGBA8888 交给 `<canvas>`。虚拟时钟由宿主驱动：加�
 | 单帧内时钟修复（忙等标题） | 修复前 `System.currentTimeMillis()` 忙等的标题（魂斗罗_5652 等 16 款）在 wasm 单帧内死循环/超时 150 s 以上；把真实流逝时间折进虚拟时钟后，魂斗罗 90 帧 **6340 ms**（原生 **6322 ms**），原 16 个 timeout 标题 15 个转 ok，1 个（毁灭战士3）转为明确的构造器拒绝 |
 | 构造器已装 Displayable 却跳过 startApp（真实 bug） | `午夜台球圣诞中文版_8677.jar`（GloftCHPO，极限台球挑战赛）的构造器里 `setCurrent()` + 启动游戏线程，真正初始化在 `startApp()`；修复前 runner 因 `displayable_ready` 已真而跳过 startApp → 画面全黑且每帧 NPE（`Graphics.drawImage ... image is null`）；改为**无条件** queue `startApp()`（与原生 `nj_run` 一致）后，20 帧起 76800 非黑像素并正常显示菜单/游戏画面 |
 | 构造器永不返回的标题 | `毁灭战士3_10598.jar` 在构造器里 join 运行游戏循环的线程；原生 CLI 靠 `--run-frames` 预算中止构造器，浏览器版改为 10 s/20000 次泵帧上限并返回明确错误；`njw_start` 约 10.0 s 内失败，不再挂死 |
-| 全语料审计（403 标题，90 帧/款，Node） | **392 ok / 8 black / 1 fatal / 1 构造器拒绝 / 1 无效 JAR**；8 个 black 全部与原生同帧对照确认 parity（7 个原生 `--fps 0` 同为全黑，火焰纹章是与原生 `--fps 60` 逐帧一致的淡出过渡，相位差 ~5-7 帧）；愤怒的小鸟为 Java heap 不足（原生默认 heap 同样 OOM，`NJW_OPT_HEAP_BYTES` 64 MiB 下 wasm 与原生均正常 90 帧、76639 非黑像素）；鲁宾逊原生同样拒绝；原始结果 `.local-tools/debug-runs/web-sweep/{sweep-403.jsonl,summary.txt}` |
+| 全语料审计（403 标题，90 帧/款，Node；`tools/check_web.sh --sweep` 已自动化） | **392 ok / 8 black / 1 fatal / 1 构造器拒绝 / 1 无效 JAR**，117 s、零 timeout、RESULT PASS；每标题独立子进程（25 s 超时），每 6 帧采样 + 末帧，black 只作警告（宿主速度/墙钟相位会让采样结果偏移）；8 个 black 中 6 个与原生 `--fps 0` 同帧全黑，乱世Q三国_1649/有女倾城破解版_11525 为时序相关加载画面；火焰纹章改判 ok（采样已捕获内容）；愤怒的小鸟为 Java heap 不足（原生默认 heap 同样 OOM，`NJW_OPT_HEAP_BYTES` 64 MiB 下 wasm 与原生均正常 90 帧、76639 非黑像素）；鲁宾逊原生同样拒绝；工具 `tools/web_test/web_sweep_test.mjs`，原始结果 `.local-tools/debug-runs/web-round8-sweep-clean/{sweep-403.jsonl,summary.txt}` |
+| 游戏内存设置 + fatal 错误提示（网页壳） | 游戏面板新增「游戏内存」选择（16/32/64/128 MiB，`njw.settings.heapMb` 持久化、下次启动生效）→ `NJW_OPT_HEAP_BYTES`；`njw_error()` 现在附带最后一条引擎错误（如 `the display loop failed (status -1); last error: thrown: java/lang/OutOfMemoryError ...`），壳对 OOM 文案追加“把游戏内存调高后重开”。回归：`web_api_test` 的 heap 检查（默认 16 MiB 失败、64 MiB 90 帧 76639 非黑像素）+ `web_browser_test` 的内存选择器持久化检查 |
 | 无静态状态门禁 | `tools/check_no_statics.sh` 通过（83 个目标文件）；web 端口与 libretro 一样按 ABI 套豁免，MIDlet 状态仍在 `nj_vm` 内 |
 | 真实浏览器冒烟（headless Firefox + `build/web` 静态服务） | 导入 hello.jar → 库条目显示 "Hello World / frog-parrot.net" → 点击出画 240x320（内容为 "Hello World!"）→ 方向键/Enter 无异常 → 返回库；无 page error，截图 `.local-tools/debug-runs/web-manual-smoke/` |
 | 与原生帧对照 | `1942空战_10403.jar` 的标题屏（"¿SONIDO?" 选择音效）在浏览器里与原生 headless `--dump-frames` 的 240x320 帧逐像素一致；该标题在原生与 wasm 上都抛同一个 `ArrayIndexOutOfBoundsException`（商品自身行为，不是端口回归） |
 | 真实游戏浏览器实测（Playwright Firefox，可玩性） | `蹦球传说美化版_2959.jar`（Bounce Tales 修改版，自动演示画面）在真实页面中：rAF pump **60.1 次/秒**、6 秒内 9 个不同画面帧（30 次采样）、方向键/Enter 后画面改变且 pump 不停、打开工具面板后画面冻结（自动暂停）并在关闭后恢复、退出回库后刷新游戏仍在库中；同一页面运行 `audiodemo.jar` 3 秒，引擎日志出现 10 行音频事件（`wav=200000`、`amr=80000`、`adpcm=252500`、state=400，`http=unsupported` 符合无网络预期）；0 console/page error，证据 `.local-tools/debug-runs/web-playtest/` |
-| 浏览器页面（Playwright Firefox + `tools/check_web.sh --browser`） | 23/23 检查通过（约 6.4 s）：静态服务 `build/web` → 真实引擎 `kind=wasm`、API 1、版本 0.5.7 → zh-CN 界面 → 导入 hello.jar（元数据/图标进 IndexedDB）→ 画布 240x320 非黑（4 色）→ 方向键/Enter（nj_key 15/16/17/6）帧号推进 → 面板自动暂停（帧冻结）+ 继续 → 存档槽 1 blob 329,724 字节、读档往返不重启 → 退出回库 → 刷新后游戏与存档仍在 → 缺 wasm 时降级 mock 并显示指向 `tools/build_web.sh` 的横幅；0 page/console error、0 外部请求；证据 `.local-tools/debug-runs/web-lead-final-all/browser-0*-*.png` |
+| 浏览器页面（Playwright Firefox + `tools/check_web.sh --browser`） | 24/24 检查通过（约 6.3 s）：静态服务 `build/web` → 真实引擎 `kind=wasm`、API 1、版本 0.5.7 → zh-CN 界面 → 导入 hello.jar（元数据/图标进 IndexedDB）→ 画布 240x320 非黑（4 色）→ 方向键/Enter（nj_key 15/16/17/6）帧号推进 → 面板自动暂停（帧冻结）+ 继续 → 存档槽 1 blob 329,724 字节、读档往返不重启 → 游戏面板内存选择 64 MiB 持久化并弹提示 → 退出回库 → 刷新后游戏与存档仍在 → 缺 wasm 时降级 mock 并显示指向 `tools/build_web.sh` 的横幅；0 page/console error、0 外部请求；证据 `.local-tools/debug-runs/web-round8-clean/browser-0*-*.png` |
 | PWA / 离线（service worker） | `manifest.json` 可解析（`display=standalone`，4 个图标含 maskable）→ `sw.js` 接管页面 → 缓存含 `js/nj2me.js` 与 `js/nj2me.wasm`（20 项）→ 库页脚显示“离线可用”（`#library-engine[data-offline=1]`、`body[data-offline=ready]`）→ **停掉静态服务器后重载**仍 boot shell 且 `kind=wasm` → 断网从库启动已导入的 `hello.jar`，240×320 画面非黑且帧号 13→38 继续推进；证据 `.local-tools/debug-runs/web-offline-badge/browser-09-offline.png`、`browser-10-offline-game.png` 与 `browser-shell-test.json`；注意 Playwright Firefox 的 `context.set_offline()` 对 service worker 不生效，离线用停服务器模拟 |
 
 性能（600 帧空跑，两边都是 Release；原生用 `--fps 0` 即 uncapped）：
@@ -180,7 +181,7 @@ tools/check_web.sh --node --corpus             # 另有 --browser（Playwright F
 | `.local-tools/debug-runs/gfx-full-20261113/linux/nj2me` | 4015104 | `cf047c9bddbe97f22afd414d7d7976021f8322a0c1048c1f0fabb8332601e5f0` |
 | `.local-tools/debug-runs/gfx-full-20261113/android-legacy/nj2me-legacy.apk` | 694718 | `0352c5fe4764747d910b98bf6cdd430bdf537e113beca1f82d92d784247139d7` |
 | `build/web/js/nj2me.js` | 93889 | `77652b2e6c8ef1a2e22e95eeec54e66530a1fe069728cf9a7bf6944ef424885f` |
-| `build/web/js/nj2me.wasm` | 2144424 | `fd431b04b0fd895f367bdc928725830bf7ca60f4b09b4af112225fcfdcda06d4` |
+| `build/web/js/nj2me.wasm` | 2144645 | `95a89c0185d9d0e5a1ee2b4357778f617f23731e37ea1b9343753489ea07c0bd` |
 
 以上产物均由同一份当前源码构建（含 2026-11-14 的 journal 批处理、持久
 GPU 会话与 2026-11-15 的自动选择改动）。legacy APK 也已用恢复的旧工具链重建：
@@ -195,7 +196,7 @@ by the QEMU2 emulator`），旧版 emulator 29.2.1 可以下载但其 AVD 系统
 因此 legacy 的运行时证据仍是 v0.5.7 早期构建在 API 5/7/10 上的历史记录
 （见 `.local-tools/release-v0.5.7-legacy/api5/`），新构建只做了构建期与静态验证。
 源码已提交；Windows/Android/libretro 产物由同一份源码在提交前构建，
-Web 产物也在提交前重新构建并重新跑过 `tools/check_web.sh --all`。
+Web 产物也在提交前重新构建并重新跑过 `tools/check_web.sh --all` 与 `--sweep`。
 
 ## 证据
 
@@ -215,8 +216,11 @@ Web 产物也在提交前重新构建并重新跑过 `tools/check_web.sh --all`�
 - libretro 真实 EGL：`.local-tools/debug-runs/gfx-full-20261113/libretro-live/`（`mc-current`、`bounce-current`、`REPORT.md`）
 - Windows/Wine：`.local-tools/debug-runs/gfx-full-20261113/windows-audit/`（`frames/`、`sdl2-mc-window.png`、`sdl2-mc.log`、`win-gles2-maze.log`、`wine-wgl.log`）
 - AMR/编解码报告：`.local-tools/debug-runs/gfx-full-20261113/amr/`、`.local-tools/debug-runs/gfx-full-20261113/codec-audit/`
-- 网页版：`.local-tools/debug-runs/web-clean-build/`（由已提交源码在干净 worktree 重建后的
-  最新 `--all` 运行：node PASS、语料 47/47、浏览器 23/23、check-web.log、42 张语料 PNG）、
+- 网页版：`.local-tools/debug-runs/web-round8-clean/`（轮 8 干净 worktree 重建后的最新
+  `--all`：node 34/34、语料 47/47、浏览器 24/24、check-web.log、10 张页面截图）、
+  `.local-tools/debug-runs/web-round8-sweep-clean/`（新自动化 403 标题审计：`sweep-403.jsonl` +
+  `sweep-summary.txt`，392/8/1/1/1、117 s、RESULT PASS）、
+  `.local-tools/debug-runs/web-clean-build/`（上一轮干净 worktree `--all`）、
   `.local-tools/debug-runs/web-final-fixes/`（修复后的 `--all` 运行）、
   `.local-tools/debug-runs/web-corpus-regression/`（加入午夜台球回归标题后的 47/47 语料运行）、
   `.local-tools/debug-runs/web-sweep/`（403 标题全语料审计：`sweep-403.jsonl` + `summary.txt`）、

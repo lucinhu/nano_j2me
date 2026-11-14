@@ -83,8 +83,9 @@ be served with or without a build:
   with `image-rendering: pixelated`, an `requestAnimationFrame` loop that calls
   `njw_frame(dt_ms)` exactly once per frame, a loading overlay until the first
   `Displayable` exists, then pause/resume, speed (100/150/200 %), mute,
-  three save states per game, PNG screenshot download, fullscreen, restart and
-  exit-to-library.
+  three save states per game, a **Game memory** selector (16/32/64/128 MiB) that
+  reaches `NJW_OPT_HEAP_BYTES` at the next launch for heavy titles, PNG
+  screenshot download, fullscreen, restart and exit-to-library.
 - **Input** — keyboard (arrows = D-pad, Enter/Space = Fire, F1/F2 = soft keys,
   Backspace = Clear, digits, `*`/`#`), an on-screen phone keypad for touch devices
   with multi-touch and slide-off cancel, pointer pass-through for games that use
@@ -356,6 +357,7 @@ default and is what CI and these docs run):
 ```sh
 tools/check_web.sh --node --corpus   # API contract + pinned corpus, about 10 s
 tools/check_web.sh --all             # those two plus the Playwright page test
+tools/check_web.sh --sweep           # full-corpus audit, 403 titles, about 2 min
 tools/check_web.sh --build --node    # rebuild build/web/ first
 ```
 
@@ -371,12 +373,16 @@ driver (the latter makes the suite work here without `npm install`). Useful
 flags: `--evidence DIR` (default
 `.local-tools/debug-runs/web-verify-<YYYYMMDD-HHMM>`) and `--frames N` (corpus
 frames per title, default 120, range 30–2000 — the first frames are needed for
-the render assertions to settle).
+the render assertions to settle). `--sweep` is deliberately **not** part of
+`--all`: it starts all 403 corpus titles in fresh child processes (~2 min) and is
+for release/CI runs, while `--all` stays a ~16 s edit loop.
 
 - **API test** (`tools/web_test/web_api_test.mjs`) — module load, version,
   manifest probe, error paths, `hello.jar` render, screen-size and speed options,
   keyboard input, pause/resume, save/load round-trip and a rejected load,
-  restart-after-stop, audio on `tests/fixtures/audiodemo.jar`.
+  restart-after-stop, audio on `tests/fixtures/audiodemo.jar`, and the
+  `NJW_OPT_HEAP_BYTES` option on the heap-hungry `愤怒的小鸟_383.jar` (fails at
+  the default 16 MiB, completes 90 frames at 64 MiB).
 - **Corpus test** (`tools/web_test/web_corpus_test.mjs`) — a deterministic slice
   of the 400-title [compatibility corpus](CORPUS.md) (plus fixtures and one
   regression title) run for 120 frames each with JAR start, drawn-frame and
@@ -384,7 +390,7 @@ the render assertions to settle).
   `午夜台球圣诞中文版_8677.jar` installs its `Canvas` in the MIDlet constructor
   and starts its game thread there, which is what caught the runner skipping
   `startApp()`.
-- **Browser test** (`tools/web_test/web_browser_test.mjs`, 23 checks) — serves
+- **Browser test** (`tools/web_test/web_browser_test.mjs`, 24 checks) — serves
   `build/web/` on an ephemeral port and drives the real shell in headless Firefox
   through Playwright: the real engine (`kind=wasm`, API 1, runtime 0.5.7),
   zh-CN UI, import `hello.jar` → metadata and icon in IndexedDB, 240×320
@@ -399,12 +405,26 @@ the render assertions to settle).
   library footer reports offline ready, reloading with the static server stopped
   still boots the shell with `kind=wasm`, and an imported game then starts and
   keeps drawing with no server at all (76,800 non-black pixels, frame counter
-  advancing).
+  advancing). One further check covers the game panel's memory selector: picking
+  64 MiB persists it in `nj2me.settings` (localStorage) for the next launch and
+  shows the "applies on the next launch" toast.
+- **Sweep suite** (`tools/web_test/web_sweep_test.mjs`, 403 titles) — the
+  full-corpus audit: every JAR under `tests/games/` except the known-bad
+  `1945空战英雄_6105.jar` is started in its own Node child process for 90 frames
+  with a 25 s timeout. Each title is classified `ok` / `black` (no sampled frame
+  had a non-black pixel) / `fatal` / `start` / `probe` / `install` / `load` /
+  `timeout`; the run fails on an unexpected class, on a regression against the
+  documented expectations (constructor refusal `毁灭战士3`, heap-bound
+  `愤怒的小鸟`, invalid JAR `鲁宾逊漂流记`), or when fewer than `--min-ok`
+  titles render. `black` is a warning, not a failure: whether a title happens to
+  show content on a sampled frame depends on host speed and wall-clock phase.
+  Results land in `<evidence>/sweep-403.jsonl` and `sweep-summary.txt`.
 
 Measured on the reference build (Emscripten 7.0.0, `include/nj2me/nj_web.h`
-0.5.7): the API suite passes **33/33 checks in 0.2 s**, the corpus suite
-**47/47 checks (42 titles) in 8.7 s**, and the browser suite **23/23 checks in
-about 6.4 s** — `tools/check_web.sh --all` is **15 s** end to end. All 42
+0.5.7): the API suite passes **34/34 checks in 0.4 s**, the corpus suite
+**47/47 checks (42 titles) in 8.7 s**, and the browser suite **24/24 checks in
+about 6.3 s** — `tools/check_web.sh --all` is **16 s** end to end. The sweep
+suite needs about 2 min for all 403 titles. All 42
 playable titles draw 120/120 frames, there are no engine `[nj2me] error:` lines,
 and the wasm heap stays at 64 MiB.
 The known-bad `1945空战英雄_6105.jar` is excluded because it fails natively too.
@@ -427,24 +447,38 @@ console/page errors. Evidence: `.local-tools/debug-runs/web-playtest/`.
 
 ### Full-corpus audit (403 titles)
 
-Beyond the pinned corpus, the whole `tests/games/` directory was audited once
-after the browser fixes: every JAR except the known-bad
-`1945空战英雄_6105.jar` (403 titles), 90 frames each, in Node with a 25 s
-per-title timeout. Result: **392 ok, 8 black, 1 fatal, 1 constructor refusal,
-1 invalid JAR**. Every remaining case was classified against the native build
-at the same 90-frame checkpoint:
+The whole compatibility corpus is covered by a runnable audit, not a one-off
+experiment:
+
+```sh
+tools/check_web.sh --sweep   # 403 titles, 90 frames each, about 2 min, jobs=1
+```
+
+`tools/web_test/web_sweep_test.mjs` starts every JAR in a fresh Node child
+process, so a single hung title cannot stall the rest; it pumps 90 frames and
+samples the framebuffer every sixth frame plus the last one. The known non-ok
+titles are pinned as expectations (`毁灭战士3_10598` constructor refusal,
+`愤怒的小鸟_383` heap, `鲁宾逊漂流记汉化BT版_4677` invalid JAR), `ok` has a floor
+(`--min-ok`, default 380), and a `black` result is a warning, not a failure: the
+audit runs at host speed under the folded wall clock, so whether a title shows
+its picture within the first 90 sampled frames can shift by a few frames.
+
+Latest run: **392 ok, 8 black, 1 fatal, 1 constructor refusal, 1 invalid JAR,
+zero timeouts** in 117 s, RESULT PASS.
 
 | Class | Titles | Verdict |
 |---|---|---|
-| Black at frame 90 (8) | 宠物王国6, 纯爱物语3, 都市赛车6, 灌篮高手-爆发!樱木, 火焰纹章勇者之剑, 开心农场BT版, 生化危机之恶化, PC正版-使命召唤5 | parity — native `--fps 0` is black at frame 90 too; 火焰纹章 is a fade-out transition frame and the native `--fps 60` per-frame dumps show the same fade (→black at 81-83, next scene at 84) within a few frames of the wasm timing |
-| Fatal (1) | 愤怒的小鸟_383 | Java heap exhaustion; the native build also throws `OutOfMemoryError` at its default heap. With `NJW_OPT_HEAP_BYTES` = 64 MiB the wasm run completes 90 frames (76,639 non-black pixels, 32 colours) just like native `--heap 64` |
-| Constructor refusal (1) | 毁灭战士3_10598 | by design — the MIDlet runs its game loop from the constructor and joins it, so the runner reports the bounded error instead of freezing the page |
+| Black (8) | 纯爱物语3, 都市赛车6, 灌篮高手-爆发!樱木, 开心农场BT版, 生化危机之恶化, PC正版-使命召唤5, 乱世Q三国_1649, 有女倾城破解版_11525 | warning — no sampled frame had content; the first six are black at the same checkpoint natively (`--fps 0`), and the last two are timing-sensitive loading screens |
+| Fatal (1) | 愤怒的小鸟_383 | Java heap exhaustion; the native build also throws `OutOfMemoryError` at its default heap. With `NJW_OPT_HEAP_BYTES` = 64 MiB the wasm run completes 90 frames (76,639 non-black pixels, 32 colours) just like native `--heap 64` — the shell's "Game memory" selector exposes the same option |
+| Constructor refusal (1) | 毁灭战士3_10598 | by design — the MIDlet runs its game loop from the constructor and joins it, so the runner reports the bounded error after ~10 s instead of freezing the page |
 | Invalid JAR (1) | 鲁宾逊漂流记汉化BT版_4677 | parity — native also rejects it (`bad JAR or no MIDlet-1`) |
 
-The audit found and drove the three real fixes listed above (wall-clock fold,
-unconditional `startApp()`, bounded constructor). Raw results and the summary
-table are in `.local-tools/debug-runs/web-sweep/` (`sweep-403.jsonl`,
-`summary.txt`).
+`宠物王国6(去模拟器限制)_12473.jar` now renders (its loading art appears within
+the sampled frames), which also shows why frame-exact black is a warning rather
+than a pass/fail signal. The audit found and drove the three real fixes listed
+above (wall-clock fold, unconditional `startApp()`, bounded constructor).
+Evidence: `.local-tools/debug-runs/web-round8-sweep-clean/` (`sweep-403.jsonl`,
+`sweep-summary.txt`).
 
 The same scenarios can be driven by hand with `node` (Node has no IndexedDB, so
 mount MEMFS instead of IDBFS) — the harnesses are the reference. Evidence
@@ -470,7 +504,8 @@ repository.
 - **Java heap** defaults to the native 16 MiB (`NJW_OPT_HEAP_BYTES` raises it up
   to the wasm memory limit). Heavy titles such as `愤怒的小鸟_383.jar` exhaust it
   exactly as they do in the native build at the default heap; 64 MiB is enough
-  for both.
+  for both. The shell's game panel exposes this as a "Game memory" selector
+  (16/32/64/128 MiB) per title, applied on the next launch.
 - **Not yet verified**: iOS Safari, very large heap games (>512 MiB), true
   multi-tab use of the same IDBFS prefix (last writer wins), and WebKitGTK.
 - The wasm target cannot be built with `NJ_ENABLE_JIT`/threaded dispatch enabled
@@ -487,6 +522,7 @@ repository.
 | No sound | browsers need a user gesture before audio; click once, check `njw_audio_available()` and the shell's mute/gain path |
 | Saves vanish after reload | IndexedDB blocked (private mode) or IDBFS fallback not syncing; check the shell's console warning and `navigator.storage.persist()` |
 | `redefinition of typedef 'nj_vm' is a C11 feature` while building | don't use `-DNJ_WERROR=ON` on the wasm target (pre-existing header style) |
+| `the display loop failed ... last error: thrown: java/lang/OutOfMemoryError` | the game needs more Java heap: pick a bigger "Game memory" in the tools panel (default 16 MiB, try 64/128 MiB) and restart the game; `njw_error()` appends the last escaped exception for exactly this reason |
 | Out of memory / `RangeError` in wasm | game needs more heap: raise `NJW_OPT_HEAP_BYTES` (max 1 GiB wasm memory) or lower screen size |
 | Build picks up the wrong Emscripten | `source .local-tools/emsdk/emsdk_env.sh` or run `tools/build_web.sh` (it locates the SDK itself) |
 | A redeployed shell still shows the old page | the cache-first service worker kept the previous shell: bump `CACHE` in `web/sw.js` (or open once with `?nosw=1`) |
@@ -503,7 +539,7 @@ repository.
 | `web/assets/icon*.png` | 192/512/maskable icons generated from `icon.svg` |
 | `tools/build_web.sh` | SDK discovery, `emcmake` build, `build/web/` assembly |
 | `tools/emsdk_setup.sh` | installs the Emscripten SDK into `.local-tools/emsdk` |
-| `tools/check_web.sh`, `tools/web_test/` | Node API/corpus and Playwright browser verification |
+| `tools/check_web.sh`, `tools/web_test/` | Node API/corpus, full-corpus sweep and Playwright browser verification |
 | `build/web/` | served directory: shell + `js/nj2me.js` + `js/nj2me.wasm` (git-ignored) |
 
 The C API is versioned (`NJW_API_VERSION`); the shell checks it at load time and

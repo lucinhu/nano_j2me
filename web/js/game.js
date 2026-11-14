@@ -54,8 +54,10 @@ import { AudioOutput } from './audio.js';
 import { GameInput } from './input.js';
 
 const LS_SETTINGS = 'nj2me.settings';
+const HEAP_CHOICES_MB = [16, 32, 64, 128];
 const DEFAULT_SETTINGS = Object.freeze({
   speedPercent: 100,
+  heapMb: 16,           // Java heap for the next start; heavy titles need 64+
   muted: false,
   volume: 0.8,
   showPad: true,
@@ -78,6 +80,9 @@ function loadSettings() {
   settings.speedPercent = [100, 150, 200].includes(Number(settings.speedPercent))
     ? Number(settings.speedPercent)
     : 100;
+  settings.heapMb = HEAP_CHOICES_MB.includes(Number(settings.heapMb))
+    ? Number(settings.heapMb)
+    : 16;
   settings.showPad = !!settings.showPad;
   settings.muted = !!settings.muted;
   settings.volume = Math.max(0, Math.min(1, Number(settings.volume) || 0));
@@ -193,6 +198,21 @@ export class GameView {
         try { this.runtime.setSpeed(value); } catch (error) { /* mock/engine */ }
         this._updateSpeedChip();
         this._updateStatus(true);
+      });
+    }
+
+    // The Java heap is fixed when the VM is created, so this only takes effect
+    // on the next start; the hint tells the user instead of silently ignoring it.
+    const heap = $('#heap-select');
+    if (heap) {
+      heap.value = String(this.settings.heapMb);
+      heap.addEventListener('change', () => {
+        const value = HEAP_CHOICES_MB.includes(Number(heap.value))
+          ? Number(heap.value) : 16;
+        if (this.settings.heapMb === value) { return; }
+        this.settings.heapMb = value;
+        saveSettings(this.settings);
+        toast(t('game.memoryNextLaunch'), { kind: 'info' });
       });
     }
 
@@ -387,6 +407,7 @@ export class GameView {
 
       runtime.optionsReset();
       runtime.optionInt(NJW.OPT_SPEED_PERCENT, this.settings.speedPercent);
+      runtime.optionInt(NJW.OPT_HEAP_BYTES, this.settings.heapMb * 1024 * 1024);
       runtime.optionString(NJW.OPT_RMS_DIR, savesDir);
       runtime.optionString(NJW.OPT_FS_DIR, filesDir);
       const midlet = Array.isArray(game.midletClasses) && game.midletClasses.length
@@ -966,7 +987,14 @@ export class GameView {
     this._showLoading(false);
     const overlay = $('#error-overlay');
     const messageEl = $('#error-message');
-    if (messageEl) { messageEl.textContent = message || t('game.errorDefault'); }
+    if (messageEl) {
+      const detail = message || t('game.errorDefault');
+      // The engine appends its last error-level line to fatal errors, so an
+      // out-of-memory failure is recognisable; point at the memory selector.
+      const heapHint = /outofmemory|out of memory|内存/i.test(detail)
+        ? ' ' + t('game.heapHint') : '';
+      messageEl.textContent = detail + heapHint;
+    }
     if (overlay) { overlay.hidden = false; }
     const retry = $('#error-retry');
     if (retry) { retry.textContent = t('game.retry'); }
@@ -984,6 +1012,8 @@ export class GameView {
   _applySettingsToUi() {
     const speed = $('#speed-select');
     if (speed) { speed.value = String(this.settings.speedPercent); }
+    const heap = $('#heap-select');
+    if (heap) { heap.value = String(this.settings.heapMb); }
     this.view.classList.toggle('controls-hidden', !this.settings.showPad);
     this._updateSpeedChip();
     this._updatePanelUi();

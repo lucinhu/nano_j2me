@@ -4,11 +4,13 @@
 #
 #   tools/check_web.sh --node --corpus      what CI and the docs run (default)
 #   tools/check_web.sh --node               JS <-> C API contract test only
-#   tools/check_web.sh --corpus             deterministic 41-title JAR smoke test only
-#   tools/check_web.sh --browser            browser page test (graceful SKIP until task-3)
+#   tools/check_web.sh --corpus             deterministic 42-title JAR smoke test only
+#   tools/check_web.sh --browser            browser page test (Playwright Firefox)
+#   tools/check_web.sh --sweep              slow full-corpus audit over tests/games/
 #   tools/check_web.sh --build --node --corpus   rebuild first, then test
 #
-# Suites (default when no suite flag is given: --node --corpus):
+# Suites (default when no suite flag is given: --node --corpus; --all means
+# --node --corpus --browser, without the slow --sweep audit):
 #   --node      node tools/web_test/web_api_test.mjs
 #               Header/baseline contract: API/runtime version identity, JAR
 #               probing + icons, start error paths, hello.jar 240-frame
@@ -17,19 +19,26 @@
 #               round trip + truncated-state rejection, audiodemo audio, heap
 #               stability.  Runs in well under a second.
 #   --corpus    node tools/web_test/web_corpus_test.mjs
-#               Pinned corpus (39 JARs from tests/games/ + the audio and bench
-#               fixtures; the known-bad 1945空战英雄_6105.jar is excluded) is
-#               probed, started and run 120 deterministic frames each.  ~25 s
-#               on this machine; the whole node+corpus suite stays under a
-#               minute, comfortably inside the two-minute budget.
+#               Pinned corpus (42 titles: 39 JARs from tests/games/ plus the
+#               Midnight Pool regression title and the audio and bench fixtures;
+#               the known-bad 1945空战英雄_6105.jar is excluded) is probed,
+#               started and run 120 deterministic frames each.  ~9 s on this
+#               machine; the whole node+corpus suite stays under half a minute.
 #   --browser   node tools/web_test/web_browser_test.mjs
-#               Real-page Playwright test of the assembled shell (task-3).  The
-#               file does not exist yet; until it does this prints
-#               "SKIP: browser page test not available yet" and the run still
-#               exits 0.  Once the file lands, Playwright (Firefox) is required
-#               and the script is invoked as:
-#                   node tools/web_test/web_browser_test.mjs --evidence <dir>
-#               sorted after --node/--corpus order: node, corpus, browser.
+#               Real-page Playwright test of the assembled shell: library import,
+#               play/pause, save slot, exit, offline reload, installable PWA and
+#               the offline-ready badge (23 checks).  Playwright (Firefox) is
+#               required; when it is not installed this is a hard error.
+#   --sweep     node tools/web_test/web_sweep_test.mjs
+#               Full-corpus audit: every JAR under tests/games/ (minus the
+#               known-bad titles) runs 90 frames in its own Node process with a
+#               25 s timeout and is classified (ok/black/fatal/start/probe/
+#               invalid/timeout).  The classification is compared with the
+#               2026-11-15 native-parity baseline: a regression fails the run,
+#               known parity cases (black title screens, heap-hungry titles,
+#               constructor-loop titles) only warn.  Several minutes long and
+#               deliberately not part of --all; treat it as a pre-release gate.
+#               Evidence: sweep-<titles>.jsonl + sweep-summary.txt.
 #
 # Options:
 #   --build         run tools/build_web.sh (rebuild build/web/ + site) first;
@@ -46,11 +55,10 @@
 #
 # Environment: Node.js >= 18 on PATH.  Building additionally needs the
 # Emscripten SDK as discovered by tools/build_web.sh (emcc on PATH, $EMSDK, or
-# .local-tools/emsdk).  The browser suite additionally needs Playwright/Firefox
-# but is skipped while the test file is absent.
+# .local-tools/emsdk).  The browser suite additionally needs Playwright/Firefox.
 #
-# Exit status: 0 when every executed suite passed (a browser SKIP is not a
-# failure), 1 when a suite failed, 2 on usage or missing-artifact errors.
+# Exit status: 0 when every executed suite passed, 1 when a suite failed, 2 on
+# usage or missing-artifact errors.
 #
 # This script only reads the build; it never commits and only writes under the
 # evidence directory.
@@ -63,12 +71,13 @@ evidence=""
 run_node=0
 run_corpus=0
 run_browser=0
+run_sweep=0
 do_build=0
 corpus_frames=120
 started_at=$(date +%s)
 
 usage() {
-    sed -n '2,66p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '2,/^set -uo pipefail/p' "${BASH_SOURCE[0]}" | sed '$d' | sed 's/^# \{0,1\}//'
 }
 
 die_usage() {
@@ -85,6 +94,7 @@ while [ $# -gt 0 ]; do
     --node)    run_node=1 ;;
     --corpus)  run_corpus=1 ;;
     --browser) run_browser=1 ;;
+    --sweep)   run_sweep=1 ;;
     --all)     run_node=1; run_corpus=1; run_browser=1 ;;
     --build)   do_build=1 ;;
     --evidence)
@@ -101,7 +111,7 @@ while [ $# -gt 0 ]; do
     shift
 done
 
-if [ "$run_node" = 0 ] && [ "$run_corpus" = 0 ] && [ "$run_browser" = 0 ]; then
+if [ "$run_node" = 0 ] && [ "$run_corpus" = 0 ] && [ "$run_browser" = 0 ] && [ "$run_sweep" = 0 ]; then
     run_node=1
     run_corpus=1
 fi
@@ -130,7 +140,7 @@ say_err() { echo "$*" >&2; echo "$*" >> "$log"; }
 say "== nano_j2me web verification"
 say "   repository: $here"
 say "   evidence:   $evidence"
-say "   suites:     node=$run_node corpus=$run_corpus browser=$run_browser build=$do_build"
+say "   suites:     node=$run_node corpus=$run_corpus browser=$run_browser sweep=$run_sweep build=$do_build"
 
 # ---- prerequisites ----------------------------------------------------------
 
@@ -167,9 +177,11 @@ fi
 rc_node=0
 rc_corpus=0
 rc_browser=0
+rc_sweep=0
 status_node="SKIP"
 status_corpus="SKIP"
 status_browser="SKIP"
+status_sweep="SKIP"
 
 if [ "$run_node" = 1 ]; then
     say ""
@@ -192,10 +204,8 @@ if [ "$run_browser" = 1 ]; then
     say "== suite: browser page test"
     browser_test="$here/tools/web_test/web_browser_test.mjs"
     if [ ! -f "$browser_test" ]; then
-        # Task-3: the Playwright test of the assembled shell does not exist yet.
-        # This hook is intentionally graceful: the suite is skipped, not failed.
-        say "SKIP: browser page test not available yet (tools/web_test/web_browser_test.mjs will be added with the browser shell)."
-        status_browser="SKIP"
+        say_err "check_web.sh: browser test is missing: $browser_test"
+        rc_browser=1
     else
         playwright_bin="${PLAYWRIGHT_BIN:-$HOME/.local/bin/playwright}"
         if ! command -v playwright >/dev/null 2>&1 && [ ! -x "$playwright_bin" ]; then
@@ -214,6 +224,14 @@ if [ "$run_browser" = 1 ]; then
     fi
 fi
 
+if [ "$run_sweep" = 1 ]; then
+    say ""
+    say "== suite: full-corpus sweep audit (this takes several minutes)"
+    node "$here/tools/web_test/web_sweep_test.mjs" --evidence "$evidence" 2>&1 | tee -a "$log"
+    rc_sweep=${PIPESTATUS[0]}
+    if [ "$rc_sweep" -eq 0 ]; then status_sweep="PASS"; else status_sweep="FAIL"; fi
+fi
+
 # ---- summary ----------------------------------------------------------------
 
 finished_at=$(date +%s)
@@ -227,17 +245,15 @@ if [ "$run_corpus" = 1 ]; then
     say "   corpus:  $status_corpus"
 fi
 if [ "$run_browser" = 1 ]; then
-    # Distinguish a genuine skip (file absent) from a not-run suite.
-    if grep -q "SKIP: browser page test not available yet" "$log" 2>/dev/null; then
-        say "   browser: SKIP (not available yet)"
-    else
-        say "   browser: $status_browser"
-    fi
+    say "   browser: $status_browser"
+fi
+if [ "$run_sweep" = 1 ]; then
+    say "   sweep:   $status_sweep"
 fi
 say "   evidence: $evidence"
 say "   elapsed:  ${elapsed}s"
 
-if [ "$rc_node" -ne 0 ] || [ "$rc_corpus" -ne 0 ] || [ "$rc_browser" -ne 0 ]; then
+if [ "$rc_node" -ne 0 ] || [ "$rc_corpus" -ne 0 ] || [ "$rc_browser" -ne 0 ] || [ "$rc_sweep" -ne 0 ]; then
     say "== RESULT: FAIL"
     exit 1
 fi

@@ -605,6 +605,29 @@ async function runRealShellChecks() {
     return `frozen at frame ${pausedFrom}, resumed, status version ${JSON.stringify(status.version.trim())}`;
   }, { fatal: true });
 
+  await check('memory selector remembers the Java heap for the next launch', async () => {
+    const panelOpen = await realPage.evaluate(() => document.querySelector('#game-panel').classList.contains('is-open'));
+    if (!panelOpen) {
+      await realPage.click('#panel-handle');
+      await realPage.waitForSelector('#game-panel.is-open', { timeout: 5000 });
+    }
+    const before = await realPage.evaluate(() => {
+      const raw = JSON.parse(localStorage.getItem('nj2me.settings') || '{}');
+      return Number(raw.heapMb) || 16;
+    });
+    await realPage.selectOption('#heap-select', '64');
+    await waitToast(realPage, '内存');
+    const saved = await realPage.evaluate(() => {
+      const raw = JSON.parse(localStorage.getItem('nj2me.settings') || '{}');
+      return Number(raw.heapMb);
+    });
+    assert(saved === 64, `heapMb should persist as 64, got ${saved}`);
+    assert((await realPage.inputValue('#heap-select')) === '64', 'selector keeps 64 MB');
+    /* Back to the test default so the following checks start identically. */
+    await realPage.selectOption('#heap-select', String(before));
+    return `heapMb ${before} -> 64 with a toast, then back to ${before}`;
+  });
+
   await check('save slot 1 writes a real njw_save_state blob', async () => {
     /* Pause again so the save is taken at a stable frame. */
     if (!(await realPage.evaluate(() => window.__nj2me.game._paused === true))) {

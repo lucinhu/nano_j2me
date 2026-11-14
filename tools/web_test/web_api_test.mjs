@@ -34,6 +34,7 @@ import {
     KEY,
     NJW_FRAME_DREW,
     NJW_FRAME_RUNNING,
+    NJW_OPT_HEAP_BYTES,
     NJW_OPT_MIDLET_CLASS,
     TestRun,
     assert,
@@ -693,6 +694,25 @@ async function main() {
         assert(growth <= 16 * 1024 * 1024, `HEAPU8 grew by ${growth} bytes across restarts`);
         assertRange(lengths[1], 16 * 1024 * 1024, 1024 * 1024 * 1024, 'HEAPU8 size after restarts');
         return `${(heapInitial / 1048576).toFixed(0)} MiB -> ${(lengths[1] / 1048576).toFixed(0)} MiB (growth ${growth} B)`;
+    });
+
+    await t.check('NJW_OPT_HEAP_BYTES lifts the Java heap for a heavy title', () => {
+        // 愤怒的小鸟 exhausts the default 16 MiB Java heap (its startApp
+        // throws OutOfMemoryError; njw_error() now carries the thrown line) and
+        // runs fine with 64 MiB, exactly like native running with --heap 64.
+        // This pins both the option and the error text the shell looks at.
+        configureRunner(m, { id: 'heap-option' });
+        assertEqual(m._njw_option_int(NJW_OPT_HEAP_BYTES, 64 * 1024 * 1024), 0,
+            'njw_option_int(HEAP_BYTES, 64 MiB)');
+        const fsPath = installJar(m, path.join(repoRoot, 'tests/games/愤怒的小鸟_383.jar'));
+        assertEqual(startJar(m, fsPath), 0, 'njw_start(愤怒的小鸟)');
+        const run = pumpFrames(m, 90);
+        assert(!run.fatal, `64 MiB run hit a fatal error: ${describePump(run)}`);
+        assert(run.drew >= 60, `expected the title to draw, got ${run.drew} drawn frames`);
+        const stats = framebufferStats(m);
+        assert(stats.nonBlack > 1000, `framebuffer should have content, got ${stats.nonBlack} non-black pixels`);
+        njwStop(m);
+        return `90 frames at 64 MiB, ${stats.nonBlack} non-black pixels`;
     });
 
     await t.check('single module instance keeps working after many JAR switches', () => {

@@ -168,6 +168,8 @@ typedef struct njw_runner {
     int          drew_this_pump;
     char         error[320];
     char         stop_reason[192];
+    char         last_error_log[256]; /* last level-0 engine log line */
+    char         last_throw_log[256]; /* last "thrown:" line (level 2) */
 
     /* --- virtual clock --- */
     nj_u8 clock_us;                 /* monotonic, host advanced */
@@ -669,10 +671,23 @@ static void web_port_free(void *ud, void *p)
 static void web_port_log(void *ud, int level, const char *msg)
 {
     (void)ud;
-    (void)level;
-    if (msg != NULL) {
-        fprintf(stderr, "[nj2me] %s\n", msg);
+    if (msg == NULL) {
+        return;
     }
+    /* Keep the last error-level line: when nj_midp_frame() reports a bare
+     * status the shell cannot tell the user what the MIDlet actually hit
+     * (out-of-memory, a format the port lacks, ...).  The line is appended to
+     * the fatal error text in njw_frame(). */
+    if (level == 0) {
+        snprintf(g_runner.last_error_log, sizeof g_runner.last_error_log,
+                 "%s", msg);
+    } else if (strncmp(msg, "thrown:", 7u) == 0) {
+        /* Escaped Java exceptions are logged at level 2; keep the newest one
+         * because it usually explains the fatal status that follows. */
+        snprintf(g_runner.last_throw_log, sizeof g_runner.last_throw_log,
+                 "%s", msg);
+    }
+    fprintf(stderr, "[nj2me] %s\n", msg);
 }
 
 /*
@@ -1259,6 +1274,8 @@ int njw_start(const char *jar_path)
     }
     r->error[0] = '\0';
     r->stop_reason[0] = '\0';
+    r->last_error_log[0] = '\0';
+    r->last_throw_log[0] = '\0';
     r->frames = 0u;
     r->epoch = 0u;
     r->drew_this_pump = 0;
@@ -1555,7 +1572,15 @@ int njw_frame(double dt_ms)
             break;
         }
         if (st != NJ_OK) {
-            runner_set_error("the display loop failed (status %d)", (int)st);
+            if (r->last_throw_log[0] != '\0') {
+                runner_set_error("the display loop failed (status %d); last error: %s",
+                                 (int)st, r->last_throw_log);
+            } else if (r->last_error_log[0] != '\0') {
+                runner_set_error("the display loop failed (status %d); last error: %s",
+                                 (int)st, r->last_error_log);
+            } else {
+                runner_set_error("the display loop failed (status %d)", (int)st);
+            }
             break;
         }
         if (r->displayable_ready) {
