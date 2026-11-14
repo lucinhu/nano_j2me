@@ -269,7 +269,12 @@ is refused as before. One measured remaining case is a title whose `paint()`
 itself waits on the virtual clock while the frontend is paused
 (`火影忍者汉化版_10735.jar`): the frame never reaches the boundary where
 requests are served and the save is refused after the four-second deadline.
-Saving during normal play, at a frame boundary, is unaffected.
+The same serving-time limitation applies to load requests: titles that keep the
+worker inside a native callback after a refused restore
+(`明星制造梦工厂_11048.jar`, `空战1944_10321.jar`, `迈阿密之夜_9566.jar`) can
+refuse a valid restore queued while the frontend is paused. The blob itself is
+validated on the worker; this is a serving-time limit, not a format change.
+Saving or loading during normal play, at a frame boundary, is unaffected.
 
 There is no determinism claim. Rewind, runahead and netplay are not advertised
 or validated; use manual states and the game's own save system. Snapshot sizes

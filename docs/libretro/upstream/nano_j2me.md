@@ -66,8 +66,9 @@ cursor are restored without reopening a codec. Native audio handles and device
 queues are cleared, so encoded/native-only playback may stop. RecordStore
 files, FileConnection contents and other external resources are not rewound.
 A load can therefore combine earlier Java state with later files. A VM unable
-to reach a safe point can refuse a request. State size scales with the heap
-budget. These basic manual states do not establish determinism or support for
+to reach a safe point can refuse a request, and a save or load requested while
+the frontend is paused can be refused when the current frame never reaches the
+boundary where requests are served. State size scales with the heap budget. These basic manual states do not establish determinism or support for
 rewind, netplay or runahead.
 
 ## Directories

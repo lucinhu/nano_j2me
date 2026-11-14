@@ -27,7 +27,7 @@ new file mode 100644
 index 0000000..aaf432a
 --- /dev/null
 +++ b/docs/library/nano_j2me.md
-@@ -0,0 +1,201 @@
+@@ -0,0 +1,203 @@
 +---
 +title: "nano_j2me – Mobile J2ME core for RetroArch"
 +description: "RetroArch nano_j2me core (Mobile J2ME): core options, controls, save states and limits. Native C99 J2ME runtime loading .jar files directly, no external Java runtime."
@@ -101,7 +101,9 @@ index 0000000..aaf432a
 +queues are cleared, so encoded/native-only playback may stop. RecordStore
 +files, FileConnection contents and other external resources are not rewound.
 +A load can therefore combine earlier Java state with later files. A VM unable
-+to reach a safe point can refuse a request. State size scales with the heap
++to reach a safe point can refuse a request, and a save or load requested while
++the frontend is paused can be refused when the current frame never reaches the
++boundary where requests are served. State size scales with the heap
 +budget. These basic manual states do not establish determinism or support for
 +rewind, netplay or runahead.
 +

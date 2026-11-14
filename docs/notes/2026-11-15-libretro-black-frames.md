@@ -95,6 +95,11 @@ three bugs above render; the remaining failures are not visual:
 * `都市赛车6火线追击_2230` and `迈阿密之夜_9566` - only
   `serialize_after_refused_restore` (a save queued immediately after a
   refused-restore sequence); saving at a normal boundary is unaffected.
+* `明星制造梦工厂_11048`, `空战1944_10321` and `迈阿密之夜_9566` also fail
+  `unserialize_accepts_resigned_state`: a valid restore queued while the
+  frontend is paused is refused when the worker stays inside a native callback
+  (the same serving-time limitation as the paused-save case, documented in
+  `docs/LIBRETRO.md`).
 * `空战1944_10321`, `明星制造梦工厂_11048`, `毁灭战士3_10598` - harness
   watchdog; heavy/long titles need a longer harness timeout.
 * `1945空战英雄_6105` and `bubblet.jar` - need

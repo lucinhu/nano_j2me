@@ -90,7 +90,7 @@ artifacts were refreshed once more after the state-load fix at HEAD `dd39c1c`
    `no_statics`. A separate build directory under `/var/tmp` is used so the
    user's in-progress `build/` trees are not touched.
 8. **Upstream patches, exact and build-validated**: `libretro-docs-nano_j2me.patch`
-   (5 files, +211 lines) and `libretro-super-nano_j2me-info.patch` (one added
+   (5 files, +213 lines) and `libretro-super-nano_j2me-info.patch` (one added
    file) were generated inside clean shallow clones of `libretro/docs` master
    `d83b34b21b8a2c14db573aea66d876e343d316ca` and `libretro-super` master
    `fb15e630655375a50317be2a7953477ef9a5d12a`, and each was re-checked with
