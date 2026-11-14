@@ -2269,13 +2269,11 @@ static void lr_idle(void *ud)
         /* A pending request blocks the frontend: advance the clock a bounded
          * amount so a frame that busy-waits on the virtual clock can reach
          * its boundary and the request gets served (LR_STATE_CLOCK_MAX_FRAMES).
-         * A load discards the VM, so it may advance without that budget. */
-        if (s->req_kind == LR_REQ_SAVE && s->clock_budget > 0u) {
+         * Both kinds are bounded: an unbounded load assist lets a frame that
+         * spins on its own loop run the virtual clock arbitrarily far ahead,
+         * which is not something a paused frontend should do. */
+        if (s->req_kind != LR_REQ_NONE && s->clock_budget > 0u) {
             s->clock_budget--;
-            s->vclock_frames++;
-            lr_cond_broadcast(&s->cond);
-            target = lr_virtual_ms(s) + 1;
-        } else if (s->req_kind == LR_REQ_LOAD) {
             s->vclock_frames++;
             lr_cond_broadcast(&s->cond);
             target = lr_virtual_ms(s) + 1;
@@ -2646,7 +2644,7 @@ static int lr_request_state(nj_lr *s, int kind, const void *input,
     s->req_kind = kind;
     s->req_done = 0;
     s->req_busy = 0;
-    s->clock_budget = (kind == LR_REQ_SAVE) ? LR_STATE_CLOCK_MAX_FRAMES : 0u;
+    s->clock_budget = LR_STATE_CLOCK_MAX_FRAMES;
     s->req_blob = copy;
     s->req_size = input_size;
     lr_cond_broadcast(&s->cond);
@@ -2723,13 +2721,11 @@ static int lr_frame_hook(nj_vm *vm, void *ud)
      * clock may advance freely.  A pending SAVE may advance at most
      * LR_STATE_CLOCK_MAX_FRAMES virtual frames: the snapshot then reflects
      * that much additional game time, which is the documented trade-off for
-     * saving while the frontend is paused.
+     * saving while the frontend is paused.  A LOAD is bounded the same way so
+     * a spinning frame cannot advance the clock without limit.
      */
     lr_mutex_lock(&s->lock);
-    if (s->req_kind == LR_REQ_LOAD) {
-        s->vclock_frames++;
-        lr_cond_broadcast(&s->cond);
-    } else if (s->req_kind == LR_REQ_SAVE && s->clock_budget > 0u) {
+    if (s->req_kind != LR_REQ_NONE && s->clock_budget > 0u) {
         s->clock_budget--;
         s->vclock_frames++;
         lr_cond_broadcast(&s->cond);
@@ -2768,8 +2764,17 @@ static void *lr_vm_thread(void *arg)
 
         /* nj_run() gives a MIDlet that paints late a grace period; the same
          * applies here.  nj_midp_frame() returns NJ_ERR while no Displayable
-         * exists, so this cannot spin forever. */
-        while (waited < 60 && nj_vm_running(s->vm) &&
+         * exists, so this cannot spin forever.
+         *
+         * The period has to allow a background loader thread to finish: the
+         * frame hook pumps frames unpaced, so 600 iterations cost little wall
+         * time while a title that parses its resources before installing its
+         * Displayable needs far more than the old 60 (拳王争霸_11585 stayed
+         * black through the whole grace and only appeared at ~100+ frames).
+         * One second was long enough for the desktop runner because startApp()
+         * there runs to completion before the grace loop starts; the libretro
+         * start is asynchronous and sees every intermediate quantum. */
+        while (waited < 600 && nj_vm_running(s->vm) &&
                !nj_midp_current(s->vm)) {
             lr_mutex_lock(&s->lock);
             stop = s->stop;
