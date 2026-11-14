@@ -85,23 +85,30 @@ SharedArrayBuffer。完整类库、软件光栅化器、解码器与 M3G/Micro3D
 （相应 API 按名字明确拒绝），文件系统走 Emscripten libc FS，画面由 C 侧从
 RGB565 展开成 RGBA8888 交给 `<canvas>`。虚拟时钟由宿主驱动：加载阶段
 （`nj_vm_new_midlet` 之前）`sleep_ms` 全量快进，运行阶段每次
-`njw_frame(dt)` 推进一次时钟，`sleep_ms` 只按小步快进使阻塞中的 Java 线程能继续。
+`njw_frame(dt)` 推进一次时钟，`sleep_ms` 只按小步快进使阻塞中的 Java 线程能继续；
+此外每帧把宿主真实流逝时间折进时钟（单调、上限 250 ms），使 `System.currentTimeMillis()`
+忙等的标题（如魂斗罗）不会在单帧内卡死。构造器永不返回的标题（如毁灭战士3）
+会在 10 秒/20000 次帧泵后以明确错误结束，而不是冻住页面。
 
 已实际执行的检查（Node，产物为当前 `build/web/js/nj2me.js`）：
 
 | 项 | 结果 |
 | --- | --- |
 | hello.jar 渲染 | 启动 rc 0，240 帧全部 `DREW`，240x320 RGBA 共 76800 像素非黑，PNG 内容正确（"Hello World!"） |
-| 固定语料批处理（41 款：39 游戏 + audiodemo/bench，120 帧/款） | 46/46 检查通过；39 款游戏全部启动并 120/120 出画；audiodemo/bench 按 `notifyDestroyed()` 正常退出（分别 1、4 帧）；唯一排除 `1945空战英雄_6105.jar`，它在原生 headless 上同样失败（标题自身 `IllegalAccessException`） |
+| 固定语料批处理（42 款：39 游戏 + 午夜台球回归标题 + audiodemo/bench，120 帧/款） | 47/47 检查通过（8.7 s）；42 款游戏全部启动并 120/120 出画、非黑；audiodemo/bench 按 `notifyDestroyed()` 正常退出（分别 1、4 帧）；唯一排除 `1945空战英雄_6105.jar`，它在原生 headless 上同样失败（标题自身 `IllegalAccessException`） |
 | bubblet.jar 构造器 | 修复前 `NullPointerException @ Bubblet.<init>+15`：构造器读取 `System.getProperty("com.nokia.keyboard.type")`；端口补上 `device_property`（回答 `None` 等）后正常出画 |
 | 存档往返（game15.jar） | `can_save=1`，保存 360,171 字节，读回 rc 0，读档后继续 `RUNNING\|DREW`，epoch 41 |
 | 声音（audiodemo.jar） | 修复前可读 0 帧：运行阶段快进把 `playTone` 在单帧内跑完，`tone_stop` 清空了宿主还没拉取的队列；改为 `tone_stop`/`pcm_close` 不清队列（有界环）后 2020 帧可读 |
 | JAR 图标 | hello.jar 的 `njw_app_icon` 返回 191 字节 PNG（修复 MIDlet-1 图标路径以 `/` 开头时查不到 zip 项的问题，与 `nj_app_resource` 的规则一致） |
+| 单帧内时钟修复（忙等标题） | 修复前 `System.currentTimeMillis()` 忙等的标题（魂斗罗_5652 等 16 款）在 wasm 单帧内死循环/超时 150 s 以上；把真实流逝时间折进虚拟时钟后，魂斗罗 90 帧 **6340 ms**（原生 **6322 ms**），原 16 个 timeout 标题 15 个转 ok，1 个（毁灭战士3）转为明确的构造器拒绝 |
+| 构造器已装 Displayable 却跳过 startApp（真实 bug） | `午夜台球圣诞中文版_8677.jar`（GloftCHPO，极限台球挑战赛）的构造器里 `setCurrent()` + 启动游戏线程，真正初始化在 `startApp()`；修复前 runner 因 `displayable_ready` 已真而跳过 startApp → 画面全黑且每帧 NPE（`Graphics.drawImage ... image is null`）；改为**无条件** queue `startApp()`（与原生 `nj_run` 一致）后，20 帧起 76800 非黑像素并正常显示菜单/游戏画面 |
+| 构造器永不返回的标题 | `毁灭战士3_10598.jar` 在构造器里 join 运行游戏循环的线程；原生 CLI 靠 `--run-frames` 预算中止构造器，浏览器版改为 10 s/20000 次泵帧上限并返回明确错误；`njw_start` 约 10.0 s 内失败，不再挂死 |
+| 全语料审计（403 标题，90 帧/款，Node） | **392 ok / 8 black / 1 fatal / 1 构造器拒绝 / 1 无效 JAR**；8 个 black 全部与原生同帧对照确认 parity（7 个原生 `--fps 0` 同为全黑，火焰纹章是与原生 `--fps 60` 逐帧一致的淡出过渡，相位差 ~5-7 帧）；愤怒的小鸟为 Java heap 不足（原生默认 heap 同样 OOM，`NJW_OPT_HEAP_BYTES` 64 MiB 下 wasm 与原生均正常 90 帧、76639 非黑像素）；鲁宾逊原生同样拒绝；原始结果 `.local-tools/debug-runs/web-sweep/{sweep-403.jsonl,summary.txt}` |
 | 无静态状态门禁 | `tools/check_no_statics.sh` 通过（83 个目标文件）；web 端口与 libretro 一样按 ABI 套豁免，MIDlet 状态仍在 `nj_vm` 内 |
 | 真实浏览器冒烟（headless Firefox + `build/web` 静态服务） | 导入 hello.jar → 库条目显示 "Hello World / frog-parrot.net" → 点击出画 240x320（内容为 "Hello World!"）→ 方向键/Enter 无异常 → 返回库；无 page error，截图 `.local-tools/debug-runs/web-manual-smoke/` |
 | 与原生帧对照 | `1942空战_10403.jar` 的标题屏（"¿SONIDO?" 选择音效）在浏览器里与原生 headless `--dump-frames` 的 240x320 帧逐像素一致；该标题在原生与 wasm 上都抛同一个 `ArrayIndexOutOfBoundsException`（商品自身行为，不是端口回归） |
 | 真实游戏浏览器实测（Playwright Firefox，可玩性） | `蹦球传说美化版_2959.jar`（Bounce Tales 修改版，自动演示画面）在真实页面中：rAF pump **60.1 次/秒**、6 秒内 9 个不同画面帧（30 次采样）、方向键/Enter 后画面改变且 pump 不停、打开工具面板后画面冻结（自动暂停）并在关闭后恢复、退出回库后刷新游戏仍在库中；同一页面运行 `audiodemo.jar` 3 秒，引擎日志出现 10 行音频事件（`wav=200000`、`amr=80000`、`adpcm=252500`、state=400，`http=unsupported` 符合无网络预期）；0 console/page error，证据 `.local-tools/debug-runs/web-playtest/` |
-| 浏览器页面（Playwright Firefox + `tools/check_web.sh --browser`） | 23/23 检查通过（约 6.3 s）：静态服务 `build/web` → 真实引擎 `kind=wasm`、API 1、版本 0.5.7 → zh-CN 界面 → 导入 hello.jar（元数据/图标进 IndexedDB）→ 画布 240x320 非黑（4 色）→ 方向键/Enter（nj_key 15/16/17/6）帧号推进 → 面板自动暂停（帧冻结）+ 继续 → 存档槽 1 blob 329,724 字节、读档往返不重启 → 退出回库 → 刷新后游戏与存档仍在 → 缺 wasm 时降级 mock 并显示指向 `tools/build_web.sh` 的横幅；0 page/console error、0 外部请求；证据 `.local-tools/debug-runs/web-lead-final-all/browser-0*-*.png` |
+| 浏览器页面（Playwright Firefox + `tools/check_web.sh --browser`） | 23/23 检查通过（约 6.4 s）：静态服务 `build/web` → 真实引擎 `kind=wasm`、API 1、版本 0.5.7 → zh-CN 界面 → 导入 hello.jar（元数据/图标进 IndexedDB）→ 画布 240x320 非黑（4 色）→ 方向键/Enter（nj_key 15/16/17/6）帧号推进 → 面板自动暂停（帧冻结）+ 继续 → 存档槽 1 blob 329,724 字节、读档往返不重启 → 退出回库 → 刷新后游戏与存档仍在 → 缺 wasm 时降级 mock 并显示指向 `tools/build_web.sh` 的横幅；0 page/console error、0 外部请求；证据 `.local-tools/debug-runs/web-lead-final-all/browser-0*-*.png` |
 | PWA / 离线（service worker） | `manifest.json` 可解析（`display=standalone`，4 个图标含 maskable）→ `sw.js` 接管页面 → 缓存含 `js/nj2me.js` 与 `js/nj2me.wasm`（20 项）→ 库页脚显示“离线可用”（`#library-engine[data-offline=1]`、`body[data-offline=ready]`）→ **停掉静态服务器后重载**仍 boot shell 且 `kind=wasm` → 断网从库启动已导入的 `hello.jar`，240×320 画面非黑且帧号 13→38 继续推进；证据 `.local-tools/debug-runs/web-offline-badge/browser-09-offline.png`、`browser-10-offline-game.png` 与 `browser-shell-test.json`；注意 Playwright Firefox 的 `context.set_offline()` 对 service worker 不生效，离线用停服务器模拟 |
 
 性能（600 帧空跑，两边都是 Release；原生用 `--fps 0` 即 uncapped）：
@@ -169,8 +176,8 @@ tools/check_web.sh --node --corpus             # 另有 --browser（Playwright F
 | `.local-tools/debug-runs/gfx-full-20261113/linux/libretro/nano_j2me_libretro.so` | 4074864 | `b3c10489601b274ba8da40408546f72dda0ee7c7c335278bc8df4879abfc6449` |
 | `.local-tools/debug-runs/gfx-full-20261113/linux/nj2me` | 4010888 | `f375c84a2201b7714a455354423e1935acbe0ce6bbaffa53b7ab0b41fa1ca6a6` |
 | `.local-tools/debug-runs/gfx-full-20261113/android-legacy/nj2me-legacy.apk` | 694454 | `4fcae0408bb83b34a9a4e097e8c61124881973900d48c559520ca48ad396446d` |
-| `build/web/js/nj2me.js` | 93864 | `5f0919d8cc7286832e3e777225b3cd93969bd944b388606084aee018488d6be9` |
-| `build/web/js/nj2me.wasm` | 2143992 | `337335f383854ad4808334c29a5bce1e79f9443a3a435830c4f95d430c65e2e7` |
+| `build/web/js/nj2me.js` | 93889 | `77652b2e6c8ef1a2e22e95eeec54e66530a1fe069728cf9a7bf6944ef424885f` |
+| `build/web/js/nj2me.wasm` | 2144424 | `fd431b04b0fd895f367bdc928725830bf7ca60f4b09b4af112225fcfdcda06d4` |
 
 以上产物均由同一份当前源码构建（含 2026-11-14 的 journal 批处理与持久
 GPU 会话改动；Windows/Android/libretro 在最后一次修改后重新构建）。legacy
@@ -196,8 +203,12 @@ Web 产物也在提交前重新构建并重新跑过 `tools/check_web.sh --all`�
 - libretro 真实 EGL：`.local-tools/debug-runs/gfx-full-20261113/libretro-live/`（`mc-current`、`bounce-current`、`REPORT.md`）
 - Windows/Wine：`.local-tools/debug-runs/gfx-full-20261113/windows-audit/`（`frames/`、`sdl2-mc-window.png`、`sdl2-mc.log`、`win-gles2-maze.log`、`wine-wgl.log`）
 - AMR/编解码报告：`.local-tools/debug-runs/gfx-full-20261113/amr/`、`.local-tools/debug-runs/gfx-full-20261113/codec-audit/`
-- 网页版：`.local-tools/debug-runs/web-lead-final-all/`（Lead 的最终 `--all` 运行：check-web.log、
-  41 张语料 PNG、`browser-01…08-*.png`、`browser-shell-test.json`、`browser-console.log`）、
+- 网页版：`.local-tools/debug-runs/web-clean-build/`（由已提交源码在干净 worktree 重建后的
+  最新 `--all` 运行：node PASS、语料 47/47、浏览器 23/23、check-web.log、42 张语料 PNG）、
+  `.local-tools/debug-runs/web-final-fixes/`（修复后的 `--all` 运行）、
+  `.local-tools/debug-runs/web-corpus-regression/`（加入午夜台球回归标题后的 47/47 语料运行）、
+  `.local-tools/debug-runs/web-sweep/`（403 标题全语料审计：`sweep-403.jsonl` + `summary.txt`）、
+  `.local-tools/debug-runs/web-lead-final-all/`（更早的 `--all` 运行）、
   `.local-tools/debug-runs/web-verify-<日期>/`（Node API/语料日志、PNG 帧）、
   `.local-tools/debug-runs/web-shell/`（外壳 mock 与真实 wasm 自测）和
   `.local-tools/debug-runs/web-manual-smoke{,2}/`（Lead 的 headless Firefox 冒烟 + 原生帧对照）和

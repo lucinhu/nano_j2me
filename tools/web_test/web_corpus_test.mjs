@@ -12,9 +12,10 @@
  *   - the first 40 titles of tests/games/ in the repository's zh_CN pinyin
  *     order, minus 1945空战英雄_6105.jar, which also fails in the native
  *     build and is therefore not a supported title;
- *   - plus tests/fixtures/audiodemo.jar (audio path) and
+ *   - plus tests/games/午夜台球圣诞中文版_8677.jar (constructor-installs-
+ *     Displayable regression), tests/fixtures/audiodemo.jar (audio path) and
  *     tests/fixtures/bench.jar (notifyDestroyed path).
- * 41 entries total.  Update this list deliberately when the corpus changes.
+ * 42 entries total.  Update this list deliberately when the corpus changes.
  *
  * Per title the test asserts:
  *   - the JAR is staged into MEMFS at its real size
@@ -111,6 +112,12 @@ const CORPUS = Object.freeze([
     'tests/games/超级马里奥_10283.jar',
     'tests/games/超级坦克大战2汉化版_531.jar',
     'tests/games/超时空帝国机甲风暴_12065.jar',
+    // Regression title: its MIDlet constructor installs a Canvas and starts the
+    // game thread, and startApp() is what actually initialises the offscreen
+    // image and state machine.  It caught the runner skipping startApp() when
+    // the constructor had already made a Displayable current, which left the
+    // screen black.
+    'tests/games/午夜台球圣诞中文版_8677.jar',
     'tests/fixtures/audiodemo.jar',
     'tests/fixtures/bench.jar',
 ]);

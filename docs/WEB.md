@@ -21,7 +21,7 @@ core).
 | Build | Emscripten 7.0.0 (`emcc`), `-sMODULARIZE` ES module + `.wasm`, single-threaded, no Asyncify |
 | Module size | `nj2me.js` ≈ 92 KiB, `nj2me.wasm` ≈ 2.1 MiB (release) |
 | CLI-free | the browser target builds the runtime library plus `src/port/web/nj_web.c` only |
-| Verify | Node API contract + 41-title corpus audit + real-Firefox page test (Playwright), see [Verification](#verification) |
+| Verify | Node API contract + 42-title corpus audit + real-Firefox page test (Playwright), see [Verification](#verification) |
 | Networking, sockets, Bluetooth, sensors | not exposed in the browser build (hooks are `NULL`; the APIs refuse by name) |
 | JIT | unavailable (no executable pages in wasm); the interpreter remains the engine, as on every other target |
 
@@ -158,9 +158,12 @@ runner built on the runtime's public embedder API:
   by the SDL2 and libretro ports: input, scheduler slice, media, paint, present).
   The host calls it once per `requestAnimationFrame`.
 - `startApp()` is queued with `nj_vm_start_app_async()` and executed by the next
-  frame pumps. While the first `Displayable` has not appeared yet, a frame may
-  internally run up to four pumps (`NJW_FRAME_LOADING` says so); this is how
-  splash screens and constructor-time waits work without blocking the tab.
+  frame pumps. It is queued **unconditionally**: some MIDlets install their
+  `Canvas` in the constructor and keep the real initialisation in `startApp()`,
+  exactly as `nj_run()` treats them. While the first `Displayable` has not
+  appeared yet, a frame may internally run up to four pumps
+  (`NJW_FRAME_LOADING` says so); this is how splash screens and constructor-time
+  waits work without blocking the tab.
 - The internal frame pacer is disabled (`nj_vm_set_frame_cap(vm, 0)`; the port
   reports `fps_cap = 0`), so `nj_midp_frame()` never sleeps. Display pacing is the
   host's business: the shell uses `requestAnimationFrame`.
@@ -183,6 +186,20 @@ The emulated clock is owned by the host, not the wall clock:
 - `njw_set_speed(percent)` (10–800) scales the virtual clock exactly like
   `nj_vm_set_speed()` on the desktop ports, and does not jump the clock when
   changed.
+- The clock also follows the host's **wall clock**. A single pump can execute a
+  lot of Java, and a MIDlet that busy-waits on `System.currentTimeMillis()`
+  (some racing titles do) must see time pass or the pump never ends. The port
+  folds the real elapsed time since the previous frame into the virtual clock
+  (monotonic, clamped to 250 ms), so those loops terminate; on a fast host the
+  folded-in amount is tiny and the frame-driven `dt` still dominates. Sleeping
+  is unaffected: `Thread.sleep()` is still fast-forwarded, so sleep-paced games
+  run at their intended speed.
+- The wall clock also lets a **constructor that never returns** be reported
+  instead of hanging the tab. If the MIDlet constructor keeps pumping frames for
+  more than 10 s of wall time (or 20,000 frame-hook pumps), `njw_start()` fails
+  with `the MIDlet constructor does not return; this title runs its game loop
+  from the constructor, which the browser port cannot interrupt` (see
+  [Limitations](#limitations)).
 
 This gives deterministic, frame-driven emulation: 60 `njw_frame(16.667)` calls
 advance 60 frames of game time whether the tab renders at 30, 60 or 144 Hz,
@@ -337,7 +354,7 @@ Runnable from a fresh checkout with the wasm built (`--node --corpus` is the
 default and is what CI and these docs run):
 
 ```sh
-tools/check_web.sh --node --corpus   # API contract + pinned corpus, about 26 s
+tools/check_web.sh --node --corpus   # API contract + pinned corpus, about 10 s
 tools/check_web.sh --all             # those two plus the Playwright page test
 tools/check_web.sh --build --node    # rebuild build/web/ first
 ```
@@ -361,8 +378,12 @@ the render assertions to settle).
   keyboard input, pause/resume, save/load round-trip and a rejected load,
   restart-after-stop, audio on `tests/fixtures/audiodemo.jar`.
 - **Corpus test** (`tools/web_test/web_corpus_test.mjs`) — a deterministic slice
-  of the 400-title [compatibility corpus](CORPUS.md) (plus fixtures) run for 120
-  frames each with JAR start, drawn-frame and non-blank-frame checks.
+  of the 400-title [compatibility corpus](CORPUS.md) (plus fixtures and one
+  regression title) run for 120 frames each with JAR start, drawn-frame and
+  non-blank-frame checks. The regression title
+  `午夜台球圣诞中文版_8677.jar` installs its `Canvas` in the MIDlet constructor
+  and starts its game thread there, which is what caught the runner skipping
+  `startApp()`.
 - **Browser test** (`tools/web_test/web_browser_test.mjs`, 23 checks) — serves
   `build/web/` on an ephemeral port and drives the real shell in headless Firefox
   through Playwright: the real engine (`kind=wasm`, API 1, runtime 0.5.7),
@@ -382,10 +403,10 @@ the render assertions to settle).
 
 Measured on the reference build (Emscripten 7.0.0, `include/nj2me/nj_web.h`
 0.5.7): the API suite passes **33/33 checks in 0.2 s**, the corpus suite
-**46/46 checks (41 titles) in 26 s**, and the browser suite **23/23 checks in
-about 6.3 s** — `tools/check_web.sh --all` is **33 s** end to end. All 39 playable
-titles draw 120/120 frames, there are no engine `[nj2me] error:` lines, and the
-wasm heap stays at 64 MiB.
+**47/47 checks (42 titles) in 8.7 s**, and the browser suite **23/23 checks in
+about 6.4 s** — `tools/check_web.sh --all` is **15 s** end to end. All 42
+playable titles draw 120/120 frames, there are no engine `[nj2me] error:` lines,
+and the wasm heap stays at 64 MiB.
 The known-bad `1945空战英雄_6105.jar` is excluded because it fails natively too.
 A real-page smoke run (headless Firefox, `build/web/` served on a local port)
 imports `hello.jar` through the shell, renders the 240×320 frame, accepts
@@ -404,6 +425,27 @@ closing it resumes, and the library entry survives a page reload. Running
 `http=unsupported` line is expected without a network hook), with zero
 console/page errors. Evidence: `.local-tools/debug-runs/web-playtest/`.
 
+### Full-corpus audit (403 titles)
+
+Beyond the pinned corpus, the whole `tests/games/` directory was audited once
+after the browser fixes: every JAR except the known-bad
+`1945空战英雄_6105.jar` (403 titles), 90 frames each, in Node with a 25 s
+per-title timeout. Result: **392 ok, 8 black, 1 fatal, 1 constructor refusal,
+1 invalid JAR**. Every remaining case was classified against the native build
+at the same 90-frame checkpoint:
+
+| Class | Titles | Verdict |
+|---|---|---|
+| Black at frame 90 (8) | 宠物王国6, 纯爱物语3, 都市赛车6, 灌篮高手-爆发!樱木, 火焰纹章勇者之剑, 开心农场BT版, 生化危机之恶化, PC正版-使命召唤5 | parity — native `--fps 0` is black at frame 90 too; 火焰纹章 is a fade-out transition frame and the native `--fps 60` per-frame dumps show the same fade (→black at 81-83, next scene at 84) within a few frames of the wasm timing |
+| Fatal (1) | 愤怒的小鸟_383 | Java heap exhaustion; the native build also throws `OutOfMemoryError` at its default heap. With `NJW_OPT_HEAP_BYTES` = 64 MiB the wasm run completes 90 frames (76,639 non-black pixels, 32 colours) just like native `--heap 64` |
+| Constructor refusal (1) | 毁灭战士3_10598 | by design — the MIDlet runs its game loop from the constructor and joins it, so the runner reports the bounded error instead of freezing the page |
+| Invalid JAR (1) | 鲁宾逊漂流记汉化BT版_4677 | parity — native also rejects it (`bad JAR or no MIDlet-1`) |
+
+The audit found and drove the three real fixes listed above (wall-clock fold,
+unconditional `startApp()`, bounded constructor). Raw results and the summary
+table are in `.local-tools/debug-runs/web-sweep/` (`sweep-403.jsonl`,
+`summary.txt`).
+
 The same scenarios can be driven by hand with `node` (Node has no IndexedDB, so
 mount MEMFS instead of IDBFS) — the harnesses are the reference. Evidence
 (screenshots, PNG dumps, logs) goes to `.local-tools/debug-runs/`, never into the
@@ -420,6 +462,15 @@ repository.
   the reason games remain playable rather than fast.
 - **No native font files**: the built-in bitmap fonts and in-tree TrueType
   rasterizer are used, like the Android build.
+- **MIDlets that never return from the constructor** are refused with a clear
+  error after about 10 s (e.g. `毁灭战士3_10598.jar`, whose constructor joins the
+  thread that runs the game loop). The native CLI only "runs" those titles
+  because `--run-frames` aborts the constructor from the frame hook; a browser
+  page cannot be frozen like that, so the port bounds the wait and reports it.
+- **Java heap** defaults to the native 16 MiB (`NJW_OPT_HEAP_BYTES` raises it up
+  to the wasm memory limit). Heavy titles such as `愤怒的小鸟_383.jar` exhaust it
+  exactly as they do in the native build at the default heap; 64 MiB is enough
+  for both.
 - **Not yet verified**: iOS Safari, very large heap games (>512 MiB), true
   multi-tab use of the same IDBFS prefix (last writer wins), and WebKitGTK.
 - The wasm target cannot be built with `NJ_ENABLE_JIT`/threaded dispatch enabled
@@ -432,6 +483,7 @@ repository.
 | `failed to asynchronously prepare wasm` / cannot find `nj2me.wasm` | `locateFile` must return an absolute URL; serve over HTTP, not `file://` |
 | Page shows "wasm 未构建 / engine missing" banner | build with `tools/build_web.sh`, serve `build/web/` (not `web/`) |
 | Blank canvas forever, `njw_frame` keeps returning `LOADING` | the MIDlet installed no `Displayable`; check `njw_stop_reason()` after 20 virtual seconds, and the console log (`[nj2me] ...`) |
+| `njw_start()` returns -1 with `the MIDlet constructor does not return ...` | the title runs its game loop from the MIDlet constructor (e.g. `毁灭战士3`); this cannot be supported without freezing the page, see [Limitations](#limitations) |
 | No sound | browsers need a user gesture before audio; click once, check `njw_audio_available()` and the shell's mute/gain path |
 | Saves vanish after reload | IndexedDB blocked (private mode) or IDBFS fallback not syncing; check the shell's console warning and `navigator.storage.persist()` |
 | `redefinition of typedef 'nj_vm' is a C11 feature` while building | don't use `-DNJ_WERROR=ON` on the wasm target (pre-existing header style) |

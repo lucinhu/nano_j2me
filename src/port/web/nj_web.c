@@ -116,6 +116,15 @@
 #define NJW_LOAD_PUMPS 4
 #define NJW_DISPLAYABLE_TIMEOUT_US 20000000ull
 
+/* A few MIDlets run their whole game from the MIDlet constructor - they start a
+ * thread that is the game loop and then join() it.  In a browser the constructor
+ * call is on the page's stack, so such a title would freeze the tab forever with
+ * no way out.  Give a constructor a generous wall-clock budget (normal
+ * constructors finish in well under a second because sleep() is fast-forwarded
+ * while loading) and then fail with a message the shell can show. */
+#define NJW_CONSTRUCTOR_WALL_MS 10000.0
+#define NJW_CONSTRUCTOR_PUMP_LIMIT 20000u
+
 #define NJW_NOMINAL_TICK_US 16667ull
 #define NJW_MAX_DT_US 250000ull
 
@@ -164,6 +173,12 @@ typedef struct njw_runner {
     nj_u8 clock_us;                 /* monotonic, host advanced */
     nj_u8 start_us;                 /* when startApp() was queued */
     unsigned pump_sleep_calls;      /* fast-forward budget of this pump */
+    double wall_ref_ms;             /* real-time reference of this pump */
+    double load_started_ms;         /* wall-clock start of the constructor */
+    unsigned load_pumps;            /* frames pumped while constructing */
+
+    /* --- engine timing diagnostics (host statistics, not gameplay) --- */
+    double pump_started_ms;         /* when the current njw_frame() began */
 
     /* --- display --- */
     int           fb_w;
@@ -533,10 +548,50 @@ static int utf16_to_utf8(const nj_u2 *units, int count, char *out, int cap)
 /* Virtual clock and port hooks                                        */
 /* ================================================================== */
 
+/* Real wall clock, in milliseconds.  The virtual clock is what the runtime's
+ * deadlines are measured against, but real elapsed time is folded into it as
+ * well (see the comment on web_port_millis): a MIDlet that busy-waits on
+ * System.currentTimeMillis() - and plenty of them do - would otherwise never
+ * see time pass while one njw_frame() call is executing, and would spin
+ * forever.  Real hardware follows the wall clock, so this is the faithful
+ * behaviour, not a trick.
+ *
+ * The frame dt the host passes in is still the base of every pump, so a host
+ * that renders slower than real time does not fast-forward the game. */
+static double web_wall_ms(void)
+{
+#ifdef __EMSCRIPTEN__
+    return emscripten_get_now();
+#else
+    struct timespec ts;
+
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) {
+        return 0.0;
+    }
+    return (double)ts.tv_sec * 1000.0 + (double)ts.tv_nsec / 1000000.0;
+#endif
+}
+
+/*
+ * Clock the runtime sees.
+ *
+ * The host owns the frame cadence: njw_frame() advances clock_us by the frame
+ * delta.  Within a pump, however, real time also elapses - Java code runs in
+ * between the port callbacks - and MIDlets busy-wait on millis() rather than
+ * always sleeping.  Reporting the live wall clock on top of the virtual base
+ * keeps those loops finite without slowing sleep-paced games: Thread.sleep()
+ * is still fast-forwarded by web_port_sleep_ms(), while a title that spins on
+ * currentTimeMillis() burns exactly the wall time it asked for.
+ */
 static nj_u4 web_port_millis(void *ud)
 {
+    double extra = web_wall_ms() - g_runner.wall_ref_ms;
+
     (void)ud;
-    return (nj_u4)(g_runner.clock_us / 1000ull);
+    if (extra < 0.0) {
+        extra = 0.0;
+    }
+    return (nj_u4)(g_runner.clock_us / 1000ull + (nj_u8)extra);
 }
 
 /*
@@ -1032,10 +1087,28 @@ static int web_pcm_queued(void *ud)
  */
 static int web_frame_hook(nj_vm *vm, void *ud)
 {
-    (void)ud;
-    if (g_runner.phase == NJW_PHASE_STOP || !g_runner.vm_usable ||
+    njw_runner *r = (njw_runner *)ud;
+
+    if (r == NULL || r->phase == NJW_PHASE_STOP || !r->vm_usable ||
         runner_has_error()) {
         return 1;
+    }
+    if (r->phase == NJW_PHASE_LOAD) {
+        /* A constructor that lets us pump frames is waiting for something; as
+         * long as it finishes, that is fine (splash screens).  If it never
+         * returns, it is a title that runs the game loop from the
+         * constructor - stop instead of freezing the browser tab. */
+        r->load_pumps++;
+        if (r->load_pumps > NJW_CONSTRUCTOR_PUMP_LIMIT ||
+            web_wall_ms() - r->load_started_ms > NJW_CONSTRUCTOR_WALL_MS) {
+            runner_set_error(
+                "the MIDlet constructor does not return; this title runs its "
+                "game loop from the constructor, which the browser port cannot "
+                "interrupt");
+            nj_vm_stop_reason(vm, 0,
+                              "the browser port gave up on the MIDlet constructor");
+            return 1;
+        }
     }
     (void)nj_midp_frame(vm);
     return nj_vm_running(vm) ? 0 : 1;
@@ -1195,6 +1268,10 @@ int njw_start(const char *jar_path)
     r->phase = NJW_PHASE_LOAD;
     r->clock_us = 0u;
     r->pump_sleep_calls = 0u;
+    r->wall_ref_ms = web_wall_ms();
+    r->pump_started_ms = r->wall_ref_ms;
+    r->load_started_ms = r->wall_ref_ms;
+    r->load_pumps = 0u;
     r->ev_head = 0u;
     r->ev_tail = 0u;
     r->audio_rate = 22050;
@@ -1371,6 +1448,11 @@ int njw_start(const char *jar_path)
 
     /* ---- construct the MIDlet ---- */
     midlet = nj_vm_new_midlet(r->vm, class_name, NULL);
+    if (runner_has_error()) {
+        /* The frame hook gave up on a constructor that never returns. */
+        runner_release_vm();
+        return -1;
+    }
     if (midlet == NULL && !nj_vm_running(r->vm)) {
         /* The constructor consumed the whole run (a title that runs its game
          * loop inside the constructor).  Not a start failure. */
@@ -1391,13 +1473,17 @@ int njw_start(const char *jar_path)
         return -1;
     }
 
-    /* startApp() is queued, not executed: the host's frames drive it. */
+    /* startApp() is queued, not executed: the host's frames drive it.  The
+     * constructor may already have installed a Displayable (some titles do
+     * their display setup there and keep their real initialisation in
+     * startApp), so queue it unconditionally - nj_run() does the same.  The
+     * flag only says whether a screen is available right now, not whether the
+     * MIDlet is initialised. */
     r->phase = NJW_PHASE_RUN;
     r->started = 1;
     r->start_us = r->clock_us;
     r->displayable_ready = (nj_midp_current(r->vm) != NULL);
-    if (!r->displayable_ready &&
-        nj_vm_start_app_async(r->vm, midlet) != NJ_OK) {
+    if (nj_vm_start_app_async(r->vm, midlet) != NJ_OK) {
         runner_set_error("nj_vm_start_app_async failed");
         runner_release_vm();
         return -1;
@@ -1429,6 +1515,23 @@ int njw_frame(double dt_ms)
     dt_us = (dt_ms > 0.0) ? (nj_u8)(dt_ms * 1000.0) : NJW_NOMINAL_TICK_US;
     if (dt_us > NJW_MAX_DT_US) {
         dt_us = NJW_MAX_DT_US;
+    }
+    {
+        /* Fold the real time that passed since the previous pump into the
+         * virtual clock.  This is exactly the time web_port_millis() has
+         * already reported, so the clock stays monotonic; taking the larger
+         * of it and the host dt keeps a slow host from fast-forwarding the
+         * game while a fast host still gets the full dt. */
+        double now_ms = web_wall_ms();
+        double extra_ms = now_ms - r->wall_ref_ms;
+
+        r->wall_ref_ms = now_ms;
+        if (extra_ms > 0.0 && (nj_u8)(extra_ms * 1000.0) > dt_us) {
+            dt_us = (nj_u8)(extra_ms * 1000.0);
+            if (dt_us > NJW_MAX_DT_US) {
+                dt_us = NJW_MAX_DT_US;
+            }
+        }
     }
     /* While startApp() is still loading, tick at least once per nominal frame
      * so a loaded game becomes playable in roughly real time even on a host
