@@ -35,23 +35,32 @@ Tree under test: `bc49c46` (`v0.5.7-9-gbc49c46`).
    (`c0f30aea…`) is JAR-only, `needs_fullpath = "true"`, Core Options 2.0,
    `savestate = "true"` / `savestate_features = "basic"`, `hw_render = "false"`.
    It ships byte-identically in all eight packages.
-2. **CI simulation, Linux**: exact template command with the default CMake
-   generator (no Ninja) configured and built the core at
-   `build/linux-x86_64/libretro/nano_j2me_libretro.so` (3,969,632 B). The
-   template's `mv $BUILD_DIR/$EXTRA_PATH/$LIBNAME` therefore finds it.
-3. **CI simulation, Android**: exact template flags with NDK 30.0.16248370 and
-   `-DANDROID_ABI=arm64-v8a` built
-   `build/android-arm64-v8a/libretro/nano_j2me_libretro.so`; the template's
-   `after_script` renames it to `nano_j2me_libretro_android.so`.
-4. **Fresh eight-target build** at HEAD into `/var/tmp/nj2me-submission-dist`
+2. **CI simulation, all three templates**: `tools/simulate_ci_builds.sh`
+   reproduces the template command shape (`cmake -DCMAKE_BUILD_TYPE=Release
+   $CORE_ARGS ...` then `cmake --build ... --target nano_j2me_libretro`) and
+   reads `CORE_ARGS` straight out of the committed `.gitlab-ci.yml`. At this
+   revision all three contracts pass:
+   - Linux (default Unix Makefiles generator):
+     `libretro/nano_j2me_libretro.so`, 3,969,632 B.
+   - Windows (mingw-w64 with `CMAKE_SYSTEM_NAME=Windows`, what the MXE
+     `*-static-cmake` wrapper supplies upstream):
+     `libretro/nano_j2me_libretro.dll`, 3,537,295 B.
+   - Android (NDK 30.0.16248370, `-DANDROID_ABI=arm64-v8a`):
+     `libretro/nano_j2me_libretro.so`, 11,543,552 B; the template's
+     `after_script` renames it to `nano_j2me_libretro_android.so`.
+   Each artifact lands at `$BUILD_DIR/$EXTRA_PATH/$LIBNAME`, where the
+   templates collect it. The CI-simulated Linux core also passed the mock
+   frontend matrix (20/20), and the shipping Windows static build is separately
+   validated by the Wine fixture suite (4/4).
+5. **Fresh eight-target build** at HEAD into `/var/tmp/nj2me-submission-dist`
    (copied to `build/libretro-dist/`), 16 files per directory, identical
    `.info`, license/notice set and `BUILD_STATUS.txt`. Sizes and SHA-256 values
    are in `build/libretro-final-report-20261115.md`.
-5. **Artifact validation**: linux-x86_64 mock frontend 20/20; real RetroArch
+6. **Artifact validation**: linux-x86_64 mock frontend 20/20; real RetroArch
    1.22.2 LoopDemo 120 frames and TextDemo 180 frames PASS; windows-x86_64
    Wine fixtures 4/4 PASS. Android/ARM cores were ABI/dependency-checked only
    in this rebuild (no device run available).
-6. **Local test suite**: isolated RelWithDebInfo build (CLI + libretro + tests,
+7. **Local test suite**: isolated RelWithDebInfo build (CLI + libretro + tests,
    SDL2/embedded/web/GLES2-accelerated port off) passed **183/183** CTest tests
    in **338.26 s** at this revision, including `test_libretro_frontend` and
    `no_statics`. A separate build directory under `/var/tmp` is used so the

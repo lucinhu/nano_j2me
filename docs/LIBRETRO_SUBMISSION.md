@@ -61,9 +61,16 @@ steps only. Working HEAD for this check: `bc49c46` (`v0.5.7-9-gbc49c46`).
   - Android template command (NDK 30.0.16248370, `arm64-v8a`):
     `/tmp/ci-sim-ndk/build/android-arm64-v8a/libretro/nano_j2me_libretro.so`,
     renamed to `nano_j2me_libretro_android.so` by the template's `after_script`.
-  Both artifacts land at `$BUILD_DIR/$EXTRA_PATH/$LIBNAME`, where the templates
-  collect them. No upstream pipeline has been executed; that requires maintainer
-  registration.
+  - Windows template contract (mingw-w64 cross compilers with
+    `CMAKE_SYSTEM_NAME=Windows`, as the MXE `*-static-cmake` wrapper provides
+    upstream): configure and build of the `nano_j2me_libretro` target succeeded
+    and produced `libretro/nano_j2me_libretro.dll` (3,537,295 bytes), i.e. the
+    path the template's post-build step expects.
+  All three land at `$BUILD_DIR/$EXTRA_PATH/$LIBNAME`, where the templates
+  collect them. `tools/simulate_ci_builds.sh` reproduces these template commands
+  (and reads `CORE_ARGS` straight out of `.gitlab-ci.yml` so the simulation
+  cannot drift from the committed CI file). No upstream pipeline has been
+  executed; that requires maintainer registration.
 - **Fresh eight-target build**. `tools/build_libretro_cores.sh --jobs 12
   --out /var/tmp/nj2me-submission-dist all` rebuilt every default-feature target
   from this revision. Per-core SHA-256:
