@@ -423,14 +423,28 @@ export class LibraryView {
               : compat.stage === 'black'
                 ? 'Black'
                 : 'Timeout'));
-      const badge = el('span', {
-        className: 'game-tile__compat' + (compat.stage === 'ok' ? ' is-ok' : ' is-warn'),
+      const warn = compat.stage !== 'ok';
+      const badge = el(warn ? 'button' : 'span', {
+        className: 'game-tile__compat' + (warn ? ' is-warn game-tile__compat--action' : ' is-ok'),
         text: label,
         attrs: {
+          type: warn ? 'button' : undefined,
           title: compat.note || label,
           'aria-label': (compat.note || label) + ' (' + (compat.title || game.fileName) + ')'
         }
       });
+      if (warn) {
+        /* A phone has no hover, so a warning badge has to explain itself when
+         * it is tapped: show the audit note as a toast and stay in the
+         * library (stopPropagation keeps the tile's own click handler out). */
+        badge.addEventListener('click', (event) => {
+          event.stopPropagation();
+          toast(t('library.compatReason', { note: compat.note || label }), {
+            kind: 'warn',
+            timeout: 6000
+          });
+        });
+      }
       cover.append(badge);
     }
 

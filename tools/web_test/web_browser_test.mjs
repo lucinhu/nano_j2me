@@ -1167,7 +1167,19 @@ async function runRealShellChecks() {
       const note = await warnBadge.getAttribute('title');
       assert(/内存|heap/.test(note || ''),
         `the badge tooltip should explain the heap issue, got ${JSON.stringify(note)}`);
-      return 'verified badge on hello.jar, heap warning on 愤怒的小鸟_383.jar';
+      /* The warning badge is a button for touch screens: tapping it explains
+         the audit result without leaving the library. */
+      await warnBadge.click();
+      await page.waitForFunction(
+        () => {
+          const toast = document.querySelector('.toast');
+          return Boolean(toast && /内存|heap/i.test(toast.textContent || ''));
+        },
+        undefined,
+        { timeout: 5000, polling: 100 });
+      assert(await page.locator('#library-view').isVisible(),
+        'tapping the badge should keep the library visible');
+      return 'verified badge on hello.jar, heap warning on 愤怒的小鸟_383.jar, tap explains it';
     } finally {
       await ctx.close();
     }

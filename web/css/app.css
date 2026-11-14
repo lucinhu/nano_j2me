@@ -495,6 +495,18 @@ body.in-game .app-header { display: none; }
 }
 .game-tile__compat.is-ok { color: #7fe3a1; border-color: rgba(127, 227, 161, 0.45); }
 .game-tile__compat.is-warn { color: #ffcf7a; border-color: rgba(255, 207, 122, 0.5); }
+/* Warning badges are buttons: phones have no hover, so a tap has to be
+ * discoverable.  Reset the button chrome and re-enable pointer events. */
+.game-tile__compat--action {
+  pointer-events: auto;
+  cursor: pointer;
+  font: inherit;
+  font-size: 10.5px;
+  font-weight: 600;
+  text-align: left;
+}
+.game-tile__compat--action:hover,
+.game-tile__compat--action:focus-visible { outline: 2px solid rgba(255, 207, 122, 0.7); outline-offset: 1px; }
 .game-tile__tag {
   position: absolute;
   top: 6px;

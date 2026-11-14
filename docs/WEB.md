@@ -92,7 +92,8 @@ be served with or without a build:
   the card disappears while the library is being searched or filtered. Cards
   of titles covered by the last full-corpus audit carry its result: a green
   "verified" badge, or an amber warning whose tooltip gives the reason (needs a
-  bigger heap, first frames are black, constructor refusal).
+  bigger heap, first frames are black, constructor refusal). Warning badges are
+  buttons, so a tap on a phone shows the same explanation as a toast.
 - **Game view** — a `<canvas>` sized to `njw_width()`×`njw_height()` and scaled
   with `image-rendering: pixelated`, an `requestAnimationFrame` loop that calls
   `njw_frame(dt_ms)` exactly once per frame, a loading overlay until the first
@@ -495,7 +496,9 @@ opt-in: it measures four titles and writes `perf-summary.json` next to the log.
   reloads the page and finds the name still in the slot's input. Another imports
   two audited JARs and asserts the compatibility badges: a green "verified" one
   on `hello.jar` and an amber "needs more heap" one on `愤怒的小鸟_383.jar`,
-  whose tooltip explains the out-of-memory class of the failure. One check covers
+  whose tooltip explains the out-of-memory class of the failure; tapping the
+  warning then asserts the same explanation arrives as a toast without leaving
+  the library. One check covers
   the game panel's memory selector: picking 64 MiB
   persists it in `nj2me.settings` (localStorage) for the next launch and shows
   the "applies on the next launch" toast. Another opens the diagnostics section
