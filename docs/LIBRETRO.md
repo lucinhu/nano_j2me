@@ -389,6 +389,11 @@ NJ_LIBRETRO_HARNESS="$PWD/build/libretro-check/test_libretro_frontend" \
 NJ_LIBRETRO_CORE="$PWD/build/libretro-check/libretro/nano_j2me_libretro.so" \
   python3 tools/check_libretro_option_matrix.py .local-tools/debug-runs/<sweep> \
   --count 8
+# Whole-corpus rendering probe (non-black, animated, saved/restored per title).
+NJ_LIBRETRO_HARNESS="$PWD/build/libretro-check/test_libretro_frontend" \
+NJ_LIBRETRO_CORE="$PWD/build/libretro-check/libretro/nano_j2me_libretro.so" \
+  python3 tools/check_libretro_corpus_visual.py .local-tools/debug-runs/<sweep> \
+  --frames 300 --jobs 10
 ```
 
 Use an existing redistributable fixture path for the final RetroArch command
@@ -408,4 +413,10 @@ key-script exits and new uncaught exceptions. The option matrix
 with every non-default core option (screen sizes, rotation, heap, builtin font,
 sound and pointer off, device, locale); profiles that change the reported
 geometry pass the matching frontend expectation. Both are sampling tools, not
-CI gates.
+CI gates. The corpus visual probe (`check_libretro_corpus_visual.py`) runs every
+sweep-ok title through the mock frontend and requires a non-black animated
+frame, so it catches "loads but paints nothing" regressions that the CLI sweep
+cannot see. At the time of writing it reports 362/373 with the remaining
+failures limited to the paused-save class, two titles that need the documented
+`nano_j2me_device=nokia6230` profile, and heavy titles that need a larger
+harness timeout.
