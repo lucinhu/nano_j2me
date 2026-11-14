@@ -122,13 +122,29 @@ static int depth_capable(void)
     /* Desktop GLSL 1.20 has fragment depth and float32 as core features;
      * its optional ES precision-query entry point must not be required. */
     precision=23;
-    if (!NJ_TEST_DESKTOP_GL)
-        glGetShaderPrecisionFormat(GL_FRAGMENT_SHADER,GL_HIGH_FLOAT,range,&precision);
-    if ((!NJ_TEST_DESKTOP_GL && (!extension(ext,"GL_EXT_frag_depth") ||
-            !extension(ext,"GL_OES_depth24"))) || precision<23) {
-        fprintf(stderr,"SKIP native triangles: frag_depth=%d depth24=%d highp=%d\n",
-            extension(ext,"GL_EXT_frag_depth"),extension(ext,"GL_OES_depth24"),precision);
-        gl_ok(); return 0;
+    {
+        int es3=0;
+        if (!NJ_TEST_DESKTOP_GL) {
+            GLint major=0;
+            glGetIntegerv(0x821B /* GL_MAJOR_VERSION, GLES 3.0 */,&major);
+            es3 = glGetError()==GL_NO_ERROR && major>=3;
+            while (glGetError()!=GL_NO_ERROR) {}
+        }
+        if (!NJ_TEST_DESKTOP_GL && !es3)
+            glGetShaderPrecisionFormat(GL_FRAGMENT_SHADER,GL_HIGH_FLOAT,range,&precision);
+        if (!NJ_TEST_DESKTOP_GL && !es3 &&
+            (!extension(ext,"GL_EXT_frag_depth") ||
+             !extension(ext,"GL_OES_depth24"))) {
+            fprintf(stderr,"SKIP native triangles: frag_depth=%d depth24=%d highp=%d\n",
+                extension(ext,"GL_EXT_frag_depth"),extension(ext,"GL_OES_depth24"),precision);
+            gl_ok(); return 0;
+        }
+        if (precision<23) {
+            fprintf(stderr,"SKIP native triangles: highp=%d\n",precision);
+            gl_ok(); return 0;
+        }
+        if (es3)
+            fprintf(stderr,"ES3 core depth path (no EXT_frag_depth needed)\n");
     }
     glGenTextures(1,&tex); glBindTexture(GL_TEXTURE_2D,tex);
     glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA,4,4,0,GL_RGBA,GL_UNSIGNED_BYTE,NULL);

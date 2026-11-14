@@ -11,7 +11,7 @@
 | --- | --- | --- | --- | --- | --- |
 | Linux / SDL2 | 是 | 可选（默认不安装；`NJ_SDL2_GLES2_2D=1` 才启用，实测比软件慢） | 是 | 是（NVIDIA ES3.2、Mesa ES2/GL2.1） | 三角形路径在 RTX 5080 上对 MC 的真实 packet 仍慢于软件；新增 auto 校准后该机自动选择软件 |
 | Windows / SDL2（MinGW，Wine 11.21） | 是（MC 真实世界） | 可选（同上，默认不安装 2D 回调） | 未在本轮复验 | 构建包含后端；WGL 动态加载器有真实 GL 上下文证据，未在 Windows 上复验三角形路径 | 只在 Wine 下验证，无原生 Windows 机器 |
-| Android 5+（API 21，模拟器） | 是（MC 真实世界） | 可选（默认不安装 2D 回调；旧版可 `NJ_ANDROID_GLES2_2D_ACCEL=1` 构建） | 是（m3gdemo `rasters=16`） | **否**：模拟器缺 `GL_EXT_frag_depth`，门控 SKIP，软件回退已验证 | auto 校准在模拟器上得到 `native backend declined -> software kept`；真机三角形路径尚未在 APK 内验证 |
+| Android 5+（API 21 / API 36 模拟器） | 是（MC 真实世界） | 可选（默认不安装 2D 回调；旧版可 `NJ_ANDROID_GLES2_2D_ACCEL=1` 构建） | 是（m3gdemo `rasters=16`） | 是（ES3 变体在 API 36 GLES 3.1 模拟器上跑通并逐字节对拍；auto 校准仍选择软件） | API 21 模拟器既无 `EXT_frag_depth` 也不是 GLES3，仍 SKIP+软件回退；API 36 模拟器 `m3gdemo` 校准 `gpu=414us software=183us -> disabled`，MC 校准 `gpu=859us software=247us -> disabled`；真机 APK 内三角形路径仍待复测 |
 | Android 2.0/2.1+（API 5，ARMv5） | 是（v0.5.7 legacy APK） | 否 | 否 | 否 | 仅软件；真实老手机未验证 |
 | libretro（硬件 GL） | 是 | 是 | 是 | 是（MC 真实 1189 个 batch） | 真实 EGL、上下文替换、存档/读档已验证 |
 | ESP32 | 构建通过（见 `tests/embedded`） | 否 | 否 | 否 | 本轮未在设备上运行 |
@@ -24,10 +24,13 @@
   重新走原软件路径。接口与校验见
   [nj_gfx_triangles.h](../include/nj2me/nj_gfx_triangles.h) 和
   [nj_gfx_triangles.c](../src/gfx/nj_gfx_triangles.c)。
-- GLES2 三角形后端要求 `GL_EXT_frag_depth`、`GL_OES_depth24` 和 ≥23 位
-  fragment highp；不满足时 SKIP 并保留软件回退。Android 模拟器的
-  SwiftShader/host 翻译层都不提供 `EXT_frag_depth`，所以 APK 在该模拟器里
-  MC 的约 100 万次三维绘制全部走软件（`declines=1075981`），画面正确。
+- GLES2 三角形后端的能力门控：GLES 2 需要 `GL_EXT_frag_depth`、
+  `GL_OES_depth24` 和 ≥23 位 fragment highp；GLES 3.0+ 改用 ES3 着色器变体
+  （核心 `gl_FragDepth` + 核心 D24 渲染缓冲），不再要求 `EXT_frag_depth`；
+  两者都不满足时 SKIP 并保留软件回退。API 21 模拟器的 SwiftShader/host
+  翻译层两条都不满足，所以该环境里 MC 的约 100 万次三维绘制全部走软件
+  （`declines=1075981`），画面正确；API 36 OpenHV 模拟器是 GLES 3.1，ES3
+  变体已通过 1459 用例/2,759,102 项检查的真实设备对拍（深度键误差 0）。
 - 每个回调的上传/读回开销是固定成本；同一主机上 48 个真实 MC packet 的
   基准为：软件 1.173842 ms，GPU ROI 7.694929 ms（6.55×），GPU 全表面
   32.089298 ms。仅 272 三角形的天空 packet GPU 更快。因此默认仍是软件，
@@ -130,9 +133,13 @@ RGB565 展开成 RGBA8888 交给 `<canvas>`。虚拟时钟由宿主驱动：加�
    默认关闭，不构成加速承诺。2026-11-15 新增 auto 校准：SDL2/Android 端口在首次
    `Graphics3D.render()` 时用 1024 三角/128×128 ROI 的合成批次分别计时软件与 GPU，
    只有 GPU 快 ≥15% 才启用（决定缓存在 VM 内并打印一行 INFO）。桌面实测选软件；
-   模拟器后端直接 DECLINE 保持软件。纯软件路径不执行校准。
-2. Android 模拟器缺 `EXT_frag_depth`，APK 内三角形批量不可用；需要真机
-   （Adreno 725 已用离屏原生程序验证后端本身，但未在 APK/游戏内验证）。
+   API 36 模拟器（ES3 变体后端可用）实测也选软件：`gpu=414us software=183us`
+   （m3gdemo）与 `gpu=859us software=247us`（MC），同步事务比软件光栅贵。
+   纯软件路径不执行校准。
+2. API 21 模拟器既无 `EXT_frag_depth` 也不是 GLES3，APK 内三角形批量不可用；
+   API 36 模拟器与桌面真机 GPU 的 ES3/ES2 变体均已在 APK/测试程序内跑通，
+   但真实手机（Adreno 725）仍只有离屏原生程序证据，尚未在手机 APK 内复测
+   三角形路径。
 3. Android 旧版（API 5）只有软件渲染；没有真机验证。
 4. AAC 只在 Android 5+ 平台可用；其他平台遇到 AAC 会按“不支持的格式”拒绝。
 5. B 帧（重排）视频容器被拒绝；Simple Profile 解码器不支持。
@@ -175,13 +182,13 @@ tools/check_web.sh --node --corpus             # 另有 --browser（Playwright F
 
 | 产物 | 大小 | SHA256 |
 | --- | --- | --- |
-| `.local-tools/debug-runs/gfx-full-20261113/android/final-build/nj2me.apk` | 1796322 | `b4b8ba40776123634d6b759c0081188d86446bd288b26eff94a6f232900770a6` |
-| `.local-tools/debug-runs/gfx-full-20261113/windows/nj2me.exe` | 4044256 | `3c89894bf893966d919ab35e137cab07fbf658dee6e2f937bca65266c477868a` |
-| `.local-tools/debug-runs/gfx-full-20261113/linux/libretro/nano_j2me_libretro.so` | 4083224 | `49d7c61da6e21f2943a6a7984bee365a4387fae604779658637033cf80b1f24e` |
-| `.local-tools/debug-runs/gfx-full-20261113/linux/nj2me` | 4015104 | `cf047c9bddbe97f22afd414d7d7976021f8322a0c1048c1f0fabb8332601e5f0` |
+| `.local-tools/debug-runs/gfx-full-20261113/android/final-build/nj2me.apk` | 1796322 | `e9d3e0476ac17c2a8150f3835d1bd7ce6f886ed72e5298ef896fe1964d2e42f7` |
+| `.local-tools/debug-runs/gfx-full-20261113/windows/nj2me.exe` | 4045359 | `070f3578c6751e514b9d619a275999cdbb764422bfb1310d2ba8c1323eceab64` |
+| `.local-tools/debug-runs/gfx-full-20261113/linux/libretro/nano_j2me_libretro.so` | 4083320 | `4a88f993258b01d59de55d78bfce2ed91c6ed55af2640e8b91d3937cf7523032` |
+| `.local-tools/debug-runs/gfx-full-20261113/linux/nj2me` | 4019296 | `c46c21c315e9252b0f99e1844f34a8894813d27d8e1638bc21e3c0a2284712ec` |
 | `.local-tools/debug-runs/gfx-full-20261113/android-legacy/nj2me-legacy.apk` | 694718 | `0352c5fe4764747d910b98bf6cdd430bdf537e113beca1f82d92d784247139d7` |
 | `build/web/js/nj2me.js` | 93889 | `77652b2e6c8ef1a2e22e95eeec54e66530a1fe069728cf9a7bf6944ef424885f` |
-| `build/web/js/nj2me.wasm` | 2144645 | `95a89c0185d9d0e5a1ee2b4357778f617f23731e37ea1b9343753489ea07c0bd` |
+| `build/web/js/nj2me.wasm` | 2144557 | `ddbbe3980c56d40a21c86de4dbf72ba163da0cd842e4588e73e5c71ebd78046b` |
 
 以上产物均由同一份当前源码构建（含 2026-11-14 的 journal 批处理、持久
 GPU 会话与 2026-11-15 的自动选择改动）。legacy APK 也已用恢复的旧工具链重建：

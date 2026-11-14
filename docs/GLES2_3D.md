@@ -85,8 +85,10 @@ M3G 的最大 key 是 `16777216`，需要 25 位有效表示。后端把 key 拆
 - 深度契约沿用二维 raster 的 24 位键：`q = round(clamp(z)*16777215)`、
   `key = 16777216 - q`，fragment 深度为 `q/M`。原生驱动的 half-tie 可能造成
   1 个键的差异，测试按此放行。
-- 后端 `src/port/gles2/nj_gfx_triangles_gles2.inc` 要求 `GL_EXT_frag_depth`、
-  `GL_OES_depth24` 和 ≥23 位 fragment highp；不满足时整个路径 SKIP，保留软件。
+- 后端 `src/port/gles2/nj_gfx_triangles_gles2.inc` 的能力门控：
+  GLES 2 需要 `GL_EXT_frag_depth`、`GL_OES_depth24` 和 ≥23 位 fragment highp；
+  GLES 3.0+ 走 ES3 着色器变体（核心 `gl_FragDepth`、核心 D24 渲染缓冲），
+  不再要求 `GL_EXT_frag_depth`。两者都不满足时整个路径 SKIP，保留软件。
 - `tests/test_gfx_triangles_gles2.c` 在 4 个真实 context 上通过 1,443 个独立
   case、2,732,649 项检查、26 次原子拒绝（NVIDIA ES3.2 与桌面 GL4.6、Mesa
   强制 ES2 与 GL2.1/GLSL 120）；覆盖颜色误差 ≤1、D24 边界、纹理组合、
@@ -148,12 +150,13 @@ list、barrier 拆分、DONE 计数与不重放、DECLINE 按序回退软件）�
 584,740 项检查通过；`tests/test_gfx_triangles_gles2.c` 增加 list 与逐 packet
 的像素+深度全等（1,458 用例/2,759,081 检查）。
 
-Android 说明：API 21 模拟器的 SwiftShader/host 翻译层不提供
-`GL_EXT_frag_depth`，APK 内三角形路径 SKIP（`SKIP native triangles:
-frag_depth=0 depth24=1 highp=23`）。journal 在该环境按契约 DECLINE 后逐
-packet 回退软件重放，MC 真实地形/水/云/HUD 画面正确（截图
-`android/final-build/shot-mc-journal4.png`），Maze 二维 `fills=2964
-blits=940 declines=0`。要在真机启用三维批量需要 ES3 核心 `gl_FragDepth`
+Android 说明：API 21 模拟器的 SwiftShader/host 翻译层既不提供
+`GL_EXT_frag_depth` 也不是 GLES 3，APK 内三角形路径仍 SKIP；journal 在该环境
+按契约 DECLINE 后逐 packet 回退软件重放，MC 真实地形/水/云/HUD 画面正确
+（截图 `android/final-build/shot-mc-journal4.png`），Maze 二维 `fills=2964
+blits=940 declines=0`。API 36 的 OpenHV 模拟器是 GLES 3.1（NVIDIA 翻译层），
+走下面的 ES3 着色器变体，三角形路径已真实跑通；但校准判定同步事务比软件
+光栅慢，自动选择保留软件。要在真机启用三维批量需要 ES3 核心 `gl_FragDepth`
 的 ESSL 300 变体，本轮未实现。
 
 ## 为什么 GPU 路径反而更慢（2026-11-14 实测拆解）
@@ -253,7 +256,41 @@ profiler 代码默认关闭（`NJ_GLES2_PROFILE=0`），只用于后续性能分
 | 环境 | 校准结果 | 结果 |
 | --- | --- | --- |
 | Linux + RTX 5080（SDL2，`--graphics gles2`） | `gpu=266us software=191us -> disabled` | MC 600 帧 5.65 s，纯软件 5.71 s（差约 0.06 ms/帧，仅 GLES2 present 固定开销） |
-| Android API36 模拟器（OpenHV，翻译层 GL） | `native backend declined -> software kept` | 翻译层无 `EXT_frag_depth`，三角形后端门控拒绝；MC 世界渲染正常 |
+| Android API36 模拟器（OpenHV，GLES 3.1 翻译层） | `gpu=414us software=183us -> disabled`（m3gdemo）/ `gpu=859us software=247us -> disabled`（MC） | ES3 变体后端可用（m3gdemo 校准留下 4096 triangles/4 batches）；同步事务仍慢于软件光栅，MC 世界/HUD 正常 |
 | Android 真机 425610ca | 待用户插线复测 | 预期选择软件（CPU 快、同步开销大），GLES2 开关不再拖慢 |
 
 手工 A/B 时把端口的 `gfx_triangles_auto` 置 0 即恢复旧行为（有回调就启用）。
+
+## 2026-11-15 GLES 3.0 着色器变体（不需要 EXT_frag_depth）
+
+背景：深度键算法需要在 fragment 里写 `gl_FragDepthEXT` 并读回颜色键纹理。
+很多 GLES 3.0+ 设备（含 Android 模拟器的翻译层）不导出
+`GL_EXT_frag_depth`，但 ES 3.0 的 `gl_FragDepth` 是核心功能；因此后端新增
+第二个着色器变体，能力门控顺序为：桌面 GL（GLSL 120）→ GLES 2 + 
+`EXT_frag_depth`+`OES_depth24`+highp≥23 → GLES 3.0+（核心 `gl_FragDepth`、
+核心 `GL_DEPTH_COMPONENT24`）→ 否则 SKIP。
+
+实现要点（`src/port/gles2/nj_gfx_triangles_gles2.inc`）：
+- 两套前缀宏：ES2 前缀定义 `NJ_DEPTH=gl_FragDepthEXT`、`NJ_COLOR=gl_FragColor`；
+  ES3 前缀为 `#version 300 es` + `out highp vec4 nj_color` +
+  `#define varying in`/`#define texture2D texture`/`#define NJ_DEPTH gl_FragDepth`。
+  着色器正文共用，输出统一写 `NJ_COLOR`。
+- `nj_gles2_config` 新增输出字段 `int gles3`；`nj_gles2_create` 用
+  `glGetIntegerv(GL_MAJOR_VERSION)` 探测（ES2 会报 `GL_INVALID_ENUM`，
+  随后清错误并回退 ES2 门控）。ES3 上下文里 `GL_MAJOR_VERSION` 为 3/4。
+- ES3 下不再要求 `GL_OES_depth24` 扩展字符串：D24 渲染缓冲是 ES3 核心格式。
+
+验证（Android API36 OpenHV 模拟器，EGL 1.4 / GLES 3.1 / NVIDIA 翻译层）：
+- 交叉编译的 `tests/test_gfx_triangles_gles2.c` 直接在设备上跑：
+  `PASS real GL native triangles: 1459 cases 2759102 checks, DONE=1457 atomic
+  declines=29; checked pixels=371475 native edge pixels=60
+  max8bitChannelError=1 maxDepthKeyError=0` —— 包含单 packet、list 与
+  session(begin/list/end) 三种提交方式，颜色误差 ≤1、深度键与软件参考完全一致。
+- `m3gdemo` 真机日志：`m3g: accel calibration gpu=414us software=183us ->
+  disabled (software is faster)`，随后 `gles2: final ... triangles=4096
+  batches=4`（校准的 4 次事务），说明后端确实在 ES3 上执行而非 SKIP。
+- Minecraft 在模拟器上正常进入世界（`MCJ: GEN 25906 ms`、`LOAD prepare 6937
+  ms`、`HUD3D auto 2d`），校准 `gpu=859us software=247us -> disabled`，
+  自动选择保留软件 —— 与桌面结论一致：CPU 权威契约下同步事务比软件光栅贵。
+
+桌面回归：全量 `ctest` 197/197 通过；ES2/桌面变体行为未变。

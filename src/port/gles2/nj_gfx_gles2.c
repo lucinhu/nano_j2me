@@ -572,6 +572,12 @@ nj_gles2 *nj_gles2_create(const nj_gles2_config *config)
     if (s->config.max_pixels > SIZE_MAX/4u || !clean_errors(s)) goto fail;
     s->gl.GetIntegerv(GL_MAX_TEXTURE_SIZE, &s->max_texture);
     s->gl.GetIntegerv(GL_MAX_VIEWPORT_DIMS, s->max_viewport);
+    if (!s->config.desktop_gl) {
+        /* GL_MAJOR_VERSION is a GLES 3.0 enum; ES2 raises GL_INVALID_ENUM. */
+        GLint major = 0;
+        s->gl.GetIntegerv(0x821Bu, &major);
+        s->config.gles3 = (clean_errors(s) && major >= 3) ? 1 : 0;
+    }
     v = shader(s, GL_VERTEX_SHADER, vs); f = shader(s, GL_FRAGMENT_SHADER, fs);
     if (!v || !f) goto fail;
     s->program = s->gl.CreateProgram();

@@ -18,6 +18,7 @@ typedef struct triangle_state {
     size_t vertices_size;
     GLint seed_image, seed_shift;
     GLint image, textured, wrapping, function, threshold, fog, fog_color, pass, blend;
+    int es3;
     int ready;
 } triangle_state;
 typedef struct triangle_view {
@@ -25,10 +26,19 @@ typedef struct triangle_view {
     int width, height, bpp;
 } triangle_view;
 
-static const char triangle_depth_prefix[] =
+static const char triangle_es2_prefix[] =
     "#ifdef GL_ES\n#extension GL_EXT_frag_depth : require\n"
     "precision highp float;\n#define NJ_DEPTH gl_FragDepthEXT\n"
-    "#else\n#define NJ_DEPTH gl_FragDepth\n#endif\n";
+    "#define NJ_COLOR gl_FragColor\n"
+    "#else\n#define NJ_DEPTH gl_FragDepth\n#define NJ_COLOR gl_FragColor\n#endif\n";
+/* GLES 3.0 keeps the same algorithm without EXT_frag_depth: gl_FragDepth is
+ * core in ESSL 300. Only the declaration syntax changes. */
+static const char triangle_es3_vs_prefix[] =
+    "#version 300 es\n#define attribute in\n#define varying out\n";
+static const char triangle_es3_fs_prefix[] =
+    "#version 300 es\nprecision highp float;\nout highp vec4 nj_color;\n"
+    "#define varying in\n#define texture2D texture\n"
+    "#define NJ_DEPTH gl_FragDepth\n#define NJ_COLOR nj_color\n";
 static const char triangle_pack_source[] =
     "float depthRank(float z){float p=clamp(z,0.0,1.0)*16777215.0;"
     "return floor(p)+step(0.5,fract(p));}"
@@ -47,7 +57,7 @@ static const char triangle_seed_fs[] =
     "void main(){vec4 b=floor(texture2D(image,uv)*255.0+0.5);"
     "float k=((b.r*256.0+b.g)*256.0+b.b)*256.0+b.a;"
     "float q=clamp(16777216.0-max(k,1.0)+shift,0.0,16777215.0);"
-    "NJ_DEPTH=rankWindow(q);gl_FragColor=packRank(q);}";
+    "NJ_DEPTH=rankWindow(q);NJ_COLOR=packRank(q);}";
 static const char triangle_draw_vs[] =
     "attribute vec2 position;attribute float windowDepth;attribute vec3 texcoord;"
     "attribute vec4 color;varying highp float z;varying highp vec3 uvq;"
@@ -69,12 +79,12 @@ static const char triangle_draw_fs[] =
     /* Match the integer threshold domain, including threshold 128 for 0.5. */
     "if(floor(c.a*255.0+0.5)<threshold)discard;"
     "float q=depthRank(z);NJ_DEPTH=rankWindow(q);"
-    "if(depthPass){gl_FragColor=packRank(q);return;}"
+    "if(depthPass){NJ_COLOR=packRank(q);return;}"
     "if(fog.x>0.5){float dist=1.0/uvq.z;float f;"
     "if(fog.x==81.0)f=fog.z>fog.y?(fog.z-dist)/(fog.z-fog.y):1.0;"
     "else f=exp(-fog.w*dist);c.rgb=mix(fogColor,c.rgb,clamp(f,0.0,1.0));}"
     "if(blend==65){c.rgb*=c.a;c.a=1.0;}"
-    "else if(blend==66||blend==67)c.a=1.0;gl_FragColor=c;}";
+    "else if(blend==66||blend==67)c.a=1.0;NJ_COLOR=c;}";
 
 static void triangles_delete(nj_gles2 *s)
 {
@@ -105,15 +115,26 @@ static void triangles_abandon(nj_gles2 *s)
         free(s->geometry);s->geometry=NULL;
     }
 }
-static GLuint triangle_shader(nj_gles2 *s, GLenum type, const char *body)
+static GLuint triangle_shader(nj_gles2 *s, GLenum type, const char *body, int es3)
 {
+    const char *pre;
     char *text;
-    size_t a=strlen(triangle_depth_prefix),b=strlen(triangle_pack_source),c=strlen(body);
+    size_t a,b,c;
     GLuint id;
-    if (type==GL_VERTEX_SHADER) return shader(s,type,body);
+    if (type==GL_VERTEX_SHADER) {
+        if (!es3) return shader(s,type,body);
+        pre=triangle_es3_vs_prefix;
+        a=strlen(pre);c=strlen(body);
+        text=(char *)malloc(a+c+1u);
+        if (!text) return 0;
+        memcpy(text,pre,a);memcpy(text+a,body,c+1u);
+        id=shader(s,type,text);free(text);return id;
+    }
+    pre=es3?triangle_es3_fs_prefix:triangle_es2_prefix;
+    a=strlen(pre);b=strlen(triangle_pack_source);c=strlen(body);
     text=(char *)malloc(a+b+c+1u);
     if (!text) return 0;
-    memcpy(text,triangle_depth_prefix,a);memcpy(text+a,triangle_pack_source,b);
+    memcpy(text,pre,a);memcpy(text+a,triangle_pack_source,b);
     memcpy(text+a+b,body,c+1u);
     id=shader(s,type,text);free(text);return id;
 }
@@ -224,17 +245,22 @@ static int triangles_init(nj_gles2 *s)
     if(!current(s))return 0;
     triangles_delete(s);
     if(!clean_errors(s))return 0;
+    t->es3=0;
     if(!s->config.desktop_gl) {
         extensions=(const char *)s->gl.GetString(GL_EXTENSIONS);
-        if(!triangle_extension(extensions,"GL_EXT_frag_depth")||
-           !triangle_extension(extensions,"GL_OES_depth24"))return 0;
-        s->gl.GetShaderPrecisionFormat(GL_FRAGMENT_SHADER,GL_HIGH_FLOAT,range,&precision);
-        if(precision<23)return 0;
+        if(s->config.gles3)t->es3=1;
+        else {
+            /* GLES 2 has neither core D24 nor core gl_FragDepth. */
+            if(!triangle_extension(extensions,"GL_EXT_frag_depth")||
+               !triangle_extension(extensions,"GL_OES_depth24"))return 0;
+            s->gl.GetShaderPrecisionFormat(GL_FRAGMENT_SHADER,GL_HIGH_FLOAT,range,&precision);
+            if(precision<23)return 0;
+        }
     }
-    t->shaders[0]=triangle_shader(s,GL_VERTEX_SHADER,triangle_seed_vs);
-    t->shaders[1]=triangle_shader(s,GL_FRAGMENT_SHADER,triangle_seed_fs);
-    t->shaders[2]=triangle_shader(s,GL_VERTEX_SHADER,triangle_draw_vs);
-    t->shaders[3]=triangle_shader(s,GL_FRAGMENT_SHADER,triangle_draw_fs);
+    t->shaders[0]=triangle_shader(s,GL_VERTEX_SHADER,triangle_seed_vs,t->es3);
+    t->shaders[1]=triangle_shader(s,GL_FRAGMENT_SHADER,triangle_seed_fs,t->es3);
+    t->shaders[2]=triangle_shader(s,GL_VERTEX_SHADER,triangle_draw_vs,t->es3);
+    t->shaders[3]=triangle_shader(s,GL_FRAGMENT_SHADER,triangle_draw_fs,t->es3);
     for(i=0;i<4;++i)if(!t->shaders[i])goto fail;
     t->seed_program=s->gl.CreateProgram();t->draw_program=s->gl.CreateProgram();
     if(!t->seed_program||!t->draw_program||

@@ -26,6 +26,9 @@ typedef struct nj_gles2_config {
      * Zero-initialize the complete config before setting individual fields. */
     const struct nj_gl_api *gl;
     int desktop_gl; /* desktop GLSL 1.20 rather than GLES GLSL ES 1.00. */
+    int gles3;      /* Output: GLES 3.0+ context, so the ES3 shader variant is
+                     * available (core gl_FragDepth) without EXT_frag_depth.
+                     * Ignored on desktop GL. */
 } nj_gles2_config;
 
 typedef struct nj_gles2_stats {
