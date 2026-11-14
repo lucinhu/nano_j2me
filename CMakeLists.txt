@@ -50,8 +50,50 @@ option(NJ_BUILD_SDL2     "Build the SDL2 desktop port"      ON)
 option(NJ_BUILD_EMBEDDED_PORTS
        "Also compile the Android and ESP32 port sources (they stub themselves \
 outside their own platform, so this costs a compile and nothing else)" ON)
+option(NJ_BUILD_GLES2_ACCEL
+       "Build the optional port-side GLES2 backend (requires NJ_ENABLE_GFX_ACCEL=1)" OFF)
+option(NJ_BUILD_LIBRETRO_HW "Enable optional proc-loaded libretro hardware rendering" OFF)
+if(NJ_BUILD_LIBRETRO_HW AND (NOT NJ_BUILD_LIBRETRO OR NOT NJ_BUILD_GLES2_ACCEL))
+  message(FATAL_ERROR "NJ_BUILD_LIBRETRO_HW requires NJ_BUILD_LIBRETRO and NJ_BUILD_GLES2_ACCEL")
+endif()
 option(NJ_WERROR         "Treat warnings as errors"         OFF)
 option(NJ_SANITIZE       "Build with ASan + UBSan"          OFF)
+
+# ---------------------------------------------------------------------
+# The Emscripten / WASM browser port.
+#
+# It is built by the Emscripten toolchain (see tools/build_web.sh) and only
+# makes sense there: the browser module is an ES module plus a .wasm file,
+# with a single-threaded runner pumped from requestAnimationFrame.  The
+# toolchain cannot build the desktop shell, the libretro core, the tests or
+# the reference headless port (that one commits JIT code through
+# __builtin___clear_cache, which wasm does not have), so those targets are
+# forced off on Emscripten instead of failing in the middle of a build.
+# ---------------------------------------------------------------------
+if(CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
+  set(_NJ_WEB_DEFAULT ON)
+  set(_NJ_FORCED_OFF_MSG "forced off for the Emscripten/WASM build")
+  set(NJ_BUILD_TESTS OFF CACHE BOOL "${_NJ_FORCED_OFF_MSG}" FORCE)
+  set(NJ_GENERATE_FIXTURES OFF CACHE BOOL "${_NJ_FORCED_OFF_MSG}" FORCE)
+  set(NJ_FIXTURES_FETCH_GAMES OFF CACHE BOOL "${_NJ_FORCED_OFF_MSG}" FORCE)
+  set(NJ_BUILD_CLI OFF CACHE BOOL "${_NJ_FORCED_OFF_MSG}" FORCE)
+  set(NJ_BUILD_LIBRETRO OFF CACHE BOOL "${_NJ_FORCED_OFF_MSG}" FORCE)
+  set(NJ_BUILD_SDL2 OFF CACHE BOOL "${_NJ_FORCED_OFF_MSG}" FORCE)
+  set(NJ_BUILD_EMBEDDED_PORTS OFF CACHE BOOL "${_NJ_FORCED_OFF_MSG}" FORCE)
+  set(NJ_BUILD_POSIX_NETWORK OFF CACHE BOOL "${_NJ_FORCED_OFF_MSG}" FORCE)
+  set(NJ_BUILD_LIBRETRO_HW OFF CACHE BOOL "${_NJ_FORCED_OFF_MSG}" FORCE)
+  set(NJ_BUILD_GLES2_ACCEL OFF CACHE BOOL "${_NJ_FORCED_OFF_MSG}" FORCE)
+  set(NJ_SANITIZE OFF CACHE BOOL "${_NJ_FORCED_OFF_MSG}" FORCE)
+else()
+  set(_NJ_WEB_DEFAULT OFF)
+endif()
+option(NJ_BUILD_WEB "Build the Emscripten/WASM browser port (requires emcmake)" ${_NJ_WEB_DEFAULT})
+if(NJ_BUILD_WEB AND NOT CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
+  message(FATAL_ERROR
+    "NJ_BUILD_WEB=ON requires the Emscripten toolchain: configure with\n"
+    "  emcmake cmake -S . -B build-web -DNJ_BUILD_WEB=ON ...\n"
+    "or just run tools/build_web.sh")
+endif()
 
 set(NJ_ENABLE_JPEG  1 CACHE STRING "Built-in baseline JPEG decoder")
 set(NJ_ENABLE_TTF   1 CACHE STRING "TrueType text (0 = bitmap faces only)")
@@ -72,7 +114,12 @@ set(NJ_ENABLE_RMS   1 CACHE STRING "RecordStore persistence")
 set(NJ_ENABLE_IO    1 CACHE STRING "java.io and javax.microedition.io")
 set(NJ_ENABLE_STREAM_UTF8 1 CACHE STRING "UTF-8/ASCII character streams (one state int per reader/writer)")
 set(NJ_ENABLE_SAX   1 CACHE STRING "Streaming non-validating SAX XML reader")
-set(NJ_ENABLE_AMR   1 CACHE STRING "Built-in AMR narrowband speech decoder")
+set(NJ_ENABLE_AMR   1 CACHE STRING "AMR narrowband speech support and built-in fallback")
+set(NJ_ENABLE_SYSTEM_AMR AUTO CACHE STRING "Native AMR backend: AUTO, 0, or 1")
+set_property(CACHE NJ_ENABLE_SYSTEM_AMR PROPERTY STRINGS AUTO 0 1)
+if(NOT NJ_ENABLE_SYSTEM_AMR MATCHES "^(AUTO|0|1)$")
+  message(FATAL_ERROR "NJ_ENABLE_SYSTEM_AMR must be AUTO, 0, or 1")
+endif()
 # The built-in MIDI renderer.  A port whose platform plays MIDI itself (Android
 # hands the file to the system synthesizer) can drop it: what is lost is the
 # fallback for a device without that synthesizer, and MIDIControl's single note
@@ -89,6 +136,10 @@ set(NJ_ENABLE_M4V ${NJ_ENABLE_VIDEO} CACHE STRING "Built-in MPEG-4 Part 2 decode
 # passed it to the compiler at all - so -DNJ_ENABLE_FLOAT=0 built a runtime that
 # still linked every libm transcendental.  A configuration option that lies is
 # worse than one that is missing.
+set(NJ_ENABLE_GFX_ACCEL 0 CACHE STRING "Optional synchronous 2D port accelerator (software fallback always retained)")
+if(NOT NJ_ENABLE_GFX_ACCEL MATCHES "^[01]$")
+  message(FATAL_ERROR "NJ_ENABLE_GFX_ACCEL must be 0 or 1")
+endif()
 set(NJ_ENABLE_M3G 1 CACHE STRING "Build JSR 184 (Mobile 3D Graphics)")
 set(NJ_M3G_FAST_PATHS 1 CACHE STRING "Specialize common M3G raster/clip paths (no persistent RAM)")
 set(NJ_ENABLE_MASCOT 1 CACHE STRING "Build Mascot Capsule Micro3D v3")
@@ -191,6 +242,7 @@ set(NJ_SOURCES
   src/core/nj_interp.c
   src/core/nj_engine.c
   src/core/nj_avcodec.c
+  src/port/common/nj_system_amr.c
   src/core/nj_jit.c
   src/core/nj_jit_rv32.c
   src/core/nj_jit_arm64.c
@@ -241,6 +293,8 @@ set(NJ_SOURCES
   src/midp/nj_mascot_raster.c
   # ---- graphics ----
   src/gfx/nj_gfx.c
+  src/gfx/nj_gfx_raster.c
+  src/gfx/nj_gfx_triangles.c
   src/gfx/nj_text.c
   src/gfx/nj_font.c
   src/gfx/nj_font_ttf.c
@@ -321,6 +375,7 @@ target_compile_definitions(nj2me PUBLIC
   NJ_JIT_HOT_THRESHOLD=${NJ_JIT_HOT_THRESHOLD}
   NJ_JIT_MAX_BLOCK_INSNS=${NJ_JIT_MAX_BLOCK_INSNS}
   NJ_JIT_MAX_CODE_BYTES=${NJ_JIT_MAX_CODE_BYTES}
+  NJ_ENABLE_GFX_ACCEL=${NJ_ENABLE_GFX_ACCEL}
   NJ_M3G_FAST_PATHS=${NJ_M3G_FAST_PATHS}
   NJ_ENABLE_HOT_FIELDS=${NJ_ENABLE_HOT_FIELDS}
   NJ_FIELD_CACHE_SLOTS=${NJ_FIELD_CACHE_SLOTS}
@@ -355,6 +410,10 @@ target_compile_definitions(nj2me PUBLIC
   NJ_ENABLE_M3G=${NJ_ENABLE_M3G}
   NJ_ENABLE_MASCOT=${NJ_ENABLE_MASCOT}
   NJ_ENABLE_TTF=${NJ_ENABLE_TTF})
+
+if(NOT NJ_ENABLE_SYSTEM_AMR STREQUAL "AUTO")
+  target_compile_definitions(nj2me PUBLIC NJ_ENABLE_SYSTEM_AMR=${NJ_ENABLE_SYSTEM_AMR})
+endif()
 
 foreach(ext M A F D C)
   if(NOT NJ_JIT_RV32_${ext} STREQUAL "AUTO")
@@ -395,6 +454,10 @@ endif()
 if(UNIX)
   target_link_libraries(nj2me PUBLIC m)
 endif()
+if(ANDROID)
+  # The system AMR provider discovers MediaCodec at runtime on API 21+.
+  target_link_libraries(nj2me PUBLIC ${CMAKE_DL_LIBS})
+endif()
 
 # ---------------------------------------------------------------------
 # Ports
@@ -405,7 +468,52 @@ endif()
 # platform it provides stubs that report NJ_ERR_UNSUPPORTED, so one library can
 # contain all of them.
 # ---------------------------------------------------------------------
-target_sources(nj2me PRIVATE src/port/posix/nj_port_headless.c)
+if(CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
+  # No headless port in the wasm module: its code-commit path calls
+  # __builtin___clear_cache, which Emscripten rejects ("llvm.clear_cache is
+  # not supported on wasm").  The web port in src/port/web/nj_web.c is the
+  # only port this build needs, and it lives in the web executable below.
+else()
+  target_sources(nj2me PRIVATE src/port/posix/nj_port_headless.c)
+endif()
+
+# Separate opt-in adapter: the core archive has no GLES/EGL dependency.
+# A platform creates/owns its dedicated context and attaches this backend.
+if(NJ_BUILD_GLES2_ACCEL)
+  if(NOT NJ_ENABLE_GFX_ACCEL STREQUAL "1")
+    message(FATAL_ERROR "NJ_BUILD_GLES2_ACCEL requires NJ_ENABLE_GFX_ACCEL=1")
+  endif()
+  option(NJ_GLES2_DYNAMIC_ONLY "Use only per-instance proc-loaded GL entry points" ${WIN32})
+  find_path(NJ_GLES2_INCLUDE_DIR GLES2/gl2.h)
+  if(NOT NJ_GLES2_INCLUDE_DIR)
+    find_path(NJ_GL_SDL_INCLUDE_DIR SDL_opengles2_gl2.h
+      HINTS ${SDL2_INCLUDE_DIRS} PATH_SUFFIXES SDL2)
+    if(NOT NJ_GL_SDL_INCLUDE_DIR)
+      message(FATAL_ERROR "Khronos GLES2 declarations or SDL2 GLES2 headers required")
+    endif()
+  endif()
+  if(NOT NJ_GLES2_DYNAMIC_ONLY)
+    find_library(NJ_GLES2_LIBRARY NAMES GLESv2)
+    if(NOT NJ_GLES2_LIBRARY)
+      message(FATAL_ERROR "GLESv2 required, or select NJ_GLES2_DYNAMIC_ONLY=ON")
+    endif()
+  endif()
+  add_library(nj2me_gles2 STATIC src/port/gles2/nj_gfx_gles2.c
+    src/port/gles2/nj_gl_api.c)
+  if(NJ_GLES2_INCLUDE_DIR)
+    target_include_directories(nj2me_gles2 PRIVATE ${NJ_GLES2_INCLUDE_DIR})
+  else()
+    target_include_directories(nj2me_gles2 PUBLIC ${NJ_GL_SDL_INCLUDE_DIR})
+    target_compile_definitions(nj2me_gles2 PUBLIC NJ_GL_USE_SDL_HEADERS=1)
+  endif()
+  target_compile_definitions(nj2me_gles2 PRIVATE
+    NJ_GLES2_DYNAMIC_ONLY=$<BOOL:${NJ_GLES2_DYNAMIC_ONLY}>)
+  target_link_libraries(nj2me_gles2 PUBLIC nj2me)
+  if(NOT NJ_GLES2_DYNAMIC_ONLY)
+    target_link_libraries(nj2me_gles2 PUBLIC ${NJ_GLES2_LIBRARY})
+  endif()
+  target_compile_options(nj2me_gles2 PRIVATE -Wall -Wextra -Werror)
+endif()
 
 if(NJ_BUILD_EMBEDDED_PORTS)
   target_sources(nj2me PRIVATE
@@ -440,12 +548,17 @@ if(NJ_BUILD_SDL2)
   #   -DSDL2_INCLUDE_DIRS=<sdl2>/x86_64-w64-mingw32/include
   #   -DSDL2_LIBRARIES=<sdl2>/x86_64-w64-mingw32/lib/libSDL2.dll.a
   #
-  # The pkg-config path stays first: a native Linux build finds SDL2 exactly
-  # as before and the fallback never overrides it.
+  # Native builds prefer pkg-config; explicit cross-target paths take priority
+  # over a host pkg-config installation.
   set(NJ_SDL2_CACHE_INCLUDE_DIRS "${SDL2_INCLUDE_DIRS}")
   set(NJ_SDL2_CACHE_LIBRARIES "${SDL2_LIBRARIES}")
   find_package(PkgConfig QUIET)
-  if(PkgConfig_FOUND)
+  if(CMAKE_CROSSCOMPILING AND NJ_SDL2_CACHE_INCLUDE_DIRS AND NJ_SDL2_CACHE_LIBRARIES)
+    set(SDL2_FOUND TRUE)
+    set(SDL2_INCLUDE_DIRS "${NJ_SDL2_CACHE_INCLUDE_DIRS}")
+    set(SDL2_LIBRARIES "${NJ_SDL2_CACHE_LIBRARIES}")
+    set(SDL2_VERSION "cross cache")
+  elseif(PkgConfig_FOUND)
     pkg_check_modules(SDL2 QUIET sdl2)
   endif()
   if(NOT SDL2_FOUND AND NJ_SDL2_CACHE_INCLUDE_DIRS AND NJ_SDL2_CACHE_LIBRARIES)
@@ -461,6 +574,15 @@ if(NJ_BUILD_SDL2)
     target_include_directories(nj2me PRIVATE ${SDL2_INCLUDE_DIRS})
     target_link_libraries(nj2me PUBLIC ${SDL2_LIBRARIES})
     target_compile_definitions(nj2me PUBLIC NJ_HAVE_SDL2=1)
+    if(NJ_BUILD_GLES2_ACCEL)
+      target_compile_definitions(nj2me PRIVATE NJ_SDL2_GLES2=1)
+      if(NJ_GLES2_INCLUDE_DIR)
+        target_include_directories(nj2me PRIVATE ${NJ_GLES2_INCLUDE_DIR})
+      endif()
+      # The SDL adapter lives in the port object, while GPU implementation stays
+      # in its separate archive. CMake repeats the static-library group as needed.
+      target_link_libraries(nj2me PUBLIC nj2me_gles2)
+    endif()
     message(STATUS "SDL2 port: enabled (${SDL2_VERSION})")
   else()
     message(STATUS "SDL2 port: disabled - install libsdl2-dev for a window; "
@@ -493,7 +615,74 @@ if(NJ_BUILD_CLI)
           DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/256x256/apps)
 endif()
 
+# ---------------------------------------------------------------------
+# Web runner (Emscripten)
+#
+# The browser build is one executable target: the C runner becomes an ES
+# module (nj2me.js) plus nj2me.wasm, linked by emcc.  src/port/web/nj_web.c
+# holds the port callbacks, the pumped runner and the njw_* entry points
+# declared in include/nj2me/nj_web.h; web/ holds the shell UI that
+# tools/build_web.sh copies next to the module.
+#
+# -sMODULARIZE + -sEXPORT_ES6 make it importable from a plain <script
+# type="module"> with no bundler.  The frame pump is driven by
+# requestAnimationFrame, not by main(), so -sINVOKE_RUN=0 and
+# -sNO_EXIT_RUNTIME=1 keep the module (and its Emscripten FS) alive after
+# startup.  IDBFS is what makes RecordStore and JSR-75 files survive a
+# reload.
+# ---------------------------------------------------------------------
+if(NJ_BUILD_WEB)
+  add_executable(nj2me-web src/port/web/nj_web.c)
+  target_link_libraries(nj2me-web PRIVATE nj2me)
+  set(NJ_WEB_OUTPUT_DIR ${CMAKE_CURRENT_BINARY_DIR}/web)
+  set_target_properties(nj2me-web PROPERTIES
+    OUTPUT_NAME nj2me
+    SUFFIX ".js"
+    RUNTIME_OUTPUT_DIRECTORY ${NJ_WEB_OUTPUT_DIR})
+
+  # The public surface of the module: exactly the functions declared in
+  # nj_web.h.  _malloc/_free stay exported for diagnostics; the shell uses
+  # njw_alloc/njw_free.
+  set(NJ_WEB_EXPORTS
+    _njw_api_version _njw_runtime_version
+    _njw_options_reset _njw_option_int _njw_option_string
+    _njw_start _njw_frame _njw_running _njw_displayable_ready _njw_stop
+    _njw_error _njw_stop_reason _njw_frames
+    _njw_framebuffer _njw_width _njw_height _njw_frame_epoch
+    _njw_key _njw_pointer _njw_text_input _njw_text_edit _njw_text_replace
+    _njw_text_active _njw_text_current _njw_text_state
+    _njw_audio_available _njw_audio_rate _njw_audio_channels _njw_audio_read
+    _njw_audio_note_playing
+    _njw_probe _njw_app_title _njw_app_vendor _njw_app_version
+    _njw_midlet_count _njw_midlet_class_at _njw_app_icon
+    _njw_can_save _njw_save_state _njw_load_state
+    _njw_alloc _njw_free
+    _njw_set_speed _njw_speed
+    _malloc _free)
+  string(JOIN "," NJ_WEB_EXPORTS_STR ${NJ_WEB_EXPORTS})
+
+  target_link_options(nj2me-web PRIVATE
+    "-sMODULARIZE=1"
+    "-sEXPORT_ES6=1"
+    "-sEXPORT_NAME=createNj2meModule"
+    "-sENVIRONMENT=web,worker,node"
+    "-sINVOKE_RUN=0"
+    "-sNO_EXIT_RUNTIME=1"
+    "-sALLOW_MEMORY_GROWTH=1"
+    "-sINITIAL_MEMORY=67108864"
+    "-sMAXIMUM_MEMORY=1073741824"
+    "-sSTACK_SIZE=1048576"
+    "-sFORCE_FILESYSTEM=1"
+    "-lidbfs.js"
+    "-sEXPORTED_FUNCTIONS=${NJ_WEB_EXPORTS_STR}"
+    "-sEXPORTED_RUNTIME_METHODS=FS,IDBFS,MEMFS,HEAPU8,HEAP16,HEAP32,HEAPU16,HEAPU32,UTF8ToString,stringToUTF8,lengthBytesUTF8,getValue")
+  message(STATUS "Web port: enabled (Emscripten; output ${NJ_WEB_OUTPUT_DIR}/nj2me.js)")
+endif()
+
 install(TARGETS nj2me ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
+if(NJ_BUILD_GLES2_ACCEL)
+  install(TARGETS nj2me_gles2 ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
+endif()
 install(DIRECTORY include/nj2me DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 
 # ---------------------------------------------------------------------
@@ -514,6 +703,18 @@ if(NJ_BUILD_LIBRETRO)
   target_include_directories(nano_j2me_libretro PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src/port/libretro)
   target_link_libraries(nano_j2me_libretro PRIVATE nj2me)
+  if(NJ_BUILD_LIBRETRO_HW)
+    set_target_properties(nj2me_gles2 PROPERTIES POSITION_INDEPENDENT_CODE ON)
+    target_sources(nano_j2me_libretro PRIVATE src/port/gles2/nj_libretro_hw_gl.c)
+    target_compile_definitions(nano_j2me_libretro PRIVATE NJ_LIBRETRO_HW=1)
+    target_link_libraries(nano_j2me_libretro PRIVATE nj2me_gles2)
+  endif()
+  # The adapter owns a worker thread. Older glibc releases keep pthread in a
+  # separate library; relying on the frontend to have linked it breaks dlopen.
+  if(NOT WIN32)
+    find_package(Threads REQUIRED)
+    target_link_libraries(nano_j2me_libretro PRIVATE Threads::Threads)
+  endif()
   target_compile_options(nano_j2me_libretro PRIVATE -Wall -Wextra -Werror=format)
   if(NOT MSVC)
     target_compile_options(nano_j2me_libretro PRIVATE -fvisibility=hidden)
@@ -521,7 +722,7 @@ if(NJ_BUILD_LIBRETRO)
   # The archive carries the optional SDL2 and curl ports; a frontend must not
   # inherit their shared libraries, so let the linker drop what no symbol uses.
   if(UNIX AND NOT APPLE)
-    target_link_options(nano_j2me_libretro PRIVATE -Wl,--as-needed)
+    target_link_options(nano_j2me_libretro PRIVATE -Wl,--as-needed -Wl,--no-undefined)
   endif()
 
   # RetroArch loads cores by bare name (<core>_libretro.so), so no "lib"
@@ -825,6 +1026,13 @@ if(NJ_BUILD_TESTS)
   nj_add_test(test_natives   tests/test_natives.c)
   nj_add_test(test_m3g       tests/test_m3g.c)
   nj_add_test(test_m3g_targets tests/test_m3g_targets.c)
+  nj_add_test(test_m3g_accel tests/test_m3g_accel.c)
+  nj_add_test(test_m3g_triangles tests/test_m3g_triangles.c)
+  add_executable(test_gfx_triangles tests/test_gfx_triangles.c src/gfx/nj_gfx_triangles.c)
+  target_include_directories(test_gfx_triangles PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+  target_compile_options(test_gfx_triangles PRIVATE -UNDEBUG -Wall -Wextra -Werror)
+  target_link_libraries(test_gfx_triangles PRIVATE m)
+  add_test(NAME test_gfx_triangles COMMAND test_gfx_triangles)
   if(UNIX)
     find_package(Threads REQUIRED)
     nj_add_test(test_m3g_parallel tests/test_m3g_parallel.c)
@@ -840,6 +1048,7 @@ if(NJ_BUILD_TESTS)
   nj_add_test(test_mascot_model tests/test_mascot_model.c)
   nj_add_test(test_mascot_anim  tests/test_mascot_anim.c)
   nj_add_test(test_mascot_raster tests/test_mascot_raster.c)
+  nj_add_test(test_mascot_accel tests/test_mascot_accel.c)
   nj_add_test(test_png tests/test_png.c)
   nj_add_test(test_png_memory tests/test_png_memory.c)
   nj_add_test(test_mascot_commands tests/test_mascot_commands.c)
@@ -1343,6 +1552,15 @@ add_test(NAME check_splash_budget
                      ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_loopdemo.sh
                      ${NJ_FIXTURES}/loopdemo.jar)
     set_tests_properties(test_loop_frames PROPERTIES TIMEOUT 120)
+    # A manual snapshot must also work on that shape: --save-state starts the
+    # MIDlet as a VM thread so the scheduler parks it at a frame boundary and
+    # nj_vm_can_save() has a representable point to snapshot (before that the
+    # synchronous startApp() spent the whole budget inside one C call).
+    add_test(NAME check_state_loop
+             COMMAND ${CMAKE_COMMAND} -E env NJ_BIN=$<TARGET_FILE:nj2me-cli>
+                     ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_state_loop.sh
+                     ${NJ_FIXTURES}/loopdemo.jar)
+    set_tests_properties(check_state_loop PROPERTIES TIMEOUT 120)
   endif()
   nj_add_test(test_directgraphics tests/test_directgraphics.c)
   nj_add_test(test_directgraphics_bytes tests/test_directgraphics_bytes.c --bounded)
@@ -1381,6 +1599,11 @@ nj_add_test(test_clip tests/test_clip.c)
 
   # ---- the formats ----
   nj_add_test(test_zip       tests/test_zip.c ${NJ_FIXTURES})
+  # MIDlet.getAppProperty() values must be trimmed like a real AMS: one corpus
+  # manifest ships "FeeMode: 0 " and parses the value without a try/catch.
+  if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_manifest_props.c)
+    nj_add_test(test_manifest_props tests/test_manifest_props.c)
+  endif()
   nj_add_test(test_codec     tests/test_codec.c)
   if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_gif.c)
     nj_add_test(test_gif tests/test_gif.c)
@@ -1492,6 +1715,7 @@ nj_add_test(test_clip tests/test_clip.c)
     nj_add_test(test_timer tests/test_timer.c)
     nj_add_test(test_timer_fairness tests/test_timer_fairness.c)
     nj_add_test(test_thread_lifecycle tests/test_thread_lifecycle.c)
+    nj_add_test(test_monitor_compat tests/test_monitor_compat.c)
   endif()
 
   # Save state / restore state: runs the fielddemo fixture in one VM, saves it
@@ -1586,7 +1810,21 @@ nj_add_test(test_clip tests/test_clip.c)
     nj_add_test(test_avcodec tests/test_avcodec.c)
     if(NJ_ENABLE_M4V)
         nj_add_test(test_m4v tests/test_m4v.c)
+        nj_add_test(test_m4v_equations tests/private/test_m4v_equations.c)
     endif()
+  endif()
+
+  if(NJ_ENABLE_MEDIA AND NJ_ENABLE_WAV)
+    nj_add_test(test_wav_stereo tests/test_wav_stereo.c)
+  endif()
+  if(NJ_ENABLE_VIDEO)
+    nj_add_test(test_mp4_timing tests/test_mp4_timing.c)
+    nj_add_test(test_media_timing tests/test_media_timing.c)
+  endif()
+  # Independent ELST mapping for the movie AMR audio track.  The fixture only
+  # synthesises grouping/timing metadata; every sample payload is real.
+  if(NJ_ENABLE_MEDIA AND NJ_ENABLE_VIDEO AND NJ_ENABLE_M4V AND NJ_ENABLE_AMR)
+    nj_add_test(test_movie_amr_timing tests/test_movie_amr_timing.c)
   endif()
 
   # The rasterizer test is deliberately standalone: it compiles nj_gfx.c with
@@ -1613,6 +1851,102 @@ nj_add_test(test_clip tests/test_clip.c)
     target_link_libraries(test_gfx_fill PRIVATE m)
     target_compile_options(test_gfx_fill PRIVATE -UNDEBUG)
     add_test(NAME test_gfx_fill COMMAND test_gfx_fill)
+    # Compile both ABI layouts independently, regardless of the library option.
+    foreach(accel IN ITEMS 0 1)
+      add_executable(test_gfx_accel_${accel} tests/test_gfx_accel.c
+                     src/gfx/nj_gfx.c tests/stub_font.c)
+      target_include_directories(test_gfx_accel_${accel} PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include)
+      target_compile_definitions(test_gfx_accel_${accel} PRIVATE NJ_ENABLE_GFX_ACCEL=${accel})
+      target_compile_options(test_gfx_accel_${accel} PRIVATE -UNDEBUG)
+      target_link_libraries(test_gfx_accel_${accel} PRIVATE m)
+      add_test(NAME test_gfx_accel_${accel} COMMAND test_gfx_accel_${accel})
+    endforeach()
+    add_executable(test_gfx_accel_vm tests/test_gfx_accel_vm.c)
+    target_include_directories(test_gfx_accel_vm PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}/src/core ${CMAKE_CURRENT_SOURCE_DIR}/src/midp)
+    target_compile_options(test_gfx_accel_vm PRIVATE -UNDEBUG)
+    target_link_libraries(test_gfx_accel_vm PRIVATE nj2me)
+    add_test(NAME test_gfx_accel_vm COMMAND test_gfx_accel_vm)
+    if(NJ_BUILD_GLES2_ACCEL)
+      if(SDL2_FOUND AND NJ_BUILD_SDL2)
+        add_executable(test_sdl2_gles2 tests/test_sdl2_gles2.c)
+        target_compile_definitions(test_sdl2_gles2 PRIVATE NJ_SDL2_GLES2=1)
+        target_include_directories(test_sdl2_gles2 PRIVATE
+          ${SDL2_INCLUDE_DIRS} ${NJ_GLES2_INCLUDE_DIR}
+          ${CMAKE_CURRENT_SOURCE_DIR}/src/core ${CMAKE_CURRENT_SOURCE_DIR}/src/midp)
+        target_compile_options(test_sdl2_gles2 PRIVATE -UNDEBUG -Wall -Wextra -Werror)
+        target_link_libraries(test_sdl2_gles2 PRIVATE nj2me)
+        add_test(NAME test_sdl2_gles2 COMMAND test_sdl2_gles2)
+        set_tests_properties(test_sdl2_gles2 PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 120
+          ENVIRONMENT "SDL_VIDEODRIVER=offscreen;SDL_AUDIODRIVER=dummy;NJ_SDL2_GLES2_2D=1")
+      endif()
+      find_path(NJ_EGL_INCLUDE_DIR EGL/egl.h)
+      find_library(NJ_EGL_LIBRARY NAMES EGL)
+      if(NJ_EGL_INCLUDE_DIR AND NJ_EGL_LIBRARY)
+        add_executable(test_gfx_gles2 tests/test_gfx_gles2.c)
+        target_include_directories(test_gfx_gles2 PRIVATE
+          ${NJ_EGL_INCLUDE_DIR} ${NJ_GLES2_INCLUDE_DIR})
+        target_link_libraries(test_gfx_gles2 PRIVATE nj2me_gles2 ${NJ_EGL_LIBRARY})
+        target_compile_options(test_gfx_gles2 PRIVATE -UNDEBUG -Wall -Wextra -Werror)
+        add_test(NAME test_gfx_gles2 COMMAND test_gfx_gles2)
+        set_tests_properties(test_gfx_gles2 PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 120)
+        add_executable(test_gfx_raster_gles2 tests/test_gfx_raster_gles2.c)
+        target_include_directories(test_gfx_raster_gles2 PRIVATE
+          ${NJ_EGL_INCLUDE_DIR} ${NJ_GLES2_INCLUDE_DIR}
+          ${CMAKE_CURRENT_SOURCE_DIR}/src/core ${CMAKE_CURRENT_SOURCE_DIR}/src/midp)
+        target_link_libraries(test_gfx_raster_gles2 PRIVATE nj2me_gles2 ${NJ_EGL_LIBRARY})
+        target_link_options(test_gfx_raster_gles2 PRIVATE
+          -Wl,--wrap=realloc -Wl,--wrap=glReadPixels -Wl,--wrap=glCreateShader)
+        target_compile_options(test_gfx_raster_gles2 PRIVATE -UNDEBUG -Wall -Wextra -Werror)
+        add_test(NAME test_gfx_raster_gles2 COMMAND test_gfx_raster_gles2)
+        set_tests_properties(test_gfx_raster_gles2 PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 180)
+        if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_gfx_triangles_gles2.c)
+          add_executable(test_gfx_triangles_gles2 tests/test_gfx_triangles_gles2.c)
+          target_include_directories(test_gfx_triangles_gles2 PRIVATE
+            ${NJ_EGL_INCLUDE_DIR} ${NJ_GLES2_INCLUDE_DIR})
+          target_compile_options(test_gfx_triangles_gles2 PRIVATE -UNDEBUG -Wall -Wextra -Werror)
+          target_link_libraries(test_gfx_triangles_gles2 PRIVATE nj2me_gles2 ${NJ_EGL_LIBRARY})
+          add_test(NAME test_gfx_triangles_gles2 COMMAND test_gfx_triangles_gles2)
+          set_tests_properties(test_gfx_triangles_gles2 PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 180)
+        endif()
+        # Exercise Android's actual wrapper on host EGL, with private property/log
+        # shims. No Android application, device, or system property is involved.
+        if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+          find_package(Threads REQUIRED)
+          add_executable(test_android_gles2 tests/test_android_gles2.c
+            src/port/android/nj_android_gles2.c src/port/gles2/nj_gfx_gles2.c
+            src/port/gles2/nj_gl_api.c src/gfx/nj_gfx_triangles.c
+            src/gfx/nj_gfx.c src/gfx/nj_gfx_raster.c tests/stub_font.c)
+          target_include_directories(test_android_gles2 PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/include
+            ${CMAKE_CURRENT_SOURCE_DIR}/src/port/android
+            ${CMAKE_CURRENT_SOURCE_DIR}/tests/android_gles2_stubs
+            ${NJ_EGL_INCLUDE_DIR} ${NJ_GLES2_INCLUDE_DIR})
+          target_compile_definitions(test_android_gles2 PRIVATE
+            __ANDROID__=1 NJ_ANDROID_GLES2=1 NJ_ENABLE_GFX_ACCEL=1
+            NJ_ANDROID_GLES2_2D_ACCEL=1
+            _POSIX_C_SOURCE=200809L
+            __system_property_get=nj_android_gles2_test_property_get
+            __android_log_print=nj_android_gles2_test_log_print
+            __android_log_write=nj_android_gles2_test_log_write)
+          target_compile_options(test_android_gles2 PRIVATE -UNDEBUG -Wall -Wextra -Werror)
+          foreach(call eglMakeCurrent eglDestroyContext eglGetDisplay eglInitialize
+              eglBindAPI eglChooseConfig eglCreatePbufferSurface eglCreateContext
+              eglGetCurrentDisplay eglGetCurrentContext eglGetCurrentSurface
+              eglGetError eglDestroySurface eglTerminate eglGetProcAddress
+              glGetString glGetError)
+            target_link_options(test_android_gles2 PRIVATE "-Wl,--wrap=${call}")
+          endforeach()
+          target_link_libraries(test_android_gles2 PRIVATE
+            ${NJ_EGL_LIBRARY} ${NJ_GLES2_LIBRARY} m Threads::Threads)
+          add_test(NAME test_android_gles2 COMMAND test_android_gles2)
+          set_tests_properties(test_android_gles2 PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 60)
+        endif()
+      else()
+        message(STATUS "EGL development files absent: GLES2 adapter built without EGL test")
+      endif()
+    endif()
   endif()
 
   # Antialiased text, with the rasteriser taken out of the picture.  test_gfx
@@ -1657,6 +1991,7 @@ nj_add_test(test_clip tests/test_clip.c)
      AND EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_ttf.c
      AND EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/ttf)
     nj_add_test(test_ttf tests/test_ttf.c)
+    nj_add_test(test_vm_font_data tests/test_vm_font_data.c)
   endif()
 
   # ---- audio: what the MIDlet asked for AND what the port received ----
@@ -1668,6 +2003,65 @@ nj_add_test(test_clip tests/test_clip.c)
   # mode, against samples another implementation of the same standard produced.
   if(NJ_ENABLE_AMR AND EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_amr.c)
     nj_add_test(test_amr tests/test_amr.c)
+    nj_add_test(test_amr_fallback tests/test_amr_fallback.c)
+    if(MSVC)
+      set(_amr_assert_flag /UNDEBUG)
+    else()
+      set(_amr_assert_flag -UNDEBUG)
+    endif()
+    # Private equations use independent libm oracles and include the decoder
+    # directly; do not link another copy through nj2me. Assertions must remain
+    # enabled in Release because these tests also execute API calls in them.
+    add_executable(test_amr_equations tests/private/test_amr_equations.c
+      src/midp/nj_amr_mp4.c)
+    target_include_directories(test_amr_equations PRIVATE include src/midp)
+    target_compile_features(test_amr_equations PRIVATE c_std_99)
+    target_compile_options(test_amr_equations PRIVATE ${_amr_assert_flag})
+    if(NOT WIN32)
+      target_link_libraries(test_amr_equations PRIVATE m)
+    endif()
+    if(NJ_SANITIZE)
+      target_compile_options(test_amr_equations PRIVATE
+        -fsanitize=address,undefined,float-cast-overflow -fno-omit-frame-pointer)
+      target_link_options(test_amr_equations PRIVATE
+        -fsanitize=address,undefined,float-cast-overflow)
+    endif()
+    add_test(NAME test_amr_equations COMMAND test_amr_equations)
+    if(WIN32)
+      add_executable(test_system_amr_windows_mock tests/test_system_amr_windows.c)
+      target_include_directories(test_system_amr_windows_mock PRIVATE include tests)
+      target_compile_options(test_system_amr_windows_mock PRIVATE ${_amr_assert_flag})
+      add_test(NAME test_system_amr_windows_mock COMMAND test_system_amr_windows_mock)
+    endif()
+    # Exercise native-service ownership, errors and packet boundaries without
+    # depending on an installed system codec. These targets supply mock APIs
+    # and compile the provider directly, so do not link the runtime provider.
+    if(UNIX AND NOT ANDROID)
+      foreach(_backend IN ITEMS android apple)
+        if(_backend STREQUAL "android")
+          set(_test_source tests/test_system_amr.c)
+          set(_test_define NJ_SYSTEM_AMR_ANDROID_TEST=1)
+        else()
+          set(_test_source tests/test_system_amr_apple.c)
+          set(_test_define NJ_SYSTEM_AMR_APPLE_TEST=1)
+        endif()
+        set(_test_target test_system_amr_${_backend}_mock)
+        add_executable(${_test_target} ${_test_source}
+          src/port/common/nj_system_amr.c)
+        target_include_directories(${_test_target} PRIVATE include tests/private)
+        target_compile_definitions(${_test_target} PRIVATE
+          NJ_ENABLE_SYSTEM_AMR=1 ${_test_define})
+        target_compile_features(${_test_target} PRIVATE c_std_11)
+        target_compile_options(${_test_target} PRIVATE ${_amr_assert_flag})
+        target_link_libraries(${_test_target} PRIVATE ${CMAKE_DL_LIBS})
+        if(NJ_SANITIZE)
+          target_compile_options(${_test_target} PRIVATE
+            -fsanitize=address,undefined -fno-omit-frame-pointer)
+          target_link_options(${_test_target} PRIVATE -fsanitize=address,undefined)
+        endif()
+        add_test(NAME ${_test_target} COMMAND ${_test_target})
+      endforeach()
+    endif()
   endif()
 
   # The same decoder reached through an MP4/3GP 'samr' track instead of the

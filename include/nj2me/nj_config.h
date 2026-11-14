@@ -71,6 +71,15 @@
 #  define NJ_LOG_LIMIT 2000u
 #endif
 
+/* Optional synchronous 2D hardware backend. This never removes the software
+ * renderer. All translation units, including ports, must use the same value. */
+#ifndef NJ_ENABLE_GFX_ACCEL
+#  define NJ_ENABLE_GFX_ACCEL 0
+#endif
+#if NJ_ENABLE_GFX_ACCEL != 0 && NJ_ENABLE_GFX_ACCEL != 1
+#  error "NJ_ENABLE_GFX_ACCEL must be 0 or 1"
+#endif
+
 /* JSR 184 (Mobile 3D Graphics).  On by default: the classes must exist for a
  * MIDlet's Class.forName to work, and a build that turns this off simply does
  * not have them.  Nothing here is needed to run a 2D title. */
@@ -143,6 +152,17 @@
  */
 #ifndef NJ_ENABLE_AMR
 #  define NJ_ENABLE_AMR 1
+#endif
+/* Native AMR backends discover the host codec at runtime and retain the
+ * built-in decoder as fallback. This controls automatic provider registration;
+ * explicit port hooks/providers remain usable. Legacy Android and freestanding
+ * targets do not acquire a dependency on the hosted system provider. */
+#ifndef NJ_ENABLE_SYSTEM_AMR
+#  if NJ_USE_LIBC && ((defined(__ANDROID__) && !defined(NJ_ANDROID_LEGACY)) || defined(__APPLE__) || defined(_WIN32))
+#    define NJ_ENABLE_SYSTEM_AMR 1
+#  else
+#    define NJ_ENABLE_SYSTEM_AMR 0
+#  endif
 #endif
 /*
  * The built-in MIDI renderer (src/midp/nj_midi.c), on by default.

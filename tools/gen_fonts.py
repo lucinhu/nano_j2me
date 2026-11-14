@@ -392,6 +392,11 @@ def emit_header(family, font_info, sizes, path, bpp=1):
     w(" * nano_j2me - %s  --  GENERATED FILE, DO NOT EDIT."
       % os.path.basename(path))
     w(" *")
+    if family.lower().startswith("liberation"):
+        w(" * Font-derived data: SIL Open Font License 1.1, not the runtime MIT license.")
+        w(" * Copyright (c) 2010 Google Corporation; (c) 2012 Red Hat, Inc.")
+        w(" * Full attribution/license: docs/licenses/Liberation-Fonts-OFL.txt.")
+        w(" *")
     w(" * Produced by tools/gen_fonts.py from %s:" % family)
     for suffix, label, _bit in STYLES:
         info = font_info[suffix]

@@ -1037,12 +1037,14 @@ static void test_esds_config(void)
     box[at++] = 0x00;
     box[at++] = 0x01;
     box[at++] = 0x00;
-    /* DecoderConfigDescriptor tag 0x05 */
-    box[at++] = 0x05;
-    box[at++] = (nj_u1)(13u + 2u + sizeof(dsi));
-    at += 13u;
-    /* DecoderSpecificInfo tag 0x04, length, payload */
+    /* DecoderConfigDescriptor tag 0x04 */
     box[at++] = 0x04;
+    box[at++] = (nj_u1)(13u + 2u + sizeof(dsi));
+    memset(box + at, 0, 13u);
+    box[at] = 0x20; box[at + 1u] = 0x11; /* MPEG-4 Visual stream. */
+    at += 13u;
+    /* DecoderSpecificInfo tag 0x05, length, payload */
+    box[at++] = 0x05;
     box[at++] = (nj_u1)sizeof(dsi);
     dsi_at = at;
     for (i = 0; i < (nj_u4)sizeof(dsi); i++) {

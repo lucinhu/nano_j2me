@@ -15,7 +15,8 @@
  *   ESP32-S3 (ESP-IDF) ............ src/port/esp32/nj_port_esp32.c
  *
  * The framebuffer contract is deliberately dumb: the port exposes a linear
- * buffer that the runtime rasterizes into, plus a `present` callback telling
+ * buffer that the runtime rasterizes into (optionally via synchronous 2D
+ * gfx_accel callbacks), plus a `present` callback telling
  * the port which rectangle changed.  That is all a SPI LCD, an ANativeWindow
  * or an SDL texture needs.
  *
@@ -44,6 +45,8 @@
 
 #include "nj_types.h"
 #include "nj_gfx.h"   /* nj_font: the port may supply the glyphs */
+#include "nj_gfx_raster.h" /* optional exact-coverage 3D fragment packets */
+#include "nj_gfx_triangles.h" /* optional native triangle transactions */
 #include "nj_device.h" /* nj_device_prop: the properties nj_run() installs */
 
 #ifdef __cplusplus
@@ -257,7 +260,8 @@ typedef struct nj_port {
     const char *name;
 
     /* ---- state owned by the port itself ----
-     * Every callback except `log` receives this pointer.  A built-in port sets
+     * Every callback except `log`, gfx_accel and gfx_raster receives
+     * this pointer. Graphics callbacks use their separate *_ud. A built-in port sets
      * it in its constructor; a custom port typically points it at a struct it
      * allocated in its own init. */
     void *ud;
@@ -791,6 +795,39 @@ typedef struct nj_port {
      * Use this for HUD/host housekeeping without rereading the framebuffer.
      * NULL retains the existing per-frame display_present behavior. */
     void (*display_idle)(void *ud);
+
+    /* Optional 2D accelerator. Opt in with NJ_ENABLE_GFX_ACCEL=1; NULL keeps
+     * software drawing. The port owns this table/context until VM teardown.
+     * Uses gfx_accel_ud (which may intentionally be NULL), not port.ud.
+     * See nj_gfx_accel for synchronous CPU-memory and fallback requirements.
+     * This does not replace M3G/Mascot or display_present. */
+#if NJ_ENABLE_GFX_ACCEL
+    const nj_gfx_accel *gfx_accel;
+    void *gfx_accel_ud;
+    /* Optional M3G/Mascot exact-coverage fragment merge. Independent of the
+     * 2D table above. NULL retains the full software rasterizers. */
+    nj_gfx_raster_fn gfx_raster;
+    void *gfx_raster_ud;
+    /* Native triangle coverage/interpolation; synchronous batch transactions.
+     * Independent of exact fragments and software. NULL keeps software only. */
+    nj_gfx_triangles_fn gfx_triangles;
+    void *gfx_triangles_ud;
+    /* Optional ordered-list merge of consecutive triangle packets into one
+     * transaction (same target, no CPU observation between them). NULL means
+     * the runtime keeps using gfx_triangles one packet at a time. */
+    nj_gfx_triangles_list_fn gfx_triangles_list;
+    void *gfx_triangles_list_ud;
+    /* Optional persistent triangle session: keep the target rectangle resident
+     * on the GPU across several list submissions so import/seed/readback are
+     * paid once per session instead of once per submission. All three hooks are
+     * required together; NULL keeps the stateless list path. While a session is
+     * open the CPU colour/depth buffers are stale and the runtime must not let
+     * Java observe the target until gfx_triangles_end or _abort returns. */
+    nj_gfx_triangles_begin_fn gfx_triangles_begin;
+    nj_gfx_triangles_end_fn gfx_triangles_end;
+    nj_gfx_triangles_abort_fn gfx_triangles_abort;
+    void *gfx_triangles_session_ud;
+#endif
 } nj_port;
 
 /* ------------------------------------------------------------------ */
@@ -901,6 +938,11 @@ typedef struct nj_run_opts {
      * limit reserves stable storage at startup, then expands the usable heap
      * only after allocation still fails following garbage collection. */
     nj_size     heap_limit;
+
+    /* How much the runtime logs: 0 keeps the startup default (2 = error, warn
+     * and info); 1..3 select that exact level, where 3 adds decoder and media
+     * decisions.  See nj_vm_set_verbose(). */
+    int         verbose;
 } nj_run_opts;
 
 /*

@@ -3910,6 +3910,172 @@ static void test_alert_timeout(nj_vm *vm, nj_port *port)
     }
 }
 
+/* Self-contained stored JAR; no experimental/generated file is needed at run time. */
+static void image_name_le(nj_u1 *p, nj_u4 value, int bytes)
+{
+    int i;
+    for (i = 0; i < bytes; ++i) { p[i] = (nj_u1)(value >> (8 * i)); }
+}
+
+static void image_name_path(char *out, int bytes, char fill)
+{
+    out[0] = '/';
+    memset(out + 1, fill, (size_t)bytes - 1u);
+    out[bytes] = '\0';
+}
+
+/* This fixture needs only stored entries and one MIDlet manifest. */
+static unsigned image_name_jar(nj_u1 *jar, const char *const *names,
+                               const nj_u1 *const *data, const unsigned *sizes,
+                               int count)
+{
+    unsigned offsets[12], crcs[12];
+    unsigned at = 0, cd;
+    int i;
+    for (i = 0; i < count; ++i) {
+        unsigned n = (unsigned)strlen(names[i]);
+        offsets[i] = at;
+        crcs[i] = nj_crc32(data[i], sizes[i], 0u);
+        memset(jar + at, 0, 30u);
+        image_name_le(jar + at, 0x04034b50u, 4);
+        image_name_le(jar + at + 4u, 20u, 2);
+        image_name_le(jar + at + 6u, 0x800u, 2); /* UTF-8 name */
+        image_name_le(jar + at + 14u, crcs[i], 4);
+        image_name_le(jar + at + 18u, sizes[i], 4);
+        image_name_le(jar + at + 22u, sizes[i], 4);
+        image_name_le(jar + at + 26u, n, 2);
+        memcpy(jar + at + 30u, names[i], n);
+        memcpy(jar + at + 30u + n, data[i], sizes[i]);
+        at += 30u + n + sizes[i];
+    }
+    cd = at;
+    for (i = 0; i < count; ++i) {
+        unsigned n = (unsigned)strlen(names[i]);
+        memset(jar + at, 0, 46u);
+        image_name_le(jar + at, 0x02014b50u, 4);
+        image_name_le(jar + at + 4u, 20u, 2);
+        image_name_le(jar + at + 6u, 20u, 2);
+        image_name_le(jar + at + 8u, 0x800u, 2);
+        image_name_le(jar + at + 16u, crcs[i], 4);
+        image_name_le(jar + at + 20u, sizes[i], 4);
+        image_name_le(jar + at + 24u, sizes[i], 4);
+        image_name_le(jar + at + 28u, n, 2);
+        image_name_le(jar + at + 42u, offsets[i], 4);
+        memcpy(jar + at + 46u, names[i], n);
+        at += 46u + n;
+    }
+    memset(jar + at, 0, 22u);
+    image_name_le(jar + at, 0x06054b50u, 4);
+    image_name_le(jar + at + 8u, (nj_u4)count, 2);
+    image_name_le(jar + at + 10u, (nj_u4)count, 2);
+    image_name_le(jar + at + 12u, at - cd, 4);
+    image_name_le(jar + at + 16u, cd, 4);
+    return at + 22u;
+}
+
+static void test_image_resource_names(nj_vm *vm, const blob *png)
+{
+    static const nj_u1 manifest[] =
+        "Manifest-Version: 1.0\r\nMIDlet-1: Names,,Names\r\n\r\n";
+    static const nj_u1 invalid[] = { 'b', 'a', 'd', '!' };
+    char path[11][300];
+    const char *names[12];
+    const nj_u1 *data[12];
+    unsigned sizes[12], size, capacity = 22u;
+    nj_u1 *jar;
+    nj_app *app;
+    int i;
+
+    /* Requested byte counts INCLUDE the initial slash. Long names precede
+     * their distinct real prefix entries to expose truncated ZIP lookup. */
+    image_name_path(path[0], 129, 'p');
+    image_name_path(path[1], 128, 'p');
+    image_name_path(path[2], 253, 'a');
+    image_name_path(path[3], 254, 'b');
+    image_name_path(path[4], 255, 'c');
+    image_name_path(path[5], 256, 'd');
+    image_name_path(path[6], 257, 'l');
+    image_name_path(path[7], 255, 'l');
+    /* A two-byte character crosses cname[256]'s whole-character boundary. */
+    image_name_path(path[8], 254, 'u');
+    memcpy(path[8] + 254, "\xc3\xa9.png", 7u);
+    image_name_path(path[9], 254, 'e');
+    image_name_path(path[10], 255, 'f');
+    names[0] = "META-INF/MANIFEST.MF";
+    data[0] = manifest; sizes[0] = (unsigned)sizeof(manifest) - 1u;
+    for (i = 0; i < 11; ++i) {
+        names[i + 1] = path[i] + 1;
+        data[i + 1] = (i == 1 || i == 7 || i >= 9) ? invalid : png->data;
+        sizes[i + 1] = (i == 1 || i == 7 || i >= 9) ?
+                          (unsigned)sizeof(invalid) : png->len;
+    }
+    for (i = 0; i < 12; ++i) {
+        capacity += 76u + 2u * (unsigned)strlen(names[i]) + sizes[i];
+    }
+    jar = (nj_u1 *)malloc(capacity);
+    OK(jar != NULL);
+    if (!jar) { return; }
+    size = image_name_jar(jar, names, data, sizes, 12);
+    OK(size == capacity);
+    /* The local header's name may differ. Only CENTRAL names are authoritative. */
+    jar[30u + (unsigned)strlen(names[0]) + sizes[0] + 30u] = 'Q';
+    {
+        nj_zip *zip = nj_zip_open(jar, size, NULL);
+        const nj_zip_entry *entry = NULL, *prefix = NULL;
+        char upper[300];
+        unsigned char pixel[4];
+        OK(zip != NULL);
+        if (zip) {
+            OK(nj_zip_count(zip) == 12);
+            entry = nj_zip_find(zip, path[0] + 1);
+            prefix = nj_zip_find(zip, path[1] + 1);
+            OK(entry != NULL && prefix != NULL && entry != prefix);
+            memcpy(upper, path[0] + 1, strlen(path[0] + 1) + 1u);
+            upper[0] = 'P';
+            OK(entry != NULL && nj_zip_find_ci(zip, upper) == entry);
+            OK(prefix != NULL && nj_zip_extract(zip, prefix, pixel, 4u) == 4 &&
+               memcmp(pixel, invalid, 4u) == 0);
+            OK(nj_zip_entry_at(zip, 1) == entry);
+            nj_zip_close(zip);
+        }
+    }
+    app = nj_app_open(vm, jar, size);
+    OK(app != NULL);
+    if (!app) { free(jar); return; }
+
+    for (i = 0; i < 11; ++i) {
+        nj_value a[1], ret;
+        nj_u4 mark = nj_root_mark(vm);
+        nj_status st;
+        int success = i != 1 && i != 7 && i < 9;
+        int w = 0, h = 0;
+        a[0] = sref(str(vm, path[i]));
+        OK(a[0].r != NULL);
+        if (!a[0].r) { nj_clear_exception(vm); continue; }
+        /* No C root retains name across the call: the real native argument
+         * frame owns it. Image creation and exception construction may GC. */
+        ret.r = NULL;
+        st = nj_call_static(vm, NJ_C_IMAGE, "createImage",
+                            "(Ljava/lang/String;)L" NJ_C_IMAGE ";", a, &ret);
+        if (success) {
+            OK_MSG(st == NJ_OK && ret.r != NULL && !nj_has_exception(vm),
+                   "resource case %d (%u UTF-8 bytes) did not decode: %s", i,
+                   (unsigned)strlen(path[i]),
+                   pending_exc(vm) ? pending_exc(vm) : "no exception");
+            OK_MSG(st == NJ_OK && ret.r &&
+                   nj_midp_image_size(vm, ret.r, &w, &h) && w == 13 && h == 7,
+                   "resource case %d selected a wrong image", i);
+        } else {
+            OK_MSG(st != NJ_OK && exc_is(vm, "java/io/IOException"),
+                   "resource case %d decoded a different existing prefix", i);
+        }
+        nj_clear_exception(vm);
+        OK(nj_root_mark(vm) == mark);
+    }
+    nj_app_close(vm, app);
+    free(jar);
+}
+
 /* ------------------------------------------------------------------ */
 /* main                                                                */
 /* ------------------------------------------------------------------ */
@@ -3993,6 +4159,7 @@ static int round_full(const blob *jar, const blob *png, const blob *png_alpha,
     if (app) {
         nj_app_close(vm, app);
     }
+    test_image_resource_names(vm, png);
     *released = nj_vm_destroy(vm);
     nj_port_shutdown(&port);
     return rc;

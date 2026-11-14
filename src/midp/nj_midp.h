@@ -200,6 +200,20 @@
  */
 nj_surface *nj_midp_surface(nj_vm *vm, nj_ref image_obj, nj_surface *scratch);
 
+/* Bind optional per-port drawing acceleration for both screen and mutable
+ * Image targets. The software-only build reduces to nj_gfx_init(). */
+static inline void nj_midp_gfx_init(nj_vm *vm, nj_gfx *g, nj_surface *surface)
+{
+    nj_gfx_init(g, surface);
+#if NJ_ENABLE_GFX_ACCEL
+    if (vm && vm->port) {
+        nj_gfx_set_accel(g, vm->port->gfx_accel, vm->port->gfx_accel_ud);
+    }
+#else
+    (void)vm;
+#endif
+}
+
 /* Resolve an Image object's dimensions.  Returns 0 for a non-image. */
 int nj_midp_image_size(nj_vm *vm, nj_ref image_obj, int *w, int *h);
 
@@ -434,6 +448,9 @@ nj_status nj_pim_late_init(nj_vm *vm);
  * Light.AMBIENT and friends.  A no-op in a build without the m3g module.
  */
 nj_status nj_m3g_late_init(nj_vm *vm);
+/* Commit deferred Graphics3D triangles before the target can be observed. */
+void nj_m3g_flush(nj_vm *vm);
+void nj_m3g_pump(nj_vm *vm);
 
 /*
  * javax.microedition.io.HttpConnection: build the object Connector.open()

@@ -929,6 +929,12 @@ int nj_run(const nj_port *port_in, const nj_run_opts *opts)
     run_hook_ctx hook_ctx;
 
     vm = nj_vm_create_with_heap_limit(&port, opts->heap_bytes, opts->heap_limit);
+    if (vm && opts->verbose > 0) {
+        /* Raised before the application opens, so the class library's own
+         * startup lines and the first media decisions are at the asked level
+         * too, not just the ones after the frame loop starts. */
+        nj_vm_set_verbose(vm, opts->verbose);
+    }
     /*
      * Let the display keep being drawn while a Java thread sleeps.
      *
@@ -1114,18 +1120,37 @@ int nj_run(const nj_port *port_in, const nj_run_opts *opts)
      * startApp() may legitimately return immediately (most games start a
      * thread and return), or it may do all its work inline.  Either way the
      * frame loop below takes over afterwards.
+     *
+     * When a snapshot was asked for, start the MIDlet as a VM thread instead
+     * of calling startApp() synchronously.  A title that runs its frame loop
+     * inside startApp() and sleeps between frames - 仙剑奇侠传完美版 does -
+     * never returns to the runner on the synchronous path: the frame hook
+     * spends the whole budget while a C call is live, so there is no frame
+     * boundary at which a snapshot could be taken.  The cooperative scheduler
+     * parks the thread at every boundary instead, which is what
+     * nj_vm_can_save() needs; the libretro port uses the same arrangement for
+     * its manual states.  Nothing else about the run changes.
      */
-    if (nj_vm_start_app(vm, midlet) != NJ_OK && nj_has_exception(vm)) {
-        if (port.log) {
-            char buf[320];
-            /* nj_exception_describe includes the class, the message and the
-             * method+pc it was raised at, which is what turns "it threw" into
-             * a one-line diagnosis. */
-            snprintf(buf, sizeof(buf), "startApp() threw %s",
-                     nj_exception_describe(vm));
-            port.log(port.user, 0, buf);
+    {
+        int async_start = opts->save_state_path != NULL &&
+                          opts->save_state_path[0] != '\0';
+
+        if (async_start && nj_vm_start_app_async(vm, midlet) != NJ_OK) {
+            async_start = 0;    /* fall back to the synchronous start */
         }
-        nj_clear_exception(vm);
+        if (!async_start && nj_vm_start_app(vm, midlet) != NJ_OK &&
+            nj_has_exception(vm)) {
+            if (port.log) {
+                char buf[320];
+                /* nj_exception_describe includes the class, the message and
+                 * the method+pc it was raised at, which is what turns "it
+                 * threw" into a one-line diagnosis. */
+                snprintf(buf, sizeof(buf), "startApp() threw %s",
+                         nj_exception_describe(vm));
+                port.log(port.user, 0, buf);
+            }
+            nj_clear_exception(vm);
+        }
     }
 
     /*
@@ -1236,11 +1261,24 @@ resumed:
                  * only safe place: every thread is parked between frames, no
                  * native call is on a thread's stack and no paint is half done,
                  * which is exactly what nj_vm_can_save() checks.
+                 *
+                 * The boundary is the first one at or after the requested
+                 * frame.  Presented frames can run ahead of loop iterations:
+                 * a title that sleeps inside startApp() or in a native call
+                 * gets extra frames from the runner's frame hook during one
+                 * iteration, so an exact equality test never fires for it
+                 * (杀鬼子-敌后武工队 presents 240 frames in ~180 iterations).
+                 * Frames can also lag when paint() throws on every frame, so
+                 * count whichever is ahead.
                  */
                 if (opts->save_state_path != NULL &&
-                    opts->save_state_path[0] != '\0' &&
-                    attempted == (nj_u8)(opts->save_state_frame > 0u
-                                             ? opts->save_state_frame : 1u)) {
+                    opts->save_state_path[0] != '\0' && !save_attempted &&
+                    attempted >= 1u &&
+                    (nj_vm_frames(vm) >= (nj_u8)(opts->save_state_frame > 0u
+                                                     ? opts->save_state_frame
+                                                     : 1u) ||
+                     attempted >= (nj_u8)(opts->save_state_frame > 0u
+                                              ? opts->save_state_frame : 1u))) {
                     nj_status src = NJ_ERR_STATE;
 
                     save_attempted = 1;
@@ -1251,9 +1289,12 @@ resumed:
                     if (port.log) {
                         char buf[384];
                         if (src == NJ_OK) {
-                            snprintf(buf, sizeof(buf), "saved state to %s after "
-                                     "%llu frame(s)", opts->save_state_path,
-                                     (unsigned long long)attempted);
+                            /* Report presented frames: the requested boundary
+                             * is a presented frame, and loop iterations can
+                             * differ from it (frame hook). */
+                            snprintf(buf, sizeof(buf), "saved state to %s at "
+                                     "frame %llu", opts->save_state_path,
+                                     (unsigned long long)nj_vm_frames(vm));
                         } else {
                             snprintf(buf, sizeof(buf), "cannot save state to "
                                      "%s (%d); the run continues",

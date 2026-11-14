@@ -1,0 +1,779 @@
+{
+  "source": {
+    "repository": "https://github.com/OxideAV/oxideav-mpeg4video",
+    "revision": "ebfef14e48acf63547f73a9a0f4c36a153db92b2",
+    "license": "MIT",
+    "copyright": "Copyright (c) 2026 Karpelès Lab Inc.",
+    "sha256": {
+      "LICENSE": "4ecae6b086e0d2663c8629e7d3d7ab7d8b39958e8853f9e1371159499a0c3bf2",
+      "src/texture.rs": "fa6981a1cd44bd2dd56378c2e33c19964d235eeac0ccee37eba82054c09a52d1",
+      "src/tcoef_tables.rs": "9c1279b6c4c7edba0163570ae448a41d9ad623cf176ee506656fb98511985912",
+      "src/predictor.rs": "48d349cd55d0828aadad416dc8d4e4c32ac9298791deae14a930d6df997003fd"
+    }
+  },
+  "dc": {
+    "lum": [
+      {
+        "bits": "011",
+        "size": 0
+      },
+      {
+        "bits": "11",
+        "size": 1
+      },
+      {
+        "bits": "10",
+        "size": 2
+      },
+      {
+        "bits": "010",
+        "size": 3
+      },
+      {
+        "bits": "001",
+        "size": 4
+      },
+      {
+        "bits": "0001",
+        "size": 5
+      },
+      {
+        "bits": "00001",
+        "size": 6
+      },
+      {
+        "bits": "000001",
+        "size": 7
+      },
+      {
+        "bits": "0000001",
+        "size": 8
+      },
+      {
+        "bits": "00000001",
+        "size": 9
+      },
+      {
+        "bits": "000000001",
+        "size": 10
+      },
+      {
+        "bits": "0000000001",
+        "size": 11
+      },
+      {
+        "bits": "00000000001",
+        "size": 12
+      }
+    ],
+    "chrom": [
+      {
+        "bits": "11",
+        "size": 0
+      },
+      {
+        "bits": "10",
+        "size": 1
+      },
+      {
+        "bits": "01",
+        "size": 2
+      },
+      {
+        "bits": "001",
+        "size": 3
+      },
+      {
+        "bits": "0001",
+        "size": 4
+      },
+      {
+        "bits": "00001",
+        "size": 5
+      },
+      {
+        "bits": "000001",
+        "size": 6
+      },
+      {
+        "bits": "0000001",
+        "size": 7
+      },
+      {
+        "bits": "00000001",
+        "size": 8
+      },
+      {
+        "bits": "000000001",
+        "size": 9
+      },
+      {
+        "bits": "0000000001",
+        "size": 10
+      },
+      {
+        "bits": "00000000001",
+        "size": 11
+      },
+      {
+        "bits": "000000000001",
+        "size": 12
+      }
+    ]
+  },
+  "intra": [
+    {
+      "bits": "10",
+      "last": 0,
+      "run": 0,
+      "level": 1
+    },
+    {
+      "bits": "0111",
+      "last": 1,
+      "run": 0,
+      "level": 1
+    },
+    {
+      "bits": "1111",
+      "last": 0,
+      "run": 0,
+      "level": 3
+    },
+    {
+      "bits": "000011001",
+      "last": 0,
+      "run": 11,
+      "level": 1
+    },
+    {
+      "bits": "010101",
+      "last": 0,
+      "run": 0,
+      "level": 6
+    },
+    {
+      "bits": "00000000101",
+      "last": 1,
+      "run": 0,
+      "level": 6
+    },
+    {
+      "bits": "0010111",
+      "last": 0,
+      "run": 0,
+      "level": 9
+    },
+    {
+      "bits": "001111",
+      "last": 1,
+      "run": 1,
+      "level": 1
+    },
+    {
+      "bits": "00011111",
+      "last": 0,
+      "run": 0,
+      "level": 10
+    },
+    {
+      "bits": "00000000100",
+      "last": 1,
+      "run": 0,
+      "level": 7
+    },
+    {
+      "bits": "000100101",
+      "last": 0,
+      "run": 0,
+      "level": 13
+    },
+    {
+      "bits": "001110",
+      "last": 1,
+      "run": 2,
+      "level": 1
+    },
+    {
+      "bits": "000100100",
+      "last": 0,
+      "run": 0,
+      "level": 14
+    },
+    {
+      "bits": "001101",
+      "last": 0,
+      "run": 5,
+      "level": 1
+    },
+    {
+      "bits": "0000100001",
+      "last": 0,
+      "run": 0,
+      "level": 17
+    },
+    {
+      "bits": "001100",
+      "last": 1,
+      "run": 0,
+      "level": 2
+    },
+    {
+      "bits": "0000100000",
+      "last": 0,
+      "run": 0,
+      "level": 18
+    },
+    {
+      "bits": "0010011",
+      "last": 1,
+      "run": 5,
+      "level": 1
+    },
+    {
+      "bits": "00000000111",
+      "last": 0,
+      "run": 0,
+      "level": 21
+    },
+    {
+      "bits": "0010010",
+      "last": 0,
+      "run": 6,
+      "level": 1
+    },
+    {
+      "bits": "00000000110",
+      "last": 0,
+      "run": 0,
+      "level": 22
+    },
+    {
+      "bits": "0010001",
+      "last": 1,
+      "run": 3,
+      "level": 1
+    },
+    {
+      "bits": "00000100000",
+      "last": 0,
+      "run": 0,
+      "level": 23
+    },
+    {
+      "bits": "0010000",
+      "last": 1,
+      "run": 4,
+      "level": 1
+    },
+    {
+      "bits": "110",
+      "last": 0,
+      "run": 0,
+      "level": 2
+    },
+    {
+      "bits": "00011010",
+      "last": 1,
+      "run": 9,
+      "level": 1
+    },
+    {
+      "bits": "010100",
+      "last": 0,
+      "run": 1,
+      "level": 2
+    },
+    {
+      "bits": "00011001",
+      "last": 0,
+      "run": 8,
+      "level": 1
+    },
+    {
+      "bits": "00011110",
+      "last": 0,
+      "run": 0,
+      "level": 11
+    },
+    {
+      "bits": "00011000",
+      "last": 0,
+      "run": 9,
+      "level": 1
+    },
+    {
+      "bits": "0000001111",
+      "last": 0,
+      "run": 0,
+      "level": 19
+    },
+    {
+      "bits": "00010111",
+      "last": 0,
+      "run": 10,
+      "level": 1
+    },
+    {
+      "bits": "00000100001",
+      "last": 0,
+      "run": 0,
+      "level": 24
+    },
+    {
+      "bits": "00010110",
+      "last": 1,
+      "run": 0,
+      "level": 3
+    },
+    {
+      "bits": "000001010000",
+      "last": 0,
+      "run": 0,
+      "level": 25
+    },
+    {
+      "bits": "00010101",
+      "last": 1,
+      "run": 6,
+      "level": 1
+    },
+    {
+      "bits": "1110",
+      "last": 0,
+      "run": 1,
+      "level": 1
+    },
+    {
+      "bits": "00010100",
+      "last": 1,
+      "run": 7,
+      "level": 1
+    },
+    {
+      "bits": "00011101",
+      "last": 0,
+      "run": 0,
+      "level": 12
+    },
+    {
+      "bits": "00010011",
+      "last": 1,
+      "run": 8,
+      "level": 1
+    },
+    {
+      "bits": "0000001110",
+      "last": 0,
+      "run": 0,
+      "level": 20
+    },
+    {
+      "bits": "000011000",
+      "last": 0,
+      "run": 12,
+      "level": 1
+    },
+    {
+      "bits": "000001010001",
+      "last": 0,
+      "run": 0,
+      "level": 26
+    },
+    {
+      "bits": "000010111",
+      "last": 1,
+      "run": 0,
+      "level": 4
+    },
+    {
+      "bits": "01101",
+      "last": 0,
+      "run": 0,
+      "level": 4
+    },
+    {
+      "bits": "000010110",
+      "last": 1,
+      "run": 1,
+      "level": 2
+    },
+    {
+      "bits": "000100011",
+      "last": 0,
+      "run": 0,
+      "level": 15
+    },
+    {
+      "bits": "000010101",
+      "last": 1,
+      "run": 10,
+      "level": 1
+    },
+    {
+      "bits": "0000001101",
+      "last": 0,
+      "run": 1,
+      "level": 7
+    },
+    {
+      "bits": "000010100",
+      "last": 1,
+      "run": 11,
+      "level": 1
+    },
+    {
+      "bits": "01100",
+      "last": 0,
+      "run": 0,
+      "level": 5
+    },
+    {
+      "bits": "000010011",
+      "last": 1,
+      "run": 12,
+      "level": 1
+    },
+    {
+      "bits": "000100010",
+      "last": 0,
+      "run": 4,
+      "level": 2
+    },
+    {
+      "bits": "000010010",
+      "last": 1,
+      "run": 13,
+      "level": 1
+    },
+    {
+      "bits": "000001010010",
+      "last": 0,
+      "run": 0,
+      "level": 27
+    },
+    {
+      "bits": "000010001",
+      "last": 1,
+      "run": 14,
+      "level": 1
+    },
+    {
+      "bits": "01011",
+      "last": 0,
+      "run": 2,
+      "level": 1
+    },
+    {
+      "bits": "0000000111",
+      "last": 0,
+      "run": 13,
+      "level": 1
+    },
+    {
+      "bits": "0000001100",
+      "last": 0,
+      "run": 2,
+      "level": 4
+    },
+    {
+      "bits": "0000000110",
+      "last": 1,
+      "run": 0,
+      "level": 5
+    },
+    {
+      "bits": "000001010011",
+      "last": 0,
+      "run": 1,
+      "level": 9
+    },
+    {
+      "bits": "0000000101",
+      "last": 1,
+      "run": 1,
+      "level": 3
+    },
+    {
+      "bits": "010011",
+      "last": 0,
+      "run": 0,
+      "level": 7
+    },
+    {
+      "bits": "0000000100",
+      "last": 1,
+      "run": 2,
+      "level": 2
+    },
+    {
+      "bits": "0000001011",
+      "last": 0,
+      "run": 3,
+      "level": 4
+    },
+    {
+      "bits": "00000100100",
+      "last": 1,
+      "run": 3,
+      "level": 2
+    },
+    {
+      "bits": "000001010100",
+      "last": 0,
+      "run": 6,
+      "level": 3
+    },
+    {
+      "bits": "00000100101",
+      "last": 1,
+      "run": 4,
+      "level": 2
+    },
+    {
+      "bits": "010010",
+      "last": 0,
+      "run": 0,
+      "level": 8
+    },
+    {
+      "bits": "00000100110",
+      "last": 1,
+      "run": 15,
+      "level": 1
+    },
+    {
+      "bits": "0000001010",
+      "last": 0,
+      "run": 4,
+      "level": 3
+    },
+    {
+      "bits": "00000100111",
+      "last": 1,
+      "run": 16,
+      "level": 1
+    },
+    {
+      "bits": "010001",
+      "last": 0,
+      "run": 3,
+      "level": 1
+    },
+    {
+      "bits": "000001011000",
+      "last": 0,
+      "run": 14,
+      "level": 1
+    },
+    {
+      "bits": "0000001001",
+      "last": 0,
+      "run": 8,
+      "level": 2
+    },
+    {
+      "bits": "000001011001",
+      "last": 1,
+      "run": 0,
+      "level": 8
+    },
+    {
+      "bits": "010000",
+      "last": 0,
+      "run": 4,
+      "level": 1
+    },
+    {
+      "bits": "000001011010",
+      "last": 1,
+      "run": 5,
+      "level": 2
+    },
+    {
+      "bits": "0000001000",
+      "last": 0,
+      "run": 5,
+      "level": 3
+    },
+    {
+      "bits": "000001011011",
+      "last": 1,
+      "run": 6,
+      "level": 2
+    },
+    {
+      "bits": "0010110",
+      "last": 0,
+      "run": 1,
+      "level": 3
+    },
+    {
+      "bits": "000001011100",
+      "last": 1,
+      "run": 17,
+      "level": 1
+    },
+    {
+      "bits": "000001010101",
+      "last": 0,
+      "run": 1,
+      "level": 10
+    },
+    {
+      "bits": "000001011101",
+      "last": 1,
+      "run": 18,
+      "level": 1
+    },
+    {
+      "bits": "0010101",
+      "last": 0,
+      "run": 2,
+      "level": 2
+    },
+    {
+      "bits": "000001011110",
+      "last": 1,
+      "run": 19,
+      "level": 1
+    },
+    {
+      "bits": "0010100",
+      "last": 0,
+      "run": 7,
+      "level": 1
+    },
+    {
+      "bits": "000001011111",
+      "last": 1,
+      "run": 20,
+      "level": 1
+    },
+    {
+      "bits": "00011100",
+      "last": 0,
+      "run": 1,
+      "level": 4
+    },
+    {
+      "bits": "00011011",
+      "last": 0,
+      "run": 3,
+      "level": 2
+    },
+    {
+      "bits": "000100001",
+      "last": 0,
+      "run": 0,
+      "level": 16
+    },
+    {
+      "bits": "000100000",
+      "last": 0,
+      "run": 1,
+      "level": 5
+    },
+    {
+      "bits": "000011111",
+      "last": 0,
+      "run": 1,
+      "level": 6
+    },
+    {
+      "bits": "000011110",
+      "last": 0,
+      "run": 2,
+      "level": 3
+    },
+    {
+      "bits": "000011101",
+      "last": 0,
+      "run": 3,
+      "level": 3
+    },
+    {
+      "bits": "000011100",
+      "last": 0,
+      "run": 5,
+      "level": 2
+    },
+    {
+      "bits": "000011011",
+      "last": 0,
+      "run": 6,
+      "level": 2
+    },
+    {
+      "bits": "000011010",
+      "last": 0,
+      "run": 7,
+      "level": 2
+    },
+    {
+      "bits": "00000100010",
+      "last": 0,
+      "run": 1,
+      "level": 8
+    },
+    {
+      "bits": "00000100011",
+      "last": 0,
+      "run": 9,
+      "level": 2
+    },
+    {
+      "bits": "000001010110",
+      "last": 0,
+      "run": 2,
+      "level": 5
+    },
+    {
+      "bits": "000001010111",
+      "last": 0,
+      "run": 7,
+      "level": 3
+    }
+  ],
+  "scale_rules": {
+    "lum": [
+      {
+        "min": 1,
+        "max": 4,
+        "expression": "8"
+      },
+      {
+        "min": 5,
+        "max": 8,
+        "expression": "2 * quantiser_scale"
+      },
+      {
+        "min": 9,
+        "max": 24,
+        "expression": "quantiser_scale + 8"
+      },
+      {
+        "min": 25,
+        "max": 31,
+        "expression": "2 * quantiser_scale - 16"
+      }
+    ],
+    "chrom": [
+      {
+        "min": 1,
+        "max": 4,
+        "expression": "8"
+      },
+      {
+        "min": 5,
+        "max": 24,
+        "expression": "(quantiser_scale + 13) / 2"
+      },
+      {
+        "min": 25,
+        "max": 31,
+        "expression": "quantiser_scale - 6"
+      }
+    ]
+  }
+}

@@ -70,11 +70,25 @@ else
         src/port/libretro/nj_port_libretro.c)
             SKIPPED+=("$rel (libretro ABI: process-global entry points)")
             continue ;;
+        src/port/web/nj_web.c)
+            # Same ABI reason as libretro: the njw_* functions are Emscripten
+            # exports with no userdata pointer, so the one runner instance is
+            # reached from file scope.  The comment at the top of nj_web.c says
+            # why that is the ABI and not a shortcut; every byte of MIDlet
+            # state still lives in the nj_vm and njw_stop() releases it.
+            SKIPPED+=("$rel (Emscripten export ABI: process-global runner)")
+            continue ;;
         esac
         o="$TMP/$(echo "$rel" | tr '/' '_').o"
+        # Compile optional backends with the feature their public API requires.
+        # This only selects the object inspected here; it does not change builds.
+        SOURCE_CFLAGS=()
+        case "$rel" in
+        src/port/gles2/nj_gfx_gles2.c) SOURCE_CFLAGS+=(-DNJ_ENABLE_GFX_ACCEL=1) ;;
+        esac
         # LC_ALL=C so the diagnostic we match on below is not localised.
         if ! LC_ALL=C "$CC" -std=c99 -O2 -I"$ROOT/include" -I"$ROOT/src/core" \
-                   "${EXTRA_CFLAGS[@]}" \
+                   "${EXTRA_CFLAGS[@]}" "${SOURCE_CFLAGS[@]}" \
                    -c "$s" -o "$o" 2>"$TMP/err"; then
             # A port's own source legitimately needs its platform SDK
             # (SDL.h, esp_log.h, jni.h).  The gate is about the runtime, so

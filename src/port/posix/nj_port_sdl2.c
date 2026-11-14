@@ -31,6 +31,7 @@
 #define _POSIX_C_SOURCE 200809L
 #endif
 #include "nj2me/nj_port.h"
+
 #include "nj_posix_clock.h"
 #include "nj_posix_dir.h"
 #include "nj2me/nj_vm.h"       /* speed + save-state, applied on the frame */
@@ -44,6 +45,20 @@
 
 #include <SDL.h>
 #include "nj_sdl2_dpi.h"
+
+#ifndef NJ_SDL2_GLES2
+#define NJ_SDL2_GLES2 0
+#endif
+#if NJ_SDL2_GLES2
+#if !NJ_ENABLE_GFX_ACCEL
+#error "NJ_SDL2_GLES2 requires NJ_ENABLE_GFX_ACCEL=1"
+#endif
+#include "nj2me/nj_gfx_gles2.h"
+#if defined(_WIN32) && !defined(NJ_GL_USE_SDL_HEADERS)
+#define NJ_GL_USE_SDL_HEADERS 1
+#endif
+#include "nj2me/nj_gl_api.h"
+#endif
 
 #include <stdlib.h>
 #include <string.h>
@@ -135,13 +150,400 @@ static const sdl2_key_def sdl2_keys[NJ_SDL2_NBTN] = {
     { NJ_KEY_POWER,      NJ_SDL2_SHAPE_RECT, SDL2_DIR_UP,    "P" }
 };
 
+#if NJ_SDL2_GLES2
+/* Each port owns its callback table, backend and dedicated context. The table
+ * is installed before nj_run copies nj_port; its address/ud never change while
+ * any nj_gfx can reference them, even after a permanent software fallback. */
+typedef GLenum (GL_APIENTRY *sdl2_gl_reset_fn)(void);
+typedef struct sdl2_gles2 {
+    nj_gfx_accel callbacks;
+    nj_gl_api gl; /* loaded only with this instance's dedicated context current */
+    nj_gles2 *backend;
+    SDL_Window *window;
+    SDL_GLContext context;
+    SDL_threadID thread;
+    GLuint sentinel;
+    sdl2_gl_reset_fn reset_status;
+    int requested, active;
+    nj_u8 fills, blits, rasters, declines, triangles, batches;
+} sdl2_gles2;
+
+typedef struct sdl2_gl_binding {
+    SDL_Window *window;
+    SDL_GLContext context;
+} sdl2_gl_binding;
+
+static sdl2_gl_binding sdl2_gl_save(void)
+{
+    sdl2_gl_binding b;
+    b.window = SDL_GL_GetCurrentWindow();
+    b.context = SDL_GL_GetCurrentContext();
+    return b;
+}
+
+static int sdl2_gl_restore(sdl2_gl_binding b)
+{
+    if (SDL_GL_GetCurrentContext() == b.context &&
+        SDL_GL_GetCurrentWindow() == b.window) return 1;
+    return SDL_GL_MakeCurrent(b.window, b.context) == 0 &&
+           SDL_GL_GetCurrentContext() == b.context &&
+           SDL_GL_GetCurrentWindow() == b.window;
+}
+
+static void sdl2_gles2_disable(sdl2_gles2 *s, const char *reason)
+{
+    if (s->active) {
+        s->active = 0;
+        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                    "gfx: SDL2 GLES2 disabled (%s); software fallback", reason);
+    }
+}
+
+/* SDL's context/window identity and native thread must match, and the private
+ * object must still exist. Robust contexts additionally report a GPU reset.
+ * Do not drain glGetError here: a backend must see errors and decline before
+ * committing CPU pixels. No VM calls or presentation GL state are involved. */
+static int sdl2_gles2_current(void *ud)
+{
+    sdl2_gles2 *s = (sdl2_gles2 *)ud;
+    return s->context && SDL_ThreadID() == s->thread &&
+           SDL_GL_GetCurrentContext() == s->context &&
+           SDL_GL_GetCurrentWindow() == s->window &&
+           (!s->reset_status || s->reset_status() == GL_NO_ERROR) &&
+           s->gl.GetString && s->gl.GetString(GL_VERSION) != NULL &&
+           (!s->sentinel || s->gl.IsTexture(s->sentinel) == GL_TRUE);
+}
+
+static int sdl2_gles2_enter(sdl2_gles2 *s, sdl2_gl_binding *previous)
+{
+    if (!s->active || !s->backend) return 0;
+    /* Java threads are cooperatively scheduled on the runner's native thread.
+     * A caller violating this contract must not steal a context from it. */
+    if (SDL_ThreadID() != s->thread) {
+        sdl2_gles2_disable(s, "drawing on a different native thread");
+        return 0;
+    }
+    *previous = sdl2_gl_save();
+    if (SDL_GL_MakeCurrent(s->window, s->context) != 0 ||
+        !sdl2_gles2_current(s)) {
+        sdl2_gles2_disable(s, "context switch or validation failed");
+        (void)sdl2_gl_restore(*previous);
+        return 0;
+    }
+    return 1;
+}
+
+static void sdl2_gles2_leave(sdl2_gles2 *s, sdl2_gl_binding previous)
+{
+    if (!sdl2_gles2_current(s))
+        sdl2_gles2_disable(s, "context lost during drawing");
+    if (!sdl2_gl_restore(previous))
+        sdl2_gles2_disable(s, "cannot restore presentation context");
+}
+
+static int sdl2_gles2_fill(void *ud, const nj_gfx *g,
+                           int x, int y, int w, int h)
+{
+    sdl2_gles2 *s = (sdl2_gles2 *)ud;
+    sdl2_gl_binding previous;
+    int rc = NJ_GFX_ACCEL_DECLINE;
+    if (sdl2_gles2_enter(s, &previous)) {
+        rc = nj_gles2_backend()->fill_rect(s->backend, g, x, y, w, h);
+        sdl2_gles2_leave(s, previous);
+    }
+    /* A completed callback has already committed CPU pixels: even if restoring
+     * the presentation context failed, never run software over those writes. */
+    if (rc == NJ_GFX_ACCEL_DONE) ++s->fills;
+    else ++s->declines;
+    return rc;
+}
+
+static int sdl2_gles2_blit(void *ud, const nj_gfx *g, const nj_gfx_blit *blit)
+{
+    sdl2_gles2 *s = (sdl2_gles2 *)ud;
+    sdl2_gl_binding previous;
+    int rc = NJ_GFX_ACCEL_DECLINE;
+    if (sdl2_gles2_enter(s, &previous)) {
+        rc = nj_gles2_backend()->blit(s->backend, g, blit);
+        sdl2_gles2_leave(s, previous);
+    }
+    if (rc == NJ_GFX_ACCEL_DONE) ++s->blits;
+    else ++s->declines;
+    return rc;
+}
+
+static int sdl2_gles2_raster(void *ud, const nj_gfx_raster *packet, nj_u4 *drawn)
+{
+    sdl2_gles2 *s = (sdl2_gles2 *)ud;
+    sdl2_gl_binding previous;
+    int rc = NJ_GFX_ACCEL_DECLINE;
+    if (sdl2_gles2_enter(s, &previous)) {
+        rc = nj_gles2_raster(s->backend, packet, drawn);
+        sdl2_gles2_leave(s, previous);
+    }
+    /* DONE commits colour, depth and *drawn together. Context restoration can
+     * retire forwarding, but must never replay this primitive in software. */
+    if (rc == NJ_GFX_ACCEL_DONE) ++s->rasters;
+    else ++s->declines;
+    return rc;
+}
+
+static int sdl2_gles2_triangles(void *ud, const nj_gfx_triangles *packet,
+                                 nj_u4 *submitted)
+{
+    sdl2_gles2 *s = (sdl2_gles2 *)ud;
+    sdl2_gl_binding previous;
+    int rc = NJ_GFX_ACCEL_DECLINE;
+    if (sdl2_gles2_enter(s, &previous)) {
+        rc = nj_gles2_triangles(s->backend, packet, submitted);
+        sdl2_gles2_leave(s, previous);
+    }
+    /* A committed batch stays DONE after reset or failed context restoration;
+     * replay would apply blending/depth twice to the authoritative CPU data. */
+    if (rc == NJ_GFX_ACCEL_DONE) {
+        s->triangles += *submitted;
+        ++s->batches;
+    } else {
+        ++s->declines;
+    }
+    return rc;
+}
+
+static int sdl2_gles2_triangles_list(void *ud,
+                                     const nj_gfx_triangles_list *list,
+                                     nj_u4 *submitted)
+{
+    sdl2_gles2 *s = (sdl2_gles2 *)ud;
+    sdl2_gl_binding previous;
+    int rc = NJ_GFX_ACCEL_DECLINE;
+    if (sdl2_gles2_enter(s, &previous)) {
+        rc = nj_gles2_triangles_list(s->backend, list, submitted);
+        sdl2_gles2_leave(s, previous);
+    }
+    if (rc == NJ_GFX_ACCEL_DONE) {
+        s->triangles += *submitted;
+        ++s->batches;
+    } else {
+        ++s->declines;
+    }
+    return rc;
+}
+
+/* The persistent session keeps the backend framebuffer alive across several
+ * submissions, so the context is re-entered per call but the GL objects and
+ * their contents persist.  A failed begin/end declines and the core replays the
+ * collected packets in software from the pre-session CPU state. */
+static int sdl2_gles2_triangles_begin(void *ud,
+                                      const nj_gfx_triangles_session *session)
+{
+    sdl2_gles2 *s = (sdl2_gles2 *)ud;
+    sdl2_gl_binding previous;
+    int rc = NJ_GFX_ACCEL_DECLINE;
+    if (sdl2_gles2_enter(s, &previous)) {
+        rc = nj_gles2_triangles_begin(s->backend, session);
+        sdl2_gles2_leave(s, previous);
+    }
+    if (rc != NJ_GFX_ACCEL_DONE) ++s->declines;
+    return rc;
+}
+
+static int sdl2_gles2_triangles_end(void *ud, nj_u4 *submitted)
+{
+    sdl2_gles2 *s = (sdl2_gles2 *)ud;
+    sdl2_gl_binding previous;
+    int rc = NJ_GFX_ACCEL_DECLINE;
+    if (sdl2_gles2_enter(s, &previous)) {
+        rc = nj_gles2_triangles_end(s->backend, submitted);
+        sdl2_gles2_leave(s, previous);
+    }
+    if (rc == NJ_GFX_ACCEL_DONE) {
+        s->triangles += *submitted;
+        ++s->batches;
+    } else {
+        ++s->declines;
+    }
+    return rc;
+}
+
+static void sdl2_gles2_triangles_abort(void *ud)
+{
+    sdl2_gles2 *s = (sdl2_gles2 *)ud;
+    sdl2_gl_binding previous;
+    if (sdl2_gles2_enter(s, &previous)) {
+        nj_gles2_triangles_abort(s->backend);
+        sdl2_gles2_leave(s, previous);
+    }
+}
+
+/* Called while SDL and the presentation renderer still exist, after the VM has
+ * released every nj_gfx. On loss/switch failure, destroy the owned context FIRST
+ * and only then abandon CPU state; never issue GL deletes in another context. */
+static void sdl2_gles2_close(sdl2_gles2 *s)
+{
+    sdl2_gl_binding previous = sdl2_gl_save();
+    SDL_GLContext owned = s->context;
+    s->active = 0;
+    if (owned && SDL_ThreadID() == s->thread &&
+        SDL_GL_MakeCurrent(s->window, owned) == 0 && sdl2_gles2_current(s)) {
+        if (nj_gles2_destroy(s->backend)) s->backend = NULL;
+        if (s->sentinel) s->gl.DeleteTextures(1, &s->sentinel);
+    }
+    if (owned) SDL_GL_DeleteContext(owned);
+    s->context = NULL;
+    s->sentinel = 0;
+    s->reset_status = NULL;
+    memset(&s->gl, 0, sizeof(s->gl));
+    nj_gles2_abandon(s->backend);
+    s->backend = NULL;
+    if (s->window) SDL_DestroyWindow(s->window);
+    s->window = NULL;
+    if (previous.context == owned) {
+        previous.window = NULL;
+        previous.context = NULL;
+    }
+    if (!sdl2_gl_restore(previous))
+        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                    "gfx: SDL2 GLES2 cleanup could not restore GL context: %s",
+                    SDL_GetError());
+}
+
+static void *sdl2_gl_resolve(void *ud, const char *name)
+{
+    void *proc;
+    (void)ud;
+    proc = SDL_GL_GetProcAddress(name);
+    /* Reject WGL's documented failure sentinels, including optional reset. */
+    if (proc == (void *)1 || proc == (void *)2 || proc == (void *)3 ||
+        proc == (void *)(size_t)-1) return NULL;
+    return proc;
+}
+
+static void sdl2_gles2_open(sdl2_gles2 *s)
+{
+    /* SDL GL attributes are process-wide creation settings. Restore every one
+     * changed here before returning to the client or any later game launch. */
+    struct gl_attr { SDL_GLattr key; int value, saved; } attrs[] = {
+#ifdef _WIN32
+        /* Windows SDL uses opengl32/WGL; keep the backend's desktop GLSL path
+         * in a private GL 2.1 context, without requiring a separate GLES DLL. */
+        {SDL_GL_CONTEXT_PROFILE_MASK, 0, 0},
+        {SDL_GL_CONTEXT_MAJOR_VERSION, 2, 0},
+        {SDL_GL_CONTEXT_MINOR_VERSION, 1, 0},
+#else
+        {SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES, 0},
+        {SDL_GL_CONTEXT_MAJOR_VERSION, 2, 0},
+        {SDL_GL_CONTEXT_MINOR_VERSION, 0, 0},
+#endif
+        {SDL_GL_CONTEXT_FLAGS, 0, 0},
+        {SDL_GL_SHARE_WITH_CURRENT_CONTEXT, 0, 0},
+#if SDL_VERSION_ATLEAST(2, 0, 6)
+        /* The backend relies on GL errors to decline before CPU commit. */
+        {SDL_GL_CONTEXT_NO_ERROR, 0, 0},
+#endif
+        /* Leave framebuffer attributes alone: SDL_GL_GetAttribute queries the
+         * current framebuffer for these, and cannot recover creation defaults
+         * when the software presentation renderer has no GL context. The tiny
+         * hidden window never supplies backend pixels; private RGBA FBOs do. */
+    };
+    sdl2_gl_binding previous;
+    nj_gles2_config config = {0};
+    size_t i, changed = 0;
+    const char *failure = NULL;
+    char enabled[512] = {0};
+    if (!s->requested) return;
+    previous = sdl2_gl_save();
+    s->thread = SDL_ThreadID();
+    for (i = 0; i < sizeof(attrs)/sizeof(attrs[0]); ++i) {
+        if (SDL_GL_GetAttribute(attrs[i].key, &attrs[i].saved) != 0) {
+            failure = "cannot save SDL GL attributes";
+            goto done;
+        }
+    }
+    for (i = 0; i < sizeof(attrs)/sizeof(attrs[0]); ++i) {
+        /* Count even a failed set, in case a driver changed it first. */
+        changed = i + 1;
+        if (SDL_GL_SetAttribute(attrs[i].key, attrs[i].value) != 0) {
+            failure = "cannot request a dedicated GLES2 context";
+            goto done;
+        }
+    }
+    s->window = SDL_CreateWindow("nano_j2me GLES2 worker", SDL_WINDOWPOS_UNDEFINED,
+                                 SDL_WINDOWPOS_UNDEFINED, 1, 1,
+                                 SDL_WINDOW_HIDDEN | SDL_WINDOW_OPENGL);
+    if (!s->window) {
+        failure = "cannot create hidden GLES2 window";
+        goto done;
+    }
+    s->context = SDL_GL_CreateContext(s->window);
+    if (!s->context || SDL_GL_MakeCurrent(s->window, s->context) != 0) {
+        failure = "cannot create/make current GLES2 context";
+        goto done;
+    }
+    /* Resolve only after this instance's context is current. The backend copies
+     * the table, so different windows/drivers never share mutable GL dispatch. */
+#ifdef _WIN32
+    config.desktop_gl = 1;
+#else
+    config.desktop_gl = 0;
+#endif
+    if (!nj_gl_api_load(&s->gl, sdl2_gl_resolve, s, config.desktop_gl)) {
+        failure = "required GL entry point unavailable";
+        goto done;
+    }
+    if (SDL_GL_ExtensionSupported("GL_KHR_robustness"))
+        s->reset_status = (sdl2_gl_reset_fn)sdl2_gl_resolve(s, "glGetGraphicsResetStatusKHR");
+    else if (SDL_GL_ExtensionSupported("GL_EXT_robustness"))
+        s->reset_status = (sdl2_gl_reset_fn)sdl2_gl_resolve(s, "glGetGraphicsResetStatusEXT");
+    s->gl.GenTextures(1, &s->sentinel);
+    s->gl.BindTexture(GL_TEXTURE_2D, s->sentinel);
+    if (!s->sentinel || !sdl2_gles2_current(s)) {
+        failure = "GLES2 context validation failed";
+        goto done;
+    }
+    config.is_current = sdl2_gles2_current;
+    config.ud = s;
+    config.gl = &s->gl;
+    s->backend = nj_gles2_create(&config);
+    if (!s->backend) {
+        failure = "GLES2 backend initialization failed";
+        goto done;
+    }
+    SDL_snprintf(enabled, sizeof(enabled),
+                 "gfx: SDL2 GLES2 enabled; renderer=%s; version=%s",
+                 (const char *)s->gl.GetString(GL_RENDERER),
+                 (const char *)s->gl.GetString(GL_VERSION));
+    s->active = 1;
+done:
+    while (changed) {
+        --changed;
+        if (SDL_GL_SetAttribute(attrs[changed].key, attrs[changed].saved) != 0)
+            failure = "cannot restore SDL GL attributes";
+    }
+    if (!sdl2_gl_restore(previous)) failure = "cannot restore presentation context";
+    if (failure) {
+        s->active = 0;
+        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                    "gfx: SDL2 GLES2 unavailable (%s): %s; software fallback",
+                    failure, SDL_GetError());
+        sdl2_gles2_close(s);
+        (void)sdl2_gl_restore(previous);
+    } else {
+        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "%s", enabled);
+    }
+}
+#endif
+
 typedef struct sdl_state {
 #ifdef NJ_HAVE_POSIX_NETWORK
     nj_posix_network network;
 #endif
+    Uint32 sdl_subsystems; /* successful, per-instance SDL subsystem references */
     SDL_Window   *window;
     SDL_Renderer *renderer;
     SDL_Texture  *texture;
+#if NJ_SDL2_GLES2
+    sdl2_gles2 gfx;
+#endif
     nj_sdl2_dpi dpi;
     int dpi_dirty;
 
@@ -423,6 +825,11 @@ static int sdl_display_init(void *ud, int *w, int *h, int *stride, void **px)
     int bpp = sdl_bytes_per_pixel(NJ_PIXFMT);
     int linear_filter = 0;
 
+    /* A VM may still hold the first framebuffer and stable accelerator state.
+     * Each port owns one display lifetime; reject reentry instead of replacing
+     * those resources underneath copied nj_port/nj_gfx values. */
+    if (s->pixels) return -1;
+
     /*
      * Take the size from the caller's nj_port, which is where --size lands.
      *
@@ -636,6 +1043,12 @@ static int sdl_display_init(void *ud, int *w, int *h, int *stride, void **px)
         sdl_log(NULL, 2, "audio: muted (NJ_SDL2_MUTE=1); streams run silent");
     }
 
+#if NJ_SDL2_GLES2
+    /* display_init and VM drawing run synchronously on nj_run's native thread;
+     * creating this here also handles callers that constructed the port on a
+     * different thread. It never shares the SDL_Renderer's context or window. */
+    sdl2_gles2_open(&s->gfx);
+#endif
     *w = s->width;
     *h = s->height;
     *stride = s->stride;
@@ -1106,6 +1519,7 @@ static void sdl2_pad_init(sdl_state *s)
         sdl_log(NULL, 2, "gamepad: enabled, controller support unavailable");
         return;
     }
+    s->sdl_subsystems |= SDL_INIT_GAMECONTROLLER;
     n = SDL_NumJoysticks();
     for (i = 0; i < n; i++) {
         if (sdl2_pad_open(s, i)) {
@@ -2289,6 +2703,11 @@ static void sdl_display_present(void *ud, int x, int y, int w, int h)
             }
             break;
         case SDL_WINDOWEVENT:
+#if NJ_SDL2_GLES2
+            /* The hidden worker window must not change presentation/input state. */
+            if (s->gfx.window &&
+                ev.window.windowID == SDL_GetWindowID(s->gfx.window)) break;
+#endif
             if (ev.window.event == SDL_WINDOWEVENT_MOVED ||
                 ev.window.event == SDL_WINDOWEVENT_SIZE_CHANGED ||
                 ev.window.event == SDL_WINDOWEVENT_RESIZED
@@ -2854,15 +3273,38 @@ static void sdl_socket_close(void *ud, void *h)
 static void sdl_shutdown(void *ud)
 {
     sdl_state *s = SS(ud);
+#if NJ_SDL2_GLES2
+    sdl2_gl_binding previous;
+#endif
 
     if (!s) {
         return;
     }
-    /* The pad is closed before SDL_Quit, while the subsystem it belongs to is
-     * still up; SDL_GameControllerClose after SDL_Quit would be a use of a
-     * torn-down joypad stack. */
+#if NJ_SDL2_GLES2
+    if (s->gfx.requested) {
+        previous = sdl2_gl_save();
+        if (previous.window == s->window || previous.context == s->gfx.context) {
+            previous.window = NULL;
+            previous.context = NULL;
+        }
+    }
+#endif
+    /* Close the pad while this port still owns a controller subsystem ref. */
     sdl2_pad_close(s);
     SDL_StopTextInput();
+#if NJ_SDL2_GLES2
+    if (s->gfx.requested) {
+        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                    "gfx: SDL2 GLES2 completed fills=%llu blits=%llu rasters=%llu declines=%llu triangles=%llu batches=%llu",
+                    (unsigned long long)s->gfx.fills,
+                    (unsigned long long)s->gfx.blits,
+                    (unsigned long long)s->gfx.rasters,
+                    (unsigned long long)s->gfx.declines,
+                    (unsigned long long)s->gfx.triangles,
+                    (unsigned long long)s->gfx.batches);
+        sdl2_gles2_close(&s->gfx);
+    }
+#endif
     if (s->texture) {
         SDL_DestroyTexture(s->texture);
     }
@@ -2880,8 +3322,19 @@ static void sdl_shutdown(void *ud)
     s->drop_path[0] = '\0';
     s->drop_pending = 0;
     free(s->pixels);
+    /* SDL_Quit tears down other ports and client-owned GL contexts too. Match
+     * just the references acquired by this instance, including dependencies. */
+    SDL_QuitSubSystem(s->sdl_subsystems);
+#if NJ_SDL2_GLES2
+    /* SDL_Renderer teardown may bind and delete its own GL context after the
+     * worker close restored a foreign one. Preserve the caller across the
+     * entire shutdown, provided its context is not owned by this port. */
+    if (s->gfx.requested && !sdl2_gl_restore(previous))
+        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                    "gfx: SDL2 shutdown could not restore GL context: %s",
+                    SDL_GetError());
+#endif
     free(s);
-    SDL_Quit();
 }
 
 /* ------------------------------------------------------------------ */
@@ -2999,13 +3452,15 @@ int nj_port_sdl2_key_for(const nj_port *port, int key)
 /* ------------------------------------------------------------------ */
 /* Construction                                                        */
 /* ------------------------------------------------------------------ */
-nj_status nj_port_sdl2(nj_port *out, const char *title)
+nj_status nj_port_sdl2_ex(nj_port *out, const char *title, int graphics_mode)
 {
     sdl_state *s;
+    Uint32 subsystems = SDL_INIT_VIDEO;
 
-    if (!out) {
-        return NJ_ERR;
-    }
+    if (!out || graphics_mode < -1 || graphics_mode > 1) return NJ_ERR;
+#if !NJ_SDL2_GLES2
+    if (graphics_mode == 1) return NJ_ERR_UNSUPPORTED;
+#endif
     (void)title;
     /*
      * A touchscreen is also reported as a mouse by SDL: every finger produces a
@@ -3018,18 +3473,17 @@ nj_status nj_port_sdl2(nj_port *out, const char *title)
 #ifdef SDL_HINT_TOUCH_MOUSE_EVENTS
     SDL_SetHint(SDL_HINT_TOUCH_MOUSE_EVENTS, "0");
 #endif
-    /* SDL_INIT_AUDIO is requested but not required: a machine with no sound
-     * card must still get a window, and the port reports the failure by leaving
-     * the audio hooks to return -1. */
-    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO) != 0
-        && SDL_Init(SDL_INIT_VIDEO) != 0) {
-        return NJ_ERR;
-    }
+    /* Acquire exactly one video ref per port. Audio is optional: a machine
+     * without a sound card must still get a window. Separate calls avoid
+     * partially acquired refs if optional initialization fails. */
+    if (SDL_InitSubSystem(SDL_INIT_VIDEO) != 0) return NJ_ERR;
+    if (SDL_InitSubSystem(SDL_INIT_AUDIO) == 0) subsystems |= SDL_INIT_AUDIO;
     s = (sdl_state *)calloc(1u, sizeof(*s));
     if (!s) {
-        SDL_Quit();
+        SDL_QuitSubSystem(subsystems);
         return NJ_ERR_NOMEM;
     }
+    s->sdl_subsystems = subsystems;
     s->scale = 0;                 /* auto: largest integer fit */
     /*
      * On-screen keys: on by default, because the point of them is the user who
@@ -3104,6 +3558,37 @@ nj_status nj_port_sdl2(nj_port *out, const char *title)
     s->port = out;
     out->name = "sdl2";
     out->ud = s;
+#if NJ_SDL2_GLES2
+    {
+        const char *gfx = graphics_mode == -1 ? SDL_getenv("NJ_SDL2_GFX") : NULL;
+        if (graphics_mode == 1 || (gfx && strcmp(gfx, "gles2") == 0)) {
+            s->gfx.requested = 1;
+            s->gfx.callbacks.version = NJ_GFX_ACCEL_VERSION;
+            s->gfx.callbacks.fill_rect = sdl2_gles2_fill;
+            s->gfx.callbacks.blit = sdl2_gles2_blit;
+            /* The 2D backend is a synchronous transaction: every fill/blit
+             * imports the CPU rectangle, uploads it, draws and reads it back.
+             * Measured on the reference host that is slower than the software
+             * path for every tested size (full 240x320 blit 320us vs 67us), so
+             * the optional 2D callbacks are opt-in through the legacy-style
+             * environment knob. The 3D triangle list path is unaffected. */
+            if (getenv("NJ_SDL2_GLES2_2D") && getenv("NJ_SDL2_GLES2_2D")[0]=='1') {
+                out->gfx_accel = &s->gfx.callbacks;
+                out->gfx_accel_ud = &s->gfx;
+            }
+            out->gfx_raster = sdl2_gles2_raster;
+            out->gfx_raster_ud = &s->gfx;
+            out->gfx_triangles = sdl2_gles2_triangles;
+            out->gfx_triangles_ud = &s->gfx;
+            out->gfx_triangles_list = sdl2_gles2_triangles_list;
+            out->gfx_triangles_list_ud = &s->gfx;
+            out->gfx_triangles_begin = sdl2_gles2_triangles_begin;
+            out->gfx_triangles_end = sdl2_gles2_triangles_end;
+            out->gfx_triangles_abort = sdl2_gles2_triangles_abort;
+            out->gfx_triangles_session_ud = &s->gfx;
+        }
+    }
+#endif
 #ifdef NJ_HAVE_POSIX_NETWORK
     /*
      * NJ_SDL2_NO_NETWORK=1 leaves every network hook NULL.
@@ -3168,4 +3653,9 @@ nj_status nj_port_sdl2(nj_port *out, const char *title)
      */
     out->fps_cap = 0;
     return NJ_OK;
+}
+
+nj_status nj_port_sdl2(nj_port *out, const char *title)
+{
+    return nj_port_sdl2_ex(out, title, -1);
 }

@@ -5,6 +5,10 @@
 #     tools/build_android.sh [--abi arm64-v8a] [--api 21] [--out DIR] [--no-midi]
 #                              [--opt 0|1|2|3|s|g|z] [--no-png] [--no-jpeg]
 #                              [--no-gif] [--no-inflate] [--no-wav] [--no-amr]
+#                              [--gles2]
+#
+# --gles2 builds the optional 2D backend. At runtime set the Android property
+# debug.nj2me.gles2=1 before launching a game; default remains software.
 #
 # --opt selects the native optimisation level; the default is -Os, the level the
 # APK has always shipped with.  -O2 and -O3 were measured for speed and neither
@@ -34,6 +38,7 @@ SCREEN=""     # e.g. 176x208; empty leaves the runtime's default (240x320)
 NO_MIDI=0     # 1 drops the built-in MIDI renderer (see --no-midi below)
 NO_CODECS=""  # space-separated codec names to cut (see --no-<codec> below)
 OPT="s"       # -O<n> for the native compile; see --opt below
+GLES2=0       # optional private EGL context for synchronous 2D acceleration
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -43,6 +48,7 @@ while [ $# -gt 0 ]; do
         --screen) SCREEN="$2"; shift 2 ;;
         --opt)  OPT="${2#-O}"; shift 2 ;;
         --no-midi) NO_MIDI=1; shift ;;
+        --gles2) GLES2=1; shift ;;
         --no-png|--no-jpeg|--no-gif|--no-inflate|--no-wav|--no-amr)
             NO_CODECS="$NO_CODECS ${1#--no-}"; shift ;;
         -h|--help) sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
@@ -87,7 +93,13 @@ SOURCES="$(cd "$ROOT" && ls src/core/*.c src/midp/*.c src/gfx/*.c src/zip/*.c)"
 # happily - a shared library may have undefined symbols by default - and then
 # fails to dlopen on the device with UnsatisfiedLinkError.  --no-undefined below
 # is what turns that runtime crash into a link error.
-SOURCES="$SOURCES src/runner/nj_run.c src/port/android/nj_port_android.c"
+SOURCES="$SOURCES src/runner/nj_run.c src/port/android/nj_port_android.c src/port/common/nj_system_amr.c"
+
+GLES2_LIBS=""
+if [ "$GLES2" -eq 1 ]; then
+    SOURCES="$SOURCES src/port/gles2/nj_gfx_gles2.c src/port/gles2/nj_gl_api.c src/port/android/nj_android_gles2.c"
+    GLES2_LIBS="-lEGL -lGLESv2"
+fi
 
 echo "NDK  $NDK"
 echo "API  $API"
@@ -140,9 +152,12 @@ fi
 # draw.
 FEATURE_DEFS="-DNJ_PIXFMT=NJ_PIXFMT_RGB565 \
 -DNJ_ENABLE_PNG=1 -DNJ_ENABLE_JPEG=1 -DNJ_ENABLE_GIF=1 -DNJ_ENABLE_INFLATE=1 \
--DNJ_ENABLE_WAV=1 -DNJ_ENABLE_RMS=1 -DNJ_ENABLE_IO=1 \
+-DNJ_ENABLE_WAV=1 -DNJ_ENABLE_MEDIA=1 -DNJ_ENABLE_AMR=1 -DNJ_ENABLE_RMS=1 -DNJ_ENABLE_IO=1 \
 -DNJ_ENABLE_FLOAT=1 -DNJ_ENABLE_M3G=1 -DNJ_ENABLE_MASCOT=1 -DNJ_ENABLE_TTF=1 \
 -DNJ_ENABLE_FONT_CJK=0"
+if [ "$GLES2" -eq 1 ]; then
+    FEATURE_DEFS="$FEATURE_DEFS -DNJ_ENABLE_GFX_ACCEL=1 -DNJ_ANDROID_GLES2=1"
+fi
 
 # The replicated interpreter body is this port's default (see the comment
 # above and docs/notes/2026-11-01-minecraft-android-costs.md); setting
@@ -231,7 +246,7 @@ for abi in $ABIS; do
     # device - which is exactly what happened with src/runner/nj_run.c.
     if ! "$cc" -shared -Wl,--gc-sections -Wl,--no-undefined \
             -Wl,-soname,libnj2me.so \
-            -o "$dir/libnj2me.so" $objs -llog -landroid -lOpenSLES -lz -lm 2>"$dir/err"; then
+            -o "$dir/libnj2me.so" $objs -llog -landroid -lOpenSLES -lz -ldl -lm $GLES2_LIBS 2>"$dir/err"; then
         echo "  $abi: link failed"
         head -5 "$dir/err"
         fail=1

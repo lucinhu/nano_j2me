@@ -6,7 +6,7 @@
 #                                [--opt 0|1|2|3|s|g|z] [--install]
 #                                [--push FILE.jar] [--no-midi]
 #                                [--no-png] [--no-jpeg] [--no-gif]
-#                                [--no-inflate] [--no-wav] [--no-amr]
+#                                [--no-inflate] [--no-wav] [--no-amr] [--gles2]
 #
 # --opt is the native optimisation level, forwarded to tools/build_android.sh.
 # Both scripts default to -Os; see docs/notes/2026-10-30-android-optimisation-
@@ -55,7 +55,7 @@ while [ $# -gt 0 ]; do
         --install) INSTALL=1; shift ;;
         --push) PUSH="$2"; shift 2 ;;
         --no-midi) NO_MIDI=1; shift ;;
-        --no-png|--no-jpeg|--no-gif|--no-inflate|--no-wav|--no-amr)
+        --gles2|--no-png|--no-jpeg|--no-gif|--no-inflate|--no-wav|--no-amr)
             NO_CODECS="$NO_CODECS $1"; shift ;;
         -h|--help) sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "unknown option: $1" >&2; exit 2 ;;
@@ -90,7 +90,9 @@ if [ -n "$PUSH" ]; then
 fi
 
 # 1. The native side, once per ABI.
-W="$OUT/apk"; rm -rf "$W"; mkdir -p "$W/classes" "$W/dex" "$W/assets" "$W/gen" "$W/res"
+mkdir -p "$OUT"
+W="$(mktemp -d "$OUT/apk.XXXXXX")" || exit 1
+mkdir -p "$W/classes" "$W/dex" "$W/assets" "$W/gen" "$W/res"
 for abi in $ABIS; do
     echo "== native ($abi)"
     MIDI_FLAG=""

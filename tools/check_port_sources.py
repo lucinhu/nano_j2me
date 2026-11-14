@@ -26,6 +26,7 @@ ESP_CMAKE = ROOT / "tests/embedded/idf/components/nj2me/CMakeLists.txt"
 DESKTOP_ONLY = {
     "src/runner/nj_run.c": "the command-line runner (argv, files, --device profiles)",
     "src/core/nj_save.c": "VM snapshots: the runner's --save-state/--load-state",
+    "src/port/common/nj_system_amr.c": "host system AMR discovery; embedded builds set NJ_ENABLE_SYSTEM_AMR=0 and retain the built-in decoder",
     "src/core/nj_detect.c": "handset/device-profile detection, used by the runner",
     "src/gfx/nj_ttf.c": "TrueType rasteriser; the device build uses the bitmap faces (NJ_ENABLE_TTF=0 there)",
     "src/gfx/nj_font_ttf.c": "the TrueType face glue for the same switch",

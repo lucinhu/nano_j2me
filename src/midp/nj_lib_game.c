@@ -374,7 +374,7 @@ static int njg_bind(nj_vm *vm, nj_ref gobj, njg_gfx_bind *b, nj_gfx *g)
     if (!b->surf) {
         return 0;
     }
-    nj_gfx_init(g, b->surf);
+    nj_midp_gfx_init(vm, g, b->surf);
 
     tx = fgi(vm, gobj, NJ_C_GRAPHICS, NJ_F_G_TX, D_INT);
     ty = fgi(vm, gobj, NJ_C_GRAPHICS, NJ_F_G_TY, D_INT);
@@ -2689,7 +2689,7 @@ static void gc_blit(nj_vm *vm, nj_ref buf, nj_surface *dst,
         nj_gfx g;
         nj_image view;
 
-        nj_gfx_init(&g, dst);
+        nj_midp_gfx_init(vm, &g, dst);
         nj_gfx_set_clip(&g, cx, cy, cw, ch);
         if (!image_view(vm, buf, sx, sy, w, h, &view)) {
             return;

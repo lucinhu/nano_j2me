@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#101318">
+  <meta name="description" content="nano_j2me — a C99 J2ME runtime running in the browser as WebAssembly.">
+  <title>nano_j2me · 网页版</title>
+  <link rel="icon" type="image/svg+xml" href="assets/icon.svg">
+  <link rel="stylesheet" href="css/app.css">
+</head>
+<body class="in-library">
+
+  <!-- Global banner: mock / fallback mode and storage warnings. -->
+  <div id="app-banner" class="app-banner" role="status" hidden>
+    <span class="app-banner__text"></span>
+    <button type="button" class="app-banner__action" hidden></button>
+  </div>
+
+  <!-- Drag & drop overlay for the library. -->
+  <div id="drop-zone" class="drop-zone" aria-hidden="true" hidden>
+    <div class="drop-zone__inner">
+      <svg class="drop-zone__icon" viewBox="0 0 48 48" fill="none" aria-hidden="true">
+        <path d="M24 8v20m0 0 7-7m-7 7-7-7" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M10 30v6a4 4 0 0 0 4 4h20a4 4 0 0 0 4-4v-6" stroke="currentColor" stroke-width="3" stroke-linecap="round"/>
+      </svg>
+      <p class="drop-zone__title" data-i18n="library.dropTitle"></p>
+      <p class="drop-zone__hint" data-i18n="library.dropHint"></p>
+    </div>
+  </div>
+
+  <header class="app-header" id="app-header">
+    <div class="app-header__brand">
+      <img class="app-header__logo" src="assets/icon.svg" alt="" width="36" height="36">
+      <div class="app-header__titles">
+        <h1 class="app-header__title" data-i18n="app.title">nano_j2me</h1>
+        <p class="app-header__subtitle" data-i18n="app.subtitle"></p>
+      </div>
+    </div>
+    <div class="app-header__actions">
+      <span id="engine-badge" class="badge badge--engine"></span>
+      <button id="lang-toggle" type="button" class="btn btn--ghost btn--small lang-toggle"
+              data-i18n-title="library.language" data-i18n-aria="library.language">EN</button>
+    </div>
+  </header>
+
+  <main class="app-main" id="app-main">
+
+    <!-- ============================ library ============================ -->
+    <section id="library-view" class="view view--library" aria-label="game library">
+      <div class="library-toolbar">
+        <label class="search-field">
+          <svg class="search-field__icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <circle cx="11" cy="11" r="6.5" stroke="currentColor" stroke-width="2"/>
+            <path d="m16 16 4.5 4.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          </svg>
+          <input id="search-input" class="search-field__input" type="search"
+                 autocomplete="off" autocapitalize="off" spellcheck="false"
+                 data-i18n-placeholder="library.search" data-i18n-aria="library.searchLabel">
+        </label>
+
+        <label class="select-field">
+          <span class="visually-hidden" data-i18n="library.sort"></span>
+          <select id="sort-select" class="select-field__select">
+            <option value="recent" data-i18n="library.sort.recent"></option>
+            <option value="imported" data-i18n="library.sort.imported"></option>
+            <option value="name" data-i18n="library.sort.name"></option>
+            <option value="size" data-i18n="library.sort.size"></option>
+          </select>
+        </label>
+
+        <button id="import-btn" type="button" class="btn btn--primary">
+          <svg class="btn__icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M12 5v10m0 0 4-4m-4 4-4-4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M5 17v2h14v-2" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          </svg>
+          <span data-i18n="library.import"></span>
+        </button>
+        <input id="file-input" class="visually-hidden" type="file" accept=".jar,application/java-archive" multiple>
+      </div>
+
+      <div class="library-meta">
+        <span id="library-count" class="library-count"></span>
+      </div>
+
+      <div id="game-grid" class="game-grid" role="list"></div>
+
+      <div id="library-empty" class="empty-state" hidden>
+        <svg class="empty-state__art" viewBox="0 0 120 120" fill="none" aria-hidden="true">
+          <rect x="34" y="12" width="52" height="96" rx="10" fill="var(--surface-2)" stroke="var(--border-strong)" stroke-width="2"/>
+          <rect x="42" y="24" width="36" height="42" rx="3" fill="var(--surface-3)"/>
+          <circle cx="60" cy="90" r="4" fill="var(--text-dim)"/>
+          <path d="M47 40h12M47 47h20M47 54h16" stroke="var(--text-dim)" stroke-width="2" stroke-linecap="round"/>
+          <path d="M14 58c-8 4-8 16 0 20M106 58c8 4 8 16 0 20" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" opacity=".55"/>
+        </svg>
+        <h2 id="library-empty-title" class="empty-state__title"></h2>
+        <p id="library-empty-body" class="empty-state__body"></p>
+        <p id="library-empty-hint" class="empty-state__hint"></p>
+        <button id="library-empty-import" type="button" class="btn btn--primary" data-i18n="library.import"></button>
+      </div>
+
+      <footer class="library-footer">
+        <span id="library-engine" class="library-footer__engine"></span>
+        <span id="library-footer-hint" class="library-footer__hint"></span>
+        <span id="library-storage" class="library-footer__storage"></span>
+      </footer>
+    </section>
+
+    <!-- ============================= game ============================== -->
+    <section id="game-view" class="view view--game" hidden aria-label="game">
+
+      <div class="game-chrome">
+        <button id="game-back" type="button" class="btn btn--icon game-chrome__back"
+                data-i18n-title="game.back" data-i18n-aria="game.back">
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="m14 6-6 6 6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button>
+        <div class="game-chrome__titles">
+          <div id="game-title" class="game-title"></div>
+          <span id="game-speed-chip" class="chip" hidden></span>
+        </div>
+        <button id="panel-handle" type="button" class="btn btn--icon game-chrome__tools"
+                data-i18n-title="game.panelOpen" data-i18n-aria="game.panelOpen">
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M4 7h16M4 12h16M4 17h16" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          </svg>
+        </button>
+      </div>
+
+      <div id="game-screen" class="game-screen">
+        <div id="game-stage" class="game-stage">
+          <canvas id="game-canvas" class="game-canvas" width="240" height="320"
+                  data-i18n-aria="game.screen"></canvas>
+        </div>
+
+        <div id="loading-overlay" class="overlay overlay--loading">
+          <div class="spinner" aria-hidden="true"></div>
+          <div id="loading-title" class="loading-title"></div>
+          <p class="loading-hint" data-i18n="game.loadingHint"></p>
+        </div>
+
+        <div id="pause-indicator" class="pause-indicator" hidden>
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M8 5v14M16 5v14" stroke="currentColor" stroke-width="3" stroke-linecap="round"/>
+          </svg>
+          <span data-i18n="game.paused"></span>
+        </div>
+
+        <div id="stop-overlay" class="overlay" hidden>
+          <h2 id="stop-title" class="overlay__title"></h2>
+          <p id="stop-message" class="overlay__message"></p>
+          <div class="overlay__actions">
+            <button id="stop-exit" type="button" class="btn" data-i18n="game.exit"></button>
+            <button id="stop-replay" type="button" class="btn btn--primary" data-i18n="common.retry"></button>
+          </div>
+        </div>
+
+        <div id="error-overlay" class="overlay" hidden>
+          <h2 id="error-title" class="overlay__title" data-i18n="game.errorTitle"></h2>
+          <p id="error-message" class="overlay__message" data-i18n="game.errorDefault"></p>
+          <div class="overlay__actions">
+            <button id="error-back" type="button" class="btn" data-i18n="game.back"></button>
+            <button id="error-retry" type="button" class="btn btn--primary" data-i18n="common.retry"></button>
+          </div>
+        </div>
+
+        <div id="text-indicator" class="text-indicator" hidden>
+          <span class="text-indicator__label" data-i18n="game.textEditing"></span>
+          <span id="text-indicator-hint" class="text-indicator__hint"></span>
+          <button id="text-done" type="button" class="btn btn--small" data-i18n="game.textDone"></button>
+        </div>
+      </div>
+
+      <!-- On-screen pad: classic phone layout (D-pad / soft keys+fire / keypad).
+           Every keycap carries data-nj-key = the nj_key code from nj_web.h; the
+           input layer does the press/release bookkeeping. -->
+      <div id="game-controls" class="controls" role="group" data-i18n-aria="game.controls">
+        <div class="controls__dpad" role="group" data-i18n-aria="game.dpad">
+          <button type="button" class="keycap keycap--dpad keycap--up" data-nj-key="13"
+                  data-i18n-aria="game.keyUp">
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m6 14 6-6 6 6" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+          <button type="button" class="keycap keycap--dpad keycap--left" data-nj-key="15"
+                  data-i18n-aria="game.keyLeft">
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m14 6-6 6 6 6" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+          <button type="button" class="keycap keycap--dpad keycap--right" data-nj-key="16"
+                  data-i18n-aria="game.keyRight">
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m10 6 6 6-6 6" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+          <button type="button" class="keycap keycap--dpad keycap--down" data-nj-key="14"
+                  data-i18n-aria="game.keyDown">
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m6 10 6 6 6-6" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+          <span class="controls__dpad-center" aria-hidden="true"></span>
+        </div>
+
+        <div class="controls__center">
+          <div class="controls__soft">
+            <button type="button" class="keycap keycap--soft" data-nj-key="18">
+              <span data-i18n="game.softLeft"></span>
+            </button>
+            <button type="button" class="keycap keycap--soft" data-nj-key="19">
+              <span data-i18n="game.softRight"></span>
+            </button>
+          </div>
+          <button type="button" class="keycap keycap--fire" data-nj-key="17">
+            <span data-i18n="game.fire"></span>
+          </button>
+          <button type="button" class="keycap keycap--clear" data-nj-key="20">
+            <span data-i18n="game.clear"></span>
+          </button>
+        </div>
+
+        <div class="controls__keypad" role="group" data-i18n-aria="game.keypad">
+          <button type="button" class="keycap keycap--num" data-nj-key="1">1</button>
+          <button type="button" class="keycap keycap--num" data-nj-key="2">2</button>
+          <button type="button" class="keycap keycap--num" data-nj-key="3">3</button>
+          <button type="button" class="keycap keycap--num" data-nj-key="4">4</button>
+          <button type="button" class="keycap keycap--num" data-nj-key="5">5</button>
+          <button type="button" class="keycap keycap--num" data-nj-key="6">6</button>
+          <button type="button" class="keycap keycap--num" data-nj-key="7">7</button>
+          <button type="button" class="keycap keycap--num" data-nj-key="8">8</button>
+          <button type="button" class="keycap keycap--num" data-nj-key="9">9</button>
+          <button type="button" class="keycap keycap--num keycap--star" data-nj-key="11">*</button>
+          <button type="button" class="keycap keycap--num" data-nj-key="10">0</button>
+          <button type="button" class="keycap keycap--num keycap--pound" data-nj-key="12">#</button>
+        </div>
+      </div>
+
+      <!-- The bridge lives inside the game view: a real (but visually hidden)
+           textarea so IME, paste and mobile keyboards keep working. -->
+      <textarea id="text-bridge" class="text-bridge" rows="2"
+                autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false"></textarea>
+    </section>
+  </main>
+
+  <!-- Tools panel behind a handle: nothing but the title row stays over the game. -->
+  <div id="panel-scrim" class="panel-scrim" hidden></div>
+  <aside id="game-panel" class="panel" aria-labelledby="panel-title" aria-hidden="true">
+    <header class="panel__header">
+      <h2 id="panel-title" class="panel__title" data-i18n="game.panel"></h2>
+      <button id="panel-close" type="button" class="btn btn--icon" data-i18n-aria="common.close">
+        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="m6 6 12 12M18 6 6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+        </svg>
+      </button>
+    </header>
+    <div class="panel__body">
+      <div class="panel__row">
+        <button id="btn-pause" type="button" class="btn" data-i18n="game.pause"></button>
+        <button id="btn-restart" type="button" class="btn" data-i18n="game.restart"></button>
+        <button id="btn-exit" type="button" class="btn" data-i18n="game.exit"></button>
+      </div>
+
+      <label class="field">
+        <span class="field__label" data-i18n="game.speed"></span>
+        <select id="speed-select" class="field__control">
+          <option value="100">100%</option>
+          <option value="150">150%</option>
+          <option value="200">200%</option>
+        </select>
+      </label>
+
+      <div class="panel__row panel__row--wrap">
+        <button id="btn-mute" type="button" class="btn btn--toggle" data-i18n="game.mute"></button>
+        <button id="btn-fit" type="button" class="btn btn--toggle" data-i18n="game.fit"></button>
+        <button id="btn-pad" type="button" class="btn btn--toggle" data-i18n="game.showControls"></button>
+        <button id="btn-fullscreen" type="button" class="btn" data-i18n="game.fullscreen"></button>
+        <button id="btn-screenshot" type="button" class="btn" data-i18n="game.screenshot"></button>
+      </div>
+
+      <section class="panel__section">
+        <h3 class="panel__heading" data-i18n="game.saveSlots"></h3>
+        <div id="save-slots" class="slots"></div>
+      </section>
+
+      <section class="panel__section">
+        <h3 class="panel__heading" data-i18n="game.status"></h3>
+        <div class="status-line">
+          <span id="status-version" class="status-line__item"></span>
+          <span id="status-frames" class="status-line__item"></span>
+          <span id="status-fps" class="status-line__item"></span>
+        </div>
+      </section>
+
+      <p class="panel__hint" data-i18n="game.keysHint"></p>
+    </div>
+  </aside>
+
+  <!-- Progress strip for imports / long operations. -->
+  <div id="activity-bar" class="activity-bar" role="progressbar" hidden>
+    <div class="activity-bar__track"><div class="activity-bar__fill"></div></div>
+    <span class="activity-bar__label"></span>
+  </div>
+
+  <dialog id="confirm-dialog" class="dialog">
+    <h2 id="confirm-title" class="dialog__title"></h2>
+    <p id="confirm-body" class="dialog__body"></p>
+    <div class="dialog__actions">
+      <button id="confirm-cancel" type="button" class="btn" data-i18n="common.cancel"></button>
+      <button id="confirm-ok" type="button" class="btn btn--primary" data-i18n="common.ok"></button>
+    </div>
+  </dialog>
+
+  <div id="toast-container" class="toast-container" aria-live="polite" aria-atomic="false"></div>
+
+  <noscript>
+    <p class="noscript">nano_j2me needs JavaScript and WebAssembly to run.</p>
+  </noscript>
+
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>

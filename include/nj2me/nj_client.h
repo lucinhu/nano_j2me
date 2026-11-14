@@ -306,6 +306,7 @@ typedef struct nj_client_run_options {
     const char *fs_dir;              /* NULL = no filesystem */
     int launcher_width, launcher_height; /* 0 = 720x540 */
     int heap_grow_override;              /* 0=settings, -1=off, +1=on */
+    int graphics_mode; /* 0=legacy env/default, 1=software, 2=experimental GLES2 */
 } nj_client_run_options;
 
 nj_status nj_client_run(const nj_client_run_options *options);

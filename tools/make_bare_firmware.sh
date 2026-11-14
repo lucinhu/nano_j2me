@@ -167,7 +167,7 @@ CFLAGS="-std=c99 $ARCHFLAGS -Os -ffunction-sections -fdata-sections
 
 objs=""
 for f in "$ROOT"/src/core/*.c "$ROOT"/src/midp/*.c "$ROOT"/src/gfx/*.c \
-         "$ROOT"/src/zip/*.c \
+         "$ROOT"/src/zip/*.c "$ROOT/src/port/common/nj_system_amr.c" \
          "$ROOT"/tests/embedded/nj_port_bare.c "$T/main.c" "$T/jar.c"; do
     o="$T/$(basename "$f").o"
     if ! $CC $CFLAGS -c "$f" -o "$o" 2>"$T/err"; then
@@ -197,7 +197,7 @@ if [ "${NJ_BARE_NO_HOST:-0}" != "1" ]; then
            -I"$ROOT/src/gfx" -I"$ROOT/src/zip" -DNJ_USE_LIBC=1 -DNJ_BARE_UART=0 \
            -o "$host" "$T/main.c" "$T/jar.c" "$ROOT/tests/embedded/nj_port_bare.c" \
            "$ROOT"/src/core/*.c "$ROOT"/src/midp/*.c "$ROOT"/src/gfx/*.c \
-           "$ROOT"/src/zip/*.c -lm 2>"$T/host.err"; then
+           "$ROOT"/src/zip/*.c "$ROOT/src/port/common/nj_system_amr.c" -lm 2>"$T/host.err"; then
         # The host build needs a main that returns its status to a shell.
         if "$host"; then
             echo "host run of the same main.c: exit 0 (the MIDlet ran to completion)"

@@ -38,6 +38,9 @@
 #include "nj_internal.h"
 #include "nj_midp.h"
 #include "nj2me/nj_inflate.h"
+#if NJ_ENABLE_GFX_ACCEL
+#include "nj2me/nj_gfx_triangles.h"
+#endif
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -4038,6 +4041,7 @@ NJFN(m3g_bindTarget)
     nj_ref target = NJ_ARG_REF(args, 0);
     int w = 0, h = 0;
 
+    nj_m3g_flush(vm);   /* queued draws belong to the old target */
     nj_rput(vm, self,
             nj_field_lookup(vm, NJ_C_G3D, "_nj_target", "Ljava/lang/Object;", 0),
             target);
@@ -4082,6 +4086,10 @@ NJFN(m3g_bindTarget3)
 
 NJFN(m3g_releaseTarget)
 {
+    /* Keep the GPU result resident: a following Graphics call, pixel read,
+     * clear, rebind or present flushes it before anything observes the target.
+     * This removes the per-section readback/seed round trip. */
+    nj_m3g_pump(vm);
     nj_rput(vm, NJ_THIS(args),
             nj_field_lookup(vm, NJ_C_G3D, "_nj_target", "Ljava/lang/Object;", 0), 0);
     return NJ_OK;
@@ -4093,6 +4101,7 @@ NJFN(m3g_setViewport)
     static const char *names[4] = { "_nj_vx", "_nj_vy", "_nj_vw", "_nj_vh" };
     int i;
 
+    nj_m3g_pump(vm);    /* queued packets already carry their own clip rect */
     if (NJ_ARG_INT(args, 2) <= 0 || NJ_ARG_INT(args, 3) <= 0 ||
         NJ_ARG_INT(args, 2) > 4096 || NJ_ARG_INT(args, 3) > 4096) {
         return nj_throw(vm, "java/lang/IllegalArgumentException", NULL);
@@ -4205,6 +4214,7 @@ NJFN(m3g_clear)
     nj_surface scratch, *surface;
     int x0, y0, x1, y1;
     nj_s4 vx, vy, vw, vh;
+    nj_m3g_flush(vm);   /* queued draws must land before the clear */
     target = nj_rget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_target", "Ljava/lang/Object;"));
     if (!target) {
         NJ_THROW(vm, "java/lang/IllegalStateException", "clear requires a rendering target");
@@ -11014,10 +11024,22 @@ M3G_F_GET(m3g_g3d_getDepthRangeFar, NJ_C_G3D, "_nj_drfar")
  * JSR 184 uses LEQUAL: in this reversed key domain, equal keys must pass,
  * so the raster loops accept key >= stored (and reject only key < stored).
  */
+#if NJ_ENABLE_GFX_ACCEL
+/* Private, per-call collection only. No VM/GL work occurs in the raster loop. */
+typedef struct {
+    nj_gfx_raster packet;
+    nj_s4 *keys;
+    int unsupported, covered;
+} m3g_raster_collect;
+#endif
+
 typedef struct {
     nj_surface *surf;
     nj_s4 *z;
     int vx, vy, vw, vh;
+#if NJ_ENABLE_GFX_ACCEL
+    m3g_raster_collect *collect;
+#endif
     const nj_u1 *tex;
     int tex_w, tex_h, tex_bpp;
     int tex_no_alpha;           /* source RGB/LUMINANCE, including RGBA mips */
@@ -12397,6 +12419,19 @@ static nj_u4 sw_tri_band(m3g_sw *sw, const float xy[6], const float inv[3],
                (rgb[1] & 0x00FFFFFFu) != (rgb[2] & 0x00FFFFFFu));
     alpha_ramp = ((rgb[0] >> 24) != (rgb[1] >> 24) || (rgb[1] >> 24) != (rgb[2] >> 24));
     flat = rgb[0];
+#if NJ_ENABLE_GFX_ACCEL
+    if (sw->collect) {
+        /* Apply the same face/colour selection above even with FAST_PATHS=0.
+         * Every state outside this first exact subset keeps its software path. */
+        if (has_tex || gouraud || alpha_ramp || (flat >> 24) != 255u ||
+            sw->fog || sw->sprite || !sw->awrite || sw->athresh > 255 ||
+            (sw->blend != 64 && sw->blend != 68)) {
+            sw->collect->unsupported = 1;
+            return 0u;
+        }
+        sw->collect->packet.color = flat;
+    }
+#endif
 #if NJ_M3G_FAST_PATHS
     /* Hoist flat/nearest texture dispatch out of the pixel loop. Clamp,
      * replace/decal and non-default compositing are common in real scenes;
@@ -12768,6 +12803,28 @@ static nj_u4 sw_tri_band(m3g_sw *sw, const float xy[6], const float inv[3],
             span.flat_texargb = flat_texargb;
             span.fog_state = fog_state;
 #endif
+#if NJ_ENABLE_GFX_ACCEL
+            if (sw->collect) {
+                m3g_raster_collect *c = sw->collect;
+                nj_size row = (nj_size)(py - c->packet.y) *
+                              (nj_size)c->packet.key_stride;
+                int px;
+                /* Keep exactly the software span's double addition order;
+                 * analytical interpolation or GPU floats change depth ties. */
+                for (px = xl; px <= xr; ++px, pz += dxz) {
+                    nj_s4 key = depth_constant ? constant_key :
+                                               sw_depth_key(pz, depth_clamp);
+                    if (key > NJ_GFX_RASTER_MAX_KEY) {
+                        c->unsupported = 1;
+                        return 0u;
+                    }
+                    if (key > 0) {
+                        c->keys[row + (nj_size)(px - c->packet.x)] = key;
+                        c->covered = 1;
+                    }
+                }
+            } else
+#endif
             drawn |= sw_span(&span);
         }
       }
@@ -12816,10 +12873,75 @@ static int sw_texture_aliases_target(const m3g_sw *sw)
                              : (nj_u8)(texture-target) < target_bytes;
 }
 
+#if NJ_ENABLE_GFX_ACCEL
+/* Attempt on the caller thread BEFORE dispatching either software row band.
+ * The bounded scratch contains only candidate keys; neither CPU target is
+ * touched until the synchronous backend accepts the complete primitive. */
+static int sw_tri_accel(nj_vm *vm, m3g_sw *sw, const float xy[6], const float inv[3],
+                       const double depth[3], const float st[6], int has_tex,
+                       const nj_u4 rgb[3], const nj_u4 rgb2[3], int twosided,
+                       nj_u4 *drawn)
+{
+    m3g_raster_collect c;
+    m3g_sw collector;
+    nj_surface *s = sw->surf;
+    nj_u8 count;
+    int bpp, result;
+    if (!vm->port || !vm->port->gfx_raster || !s || !s->pixels || !sw->z ||
+        has_tex || sw->fog || sw->sprite || !sw->awrite ||
+        (sw->blend != 64 && sw->blend != 68) || sw->athresh > 255)
+        return 0;
+    bpp = s->format == NJ_PIXFMT_ARGB8888 ? 4 :
+          s->format == NJ_PIXFMT_RGB888 ? 3 : s->format == NJ_PIXFMT_RGB565 ? 2 : 0;
+    if (!bpp || s->width <= 0 || s->height <= 0 ||
+        (nj_s8)s->stride < (nj_s8)s->width * bpp ||
+        sw->vx < 0 || sw->vy < 0 || sw->vw <= 0 || sw->vh <= 0 ||
+        (nj_s8)sw->vx + sw->vw > s->width || (nj_s8)sw->vy + sw->vh > s->height ||
+        (nj_u8)s->height * (nj_u8)s->stride > (nj_u8)PTRDIFF_MAX ||
+        (nj_u8)s->width * (nj_u8)s->height > (nj_u8)PTRDIFF_MAX / sizeof(nj_s4))
+        return 0;
+    /* Limit one primitive to 1M candidates (4 MiB), including on 32-bit hosts.
+     * A larger viewport keeps the unchanged, allocation-free software path. */
+    count = (nj_u8)sw->vw * (nj_u8)sw->vh;
+    if (count > 1024u * 1024u || count > UINT32_MAX / sizeof(nj_s4) ||
+        count > SIZE_MAX / sizeof(nj_s4)) return 0;
+    memset(&c, 0, sizeof(c));
+    c.keys = (nj_s4 *)nj_host_alloc(vm, (nj_size)(count * sizeof(nj_s4)));
+    if (!c.keys) return 0;
+    c.packet.version = NJ_GFX_RASTER_VERSION;
+    c.packet.surface = s;
+    c.packet.x = sw->vx; c.packet.y = sw->vy;
+    c.packet.width = sw->vw; c.packet.height = sw->vh;
+    c.packet.keys = c.keys; c.packet.key_stride = sw->vw;
+    c.packet.depth = sw->z; c.packet.depth_stride = s->width;
+    c.packet.depth_test = sw->dtest != 0; c.packet.depth_write = sw->dwrite != 0;
+    collector = *sw;
+    collector.collect = &c;
+    (void)sw_tri_band(&collector, xy, inv, depth, st, has_tex, rgb, rgb2, twosided, -1);
+    if (c.unsupported) {
+        nj_host_free(vm, c.keys);
+        return 0;
+    }
+    if (!c.covered) {
+        *drawn = 0u;
+        nj_host_free(vm, c.keys);
+        return 1;
+    }
+    result = vm->port->gfx_raster(vm->port->gfx_raster_ud, &c.packet, drawn);
+    nj_host_free(vm, c.keys);
+    return result == NJ_GFX_ACCEL_DONE;
+}
+#endif
+
 static nj_u4 sw_tri(nj_vm *vm, m3g_sw *sw, const float xy[6], const float inv[3],
                     const double depth[3], const float st[6], int has_tex,
                     const nj_u4 rgb[3], const nj_u4 rgb2[3], int twosided)
 {
+#if NJ_ENABLE_GFX_ACCEL
+    nj_u4 drawn = 0u;
+    if (sw_tri_accel(vm, sw, xy, inv, depth, st, has_tex, rgb, rgb2, twosided, &drawn))
+        return drawn;
+#endif
     /* Small triangles cost less than a cross-core handoff. Dispatch only
      * substantial visible bounds; no heap/VM operation occurs in a worker. */
     if (vm->port && vm->port->parallel_for &&
@@ -12867,6 +12989,16 @@ static nj_u4 sw_tri(nj_vm *vm, m3g_sw *sw, const float xy[6], const float inv[3]
  */
 #define NJ_M3G_LIGHTS 16
 
+#if NJ_ENABLE_GFX_ACCEL
+/* One jr_draw transaction. Only host scratch grows while Java buffers are
+ * borrowed; failed collection must never fall through to a pixel writer. */
+typedef struct {
+    nj_gfx_triangle_cmd *triangles;
+    nj_u4 count, capacity;
+    int failed;
+} m3g_triangle_collect;
+#endif
+
 typedef struct {
     nj_vm *vm;
     const nj_s2 *pos;
@@ -12882,6 +13014,9 @@ typedef struct {
     nj_u4 dif;
     nj_u4 default_colour;
     nj_u4 drawn;
+#if NJ_ENABLE_GFX_ACCEL
+    m3g_triangle_collect *triangles;
+#endif
     const nj_s4 *idx;             /* the index buffer, when the mesh has one */
     nj_s4 icount;
     nj_s4 ilimit;                 /* how many ints idx really points at */
@@ -13452,6 +13587,107 @@ static void jr_blend(m3g_jr *r, const jr_vtx *a, const jr_vtx *b, float t,
     jr_project(r->proj, o->pe, r->hw, r->hh, o->xy, &o->inv, &o->ndc_z);
 }
 
+#if NJ_ENABLE_GFX_ACCEL
+/* Capture after clipping and the existing per-triangle mip choice. Culling,
+ * two-sided colour and depth offset are resolved here, so no private M3G/VM
+ * state or graphics API type crosses the optional C interface. */
+static void jr_collect_triangle(m3g_jr *r, const float xy[6], const float inv[3],
+                                const double depth[3], const float st[6],
+                                const nj_u4 rgb[3], const nj_u4 rgb2[3])
+{
+    m3g_triangle_collect *c = r->triangles;
+    const m3g_sw *sw = &r->sw;
+    float area = (xy[2] - xy[0]) * (xy[5] - xy[1]) -
+                 (xy[4] - xy[0]) * (xy[3] - xy[1]);
+    int cull = sw->cull ? sw->cull : M3G_SW_BACK;
+    int wind = sw->winding ? sw->winding : M3G_SW_CCW;
+    int back, k, textured = sw->tex != NULL && r->tpos != NULL;
+    double bias = 0.0;
+    nj_gfx_triangle_cmd *t;
+
+    if (c->failed) return;
+    /* These are also no-ops in sw_tri_band(), before it touches the target. */
+    if (!isfinite(area) || area == 0.0f) return;
+    for (k = 0; k < 3; ++k) {
+        if (!isfinite(xy[k * 2]) || !isfinite(xy[k * 2 + 1]) ||
+            !isfinite(depth[k]) || !isfinite(inv[k])) return;
+    }
+    back = wind == M3G_SW_CCW ? area > 0.0f : area < 0.0f;
+    if ((cull == M3G_SW_BACK && back) || (cull == M3G_SW_FRONT && !back)) return;
+    if (r->twosided && back) rgb = rgb2;
+    if (sw->sprite || (textured && sw_texture_aliases_target(sw))) {
+        c->failed = 1;
+        return;
+    }
+    /* Match the software double window-Z slope/units calculation. Applying
+     * the same bias to all three vertex depths leaves the affine plane intact.
+     * Native coverage/interpolation still deliberately has its own rounding. */
+    if (sw->dtest || sw->dwrite) {
+        double ax = (double)xy[2] - xy[0], ay = (double)xy[3] - xy[1];
+        double bx = (double)xy[4] - xy[0], by = (double)xy[5] - xy[1];
+        double da = ax * by - bx * ay;
+        double dz1 = depth[1] - depth[0], dz2 = depth[2] - depth[0];
+        double dxz, dyz, slope;
+        if (da == 0.0 || !isfinite(da)) return;
+        dxz = (dz1 * by - dz2 * ay) / da;
+        dyz = (ax * dz2 - bx * dz1) / da;
+        slope = fabs(dxz) > fabs(dyz) ? fabs(dxz) : fabs(dyz);
+        if (sw->depth_factor != 0.0f) bias = slope * sw->depth_factor;
+        if (sw->depth_units != 0.0f) bias += (double)sw->depth_units / 16777215.0;
+    }
+    if (c->count == c->capacity) {
+        nj_u4 capacity = c->capacity ? c->capacity * 2u : 128u;
+        nj_gfx_triangle_cmd *more;
+        if (capacity > NJ_GFX_TRIANGLES_MAX_COUNT) capacity = NJ_GFX_TRIANGLES_MAX_COUNT;
+        if (capacity <= c->count ||
+            (nj_u8)capacity * sizeof(*more) > UINT32_MAX ||
+            (nj_u8)capacity * sizeof(*more) > SIZE_MAX) {
+            c->failed = 1;
+            return;
+        }
+        more = (nj_gfx_triangle_cmd *)nj_host_alloc(r->vm,
+                         (nj_size)((nj_u8)capacity * sizeof(*more)));
+        if (!more) {
+            c->failed = 1;
+            return;
+        }
+        if (c->count) memcpy(more, c->triangles, c->count * sizeof(*more));
+        if (c->triangles) nj_host_free(r->vm, c->triangles);
+        c->triangles = more;
+        c->capacity = capacity;
+    }
+    t = &c->triangles[c->count++];
+    for (k = 0; k < 3; ++k) {
+        t->vertices[k].x = xy[k * 2];
+        t->vertices[k].y = xy[k * 2 + 1];
+        t->vertices[k].depth = depth[k] + bias;
+        t->vertices[k].inv_w = inv[k];
+        t->vertices[k].u = st[k * 2];
+        t->vertices[k].v = st[k * 2 + 1];
+        t->vertices[k].color = rgb[k];
+    }
+    t->texture = textured ? sw->tex : NULL;
+    t->texture_width = textured ? sw->tex_w : 0;
+    t->texture_height = textured ? sw->tex_h : 0;
+    t->texture_bpp = textured ? sw->tex_bpp : 0;
+    t->texture_no_alpha = textured && sw->tex_no_alpha;
+    t->wrap_s = sw->wrap_s;
+    t->wrap_t = sw->wrap_t;
+    t->filter = sw->filt_image == 209 || sw->filt_image == 129 ? 209 : 208;
+    t->texture_function = sw->texfunc;
+    t->blend = sw->blend;
+    t->alpha_threshold = sw->athresh;
+    t->alpha_write = sw->awrite != 0;
+    t->depth_test = sw->dtest != 0;
+    t->depth_write = sw->dwrite != 0;
+    t->fog = sw->fog ? (sw->fog_mode == 81 ? 81 : 80) : 0;
+    t->fog_color = sw->fog_colour;
+    t->fog_near = sw->fog_near;
+    t->fog_far = sw->fog_far;
+    t->fog_density = sw->fog_density;
+}
+#endif
+
 static void jr_emit(m3g_jr *r, const jr_vtx *v0, const jr_vtx *v1,
                     const jr_vtx *v2)
 {
@@ -13520,6 +13756,12 @@ static void jr_emit(m3g_jr *r, const jr_vtx *v0, const jr_vtx *v1,
                 r->sw.tex_bpp = 4;   /* the chain is RGBA at every level */
             }
         }
+#if NJ_ENABLE_GFX_ACCEL
+        if (r->triangles) {
+            jr_collect_triangle(r, xy, inv, depth, st, rgb, rgb2);
+            return; /* Including failed collection: never write part of a batch. */
+        }
+#endif
         /* The rasteriser writes the pixels: depth, texture, culling. */
         if (sw_tri(r->vm, &r->sw, xy, inv, depth, st,
                    r->sw.tex != NULL && (r->tpos != NULL || r->sw.sprite),
@@ -14498,7 +14740,7 @@ static int jr_setup(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref ib, nj_ref app,
  * index buffer walks its indices, and a mesh with neither is the JSR's
  * implicit list over the vertex range.
  */
-static nj_u4 jr_draw(m3g_jr *r)
+static void jr_draw_walk(m3g_jr *r)
 {
     if (r->nstrip > 0 && r->lens) {
         nj_s4 i;
@@ -14556,6 +14798,444 @@ static nj_u4 jr_draw(m3g_jr *r)
          */
         jr_strip(r, NULL, r->pcount, r->ifirst);
     }
+}
+
+#if NJ_ENABLE_GFX_ACCEL
+/* Restrict transfers/validation to a conservative batch footprint. Coordinates
+ * remain double until BOTH bounds have been clipped to the valid surface
+ * rectangle: a finite projected vertex can still be far outside int range.
+ * Return -1 for an invalid clip/input, 0 for an empty intersection, 1 for ROI. */
+static int jr_triangle_roi(nj_gfx_triangles *p)
+{
+    double left, top, right, bottom, minx, miny, maxx, maxy;
+    nj_u4 i;
+    int k;
+    if (!p->surface || p->x < 0 || p->y < 0 || p->width <= 0 || p->height <= 0 ||
+        (nj_s8)p->x + p->width > p->surface->width ||
+        (nj_s8)p->y + p->height > p->surface->height || !p->count || !p->triangles)
+        return -1;
+    left = p->x; top = p->y;
+    right = left + p->width; bottom = top + p->height;
+    minx = right; miny = bottom; maxx = left; maxy = top;
+    for (i = 0; i < p->count; ++i) {
+        for (k = 0; k < 3; ++k) {
+            double x = p->triangles[i].vertices[k].x;
+            double y = p->triangles[i].vertices[k].y;
+            if (!isfinite(x) || !isfinite(y)) return -1;
+            if (x < minx) minx = x;
+            if (x > maxx) maxx = x;
+            if (y < miny) miny = y;
+            if (y > maxy) maxy = y;
+        }
+    }
+    if (minx < left) minx = left;
+    if (maxx > right) maxx = right;
+    if (miny < top) miny = top;
+    if (maxy > bottom) maxy = bottom;
+    if (minx >= maxx || miny >= maxy) return 0;
+    /* One extra pixel covers native edge/rounding differences. Clamp again
+     * after expansion, before ANY floating-to-integer conversion. */
+    minx = floor(minx) - 1.0; maxx = ceil(maxx) + 1.0;
+    miny = floor(miny) - 1.0; maxy = ceil(maxy) + 1.0;
+    if (minx < left) minx = left;
+    if (maxx > right) maxx = right;
+    if (miny < top) miny = top;
+    if (maxy > bottom) maxy = bottom;
+    p->x = (int)minx; p->y = (int)miny;
+    p->width = (int)maxx - p->x; p->height = (int)maxy - p->y;
+    return 1;
+}
+
+
+#if NJ_ENABLE_GFX_ACCEL
+/*
+ * Deferred triangle journal.
+ *
+ * Inside one Graphics3D bind()..release() section a JSR-184 title may queue
+ * many render() calls into the same target, and it may not look at the target
+ * in between (the specification defers the pixels to releaseTarget, or to the
+ * first read).  Submitting each call through the single-packet callback pays
+ * the fixed colour/depth import + seed + readback cost per call, which on a
+ * real title is several times the rasterisation itself.  So consecutive calls
+ * are collected here and committed by ONE ordered-list call.
+ *
+ * The journal is a pure core-side buffer; the port keeps its atomic
+ * DONE/DECLINE contract.  A DECLINE replays every collected packet through
+ * the same software rasteriser the original path would have used, so the
+ * fallback stays complete.  Textures are copied at collection time: a Java
+ * write to a texture between two queued render() calls must not change what
+ * an earlier call drew.
+ *
+ * Everything is flushed before anything may observe the target: another
+ * binding, release, clear, viewport change, a 2D Graphics call, a read, a
+ * present, or a capacity limit.  The journal therefore lives only inside one
+ * bind()..release() section, and the borrowed Java arrays it references are
+ * the ones the running MIDlet keeps alive for that section.
+ */
+#define M3G_JOURNAL_TEXTURE_MAX ((nj_size)16u * 1024u * 1024u)
+
+typedef struct m3g_journal_tex {
+    const nj_u1 *source;   /* texture pointer when the call was collected */
+    nj_size offset;        /* into the journal's pool */
+    int w, h, bpp, no_alpha;
+} m3g_journal_tex;
+
+typedef struct m3g_journal_entry {
+    nj_gfx_triangle_cmd *triangles;
+    nj_u4 count;
+    int x, y, width, height;
+} m3g_journal_entry;
+
+typedef struct m3g_journal {
+    nj_surface surface_copy;    /* the caller's nj_surface may be a stack copy */
+    nj_surface *surface;
+    nj_s4 *depth;
+    int depth_stride;
+    m3g_journal_entry *entries;
+    nj_u4 count, capacity;
+    nj_u4 total;
+    m3g_journal_tex *textures;
+    nj_u4 ntextures, tex_capacity;
+    nj_u1 *pool;
+    nj_size pool_size, pool_used;
+    /* Persistent port session: entries [0, submitted) are queued on the GPU,
+     * entries [submitted, count) are not, and the open session covers
+     * (sx, sy, sw, sh).  The CPU buffers stay stale until end() commits. */
+    int session;
+    nj_u4 submitted;
+    int sx, sy, sw, sh;
+} m3g_journal;
+
+static void m3g_journal_destroy(nj_vm *vm)
+{
+    m3g_journal *j = (m3g_journal *)vm->m3g_journal;
+    nj_u4 i;
+    if (!j) return;
+    if (j->session && vm->port && vm->port->gfx_triangles_abort) {
+        vm->port->gfx_triangles_abort(vm->port->gfx_triangles_session_ud);
+        j->session = 0;
+    }
+    for (i = 0; i < j->count; ++i) {
+        if (j->entries[i].triangles)
+            nj_host_free(vm, j->entries[i].triangles);
+    }
+    if (j->entries) nj_host_free(vm, j->entries);
+    if (j->textures) nj_host_free(vm, j->textures);
+    if (j->pool) nj_host_free(vm, j->pool);
+    nj_host_free(vm, j);
+    vm->m3g_journal = NULL;
+}
+
+/* Replay one collected packet through the software rasteriser.  The command
+ * already carries the post-clip geometry, the per-triangle mip level the
+ * software path would have picked, and the depth bias, so a local state struct
+ * is enough; nothing in sw_tri_band() reads a field the command cannot
+ * provide. */
+static nj_u4 m3g_replay_packet(nj_vm *vm, const nj_gfx_triangles *p)
+{
+    nj_u4 drawn = 0u, i;
+    int k;
+    if (!p->surface || !p->surface->pixels || !p->depth ||
+        p->depth_stride != p->surface->width) return 0u;
+    for (i = 0; i < p->count; ++i) {
+        const nj_gfx_triangle_cmd *t = &p->triangles[i];
+        m3g_sw sw;
+        float xy[6], inv[3], st[6];
+        double depth[3];
+        nj_u4 rgb[3];
+        int has_tex = t->texture != NULL && t->texture_width > 0 &&
+                      t->texture_height > 0 && t->texture_bpp > 0;
+        memset(&sw, 0, sizeof(sw));
+        sw.surf = p->surface;
+        sw.z = p->depth;
+        sw.vx = p->x; sw.vy = p->y;
+        sw.vw = p->width; sw.vh = p->height;
+        /* Culling and winding were applied when the packet was collected. */
+        sw.cull = 162;              /* no cull */
+        sw.winding = M3G_SW_CCW;
+        sw.tex = has_tex ? t->texture : NULL;
+        sw.tex_w = t->texture_width;
+        sw.tex_h = t->texture_height;
+        sw.tex_bpp = t->texture_bpp;
+        sw.tex_no_alpha = t->texture_no_alpha;
+        sw.wrap_s = t->wrap_s;
+        sw.wrap_t = t->wrap_t;
+        sw.texfunc = t->texture_function;
+        sw.filt_image = t->filter;
+        sw.filt_level = 208;        /* the command already names its level */
+        sw.tex_base = t->texture;
+        sw.blend = t->blend;
+        sw.athresh = t->alpha_threshold;
+        sw.awrite = t->alpha_write;
+        sw.dtest = t->depth_test;
+        sw.dwrite = t->depth_write;
+        sw.depth_near = 0.0f;
+        sw.depth_far = 1.0f;
+        sw.depth_factor = 0.0f;     /* the bias is already in the vertices */
+        sw.depth_units = 0.0f;
+        sw.fog = t->fog ? 1 : 0;
+        sw.fog_mode = t->fog == 81 ? 81 : 80;
+        sw.fog_colour = t->fog_color;
+        sw.fog_near = t->fog_near;
+        sw.fog_far = t->fog_far;
+        sw.fog_density = t->fog_density;
+        sw.fog_inv_span = (sw.fog_far > sw.fog_near)
+            ? 1.0f / (sw.fog_far - sw.fog_near) : 0.0f;
+        sw.fog_inv_near = (sw.fog_near > 0.0f) ? 1.0f / sw.fog_near : 0.0f;
+        sw.fog_inv_far = (sw.fog_far > 0.0f) ? 1.0f / sw.fog_far : 0.0f;
+        for (k = 0; k < 3; ++k) {
+            xy[k * 2] = t->vertices[k].x;
+            xy[k * 2 + 1] = t->vertices[k].y;
+            inv[k] = t->vertices[k].inv_w;
+            depth[k] = t->vertices[k].depth;
+            st[k * 2] = t->vertices[k].u;
+            st[k * 2 + 1] = t->vertices[k].v;
+            rgb[k] = t->vertices[k].color;
+        }
+        drawn += sw_tri(vm, &sw, xy, inv, depth, st, has_tex, rgb, rgb, 0);
+    }
+    return drawn;
+}
+
+static int m3g_journal_reserve(nj_vm *vm, m3g_journal *j, nj_u4 entries,
+                               nj_u4 textures, nj_size pool)
+{
+    if (entries > j->capacity) {
+        nj_u4 cap = j->capacity ? j->capacity : 16u;
+        m3g_journal_entry *more;
+        while (cap < entries) cap *= 2u;
+        more = (m3g_journal_entry *)nj_host_alloc(vm, (nj_size)cap * sizeof(*more));
+        if (!more) return 0;
+        if (j->entries) {
+            memcpy(more, j->entries, (nj_size)j->count * sizeof(*more));
+            nj_host_free(vm, j->entries);
+        }
+        j->entries = more;
+        j->capacity = cap;
+    }
+    if (textures > j->tex_capacity) {
+        nj_u4 cap = j->tex_capacity ? j->tex_capacity : 16u;
+        m3g_journal_tex *more;
+        while (cap < textures) cap *= 2u;
+        more = (m3g_journal_tex *)nj_host_alloc(vm, (nj_size)cap * sizeof(*more));
+        if (!more) return 0;
+        if (j->textures) {
+            memcpy(more, j->textures, (nj_size)j->ntextures * sizeof(*more));
+            nj_host_free(vm, j->textures);
+        }
+        j->textures = more;
+        j->tex_capacity = cap;
+    }
+    if (pool > j->pool_size) {
+        nj_u1 *more;
+        nj_size cap = j->pool_size ? j->pool_size : 65536u;
+        while (cap < pool) cap *= 2u;
+        more = (nj_u1 *)nj_host_alloc(vm, cap);
+        if (!more) return 0;
+        if (j->pool) {
+            memcpy(more, j->pool, j->pool_used);
+            nj_host_free(vm, j->pool);
+        }
+        j->pool = more;
+        j->pool_size = cap;
+    }
+    return 1;
+}
+
+static void m3g_journal_flush(nj_vm *vm);
+static void m3g_journal_pump(nj_vm *vm);
+static int m3g_journal_append(m3g_jr *r, const nj_gfx_triangles *p)
+{
+    nj_vm *vm = r->vm;
+    m3g_journal *j = (m3g_journal *)vm->m3g_journal;
+    nj_gfx_triangle_cmd *copy;
+    nj_u4 i, k, new_tex = 0;
+    nj_size need = 0;
+
+    if (!p->count || p->count > NJ_GFX_TRIANGLES_LIST_MAX_TOTAL) return 0;
+    if (!j) {
+        j = (m3g_journal *)nj_host_alloc(vm, sizeof(*j));
+        if (!j) return 0;
+        memset(j, 0, sizeof(*j));
+        j->surface_copy = *p->surface;
+        j->surface = &j->surface_copy;
+        j->depth = p->depth;
+        j->depth_stride = p->depth_stride;
+        vm->m3g_journal = j;
+    }
+    if (j->count && (j->surface_copy.pixels != p->surface->pixels ||
+                     j->surface_copy.width != p->surface->width ||
+                     j->surface_copy.height != p->surface->height ||
+                     j->surface_copy.format != p->surface->format ||
+                     j->surface_copy.bpp != p->surface->bpp ||
+                     j->surface_copy.stride != p->surface->stride ||
+                     j->depth != p->depth ||
+                     j->depth_stride != p->depth_stride)) {
+        m3g_journal_flush(vm);
+        return m3g_journal_append(r, p);
+    }
+    if (j->count >= NJ_GFX_TRIANGLES_LIST_MAX_PACKETS ||
+        p->count > NJ_GFX_TRIANGLES_LIST_MAX_TOTAL - j->total) {
+        m3g_journal_flush(vm);
+        return m3g_journal_append(r, p);
+    }
+    /* Count the textures this packet needs snapshotted: one copy per distinct
+     * pointer, both against the journal so far and against this packet. */
+    for (i = 0; i < p->count; ++i) {
+        const nj_gfx_triangle_cmd *t = &p->triangles[i];
+        int seen = 0;
+        if (!t->texture) continue;
+        if (t->texture_width <= 0 || t->texture_height <= 0 ||
+            t->texture_bpp <= 0 || t->texture_bpp > 4) return 0;
+        for (k = 0; k < j->ntextures; ++k) {
+            if (j->textures[k].source == t->texture &&
+                j->textures[k].w == t->texture_width &&
+                j->textures[k].h == t->texture_height &&
+                j->textures[k].bpp == t->texture_bpp) { seen = 1; break; }
+        }
+        for (k = 0; !seen && k < i; ++k) {
+            if (p->triangles[k].texture == t->texture &&
+                p->triangles[k].texture_width == t->texture_width &&
+                p->triangles[k].texture_height == t->texture_height &&
+                p->triangles[k].texture_bpp == t->texture_bpp) seen = 1;
+        }
+        if (seen) continue;
+        need += (nj_size)t->texture_width * (nj_size)t->texture_height *
+                (nj_size)t->texture_bpp;
+        ++new_tex;
+    }
+    if (need > M3G_JOURNAL_TEXTURE_MAX - j->pool_used) {
+        m3g_journal_flush(vm);
+        return m3g_journal_append(r, p);
+    }
+    if (!m3g_journal_reserve(vm, j, j->count + 1u, j->ntextures + new_tex,
+                             j->pool_used + need)) return 0;
+    copy = (nj_gfx_triangle_cmd *)nj_host_alloc(
+        vm, (nj_size)p->count * sizeof(*copy));
+    if (!copy) return 0;
+    memcpy(copy, p->triangles, (nj_size)p->count * sizeof(*copy));
+    for (i = 0; i < p->count; ++i) {
+        nj_gfx_triangle_cmd *t = &copy[i];
+        nj_u4 found = j->ntextures;
+        if (!t->texture) continue;
+        for (k = 0; k < j->ntextures; ++k) {
+            if (j->textures[k].source == t->texture &&
+                j->textures[k].w == t->texture_width &&
+                j->textures[k].h == t->texture_height &&
+                j->textures[k].bpp == t->texture_bpp) { found = k; break; }
+        }
+        if (found == j->ntextures) {
+            m3g_journal_tex *tx = &j->textures[j->ntextures];
+            nj_size bytes = (nj_size)t->texture_width *
+                            (nj_size)t->texture_height *
+                            (nj_size)t->texture_bpp;
+            tx->source = t->texture;
+            tx->offset = j->pool_used;
+            tx->w = t->texture_width;
+            tx->h = t->texture_height;
+            tx->bpp = t->texture_bpp;
+            tx->no_alpha = t->texture_no_alpha;
+            memcpy(j->pool + j->pool_used, t->texture, bytes);
+            j->pool_used += bytes;
+            ++j->ntextures;
+        } else {
+            t->texture_no_alpha = j->textures[found].no_alpha;
+        }
+        t->texture = j->pool + j->textures[found == j->ntextures
+                                          ? j->ntextures - 1u : found].offset;
+    }
+    {
+        m3g_journal_entry *e = &j->entries[j->count++];
+        e->triangles = copy;
+        e->count = p->count;
+        e->x = p->x; e->y = p->y;
+        e->width = p->width; e->height = p->height;
+        j->total += p->count;
+    }
+    return 1;
+}
+
+#endif /* NJ_ENABLE_GFX_ACCEL */
+
+static int jr_draw_accel(m3g_jr *r)
+{
+    m3g_triangle_collect c;
+    m3g_jr collector;
+    nj_gfx_triangles packet;
+    nj_u4 submitted = 0u;
+    int result = NJ_GFX_ACCEL_DECLINE;
+    int deferred = 0;
+    int journaled;
+    if (!r->vm->port || !r->vm->port->gfx_triangles || !r->sw.surf ||
+        !r->sw.surf->pixels || !r->sw.z || r->sw.sprite || r->triangles) return 0;
+    /* Queue into the journal only when the port can commit a whole list in
+     * one transaction; otherwise keep the original synchronous callback. */
+    journaled = r->vm->port->gfx_triangles_list != NULL;
+    memset(&c, 0, sizeof(c));
+    collector = *r;
+    collector.triangles = &c;
+    collector.drawn = 0u;
+    /* surf may point at r->scratch. It stays alive throughout this synchronous
+     * call, and collection only reads it. All mutable mip state is in the copy. */
+    jr_draw_walk(&collector);
+    memset(&packet, 0, sizeof(packet));
+    packet.version = NJ_GFX_TRIANGLES_VERSION;
+    packet.surface = r->sw.surf;
+    packet.depth = r->sw.z;
+    packet.depth_stride = r->sw.surf->width;
+    packet.x = r->sw.vx; packet.y = r->sw.vy;
+    packet.width = r->sw.vw; packet.height = r->sw.vh;
+    packet.triangles = c.triangles;
+    packet.count = c.count;
+    if (!c.failed) {
+        if (!c.count) {
+            result = NJ_GFX_ACCEL_DONE; /* Clipped/culled/degenerate only. */
+        } else {
+            int roi = jr_triangle_roi(&packet);
+            if (roi == 0) {
+                result = NJ_GFX_ACCEL_DONE; /* Entire batch outside the clip. */
+            } else if (roi > 0 && nj_gfx_triangles_validate(&packet, &submitted)) {
+                if (journaled && m3g_journal_append(r, &packet)) {
+                    c.triangles = NULL;   /* the journal owns the copy */
+                    deferred = 1;
+                    result = NJ_GFX_ACCEL_DONE;
+                } else {
+                    /* Never submit out of order: commit what is queued first. */
+                    if (journaled) m3g_journal_flush(r->vm);
+                    result = r->vm->port->gfx_triangles(
+                        r->vm->port->gfx_triangles_ud, &packet, &submitted);
+                }
+            }
+        }
+    }
+    if (c.triangles) nj_host_free(r->vm, c.triangles);
+    if (result != NJ_GFX_ACCEL_DONE) return 0;
+    /* Native submission is a work counter, not a software visibility query.
+     * The callback contract requires submitted <= count; do not replay a DONE
+     * transaction even if a broken backend misreports this profiling value. */
+    if (!deferred) r->drawn += submitted <= c.count ? submitted : c.count;
+    r->sw.tex = collector.sw.tex;
+    r->sw.tex_w = collector.sw.tex_w;
+    r->sw.tex_h = collector.sw.tex_h;
+    r->sw.tex_bpp = collector.sw.tex_bpp;
+    return 1;
+}
+#endif
+
+static nj_u4 jr_draw(m3g_jr *r)
+{
+#if NJ_ENABLE_GFX_ACCEL
+    if (!jr_draw_accel(r)) {
+        /* A journaled frame must stay ordered: commit queued draws before the
+         * software path writes the same target for this call. */
+        if (r->vm->m3g_journal) m3g_journal_flush(r->vm);
+        jr_draw_walk(r);
+    }
+#else
+    jr_draw_walk(r);
+#endif
+    /* Commit counters exactly once, including collection failures and DECLINE.
+     * No callback means the original software visibility count is unchanged. */
     r->vm->tris += (nj_u8)r->drawn;
     r->vm->m3g_renders++;
     return r->drawn;
@@ -16067,3 +16747,30 @@ nj_status nj_m3g_late_init(nj_vm *vm)
 }
 
 #endif /* NJ_ENABLE_M3G */
+
+/*
+ * Commit any triangles deferred into the journal.  Every path that can
+ * observe or replace the target must call this first: Graphics drawing,
+ * present, binding/releasing a target, clearing, and viewport changes.  The
+ * cost is a null check when nothing is queued.
+ */
+void nj_m3g_flush(nj_vm *vm)
+{
+#if NJ_ENABLE_M3G && NJ_ENABLE_GFX_ACCEL
+    m3g_journal_flush(vm);
+#else
+    (void)vm;
+#endif
+}
+
+/* Order-only flush: queued draws are handed to the port's persistent session,
+ * but the CPU colour/depth buffers stay stale until a later nj_m3g_flush().
+ * Only safe at points where nothing may observe the target yet. */
+void nj_m3g_pump(nj_vm *vm)
+{
+#if NJ_ENABLE_M3G && NJ_ENABLE_GFX_ACCEL
+    m3g_journal_pump(vm);
+#else
+    (void)vm;
+#endif
+}

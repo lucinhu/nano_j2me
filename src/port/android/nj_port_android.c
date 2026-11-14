@@ -51,6 +51,7 @@
 #ifndef NJ_ANDROID_LEGACY
 #define NJ_ANDROID_LEGACY 0
 #endif
+#include "nj_android_gles2.h"
 #if !NJ_ANDROID_LEGACY
 #include <android/native_window.h>
 #include <android/native_window_jni.h>
@@ -289,6 +290,10 @@ typedef struct android_glyph_face {
 #define BT_SVC_MAX  8
 
 typedef struct android_state {
+#if NJ_ANDROID_GLES2 && !NJ_ANDROID_LEGACY
+    nj_android_gles2 gles2;   /* stable callback userdata; EGL belongs to run thread */
+    int gles2_bound;
+#endif
 #if !NJ_ANDROID_LEGACY
     ANativeWindow *window;
 #else
@@ -299,6 +304,9 @@ typedef struct android_state {
     int audio_finished;           /* guarded by audio->lock; no pull after run */
 #endif
     pthread_mutex_t lock;
+    /* CPU-only lifecycle for software builds or failed GLES wrapper binding.
+     * Guarded by lock; normal GLES snapshots use its independent info_lock. */
+    int graphics_mode, graphics_started, graphics_stopped;
 
     int   width, height, stride;   /* the LOGICAL screen: what the MIDlet sees */
     int   win_w, win_h;            /* the Surface: usually much larger */
@@ -3171,6 +3179,11 @@ static void android_shutdown(void *ud)
         return;
     }
     android_audio_close(s);
+#if NJ_ANDROID_GLES2 && !NJ_ANDROID_LEGACY
+    /* nativeDestroy joins the run thread first. No EGL calls belong here on
+     * the UI thread; do not free callback userdata if teardown was skipped. */
+    if (s->gles2_bound && !nj_android_gles2_dispose(&s->gles2)) return;
+#endif
     while (s->qh != s->qt) {
         nj_event *event = &s->queue[s->qh];
         if (event->type == NJ_EV_TEXT_REPLACE) { free((void *)event->text_utf16); }
@@ -4719,6 +4732,7 @@ nj_status nj_port_android_ex(nj_port *out, int screen_w, int screen_h)
         return NJ_ERR_NOMEM;
     }
     pthread_mutex_init(&s->lock, NULL);
+    s->graphics_mode = -1;
 #if NJ_ANDROID_LEGACY
     /* Java may pull before nativeRun has entered the VM.  Publish one stable
      * mixer now, rather than racing a first playTone/PCM lazy allocation. */
@@ -4748,6 +4762,12 @@ nj_status nj_port_android_ex(nj_port *out, int screen_w, int screen_h)
     memset(out, 0, sizeof(*out));
     out->name = "android";
     out->ud = s;
+#if NJ_ANDROID_GLES2 && !NJ_ANDROID_LEGACY
+    /* Stable wrappers only: nativeCreate must never own an EGL context.
+     * Non-JNI embedders using this constructor directly retain software unless
+     * they explicitly enter the private run-thread lifecycle. */
+    s->gles2_bound = nj_android_gles2_bind(&s->gles2, out);
+#endif
 #if NJ_ANDROID_LEGACY
     out->alloc = android_legacy_alloc;
     out->free = android_legacy_free;
@@ -5124,6 +5144,78 @@ typedef struct android_app {
     int        joined;
 } android_app;
 
+JNIEXPORT jboolean JNICALL
+Java_com_lucinhu_nj2me_GameActivity_nativeGraphicsSupported(JNIEnv *env, jclass cls)
+{
+    (void)env; (void)cls;
+#if NJ_ANDROID_GLES2 && !NJ_ANDROID_LEGACY
+    return JNI_TRUE;
+#else
+    return JNI_FALSE;
+#endif
+}
+
+JNIEXPORT void JNICALL
+Java_com_lucinhu_nj2me_GameActivity_nativeSetGraphicsMode(JNIEnv *env, jclass cls,
+                                                        jlong handle, jint mode)
+{
+    (void)env; (void)cls;
+#if NJ_ANDROID_GLES2 && !NJ_ANDROID_LEGACY
+    android_app *a = (android_app *)(intptr_t)handle;
+    android_state *s = a ? AS(a->port.ud) : NULL;
+    if (!s || (mode != 0 && mode != 1)) return;
+    if (s->gles2_bound) {
+        (void)nj_android_gles2_set_mode(&s->gles2, (int)mode);
+    } else if (pthread_mutex_trylock(&s->lock) == 0) {
+        if (!s->graphics_started) s->graphics_mode = (int)mode;
+        pthread_mutex_unlock(&s->lock);
+    }
+#else
+    (void)handle; (void)mode;
+#endif
+}
+
+JNIEXPORT jlongArray JNICALL
+Java_com_lucinhu_nj2me_GameActivity_nativeGraphicsInfo(JNIEnv *env, jclass cls,
+                                                     jlong handle)
+{
+    nj_android_gles2_info info;
+    jlong values[8];
+    jlongArray result;
+    (void)cls;
+    memset(&info, 0, sizeof info);
+#if NJ_ANDROID_GLES2 && !NJ_ANDROID_LEGACY
+    {
+        android_app *a = (android_app *)(intptr_t)handle;
+        android_state *s = a ? AS(a->port.ud) : NULL;
+        if (s && s->gles2_bound) {
+            nj_android_gles2_snapshot(&s->gles2, &info);
+        } else if (s) {
+            /* No GLES lock exists if bind failed. This path never enters EGL;
+             * only the run thread resolves a legacy property selection. */
+            pthread_mutex_lock(&s->lock);
+            info.requested = s->graphics_mode == 1;
+            info.state = s->graphics_stopped ? 4 : info.requested ?
+                         (s->graphics_started ? 3 : 1) : 0;
+            pthread_mutex_unlock(&s->lock);
+        }
+    }
+#else
+    (void)handle;
+    info.state = 5;
+#endif
+    values[0] = (jlong)info.state;
+    values[1] = (jlong)info.fills; values[2] = (jlong)info.blits;
+    values[3] = (jlong)info.rasters; values[4] = (jlong)info.declines;
+    values[5] = (jlong)info.requested;
+    values[6] = (jlong)info.triangles; values[7] = (jlong)info.batches;
+    /* Java holds its existing handle-lifetime lock. Allocation/copy happen
+     * after releasing native locks, never across driver or VM work. */
+    result = (*env)->NewLongArray(env, 8);
+    if (result) (*env)->SetLongArrayRegion(env, result, 0, 8, values);
+    return result;
+}
+
 static void *android_main_thread(void *arg)
 {
     android_app *a = (android_app *)arg;
@@ -5162,7 +5254,33 @@ static void *android_main_thread(void *arg)
         }
         pthread_mutex_unlock(&s->lock);
     }
+#if NJ_ANDROID_GLES2 && !NJ_ANDROID_LEGACY
+    if (s && s->gles2_bound) {
+        nj_android_gles2_start(&s->gles2);
+    } else if (s) {
+        /* Resolve the old property only on the run thread if binding failed.
+         * Explicit UI selection still takes precedence in this fallback. */
+        pthread_mutex_lock(&s->lock);
+        if (s->graphics_mode == -1) {
+            char prop[PROP_VALUE_MAX];
+            prop[0] = '\0';
+            (void)__system_property_get("debug.nj2me.gles2", prop);
+            s->graphics_mode = strcmp(prop, "1") == 0;
+        }
+        s->graphics_started = 1;
+        pthread_mutex_unlock(&s->lock);
+    }
+#endif
     (void)nj_run(&a->port, &a->opts);
+#if NJ_ANDROID_GLES2 && !NJ_ANDROID_LEGACY
+    if (s && s->gles2_bound) {
+        nj_android_gles2_stop(&s->gles2);
+    } else if (s) {
+        pthread_mutex_lock(&s->lock);
+        s->graphics_stopped = 1;
+        pthread_mutex_unlock(&s->lock);
+    }
+#endif
 #if NJ_ANDROID_LEGACY
     /* Keep the mixer alive for a pull already in progress, but stop consuming
      * queued sound as soon as the game ends.  Java joins its audio thread

@@ -1,6 +1,10 @@
 /*
  * nano_j2me - nj_font_data_aa.h  --  GENERATED FILE, DO NOT EDIT.
  *
+ * Font-derived data: SIL Open Font License 1.1, not the runtime MIT license.
+ * Copyright (c) 2010 Google Corporation; (c) 2012 Red Hat, Inc.
+ * Full attribution/license: docs/licenses/Liberation-Fonts-OFL.txt.
+ *
  * Produced by tools/gen_fonts.py from Liberation Mono:
  *   plain LiberationMono-Regular.ttf
  *         sha256 47ed5b5fcfe6b3c9228937b05de9c769f5fa55b777d539af0f65172f0a24c90b

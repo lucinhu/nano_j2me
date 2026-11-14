@@ -13,10 +13,13 @@ from concurrent.futures import ProcessPoolExecutor
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUT = os.sys.argv[1] if len(os.sys.argv) > 1 else os.path.join(
     ROOT, ".local-tools", "debug-runs", "compat-matrix-20261025")
+# build/nj2me can be stale relative to HEAD (it was: the 2026-11 sweep used a
+# binary 20 commits behind); NJ_BIN lets the caller point at a fresh build.
+BIN = os.environ.get("NJ_BIN") or os.path.join(ROOT, "build", "nj2me")
 RUN = 600
 KEYS = ["30:fire", "55:soft1", "80:53", "110:pressed@120,160", "112:released@120,160",
         "140:left", "165:right", "190:48", "215:up", "240:down", "265:soft2", "290:5",
-        "320:fire", "345:pressed@60,300", "347:released@60,300", "375:stars",
+        "320:fire", "345:pressed@60,300", "347:released@60,300", "375:star",
         "400:6", "430:fire", "470:soft1", "510:pressed@180,300", "512:released@180,300",
         "545:fire", "575:left"]
 
@@ -54,7 +57,7 @@ def one(job):
     keys = os.path.join(OUT, "keys.txt")
     for heap in (16, 32):
         rms = os.path.join(OUT, "rms", base.replace(".jar", "") + "-" + str(heap))
-        cmd = [ROOT + "/build/nj2me", "--port", "headless", "--size", "240x320",
+        cmd = [BIN, "--port", "headless", "--size", "240x320",
                "--heap", str(heap), "--fps", "30", "--run-frames", str(RUN),
                "--keys", "@" + keys, "--rms-dir", rms, "--stats", path]
         try:
@@ -73,7 +76,7 @@ def one(job):
         elif "not a usable MIDlet suite" in err:
             row["note"] = "not a usable MIDlet suite (bad JAR or no MIDlet-1)"
         thrown = re.findall(r"thrown:\s*([\w/$]+)", err)
-        uncaught = len(re.findall(r"uncaught:\s*java/lang/(\w+)", err))
+        uncaught = len(re.findall(r"uncaught exception in thread \d+:", err))
         row.update({"rc": rc, "heap": heap,
                     "frames": int(stats.get("frames", 0)), "paints": int(stats.get("paints", 0)),
                     "bytecodes": int(stats.get("bytecodes", 0)),
@@ -108,7 +111,7 @@ def one(job):
         # A title that reads Nokia device properties cannot start on the generic
         # handset; retry once with a real profile so the row measures the title
         # instead of the recipe.
-        cmd = [ROOT + "/build/nj2me", "--port", "headless", "--size", "240x320",
+        cmd = [BIN, "--port", "headless", "--size", "240x320",
                "--heap", "32", "--device", "nokia6230", "--fps", "30",
                "--run-frames", str(RUN), "--keys", "@" + keys,
                "--rms-dir", os.path.join(OUT, "rms", base.replace(".jar", "") + "-dev"),
@@ -151,7 +154,7 @@ def main():
     jobs = [j for j in jobs if j[1] not in seen]
     os.makedirs(os.path.join(OUT, "rms"), exist_ok=True)
     with open(os.path.join(OUT, "keys.txt"), "w") as fh:
-        fh.write(",".join(KEYS) + "\n")
+        fh.write("\n".join(KEYS) + "\n")
     done = 0
     with open(rows_path, "a") as fh, ProcessPoolExecutor(max_workers=10) as ex:
         for row in ex.map(one, jobs):

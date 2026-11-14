@@ -1,9 +1,10 @@
-/*
+/* SPDX-License-Identifier: MIT
  * nano_j2me - nj_amr.h
  *
- * The AMR narrowband speech decoder behind Manager.createPlayer() for the
- * "#!AMR" assets in the collection.  Private to src/midp: nj_lib_media.c is
- * the only caller.
+ * Private AMR narrowband fallback decoder API for the codec/media provider.
+ * Runtime source is MIT; generated codebooks carry separate Apache-2.0
+ * notices. See docs/AMR_DATA_LICENSES.md and
+ * docs/notes/2026-11-12-amr-independent-implementation.md.
  */
 #ifndef NJ_AMR_H
 #define NJ_AMR_H
@@ -43,9 +44,11 @@ nj_u4 nj_amr_frames(const void *data, nj_u4 size);
  * decoded, or zero when there is nothing to decode.
  *
  * Nothing is allocated and nothing is read back: the decoder's entire state
- * sits on its own stack, so a caller with room for the samples has room to
- * decode them - the largest clip in the collection is 310 KB of samples
- * against 4 KB of stack (measured, -fstack-usage).
+ * sits on its own stack, including its SID/CNG histories. Decode entry
+ * frames measure about 4.1 KB on x86-64 with GCC -O2 -fstack-usage, plus
+ * nested DSP call frames; stack demand is independent of clip duration.
+ * SID/DTX is floating-point and not fixed-point bit exact. Unusable speech
+ * uses conservative erasure muting rather than full TS 26.091 PLC.
  */
 nj_u4 nj_amr_decode(const void *data, nj_u4 size, nj_u1 *pcm);
 

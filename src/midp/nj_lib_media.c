@@ -59,6 +59,7 @@
  * contract even in a build without the decoder, so the header is included
  * unconditionally; every call into the decoder stays behind NJ_ENABLE_AMR. */
 #include "nj_amr.h"
+#include "nj_amr_mp4.h"
 
 #if NJ_USE_LIBC
 #  include <string.h>
@@ -391,7 +392,36 @@ void nj_media_restore_object(nj_vm *vm, nj_ref player)
             w_z(vm, player, F_P_STREAM, 0);
             w_z(vm, player, F_P_PLAT, 0);
             w_z(vm, player, F_P_OPEN, 0);
-            w_i(vm, player, F_P_PUSHED, 0);
+            {
+                nj_s4 cursor = 0;
+                if (!native_song && r_i(vm, player, F_P_KIND) == 1) {
+                    nj_s4 frames = r_i(vm, player, F_P_FRAMES);
+                    cursor = r_i(vm, player, F_P_PUSHED);
+                    /* A paused PCM Player already holds its resume cursor.
+                     * For a playing one, discard the native queue frontier
+                     * and resume at the last recorded audible media time. */
+                    if (r_i(vm, player, F_P_STATE) == 400) {
+                        nj_s4 rate = r_i(vm, player, F_P_RATE);
+                        nj_s8 time = r_j(vm, player, F_P_TIME);
+                        cursor = 0;
+                        if (rate > 0 && frames > 0 && time > 0) {
+                            nj_s8 end = (nj_s8)frames * 1000000LL / rate;
+                            if (time >= end) {
+                                cursor = frames;
+                            } else {
+                                /* Media time truncates fractional microseconds.
+                                 * Round up to recover the corresponding sample. */
+                                nj_s8 at = time / 1000000LL * rate +
+                                    ((time % 1000000LL) * rate + 999999LL) / 1000000LL;
+                                cursor = at > frames ? frames : (nj_s4)at;
+                            }
+                        }
+                    }
+                    if (cursor < 0 || frames <= 0) cursor = 0;
+                    else if (cursor > frames) cursor = frames;
+                }
+                w_i(vm, player, F_P_PUSHED, cursor);
+            }
             w_i(vm, player, F_P_LOOPDONE, 0);
             if (r_i(vm, player, F_P_STATE) == 400) {
                 w_i(vm, player, F_P_STATE, 300);
@@ -708,11 +738,12 @@ static nj_u4 wav_ima_decode(const nj_u1 *src, nj_u4 len, int channels,
     int samples_per_block;
     nj_u1 *out = dst;
 
-    if (channels < 1 || channels > 2 || block < 4 * channels + 4) {
+    if (!src || !dst || channels < 1 || channels > 2 ||
+        block < 4 * channels + 4) {
         return 0u;
     }
     samples_per_block = 2 * (block - 4 * channels) / channels + 1;
-    while (pos + (nj_u4)block <= len) {
+    while ((nj_u4)block <= len - pos) {
         int pred[2];
         int idx[2];
         int c;
@@ -727,52 +758,32 @@ static nj_u4 wav_ima_decode(const nj_u1 *src, nj_u4 len, int channels,
                 idx[c] = 88;
             }
         }
+        if (dst_cap - (nj_u4)(out - dst) < (nj_u4)(channels * 2)) {
+            return frames;
+        }
         for (c = 0; c < channels; c++) {
-            if (dst_cap - (nj_u4)(out - dst) < (nj_u4)(channels * 2)) {
-                return frames;
-            }
             *out++ = (nj_u1)(pred[c] & 0xFF);
             *out++ = (nj_u1)((pred[c] >> 8) & 0xFF);
         }
         frames++;
-        /*
-         * Sample bytes are grouped in 4-byte units: mono holds eight samples
-         * of the one channel, stereo alternates a left unit and a right unit.
-         */
-        for (s = 1; s < samples_per_block; s += 8) {
-            for (c = 0; c < channels; c++) {
-                const nj_u1 *q;
-                int k;
-
-                if (channels == 1) {
-                    q = p + 4 + ((s - 1) / 8) * 4;
-                } else {
-                    q = p + 8 + ((s - 1) / 8) * 8 + c * 4;
-                }
-                if (q + 4 > p + block) {
-                    break;
-                }
-                for (k = 0; k < 4; k++) {
-                    int nibbles[2];
-                    int n;
-
-                    nibbles[0] = (int)(q[k] & 0x0F);
-                    nibbles[1] = (int)((q[k] >> 4) & 0x0F);
-                    for (n = 0; n < 2; n++) {
-                        int v;
-                        if (((s - 1) / 8) * 8 + k * 2 + n >= samples_per_block - 1) {
-                            break;
-                        }
-                        v = ima_decode(nibbles[n], &idx[c], &pred[c]);
-                        if (dst_cap - (nj_u4)(out - dst) < 2u) {
-                            return frames;
-                        }
-                        *out++ = (nj_u1)(v & 0xFF);
-                        *out++ = (nj_u1)((v >> 8) & 0xFF);
-                        frames++;
-                    }
-                }
+        /* The file groups four bytes per channel; PCM interleaves complete
+         * left/right frames. Validate the last source channel before writing. */
+        for (s = 1; s < samples_per_block; s++) {
+            int group = (s - 1) / 8;
+            int within = (s - 1) % 8;
+            int byte = 4 * channels + group * (4 * channels) + within / 2;
+            if (byte + (channels - 1) * 4 >= block) { return frames; }
+            if (dst_cap - (nj_u4)(out - dst) < (nj_u4)(channels * 2)) {
+                return frames;
             }
+            for (c = 0; c < channels; c++) {
+                int packed = p[byte + c * 4];
+                int nibble = (within & 1) ? (packed >> 4) : (packed & 0x0F);
+                int v = ima_decode(nibble, &idx[c], &pred[c]);
+                *out++ = (nj_u1)(v & 0xFF);
+                *out++ = (nj_u1)((v >> 8) & 0xFF);
+            }
+            frames++;
         }
         pos += (nj_u4)block;
     }
@@ -1567,126 +1578,126 @@ static int media_restart(nj_vm *vm, nj_ref p)
     return 1;
 }
 
-#if NJ_ENABLE_VIDEO
 #if NJ_ENABLE_AMR
-/*
- * The movie's own sound track.
- *
- * A video Player used to decode only the video track, so the corpus intros
- * were silent.  The container iterator can select the AMR-NB sound track now
- * (`nj_mp4_open_audio()`), and the whole track is decoded once, at start(),
- * into a PCM byte array on the Player: a sample of a 3GP may hold one AMR
- * frame or several (doom.3gp 1x20 ms, 1942/movie 5x20 ms per sample), so the
- * samples are concatenated behind an "#!AMR" header and decoded by the same
- * whole-file decoder the bare .amr players use - the frame walk then lives in
- * one place instead of being repeated in three.
- *
- * The PCM is then handed to the port progressively from video_audio_pump(),
- * on the same wall clock the picture follows.
- */
-nj_u4 nj_media_movie_amr_decode(nj_vm *vm, const nj_u1 *data, nj_u4 size,
-                                 nj_u1 *pcm, nj_u4 pcm_cap)
+/* Bare assets, audio-only 3GP and movie tracks share the same complete-clip
+ * system/provider/fallback policy. Container validation precedes every decode. */
+static nj_u4 media_amr_decode(nj_vm *vm, const nj_u1 *data, nj_u4 size,
+                              nj_u1 *pcm, nj_u4 pcm_cap)
 {
-    nj_mp4 it;
-    nj_mp4_sample s;
-    nj_u4 total = 0u, frames, off, got;
+    nj_amr_mp4 it;
+    const nj_u1 *sample;
     nj_u1 *host;
-
-    if (!vm || !data || !pcm ||
-        nj_mp4_open_audio(&it, data, size) != NJ_MP4_OK ||
-        it.codec != NJ_MP4_CODEC_SAMR || it.sample_count == 0u) {
-        return 0u;
+    nj_u4 bytes, total = 0u, off, frames, got;
+    int rc;
+    if (!vm || !data || !pcm) return 0u;
+    if (size >= 6u && memcmp(data, "#!AMR\n", 6u) == 0)
+        return nj_avcodec_decode_amr(vm, data, size, pcm, pcm_cap);
+    frames = nj_amr_mp4_frames(data, size);
+    if (!frames || frames > pcm_cap / 320u ||
+        !nj_amr_mp4_open(&it, data, size)) return 0u;
+    while ((rc = nj_amr_mp4_next(&it, &sample, &bytes)) == 1) {
+        if (bytes > (1u << 20) - total) return 0u;
+        total += bytes;
     }
-    nj_mp4_rewind(&it);
-    while (nj_mp4_next(&it, &s) == 1) {
-        if ((nj_u4)s.offset + s.size > size) {
-            return 0u;
-        }
-        total += s.size;
-    }
-    /* A movie's audio track is a few tens of kilobytes; anything past a
-     * megabyte is a table that lies, and it must not become an allocation. */
-    if (total == 0u || total > (1u << 20)) {
-        return 0u;
-    }
-    host = (nj_u1 *)nj_host_alloc(vm, 6u + (nj_size)total);
-    if (!host) {
-        return 0u;
-    }
+    if (rc < 0 || !total) return 0u;
+    host = (nj_u1 *)nj_host_alloc(vm, total + 6u);
+    if (!host) return 0u;
     memcpy(host, "#!AMR\n", 6u);
     off = 6u;
-    nj_mp4_rewind(&it);
-    while (nj_mp4_next(&it, &s) == 1) {
-        memcpy(host + off, data + s.offset, s.size);
-        off += s.size;
-    }
-    frames = nj_amr_frames(host, off);
-    if (frames == 0u ||
-        frames * (nj_u4)(NJ_AMR_BLOCK * 2) > pcm_cap) {
+    if (!nj_amr_mp4_open(&it, data, size)) {
         nj_host_free(vm, host);
-        return 0u;              /* not decodable AMR after all: stay silent */
+        return 0u;
     }
-    /*
-     * A port that installed its own AMR decoder (hardware, or the platform's
-     * media framework) gets the movie's sound track too: the track is an
-     * elementary "#!AMR" stream by now, which is what the provider contract
-     * takes.  The built-in provider is skipped on purpose - it decodes the
-     * whole track into its own buffer first, and going through it would hold
-     * the PCM twice - so the direct call below stays the default path.
-     *
-     * A provider that claims the stream and then produces nothing usable (an
-     * open that fails, a decoder that answers "more input needed" for the
-     * whole track) must not turn the movie silent: the built-in decoder is
-     * tried next.  That costs a second decode only where the alternative is
-     * no sound at all, and it keeps a port's AMR support additive rather
-     * than a capability the movie path can lose.
-     */
-    {
-        const nj_av_audio_ops *aops = nj_avcodec_find_audio(vm, host, off);
-
-        if (aops != NULL && aops != nj_avcodec_sw_amr()) {
-            nj_av_mem memd;
-            nj_av_info info;
-            const char *err = NULL;
-            nj_av_dec *dec;
-
-            memd.ud = vm;
-            memd.alloc = av_alloc;
-            memd.free = av_free;
-            memset(&info, 0, sizeof(info));
-            dec = aops->open(host, off, &memd, &info, &err);
-            if (dec != NULL) {
-                nj_av_step step;
-                int rc;
-
-                memset(&step, 0, sizeof(step));
-                step.out = pcm;
-                step.out_cap = pcm_cap;
-                rc = aops->decode(dec, &step);
-                aops->close(dec);
-                if (rc == NJ_AV_OK && step.frames >= (nj_u4)NJ_AMR_BLOCK) {
-                    /* step.frames counts PCM frames; the caller wants AMR
-                     * frames (20 ms each), the unit nj_amr_frames() reports.
-                     * A hardware decoder is not required to agree with the
-                     * table walk on the exact count, so derive it - but never
-                     * report more frames than the output buffer can carry. */
-                    nj_u4 amr = step.frames / (nj_u4)NJ_AMR_BLOCK;
-                    nj_u4 room = pcm_cap / ((nj_u4)NJ_AMR_BLOCK * 2u);
-
-                    if (amr > room) {
-                        amr = room;
-                    }
-                    if (amr > 0u) {
-                        nj_host_free(vm, host);
-                        return amr;
-                    }
-                }
-            }
-        }
+    while ((rc = nj_amr_mp4_next(&it, &sample, &bytes)) == 1) {
+        if (bytes > total + 6u - off) break;
+        memcpy(host + off, sample, bytes);
+        off += bytes;
     }
-    got = nj_amr_decode(host, off, pcm);
+    got = rc == 0 && off == total + 6u ?
+        nj_avcodec_decode_amr(vm, host, off, pcm, pcm_cap) : 0u;
     nj_host_free(vm, host);
     return got == frames ? frames : 0u;
+}
+#endif
+
+#if NJ_ENABLE_VIDEO
+#if NJ_ENABLE_AMR
+nj_u4 nj_media_movie_amr_decode(nj_vm *vm, const nj_u1 *data, nj_u4 size,
+                                  nj_u1 *pcm, nj_u4 pcm_cap)
+{
+    return media_amr_decode(vm, data, size, pcm, pcm_cap);
+}
+
+/* Floor-rescale the audio track independently of the video track's edits. */
+static nj_s8 audio_time_frames(const nj_mp4 *m, nj_s8 ticks)
+{
+    const nj_s8 hi = 0x7fffffffffffffffLL, lo = -0x7fffffffffffffffLL - 1;
+    nj_s8 q = ticks / (nj_s8)m->timescale;
+    nj_s8 r = ticks % (nj_s8)m->timescale;
+    nj_s8 f = r * NJ_AMR_RATE / (nj_s8)m->timescale;
+    if (r < 0 && r * NJ_AMR_RATE % (nj_s8)m->timescale) { --f; }
+    if (q > hi / NJ_AMR_RATE) { return hi; }
+    if (q < lo / NJ_AMR_RATE) { return lo; }
+    q *= NJ_AMR_RATE;
+    if (f > 0 && q > hi - f) { return hi; }
+    if (f < 0 && q < lo - f) { return lo; }
+    return q + f;
+}
+
+/* Decode order concatenation is valid only for contiguous 20-ms AMR samples.
+ * Apply this track's own edit to PCM, retaining silence in its leading gap. */
+static nj_u4 video_audio_timeline(const nj_u1 *data, nj_u4 size,
+                                  nj_u1 *pcm, nj_u4 raw, nj_u4 capacity)
+{
+    nj_mp4 a;
+    nj_amr_mp4 raw_it;
+    nj_mp4_sample sample;
+    const nj_u1 *packet;
+    nj_u4 packet_size;
+    nj_s8 offset, first, end, dst, src, count = 0;
+    nj_u4 n = 0;
+    int rc;
+    if (nj_mp4_open_audio(&a, data, size) != NJ_MP4_OK || !a.timescale ||
+        a.codec != NJ_MP4_CODEC_SAMR ||
+        !nj_amr_mp4_open(&raw_it, data, size)) { return 0; }
+    while ((rc = nj_mp4_next(&a, &sample)) == 1) {
+        if (nj_amr_mp4_next(&raw_it, &packet, &packet_size) != 1 ||
+            packet != data + sample.offset || packet_size != sample.size) {
+            return 0;  /* both decoders must select exactly the same track */
+        }
+        if ((nj_u8)sample.duration * NJ_AMR_RATE !=
+                (nj_u8)raw_it.frames_per_sample * NJ_AMR_BLOCK * a.timescale ||
+            sample.pts != (nj_s8)sample.dts + a.presentation_offset) {
+            return 0;  /* no implicit gaps, overlaps or CTTS reorder */
+        }
+        ++n;
+    }
+    if (rc != 0 || (nj_u8)n * raw_it.frames_per_sample * NJ_AMR_BLOCK != raw ||
+        nj_amr_mp4_next(&raw_it, &packet, &packet_size) != 0) { return 0; }
+    offset = audio_time_frames(&a, a.presentation_offset);
+    first = audio_time_frames(&a, a.presentation_start);
+    end = audio_time_frames(&a, a.presentation_end);
+    if (first < 0 || end <= first || end > (nj_s8)capacity / 2) { return 0; }
+    dst = first;
+    src = 0;
+    if (offset >= -(nj_s8)raw && offset < end) {
+        if (dst < offset) { dst = offset; }
+        src = dst - offset;  /* both sides now lie within the bounded arrays */
+        if (src < (nj_s8)raw && dst < end) {
+            count = (nj_s8)raw - src;
+            if (count > end - dst) { count = end - dst; }
+            memmove(pcm + (nj_u4)dst * 2u, pcm + (nj_u4)src * 2u,
+                    (nj_size)count * 2u);
+        }
+    }
+    if (count > 0) {
+        memset(pcm, 0, (nj_size)dst * 2u);
+        memset(pcm + (nj_u4)(dst + count) * 2u, 0,
+               (nj_size)(end - dst - count) * 2u);
+    } else {
+        memset(pcm, 0, (nj_size)end * 2u);
+    }
+    return (nj_u4)end;
 }
 
 static int video_audio_decode(nj_vm *vm, nj_ref p, const media_video_state *st,
@@ -1694,28 +1705,41 @@ static int video_audio_decode(nj_vm *vm, nj_ref p, const media_video_state *st,
 {
     nj_u4 frames, cap;
     nj_ref pcm;
+    nj_u4 mark = nj_root_mark(vm);
 
     (void)st;
+    nj_root(vm, p);
+    nj_root(vm, src);
     /* Upper bound for the PCM array: 2000 AMR frames = 40 s of 8 kHz mono
      * s16, more than twice the longest corpus movie (17.2 s).  The helper
      * refuses a track that would need more, so a lying table cannot turn
      * this into an enormous allocation, and a Player that does not start
      * never allocates it at all. */
     cap = 2000u * (nj_u4)NJ_AMR_BLOCK * 2u;
-    pcm = nj_byte_array_new(vm, cap);
+    pcm = nj_root(vm, nj_byte_array_new(vm, cap));
     if (!pcm) {
+        nj_root_release(vm, mark);
         return 0;
     }
     frames = nj_media_movie_amr_decode(vm, src->u.bytes, src->length,
                                        pcm->u.bytes, cap);
     if (frames == 0u) {
+        nj_root_release(vm, mark);
         return 0;               /* not decodable AMR after all: stay silent */
     }
+    frames = video_audio_timeline(src->u.bytes, src->length, pcm->u.bytes,
+                                  frames * (nj_u4)NJ_AMR_BLOCK, cap);
+    if (frames == 0u) {
+        nj_root_release(vm, mark);
+        return 0;
+    }
+    pcm->length = frames * 2u;
     w_r(vm, p, F_P_APCM, "[B", pcm);
-    /* pApcmn counts PCM frames (samples), not AMR frames: the pump compares
-     * it against elapsed milliseconds * 8 kHz. */
-    w_i(vm, p, F_P_APCMN, (nj_s4)(frames * (nj_u4)NJ_AMR_BLOCK));
+    /* pApcmn is now the movie-aligned PCM timeline, including audio-only gap
+     * and crop decisions; the picture track's independent edit is irrelevant. */
+    w_i(vm, p, F_P_APCMN, (nj_s4)frames);
     w_i(vm, p, F_P_APUSH, 0);
+    nj_root_release(vm, mark);
     return 1;
 }
 
@@ -1821,51 +1845,116 @@ static void video_audio_pump(nj_vm *vm, nj_ref p)
 }
 #endif /* NJ_ENABLE_AMR */
 
-/*
- * Is the next sample of this movie due yet?
- *
- * A movie's clock is real time: sample n belongs at start + n/fps seconds,
- * where `start` is the wall clock read at start() (adjusted on a restart so a
- * stopped Player resumes instead of skipping).  The pump is called once per
- * emulated frame, so on a pale that keeps up with its cap this is also the
- * movie's own rate, and on a frame that is slow the picture follows the clock
- * instead of running slow - which is what a handset's media clock does, and
- * what a title that sleeps for the clip's length expects.
- *
- * A port with no frame cap (the test VMs, bench runs) has no playback clock to
- * follow: there pacing is off and one pump call decodes one sample, which is
- * the deterministic contract the unit tests and the frame-comparison tools
- * rely on.
- */
-static int video_sample_due(nj_vm *vm, nj_ref p)
+/* Rescale signed presentation times without overflowing on an edited track.
+ * Division is toward zero, including negative preroll; normal visible times
+ * are nonnegative. Saturation keeps malformed/extreme timestamps off the CPU
+ * clock rather than wrapping them into immediately due samples. */
+static nj_s8 video_time_us(const nj_mp4 *m, nj_s8 ticks)
 {
-    nj_s4 cap = nj_vm_frame_cap(vm);
-    nj_s4 fps = r_i(vm, p, F_P_RATE);
-    nj_s8 start;
-    nj_s4 pushed;
-
-    if (cap <= 0 || fps <= 0) {
-        return 1;
-    }
-    start = r_j(vm, p, F_P_VSTART);
-    pushed = r_i(vm, p, F_P_PUSHED);
-    return nj_now_ms(vm) >= start + ((nj_s8)pushed * 1000) / (nj_s8)fps;
+    const nj_s8 hi = 0x7fffffffffffffffLL, lo = -0x7fffffffffffffffLL - 1;
+    nj_s8 whole, fraction, base;
+    if (m->timescale == 0u) { return 0; }
+    whole = ticks / (nj_s8)m->timescale;
+    fraction = (ticks % (nj_s8)m->timescale) * 1000000LL /
+               (nj_s8)m->timescale;
+    if (whole > hi / 1000000LL) { return hi; }
+    if (whole < lo / 1000000LL) { return lo; }
+    base = whole * 1000000LL;
+    if (fraction > 0 && base > hi - fraction) { return hi; }
+    if (fraction < 0 && base < lo - fraction) { return lo; }
+    return base + fraction;
 }
 
-/*
- * Record the wall-clock time at which this Player's next sample is due.
- * Called from start(); the `pushed` subtraction makes stop()+start() resume
- * where it left off rather than treating the paused time as if it played.
- */
+/* A frame that straddles the edit start remains visible for the rest of its
+ * interval. Testing only its initial timestamp would drop that whole frame. */
+static int video_sample_visible(const nj_mp4 *m, const nj_mp4_sample *smp)
+{
+    return smp->pts < m->presentation_end &&
+           (smp->pts >= m->presentation_start ||
+            smp->pts > m->presentation_start - (nj_s8)smp->duration);
+}
+
+static nj_s8 video_sample_time(const nj_mp4 *m, const nj_mp4_sample *smp)
+{
+    return smp->pts < m->presentation_start ? m->presentation_start : smp->pts;
+}
+
+/* Peek a copied iterator: scheduling must not consume the picture being timed.
+ * Preroll can be decoded immediately, but visible frames respect their PTS.
+ * With no more samples, keep the last picture for its complete duration. */
+static nj_s8 video_next_time_us(nj_vm *vm, nj_ref p)
+{
+    nj_ref hold = r_r(vm, p, F_P_DATA, "[B");
+    media_video_state st;
+    nj_mp4_sample smp;
+    nj_s8 ticks;
+    if (hold == NULL || hold->length < (nj_u4)sizeof(st)) { return 0; }
+    memcpy(&st, hold->u.bytes, sizeof(st));
+    if (nj_mp4_next(&st.m, &smp) != 1) {
+        ticks = st.m.presentation_end;
+    } else {
+        ticks = video_sample_time(&st.m, &smp);
+        if (!video_sample_visible(&st.m, &smp) && smp.pts < st.m.presentation_start) {
+            return 0;  /* decode only the complete preroll now */
+        }
+        if (ticks > st.m.presentation_end) { ticks = st.m.presentation_end; }
+    }
+    return video_time_us(&st.m, ticks);
+}
+
+/* Capped ports follow the container's presentation timeline (including VFR
+ * and leading edits). Uncapped ports retain one sample per explicit pump,
+ * except a movie that has a sound track: its pictures follow the same
+ * wall-clock the audio pump uses, or the picture races ahead of the sound on
+ * every render boundary (a 15 fps intro clip plays at the render rate). */
+static int video_sample_due(nj_vm *vm, nj_ref p)
+{
+    nj_s8 start, due, now;
+    if (nj_vm_frame_cap(vm) <= 0) {
+        if (r_i(vm, p, F_P_APCMN) <= 0) { return 1; }
+        start = r_j(vm, p, F_P_VSTART);
+        now = nj_now_ms(vm);
+        if (now < start) { return 0; }
+        due = video_next_time_us(vm, p) / 1000;
+        if (due <= 0) { return 1; }
+        return now - start >= due;
+    }
+    start = r_j(vm, p, F_P_VSTART);
+    due = video_next_time_us(vm, p) / 1000;
+    now = nj_now_ms(vm);
+    if (due <= 0) { return now >= start; }
+    if (start > 0x7fffffffffffffffLL - due) { return 0; }
+    return now >= start + due;
+}
+
+/* The current one-buffer video pump has no reorder queue. Containers may
+ * expose B-frame timestamps, but accepting them here would schedule decode in
+ * presentation order and break reference pictures. A provider with such a queue
+ * needs a separate output-timestamp contract before this restriction can lift. */
+static int video_timeline_ordered(const nj_mp4 *movie)
+{
+    nj_mp4 it = *movie;
+    nj_mp4_sample sample;
+    nj_s8 previous = -0x7fffffffffffffffLL - 1;
+    int rc;
+    if (movie->ctts_count == 0u) { return 1; }
+    nj_mp4_rewind(&it);
+    while ((rc = nj_mp4_next(&it, &sample)) == 1) {
+        if (sample.pts < previous) { return 0; }
+        previous = sample.pts;
+    }
+    return rc == 0;
+}
+
+/* Initial playback retains a leading empty edit. Restarting a stopped or
+ * sought movie makes its next sample due now, preserving pause/resume. */
 static void video_set_start(nj_vm *vm, nj_ref p)
 {
-    nj_s4 cap = nj_vm_frame_cap(vm);
-    nj_s4 fps = r_i(vm, p, F_P_RATE);
-    nj_s4 pushed = r_i(vm, p, F_P_PUSHED);
     nj_s8 start = nj_now_ms(vm);
-
-    if (cap > 0 && fps > 0) {
-        start -= ((nj_s8)pushed * 1000) / (nj_s8)fps;
+    if (nj_vm_frame_cap(vm) > 0 &&
+        (r_i(vm, p, F_P_PUSHED) > 0 || r_j(vm, p, F_P_TIME) > 0)) {
+        nj_s8 due = video_next_time_us(vm, p) / 1000;
+        if (due > 0) { start -= due; }
     }
     w_j(vm, p, F_P_VSTART, start);
 }
@@ -1942,6 +2031,35 @@ static int video_decoder_reopen(nj_vm *vm, nj_ref p)
  * last sample start when the track stops early, and the unchanged position
  * when the decoder cannot be rebuilt.
  */
+/* Decode preroll for reference-picture continuity without exposing it through
+ * VideoControl's visible buffer. Host allocation does not move Java objects. */
+static int video_decode_sample(nj_vm *vm, media_video_state *st, nj_ref src,
+                               nj_ref vbuf, const nj_mp4_sample *smp,
+                               nj_u4 *produced)
+{
+    nj_av_step step;
+    nj_u1 *scratch = NULL;
+    int visible = video_sample_visible(&st->m, smp);
+    int rc;
+    *produced = 0;
+    if (smp->offset > src->length || smp->size > src->length - smp->offset) {
+        return NJ_AV_ERR_CORRUPT;
+    }
+    if (!visible) {
+        scratch = (nj_u1 *)nj_host_alloc(vm, vbuf->length);
+        if (scratch == NULL) { return NJ_AV_ERR_MEMORY; }
+    }
+    memset(&step, 0, sizeof(step));
+    step.in = src->u.bytes + smp->offset;
+    step.in_len = smp->size;
+    step.out = scratch != NULL ? scratch : vbuf->u.bytes;
+    step.out_cap = vbuf->length;
+    rc = st->vops->decode(st->vdec, &step);
+    if (scratch != NULL) { nj_host_free(vm, scratch); }
+    *produced = step.out_used;
+    return rc;
+}
+
 static nj_s8 video_seek(nj_vm *vm, nj_ref p, nj_s8 want)
 {
     nj_ref hold = r_r(vm, p, F_P_DATA, "[B");
@@ -1949,7 +2067,7 @@ static nj_s8 video_seek(nj_vm *vm, nj_ref p, nj_s8 want)
     nj_ref vbuf = r_r(vm, p, F_P_VBUF, "[B");
     media_video_state st;
     nj_mp4_sample smp;
-    nj_av_step step;
+    nj_u4 produced;
     nj_av_mem *mem;
     nj_av_info info;
     const char *err = NULL;
@@ -1986,28 +2104,38 @@ static nj_s8 video_seek(nj_vm *vm, nj_ref p, nj_s8 want)
     }
     st.vdec = dec;
     nj_mp4_rewind(&st.m);
-    while ((rc = nj_mp4_next(&st.m, &smp)) == 1) {
-        nj_s8 t = st.m.timescale > 0u
-            ? (nj_s8)smp.dts * 1000000LL / (nj_s8)st.m.timescale : 0;
-
-        if (t >= want) {
-            actual = t;         /* the pump shows this sample next */
-            break;
-        }
-        if ((nj_u4)smp.offset + smp.size > src->length) {
-            break;
-        }
-        memset(&step, 0, sizeof(step));
-        step.in = src->u.bytes + smp.offset;
-        step.in_len = smp.size;
-        step.out = vbuf->u.bytes;
-        step.out_cap = vbuf->length;
-        if (st.vops->decode(st.vdec, &step) != NJ_AV_OK) {
-            /* The reference chain stops here; leave the iterator at the next
-             * sample so the pump carries on instead of replaying this one. */
+    if (want < video_time_us(&st.m, st.m.presentation_start)) {
+        memset(vbuf->u.bytes, 0, vbuf->length);
+    }
+    for (;;) {
+        nj_mp4 before = st.m;
+        nj_s8 t;
+        rc = nj_mp4_next(&st.m, &smp);
+        if (rc != 1) { break; }
+        t = video_time_us(&st.m, video_sample_time(&st.m, &smp));
+        if (video_sample_visible(&st.m, &smp) &&
+            (t >= want || want - t < video_time_us(&st.m,
+                (nj_s8)smp.duration - (video_sample_time(&st.m, &smp) - smp.pts)))) {
+            /* nj_mp4_next advanced the copy; leave this exact target sample
+             * pending, rather than silently displaying the following one. */
+            st.m = before;
             actual = t;
-            decoded++;
+            if (want < video_time_us(&st.m, st.m.presentation_start)) {
+                actual = want;  /* a seek into the leading empty edit */
+            }
             break;
+        }
+        {
+            int drc = video_decode_sample(vm, &st, src, vbuf, &smp, &produced);
+            if (drc == NJ_AV_ERR_MEMORY) {
+                st.m = before;  /* allocation failed before decoding */
+                break;
+            }
+            if (drc != NJ_AV_OK) {
+                actual = t;
+                decoded++;
+                break;
+            }
         }
         decoded++;
         actual = t;
@@ -2017,15 +2145,29 @@ static nj_s8 video_seek(nj_vm *vm, nj_ref p, nj_s8 want)
          * so the position is the end of the movie. */
         actual = want;
     }
+    if (actual < 0) { actual = 0; }
     memcpy(hold->u.bytes, &st, sizeof(st));
     w_i(vm, p, F_P_PUSHED, decoded);
     w_j(vm, p, F_P_TIME, actual);
 #if NJ_ENABLE_AMR
-    /* The movie's PCM is handed to the device against this same clock. */
-    w_i(vm, p, F_P_APUSH,
-        (nj_s4)((nj_u8)actual * (nj_u8)NJ_AMR_RATE / 1000000u));
+    /* Clamp before multiplication: a very long edit need not have equally
+     * long decoded audio, and the frame index is a signed Java int. */
+    {
+        nj_s4 total = r_i(vm, p, F_P_APCMN);
+        nj_s8 audio = actual / 1000000LL;
+        nj_s8 frames = audio > 0x7fffffffLL / NJ_AMR_RATE
+            ? 0x7fffffffLL
+            : audio * NJ_AMR_RATE + (actual % 1000000LL) * NJ_AMR_RATE / 1000000LL;
+        if (frames > total) { frames = total; }
+        if (frames < 0) { frames = 0; }
+        w_i(vm, p, F_P_APUSH, (nj_s4)frames);
+    }
 #endif
-    video_set_start(vm, p);
+    if (want == 0 || want < video_time_us(&st.m, st.m.presentation_start)) {
+        w_j(vm, p, F_P_VSTART, nj_now_ms(vm) - actual / 1000);
+    } else {
+        video_set_start(vm, p);
+    }
     return actual;
 }
 
@@ -2083,7 +2225,8 @@ static void media_video_step(nj_vm *vm, nj_ref p)
     nj_ref vbuf = r_r(vm, p, F_P_VBUF, "[B");
     media_video_state st;
     nj_mp4_sample smp;
-    nj_av_step step;
+    nj_mp4 before;
+    nj_u4 produced;
     int rc;
 
     if (hold == NULL || src == NULL || vbuf == NULL ||
@@ -2109,31 +2252,27 @@ static void media_video_step(nj_vm *vm, nj_ref p)
     if (!video_sample_due(vm, p)) {
         return;                 /* the movie's own clock has not reached it */
     }
+    before = st.m;
     if (nj_mp4_next(&st.m, &smp) != 1) {
         video_audio_stop(vm, p);
+        w_j(vm, p, F_P_TIME, video_time_us(&st.m, st.m.presentation_end));
         w_i(vm, p, F_P_STATE, 300);
         fire(vm, p, "endOfMedia");
         media_unregister(vm, p);
         memcpy(hold->u.bytes, &st, sizeof(st));
         return;
     }
-    if ((nj_u4)smp.offset + smp.size > src->length) {
+    rc = video_decode_sample(vm, &st, src, vbuf, &smp, &produced);
+    if (rc == NJ_AV_ERR_MEMORY) {
+        st.m = before;
         return;
     }
-    memset(&step, 0, sizeof(step));
-    step.in = src->u.bytes + smp.offset;
-    step.in_len = smp.size;
-    step.out = vbuf->u.bytes;
-    step.out_cap = vbuf->length;
-    rc = st.vops->decode(st.vdec, &step);
     memcpy(hold->u.bytes, &st, sizeof(st));
-    if (rc != NJ_AV_OK || step.out_used == 0u) {
-        return;
-    }
+    if (rc != NJ_AV_OK || produced == 0u) { return; }
     w_i(vm, p, F_P_PUSHED, r_i(vm, p, F_P_PUSHED) + 1);
-    w_j(vm, p, F_P_TIME,
-        st.m.timescale > 0u
-            ? (nj_s8)smp.dts * 1000000LL / (nj_s8)st.m.timescale : 0);
+    if (video_sample_visible(&st.m, &smp)) {
+        w_j(vm, p, F_P_TIME, video_time_us(&st.m, video_sample_time(&st.m, &smp)));
+    }
 }
 
 /*
@@ -2175,7 +2314,7 @@ static void video_blit_rgb565(nj_vm *vm, nj_ref p, nj_surface *scr)
         return;
     }
     src = vb->u.bytes;
-    nj_gfx_init(&g, scr);
+    nj_midp_gfx_init(vm, &g, scr);
     if (dw == vw && dh == vh) {
         /* Same size is the common case: one image blit, whole rows. */
         nj_image img;
@@ -2577,6 +2716,12 @@ static const char *sniff_media(const nj_u1 *b, nj_u4 len)
         b[3] == 'M' && b[4] == 'R') {
         return "AMR";
     }
+    /* ADTS has the same leading sync bits as MPEG audio, but its layer bits
+     * are zero. Name it before the broad MP3 sync probe. The decoder still
+     * validates the complete header and frame; this is only container naming. */
+    if (len >= 2u && b[0] == 0xFFu && (b[1] & 0xF6u) == 0xF0u) {
+        return "AAC";
+    }
     if (len >= 3u && b[0] == 'I' && b[1] == 'D' && b[2] == '3') {
         return "MP3";
     }
@@ -2635,23 +2780,39 @@ static const char *media_refusal(const char *what)
     if (strcmp(what, "MP3") == 0) {
         return "this runtime has no MPEG audio decoder" NJ_MEXC_DATA;
     }
+    if (strcmp(what, "AAC") == 0) {
+        return "no installed platform decoder accepted this AAC file" NJ_MEXC_DATA;
+    }
     if (strcmp(what, "MP4") == 0) {
-        /*
-         * Reaching this line means neither track could be built, and the
-         * message should say which tracks this runtime does play instead of
-         * implying video is missing as a whole: H.263 and MPEG-4 Part 2 video
-         * and AMR audio are wired into Player and the pump, while AAC audio
-         * has no decoder at all and the other video codecs are not claimed by
-         * any installed provider.
-         */
-        return "no playable track in this MP4/3GP: audio must be AMR and video "
-               "must be H.263 or MPEG-4 Part 2 (AAC has no decoder)"
+        /* The platform may add audio-only formats. A video container must
+         * still go through the video provider, rather than lose its picture. */
+        return "no playable track in this MP4/3GP: built-in audio is AMR and "
+               "video is H.263 or MPEG-4 Part 2; other audio needs a platform decoder"
                NJ_MEXC_DATA;
     }
     if (strcmp(what, "an unrecognised container") == 0) {
         return "this is not a container this runtime knows" NJ_MEXC_DATA;
     }
     return "not a PCM WAV" NJ_MEXC_DATA;
+}
+
+/* A sampled-audio hook must not consume a movie before the video provider.
+ * Platform hooks must also reject video codecs the built-in parser cannot
+ * identify; the Android extractor checks every track for that reason. */
+static int media_port_audio_candidate(const char *what, const nj_u1 *data,
+                                      nj_u4 size)
+{
+#if NJ_ENABLE_VIDEO
+    if (strcmp(what, "MP4") == 0) {
+        nj_mp4 m;
+        return nj_mp4_open(&m, data, size) == NJ_MP4_ERR_NO_VIDEO;
+    }
+#else
+    (void)what;
+    (void)data;
+    (void)size;
+#endif
+    return 1;
 }
 
 /* Build a Player from an already-parsed source. */
@@ -2682,6 +2843,9 @@ static const char *mime_for_container(const char *what)
     }
     if (strcmp(what, "MP3") == 0) {
         return "audio/mpeg";
+    }
+    if (strcmp(what, "AAC") == 0) {
+        return "audio/aac";
     }
     if (strcmp(what, "MP4") == 0) {
         return "audio/mp4";
@@ -2985,6 +3149,8 @@ NJFN(media_createPlayer_stream)
         w_i(vm, p, F_P_FRAMES, (nj_s4)wi.frames);
         w_j(vm, p, F_P_DURATION,
             (nj_s8)wi.frames * 1000000LL / (nj_s8)wi.rate);
+        nj_logf(vm, 3, "media: streamed WAV %u Hz, %u channel(s), %u frames",
+                (unsigned)wi.rate, (unsigned)wi.channels, (unsigned)wi.frames);
         nj_root_release(vm, mark);
         ret->r = p;
         return NJ_OK;
@@ -3135,6 +3301,9 @@ NJFN(media_createPlayer_stream)
                     w_i(vm, p, F_P_FRAMES, (nj_s4)mframes);
                     w_j(vm, p, F_P_DURATION,
                         (nj_s8)mframes * 1000000LL / (nj_s8)NJ_MIDI_RATE);
+                    nj_logf(vm, 3, "media: built-in MIDI renderer, "
+                                   "%u frames, %u channels",
+                            (unsigned)mframes, (unsigned)mchans);
                     nj_root_release(vm, mark);
                     ret->r = p;
                     return NJ_OK;
@@ -3178,21 +3347,31 @@ NJFN(media_createPlayer_stream)
          * refusal.  The runtime owns the buffer it hands over, so the port
          * never has to allocate and never has to free.
          */
-        if (vm->port && vm->port->audio_decode) {
+        if (vm->port && vm->port->audio_decode &&
+            media_port_audio_candidate(what, barray_bytes(data), barray_len(data))
+#if NJ_ENABLE_AMR
+            && strcmp(what, "AMR") != 0
+            && !(strcmp(what, "MP4") == 0 &&
+                 nj_amr_mp4_frames(barray_bytes(data), barray_len(data)) > 0u)
+#endif
+            ) {
             nj_u4 need = 0u, rate = 0u, chan = 0u;
             if (vm->port->audio_decode(vm->port->ud, barray_bytes(data),
                                        barray_len(data), NULL, 0u, &need,
                                        &rate, &chan) == NJ_OK &&
-                need > 0u && rate > 0u && chan > 0u) {
-                nj_ref pcm = nj_byte_array_new(vm, need);
+                need > 0u && rate > 0u && rate <= 0x7fffffffu &&
+                (chan == 1u || chan == 2u) && need % (2u * chan) == 0u) {
+                nj_u4 capacity = need, expected_rate = rate, expected_chan = chan;
+                nj_ref pcm = nj_byte_array_new(vm, capacity);
                 if (!pcm) {
                     nj_root_release(vm, mark);
                     return NJ_ERR;
                 }
                 if (vm->port->audio_decode(vm->port->ud, barray_bytes(data),
-                                           barray_len(data), pcm->u.bytes, need,
+                                           barray_len(data), pcm->u.bytes, capacity,
                                            &need, &rate, &chan) == NJ_OK &&
-                    need > 0u) {
+                    need > 0u && need <= capacity && rate == expected_rate &&
+                    chan == expected_chan && need % (2u * chan) == 0u) {
                     nj_s4 frames = (nj_s4)(need / (2u * chan));
                     w_r(vm, p, F_P_DATA, "[B", pcm);
                     w_i(vm, p, F_P_RATE, (nj_s4)rate);
@@ -3280,6 +3459,11 @@ NJFN(media_createPlayer_stream)
 
             if (nj_mp4_open(&m, barray_bytes(data), barray_len(data)) == NJ_MP4_OK &&
                 m.width > 0u && m.height > 0u && m.sample_count > 0u) {
+                if (!video_timeline_ordered(&m)) {
+                    nj_root_release(vm, mark);
+                    return nj_throw(vm, NJ_C_MEXC,
+                                    "video requires presentation reordering");
+                }
                 /*
                  * The providers decide by looking at the container: H.263
                  * claims s263/H263 sample entries, MPEG-4 Part 2 claims mp4v
@@ -3340,10 +3524,8 @@ NJFN(media_createPlayer_stream)
                             w_i(vm, p, F_P_RATE, (nj_s4)m.fps);
                             w_i(vm, p, F_P_FRAMES, (nj_s4)m.sample_count);
                             w_j(vm, p, F_P_DURATION,
-                                (m.timescale > 0u && m.duration > 0u)
-                                    ? (nj_s8)m.duration * 1000000LL /
-                                          (nj_s8)m.timescale
-                                    : -1);
+                                m.timescale > 0u
+                                    ? video_time_us(&m, m.presentation_end) : -1);
                             player_set_type(vm, p, "video/3gpp");
                             nj_logf(vm, 3, "media: %s movie %ux%u, %u samples",
                                     vops->name, (unsigned)w, (unsigned)h,
@@ -3393,69 +3575,6 @@ NJFN(media_createPlayer_stream)
             const int in_mp4 = (strcmp(what, "MP4") == 0);
             const nj_u1 *src = barray_bytes(data);
             nj_u4 src_len = barray_len(data);
-            /*
-             * A bare AMR stream goes through nj_avcodec first, so a port with a
-             * hardware AMR decoder displaces the software one exactly as it
-             * does for MP3.  The wrapped 'samr' track keeps the direct call
-             * below: the provider sees an elementary stream, not a container,
-             * and unpacking the track is nj_mp4's job, not the codec's.
-             */
-            if (!in_mp4) {
-                const nj_av_audio_ops *aops =
-                    nj_avcodec_find_audio(vm, src, src_len);
-
-                if (aops != NULL) {
-                    nj_av_mem memd;
-                    nj_av_info info;
-                    const char *err = NULL;
-                    nj_av_dec *dec;
-
-                    memd.ud = vm;
-                    memd.alloc = av_alloc;
-                    memd.free = av_free;
-                    memset(&info, 0, sizeof(info));
-                    dec = aops->open(src, src_len, &memd, &info, &err);
-                    if (dec != NULL) {
-                        nj_u4 want = info.frames * info.channels * 2u;
-
-                        if (info.rate > 0u && info.channels > 0u && want > 0u) {
-                            nj_ref apcm = nj_byte_array_new(vm, want);
-
-                            if (apcm != NULL) {
-                                nj_av_step step;
-
-                                memset(&step, 0, sizeof(step));
-                                step.out = apcm->u.bytes;
-                                step.out_cap = want;
-                                if (aops->decode(dec, &step) == NJ_AV_OK &&
-                                    step.out_used == want) {
-                                    w_r(vm, p, F_P_DATA, "[B", apcm);
-                                    w_i(vm, p, F_P_RATE, (nj_s4)info.rate);
-                                    w_i(vm, p, F_P_CHAN, (nj_s4)info.channels);
-                                    w_i(vm, p, F_P_FRAMES, (nj_s4)info.frames);
-                                    w_j(vm, p, F_P_DURATION,
-                                        (nj_s8)info.frames * 1000000LL /
-                                        (nj_s8)info.rate);
-                                    aops->close(dec);
-                                    nj_logf(vm, 3, "media: %s decoded %u AMR "
-                                                   "frames into %u PCM bytes",
-                                            aops->name,
-                                            (unsigned)info.frames,
-                                            (unsigned)want);
-                                    nj_root_release(vm, mark);
-                                    ret->r = p;
-                                    return NJ_OK;
-                                }
-                            }
-                        }
-                        aops->close(dec);
-                    }
-                    if (nj_has_exception(vm)) {
-                        nj_clear_exception(vm);     /* the direct path follows */
-                    }
-                }
-            }
-
             nj_u4 aframes = in_mp4 ? nj_amr_mp4_frames(src, src_len)
                                    : nj_amr_frames(src, src_len);
             nj_ref pcm = NULL;
@@ -3465,9 +3584,8 @@ NJFN(media_createPlayer_stream)
                                         aframes * (nj_u4)NJ_AMR_BLOCK * 2u);
             }
             if (pcm != NULL) {
-                nj_u4 decoded =
-                    in_mp4 ? nj_amr_mp4_decode(src, src_len, pcm->u.bytes)
-                           : nj_amr_decode(src, src_len, pcm->u.bytes);
+                nj_u4 decoded = media_amr_decode(vm, src, src_len,
+                    pcm->u.bytes, aframes * (nj_u4)NJ_AMR_BLOCK * 2u);
 
                 if (decoded == aframes) {
                     w_r(vm, p, F_P_DATA, "[B", pcm);
@@ -3606,6 +3724,8 @@ NJFN(media_createPlayer_stream)
     w_i(vm, p, F_P_FRAMES, (nj_s4)wi.frames);
     w_j(vm, p, F_P_DURATION,
         (nj_s8)wi.frames * 1000000LL / (nj_s8)wi.rate);
+    nj_logf(vm, 3, "media: built-in WAV %u Hz, %u channel(s), %u frames",
+            (unsigned)wi.rate, (unsigned)wi.channels, (unsigned)wi.frames);
     nj_root_release(vm, mark);
     ret->r = p;
     return NJ_OK;
@@ -5757,7 +5877,7 @@ static const nj_builtin_method videocontrol_methods[] = {
     M("getDisplayHeight",    "()I", 0),
     M("getSourceWidth",      "()I", 0),
     M("getSourceHeight",     "()I", 0),
-    M("getSnapshot",         "(Ljava/lang/String;)Ljava/lang/Object;", 0)
+    M("getSnapshot",         "(Ljava/lang/String;)[B", 0)
 };
 
 /* JSR 135's tempo and rate controls.  RateControl is the parent interface;
@@ -5917,7 +6037,7 @@ const nj_native_entry nj_lib_media_table[] = {
     { NJ_C_VIDEOC, "getSourceWidth",       "()I",   videoctl_getSourceWidth },
     { NJ_C_VIDEOC, "getSourceHeight",      "()I",   videoctl_getSourceHeight },
     { NJ_C_VIDEOC, "getSnapshot",
-      "(Ljava/lang/String;)Ljava/lang/Object;", videoctl_getSnapshot },
+      "(Ljava/lang/String;)[B", videoctl_getSnapshot },
 
     { NJ_C_MIDICTL, "setChannelVolume",     "(II)V", midi_setChannelVolume },
     { NJ_C_MIDICTL, "getChannelVolume",     "(I)I",  midi_getChannelVolume },

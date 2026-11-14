@@ -565,26 +565,43 @@ cleanup:
     nj_port_shutdown(&port);
 }
 
+#include "private/amr_movie_fixture.h"
+
 /*
- * A movie Player's sound track is decoded through the provider registry too,
- * so a port whose AMR runs in firmware serves the intros as well as the bare
- * .amr assets.  The software provider is deliberately bypassed there (it would
- * hold the whole track twice), which makes this the one path where "installed
- * provider wins" has to be tested separately.
+ * The original demuxer-only fixture has an incomplete damr and sample sizes
+ * [13,12,15,14,16] containing partial AMR blocks. The old movie helper merely
+ * concatenated nj_mp4 samples; the unified path validates framesPerSample and
+ * each sample's block boundaries through nj_amr_mp4. Keep that refusal, and
+ * exercise provider and software PCM on a valid in-memory adaptation instead.
  */
 static void test_port_amr_serves_movie_track(nj_vm *vm)
 {
     nj_u1 pcm[(nj_u4)M4V_AV_AUDIO_FRAMES * 320u];
     nj_u1 baseline[(nj_u4)M4V_AV_AUDIO_FRAMES * 320u];
-    nj_u4 frames, base_frames;
+    nj_u1 clip[NJ_TEST_AMR_MOVIE_BYTES], malformed[NJ_TEST_AMR_MOVIE_BYTES];
+    nj_u4 frames, base_frames, at, i;
 
-    /* What the built-in decoder makes of the fixture, with the stock
-     * registry: the fallback below must reproduce exactly this. */
+    memset(pcm, 0xa5, sizeof(pcm));
+    ok(nj_media_movie_amr_decode(vm, m4v_av_3gp, sizeof(m4v_av_3gp),
+                                 pcm, sizeof(pcm)) == 0u,
+       "the original demuxer fixture is refused as malformed AMR");
+    ok(nj_test_amr_movie_fixture(clip, 0), "construct five complete AMR movie samples");
+    memcpy(malformed, clip, sizeof(malformed));
+    at = nj_test_amr_movie_tag(malformed, sizeof(malformed), "stsz");
+    ok(at != 0u, "movie AMR fixture has sample sizes");
+    nj_test_amr_movie_put32(malformed + at + 20u, 12u); /* second mode-0 block is truncated */
+    ok(nj_media_movie_amr_decode(vm, malformed, sizeof(malformed),
+                                 pcm, sizeof(pcm)) == 0u,
+       "a valid damr cannot conceal a partial AMR block at a sample boundary");
+    for (i = 0; i < sizeof(pcm); ++i) if (pcm[i] != 0xa5u) break;
+    ok(i == sizeof(pcm), "malformed movie AMR leaves the output untouched");
+
+    /* Force a software-only baseline even on a host with a system decoder. */
+    ok(nj_avcodec_install_audio(vm, NULL) == 0, "clear providers for software baseline");
     memset(baseline, 0, sizeof(baseline));
-    base_frames = nj_media_movie_amr_decode(vm, m4v_av_3gp,
-                                            (nj_u4)sizeof(m4v_av_3gp), baseline,
+    base_frames = nj_media_movie_amr_decode(vm, clip, sizeof(clip), baseline,
                                             (nj_u4)sizeof(baseline));
-    ok(base_frames != 0u, "the built-in decoder handles the fixture");
+    ok(base_frames == FAKE_AMR_FRAMES, "the built-in decoder handles all five valid blocks");
 
     ok(nj_avcodec_install_audio(vm, &fake_amr) > 0,
        "a port can install an AMR provider");
@@ -595,24 +612,21 @@ static void test_port_amr_serves_movie_track(nj_vm *vm)
     }
 
     memset(pcm, 0, sizeof(pcm));
-    frames = nj_media_movie_amr_decode(vm, m4v_av_3gp,
-                                       (nj_u4)sizeof(m4v_av_3gp), pcm,
+    frames = nj_media_movie_amr_decode(vm, clip, sizeof(clip), pcm,
                                        (nj_u4)sizeof(pcm));
-    ok(frames != 0u, "the movie's AMR track decodes through the provider");
-    ok(frames > 0u, "the provider's frame count reaches the Player");
-    if (frames != 0u) {
-        ok((nj_s2)(int16_t)(pcm[0] | (nj_s2)(pcm[1] << 8)) == FAKE_AMR_SENTINEL,
-           "the PCM comes from the installed provider");
-    }
+    ok(frames == FAKE_AMR_FRAMES, "the movie's complete AMR track decodes through the provider");
+    for (i = 0; i < sizeof(pcm); ++i) if (pcm[i] != 0x2bu) break;
+    ok(i == sizeof(pcm), "every PCM byte comes from the installed provider");
 
     /* A provider that claims the stream and then delivers nothing usable must
      * not make the movie silent: the built-in decoder takes over and produces
      * exactly what it produces with no port provider installed. */
+    /* Remove the successful provider: fallback tries earlier providers too. */
+    ok(nj_avcodec_install_audio(vm, NULL) == 0, "remove the successful AMR provider");
     ok(nj_avcodec_install_audio(vm, &fake_amr_deaf) > 0,
        "a provider that yields no PCM can be installed");
     memset(pcm, 0, sizeof(pcm));
-    frames = nj_media_movie_amr_decode(vm, m4v_av_3gp,
-                                       (nj_u4)sizeof(m4v_av_3gp), pcm,
+    frames = nj_media_movie_amr_decode(vm, clip, sizeof(clip), pcm,
                                        (nj_u4)sizeof(pcm));
     ok(frames != 0u && frames == base_frames,
        "a provider that yields nothing falls back to the built-in decoder");

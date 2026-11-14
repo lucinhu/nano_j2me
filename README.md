@@ -3,1010 +3,261 @@
 **English** | [简体中文](README.zh-CN.md)
 
 [![latest release](https://img.shields.io/github/v/release/lucinhu/nano_j2me?sort=semver&label=release&color=blue)](https://github.com/lucinhu/nano_j2me/releases/latest)
-[![licence](https://img.shields.io/github/license/lucinhu/nano_j2me)](LICENSE)
-[![tests](https://img.shields.io/badge/tests-171%20passing-brightgreen)](docs/VERIFICATION.md)
+[![licence](https://img.shields.io/badge/licence-MIT-blue)](LICENSE)
+[![tests](https://img.shields.io/badge/ctest-190%20passing-brightgreen)](docs/VERIFICATION.md)
 [![sanitized](https://img.shields.io/badge/sanitized-ASan%20%2B%20UBSan%20%2B%20LSan-brightgreen)](tools/run_sanitized_tests.sh)
-[![C99, no dependencies](https://img.shields.io/badge/C99-no%20dependencies-informational)](#design-commitments)
+[![C99](https://img.shields.io/badge/C99-no%20dependencies-informational)](#design-commitments)
 
-A J2ME (CLDC 1.1 / MIDP 2.0) runtime written in plain C99, built to be embedded.
+<p align="center">
+  <img src="data/nj2me.png" width="96" alt="">
+</p>
 
-It runs MIDlet suites — the `.jar` games written for feature phones — on
-anything with a framebuffer and a few hundred kilobytes of RAM: Linux, Windows,
-Android, an ESP32-S3, or whatever you are holding.
+A J2ME (CLDC 1.1 / MIDP 2.0) runtime written in portable C99. It runs the `.jar`
+games written for feature phones on a PC, a phone, a microcontroller, or a web
+browser — the same runtime everywhere, with one small `nj_port` per platform.
 
-```
-                    ┌──────────────────────────────────────────┐
-   game.jar  ──────►│  nj_app      ZIP reader, manifest,       │
-                    │              class + resource source    │
-                    └───────────────┬──────────────────────────┘
-                                    │ .class bytes
-                    ┌───────────────▼──────────────────────────┐
-                    │  nj_class    parser, linker, constant-   │
-                    │              pool cache (inline caches)  │
-                    └───────────────┬──────────────────────────┘
-                                    │
-   ┌────────────────┐   ┌───────────▼───────────┐   ┌──────────────────┐
-   │  nj_heap       │◄──┤  nj_interp            ├──►│  nj_thread       │
-   │  arena + mark  │   │  CLDC 1.1 bytecodes   │   │  green threads,  │
-   │  & sweep GC    │   │  exceptions, calls    │   │  scheduler       │
-   └────────────────┘   └───────────┬───────────┘   └──────────────────┘
-                                    │ natives
-                    ┌───────────────▼──────────────────────────┐
-                    │  the class library, written in C         │
-                    │  java.lang · java.util · java.io ·       │
-                    │  javax.microedition.lcdui · .game · .rms │
-                    └───────────────┬──────────────────────────┘
-                                    │ nj_gfx (software rasterizer)
-                    ┌───────────────▼──────────────────────────┐
-                    │  nj_port   ← the ONLY OS-facing surface  │
-                    │  headless · SDL2 · Android · ESP32-S3    │
-                    └──────────────────────────────────────────┘
-```
+- **The whole phone, not a subset.** CLDC 1.1 bytecodes including `long`,
+  `double`, exceptions, `synchronized` and `jsr`/`ret`; MIDP 2.0 LCDUI and game
+  APIs; RMS, JSR 75 files, JSR 135 media, JSR 184 M3G, Mascot Capsule Micro3D,
+  JSR 82 Bluetooth discovery and JSR 256 sensors.
+- **No dependencies.** `cc` and CMake are enough. No C++, no JVM, no libc
+  requirement for freestanding builds, no zlib/libpng/libjpeg — DEFLATE, PNG,
+  JPEG, GIF, WAV, AMR-NB, MP3, MIDI, H.263 and MPEG-4 Part 2 are in-tree.
+- **Small and embeddable.** Everything OS-specific is one `nj_port` implementation
+  (about ten callbacks). The runtime keeps zero mutable global state; several VMs
+  can coexist in one process, and `nj_vm_destroy()` returns the bytes it released.
+- **Verifiable.** 190 registered tests pass under `ctest`; a 400-title real-game
+  corpus runs 398 titles; every claim below is checked by a test, a gate or a
+  recorded playback.
 
 ## Screenshots
 
-**Desktop, SDL2 port.** The full 12-key phone keypad, drawn by the port because a
-D-pad alone runs a platformer and nothing else.
+**Desktop (SDL2)** — the game plus the twelve-key phone pad the port draws itself.
 
 <p>
-<img src="docs/images/readme-sdl2-1942.png" width="240" height="320" alt="1942 Air Combat mid-mission over the English coast, with the on-screen keypad">
+<img src="docs/images/readme-sdl2-1942.png" width="240" height="320" alt="1942 Air Combat mid-mission with the on-screen keypad">
 <img src="docs/images/readme-sdl2-xianjian.png" width="240" height="320" alt="Chinese Paladin: an isometric inn scene with a dialogue box">
 <img src="docs/images/readme-sdl2-aoe.png" width="240" height="320" alt="Sango: the title screen with a fiery battlefield menu">
 </p>
 
-**Desktop client, new in 0.5.2.** The library window: icons and names come from
-the MIDlet itself, a broken archive stays in the list marked `bad`, and the
-footer hints are clickable buttons.
+**Desktop client** — with no JAR argument the SDL2 build opens a library of the
+games in your games directory: icons and names come from the MIDlet itself,
+search, recents, favourites, key rebinding and a settings page included.
 
 <p>
-<img src="docs/images/readme-desktop-client.png" width="480" height="360" alt="The nano_j2me desktop client's library window with icon rows, Chinese game names and file names">
+<img src="docs/images/readme-desktop-client.png" width="480" height="360" alt="The nano_j2me desktop client library window">
+<img src="docs/images/readme-client-settings.png" width="360" height="270" alt="The client's settings page">
 </p>
 
-**Settings and key mapping, new in 0.5.2.** The settings page edits the display,
-the heap and the network; the 按键映射 page binds any of the twelve game keys,
-and the toast confirms the new key.
+**Browser (WebAssembly)** — the same runtime as an Emscripten module with a
+dependency-free shell: drag in `.jar` files, play with keyboard or on-screen
+keypad, sound, three save states per game, all stored locally in IndexedDB.
 
 <p>
-<img src="docs/images/readme-client-settings.png" width="360" height="270" alt="The client's settings page with rows for game directory, scale, filter, fullscreen and renderer">
-<img src="docs/images/readme-client-binds.png" width="360" height="270" alt="The key mapping page with the top action bound to W and a toast saying 上：W">
+<img src="docs/images/readme-web-library.png" width="330" alt="The web shell's game library after importing a JAR">
+<img src="docs/images/readme-web-game.png" width="330" alt="Bounce Tales running in a browser">
+<img src="docs/images/readme-web-panel.png" width="330" alt="The in-game panel with save states and settings">
 </p>
 
-**Search and the shortcut sheet.** Typing filters the library by name, file or
-MIDlet class; `F1` lists every key the client accepts and where the settings
-file lives.
-
-<p>
-<img src="docs/images/readme-client-search.png" width="360" height="270" alt="The library window with a 1942 search filter and one matching game">
-<img src="docs/images/readme-client-help.png" width="360" height="270" alt="The F1 shortcut sheet listing library, game-window and settings keys">
-</p>
-
-**Recently played and starred.** The top section lists the last ten jars that
-ran; `F2` stars a row worth finding again, and the star survives a restart while
-the settings reset leaves it alone.
-
-<p>
-<img src="docs/images/readme-client-recent.png" width="360" height="270" alt="The library window with a 最近玩过 section above the full game list">
-<img src="docs/images/readme-client-favorite.png" width="360" height="270" alt="A favourite row with a star and the 已收藏 toast">
-</p>
-
-**Windows, new in 0.5.2.** The same client as `nj2me.exe`, captured under wine:
-the UTF-16 path handling makes the wide-path listing and Chinese game names
-work exactly as on Linux.
-
-<p>
-<img src="docs/images/readme-client-windows.png" width="480" height="360" alt="The nano_j2me Windows build's library window: icon rows with Chinese game names and a Windows path in the header">
-</p>
-
-**Android.** A launcher that shows each game's own name and icon, and the game
-running with one of the configurable floating keypads.
+**Android, RetroArch and ESP32-S3** — the same core on a phone launcher, as a
+libretro core, and on a real 240 MHz Xtensa part.
 
 <p>
 <img src="docs/images/readme-android-launcher.png" width="200" height="400" alt="Nano J2ME launcher listing four games">
-<img src="docs/images/readme-android-game.png" width="200" height="400" alt="1942 Air Combat on Android with the floating keypad, fire key held">
-</p>
-
-**RetroArch.** The same runtime as a libretro core, loaded in the RetroArch
-frontend.
-
-<p>
-<img src="docs/images/readme-retroarch.png" width="360" height="480" alt="RetroArch running the nano_j2me core with a game loaded">
-</p>
-
-**ESP32-S3.** A real MIDlet inside Espressif's `esp-emu`: the internal-RAM board
-profile, the frame path streamed over UART and decoded to this PNG.
-
-<p>
+<img src="docs/images/readme-android-game.png" width="200" height="400" alt="1942 Air Combat on Android with the floating keypad">
+<img src="docs/images/readme-retroarch.png" width="270" height="360" alt="RetroArch running the nano_j2me core">
 <img src="docs/images/esp-emu-1942-menu.png" width="180" height="240" alt="1942 Air Combat running on the emulated ESP32-S3">
 </p>
 
-**Minecraft PE 0.6.1, new in 0.4.0.** A world the game generated itself, with
-the cloud layer textured out of the paletted `Image2D`, clean water, and the
-title's own frame cap keeping up.
+**3D and video** — JSR 184 M3G (Minecraft PE), Mascot Capsule Micro3D, and an
+MPEG-4 intro movie with its own AMR-NB track.
 
 <p>
-<img src="docs/images/readme-minecraft.png" width="240" height="320" alt="Minecraft PE world with clouds, water and grass">
-<img src="docs/images/readme-android-minecraft.png" width="200" height="400" alt="Minecraft PE running on the Android build">
-</p>
-
-**Video, new in 0.3.0.** 1942's MPEG-4 intro, decoded frame by frame and drawn
-as a direct-video overlay over the Canvas; the movie's own AMR-NB track plays
-with it.
-
-<p>
-<img src="docs/images/readme-movie-1942.png" width="240" height="320" alt="1942 Air Combat's MPEG-4 intro movie playing in the emulator">
-</p>
-
-**Micro3D on real titles, new in 0.3.0.** 鬼泣3D's mission-1 combat and
-浴火银河's flight scene, rendered through the Mascot Capsule Micro3D command
-list and figures.
-
-<p>
+<img src="docs/images/readme-minecraft.png" width="240" height="320" alt="Minecraft PE: a generated world with clouds and water">
+<img src="docs/images/readme-movie-1942.png" width="240" height="320" alt="1942 Air Combat's MPEG-4 intro movie playing">
 <img src="docs/images/dmc-micro3d-combat.png" width="240" height="320" alt="Devil May Cry 3D mission combat rendered by Micro3D">
 <img src="docs/images/gof-micro3d-flight.png" width="240" height="320" alt="Galaxy on Fire flight scene rendered by Micro3D">
 </p>
 
-## Platforms and portability
-
-nano_j2me is one portable C99 runtime, not a desktop-only emulator: the
-interpreter, class library, rasterizer, decoders and M3G/Micro3D pipelines are
-platform-neutral, and everything OS-specific lives behind a single `nj_port`
-implementation (about ten callbacks). Supporting a new target needs a
-framebuffer, a few hundred KiB of RAM and a new `nj_port` — nothing else. The
-runtime has no libc requirement (`NJ_USE_LIBC=0` for freestanding builds), no
-external libraries (DEFLATE, PNG and JPEG are in-tree), and keeps zero mutable
-global state, so several VMs can coexist in one process and be destroyed
-byte-for-byte. That is why the same core runs unchanged from a phone to a
-microcontroller.
-
-Currently supported and verified by the release pipeline:
+## Platforms
 
 | Target | What you get |
 |---|---|
-| Linux x86_64 / aarch64 | SDL2 desktop client and CLI, portable builds for glibc 2.17 and newer |
-| Windows x86_64 | `nj2me.exe` (mingw-w64): library window plus console runner, verified under Wine |
-| Android 5.0+ (API 21) | universal APK for arm64-v8a, armeabi-v7a, x86 and x86_64, launcher and floating keypads |
-| RetroArch / libretro | native cores for Linux (x86_64, aarch64, armv7) and Android (arm64, armv7, x86_64), no JVM or subprocess |
-| ESP32-S3 (ESP-IDF) | full runtime and MIDlet on a 16 MB flash / 8 MB PSRAM board, exercised in `esp-emu` and QEMU |
-| ESP32-C3 (ESP-IDF, RISC-V) | builds, links and boots; needs PSRAM for the VM |
-| headless | the reference port used by the test suite, for embedding and CI |
+| **Linux** x86_64 / aarch64 | CLI runner and the SDL2 desktop client; builds for glibc 2.17+ |
+| **Windows** x86_64 | `nj2me.exe` (mingw-w64): console runner plus the same library client, UTF-8 paths, verified under Wine |
+| **Android 5.0+** | one APK for arm64-v8a / armeabi-v7a / x86 / x86_64: launcher, floating keypads, AAudio/OpenSL ES sound |
+| **Android 2.x legacy** | ARMv5 `armeabi` edition with a lightweight launcher — see [docs/ANDROID_LEGACY.md](docs/ANDROID_LEGACY.md) |
+| **Web browsers** | Emscripten module plus a dependency-free ES-module shell — see [docs/WEB.md](docs/WEB.md) |
+| **RetroArch / libretro** | native cores for Linux (x86_64, aarch64, armv7) and Android (arm64, armv7, x86_64) |
+| **ESP32-S3 / ESP32-C3** | full runtime and MIDlet on an ESP-IDF board (PSRAM required for the VM) |
+| **headless** | the reference port used by the test suite, for embedding and CI |
 
-A separate **Android 2.0+ (API 5) legacy edition** targets ARMv5/`armeabi`
-phones, including Android 2.3, with a lightweight launcher, software display and
-AudioTrack sound. It supports browsing/importing JARs and opening them from file
-managers, and shares the standard edition's launcher icon. Build it with
-`tools/build_android_legacy.sh`; installation,
-old-toolchain requirements and limitations are in
-[docs/ANDROID_LEGACY.md](docs/ANDROID_LEGACY.md). Download the
-[0.5.7 legacy APK](https://github.com/lucinhu/nano_j2me/releases/download/v0.5.7/nj2me-0.5.7-android-legacy-armeabi.apk).
-
-The same desktop binary plays the 400-title
-[compatibility corpus](docs/CORPUS.md) with 398 running titles. Porting notes
-are in [docs/PORTING.md](docs/PORTING.md).
-
-**Arch Linux:** install it straight from the AUR. [`nano-j2me`](https://aur.archlinux.org/packages/nano-j2me)
-tracks the latest release, [`nano-j2me-git`](https://aur.archlinux.org/packages/nano-j2me-git)
-tracks master, and both install the desktop client, the static library and
+On Arch Linux the AUR packages install the desktop client, the static library and
 headers, the libretro core and a desktop entry:
 
 ```sh
-yay -S nano-j2me     # or: paru -S nano-j2me, or the -git package
+yay -S nano-j2me        # releases; nano-j2me-git tracks master
 ```
-
-Other targets build from source in one command; see [Building](#building).
-
-## What's new in 0.5.6
-
-This patch release fixes compatibility and correctness bugs rather than adding
-features. Java Math returns its defined values at the numeric edges (`abs`,
-`min`/`max`, `round`), `System.arraycopy` handles overlapping ranges and
-partial reference-copy failure like the reference implementation, and
-`java.util.Random` honors overridden `next(int)` and `setSeed(long)` in
-subclasses. RMS record enumerations are now live, reopening a store shares one
-open instance, the interpreter's constant-pool fast path handles collision
-slots, `Integer.toString` radix formatting uses defined unsigned magnitude
-arithmetic, and heap/UTF-16 allocation arithmetic rejects sizes that would wrap.
-
-The M3G file loader no longer mistakes a 40-byte VertexArray for a component
-transform, fixing the crash that stopped Stranded 2 (孤岛余生2时间之谜) at the
-dinosaur scene. RMS record lookup reads builtin Vector/Integer fields without
-per-element native calls, up to 96× faster in a fixed-work microbenchmark (not
-a game FPS claim), and the standalone Android CMake component used by
-`externalNativeBuild` now builds the full runtime.
-
-**Snapshot compatibility:** snapshots written by 0.5.5 load unchanged, including
-their RMS stores; snapshots written by 0.5.6 need the new runtime because the
-builtin class table gains two internal RMS classes. Game JARs, world files and
-RMS disk saves are unaffected. See
-[release details and verification](docs/RELEASE_0.5.6.md).
-
-## What's new in 0.5.5
-
-Minecraft compatibility now includes persistent depth between host frames,
-correct mesh and cloud alpha, default World background clearing, LEQUAL depth
-tests, projected depth for parallel and generic cameras, depth ranges and polygon
-offset. Linux desktop controls also support automatic DPI scaling and a saved UI
-scale setting.
-
-Release builds use their normal interpreter optimization level. In a fixed-work
-Minecraft generation benchmark, three seeds took 19–20% less CPU time than the
-previous forced `-O2` build, with identical world data. Transformed 2D drawing and
-String.getChars also have measured optimizations. Stream, collection, RMS,
-StringBuffer, image decoding, Nokia DirectGraphics and sound callback fixes are
-included. These measurements do not predict whole-game FPS.
-
-**Fast snapshots:** old snapshots containing a Graphics3D instance cannot resume
-under the new depth encoding; start the game again and load its own save.
-Game JARs, world files and RMS saves are unaffected. New snapshots require the
-new runtime. See [release details and verification](docs/RELEASE_0.5.5.md).
-
-## What's new in 0.5.4
-
-**The software rasteriser does less per fragment, and the picture does not
-change.** A phase profile of Minecraft PE in a saved world put 40% of a frame in
-the flat textured path, and three changes there removed about **18%** of the
-user CPU for 1200 in-world frames - 2.760/2.766/2.773 s down to
-2.261/2.274/2.252 s, roughly 81 to 99 frames a second of CPU time:
-
-- a textured triangle divides `1/w` once per fragment instead of three times
-  (two texture coordinates plus the fog), and the fog is evaluated from the
-  depth directly;
-- a triangle whose vertices are all nearer than the fog's near plane has no fog,
-  and one whose vertices are all past its far plane is exactly the fog colour,
-  so both skip the per-fragment fog;
-- fragments whose source alpha is 1/255 - 80% of the cloud texture - are skipped
-  after the depth write, because blending them moves the destination by at most
-  one unit.
-
-The fused reciprocal is not bit-identical, and `tests/test_m3g.c`'s wrap test
-proved it matters: on a `WRAP_REPEAT` tile boundary one ulp picks the other tile,
-so repeat textures keep their divisions (Minecraft's clouds repeat, its terrain
-clamps). `test_m3g` is 933 checks / 0 failures, full ctest 140/140, corpus gate
-`fatal 0 / 400, known 4`, and frame dumps of the same snapshot differ only in
-the cloud band the title animates from the wall clock. See
-`docs/notes/2026-10-31-raster-fast-paths.md`.
-
-**The replicated interpreter is now the default, and the Android APK builds
-it too.**  The computed-goto body was already the faster one on desktop
-(-6% terrain generation, -20% on Minecraft's 22 MB initial save); on the phone
-build, which compiles with clang `-Os`, the portable switch is much worse: a
-fresh Minecraft PE world on the x86_64 API-21 emulator takes 73.7 s of
-generation with the switch and 43.9 s with the replicated body, and the whole
-Start-to-in-world phase drops from about 1 min 50 s to 1 min 08 s (-40%
-generation, -35% save, -39% load-back prepare).  `tools/build_android.sh` now
-passes `-DNJ_THREADED_DISPATCH=1` by default (`NJ_ANDROID_THREADED=0` restores
-the switch for A/B); `tools/check_threaded_dispatch.sh` keeps both bodies
-equivalent under `ctest`.  See
-`docs/notes/2026-11-01-minecraft-android-costs.md`.
-
-**Five M3G bugs fixed, each with a regression check.**  `VertexArray.get` read
-before its backing array on a negative `firstVertex`; `VertexArray.set`
-multiplied `numVertices*numComponents` in 32 bits (zero-size allocation then an
-out-of-bounds store - a real ASan SEGV and UBSan signed overflow);
-`TriangleStripArray` constructors accepted strip lengths past the index array;
-`Image2D(fmt,w,h,byte[])` accepted short or NULL pixel storage; and
-`Group.addChild` accepted self/ancestor edges, making render walks recurse
-until the stack died.  `test_m3g` is now 933 checks / 0 failures under ASan and
-UBSan, and the PPM frame dumps of the same saved world are unchanged outside
-the wall-clock cloud band.
-
-**The interpreter folds the loops world generation spends its time in, and the
-M3G renderer resolves a frame once per pass.**  Generation is >99% interpreter
-dispatch, and its bytecode mix still had no float folds at all, so five int and
-float families now run as one dispatch: `iload`+implied-const+int-arith (7.7%
-of generation dispatch sites), const+`if_icmp` branches (3.7%), chained
-`fadd/fmul/fsub` with `fstore`/`freturn` tails, `fload`+`fload`/`fconst`+farith,
-and store+load.  The phone APK generates 8.6% faster per 1000 world blocks and
-saves 5.6% faster; the desktop fresh-world creation phase drops 8.4% (the
-fixed throughput workload goes 0.216 s -> 0.195 s and 70.5 M -> 62.5 M
-bytecodes).  In the renderer, a `render(World)` pass makes about 46 draws
-through the same `Graphics3D` but re-resolved the target, camera, matrices and
-light list on every one; the Graphics3D half is now resolved once per pass
-into a call-local and revalidated by a small key, taking another 2.35% off
-in-world user CPU (12 of 12 rounds faster, frame dumps identical to the
-pristine build).  See `docs/notes/2026-11-01-interpreter-superinstructions.md`
-and `docs/notes/2026-10-31-per-pass-frame-state.md`.
-
-**JSR 75 `FileConnection` behaves like a file system, and one bug in it
-deleted files.**  A closed connection no longer operates on the closed file -
-`delete()` on a closed connection really deleted it - and the JSR 75 mode
-rules are honoured: a `READ` connection refuses `create()`, `mkdir()` and
-`delete()`, a `WRITE`-only one refuses the metadata queries and
-`openInputStream()`.  The metadata answers match a phone: `getName()` keeps
-the trailing slash on a directory, `fileSize()` is -1 for a missing file and
-throws `IOException` for a directory, `lastModified()` is 0 when the file is
-missing, and `availableSize()` reports the volume's free space instead of the
-file's own length.  `tests/test_fs.c` went from 66 checks / 24 failures
-against the old behaviour to **132 checks / 0 failures**, full ctest is
-140/140.  A speculative `isOpen()` was dropped: a builtin class's method count
-is part of the saved-state ABI hash, and adding it made every existing
-`world.state` refuse to resume, which is now documented in the commit.  See
-`docs/notes/2026-11-01-jsr75-file-connection.md`.
-
-**A dig no longer re-scans the scene graph through the interpreter, and three
-more M3G index bugs are closed.**  Minecraft PE rebuilds chunk meshes the
-moment a block breaks, and adding each rebuilt part runs `Group.addChild()`'s
-duplicate check - `java.util.Vector.indexOf(child)` comparing every element
-through the interpreter's `Object.equals` dispatch at about 167 ns per element,
-over a child vector that held 678-695 scene-graph nodes, 13 scans per frame
-(~1.5 ms).  The scan now resolves the receiver's `equals` once and, when it is
-`java.lang.Object.equals`, compares references directly; classes that override
-`equals` keep the old path, and the shortcut is exact because
-`Object.equals(o, e)` is `o == e`.  The render frame of a dig burst drops
-5.75 ms -> 3.49 ms (-39%) and post-startup p99 6.10 ms -> 3.77 ms (-38%); the
-two Java mesh-rebuild frames are unchanged because they are the game's own
-work.  The round's seeded fuzz driver found three more M3G bugs:
-`setLight(INT_MAX)` overflowed `(index+1)*16` in 32 bits (UBSan, then OOME) and
-now throws `IndexOutOfBoundsException` past the 16-light table;
-`Mesh.setAppearance()` grew its submesh vector to the caller's index (so
-`setAppearance(1)` on a one-submesh mesh silently created a second one) and now
-rejects indexes outside the submesh count; and `getLight()` could answer from
-the array's slack or from stale slots after `resetLights()`, and is now bounded
-by the live light count.  `test_m3g` is 933 checks / 0 failures under ASan and
-UBSan, and the deterministic driver is committed under `tests/fuzzdemo/`.  See
-`docs/notes/2026-11-02-dig-burst-runtime.md` and
-`docs/notes/2026-11-02-m3g-fuzz.md`.
-
-**Three measurements said "do not change this", and one said "not on the
-phone".**  Android APKs built `-O2`, `-O3` and `-O2 -flto` are 18%, 25% and
-58% larger than the shipped `-Os` library, and a deterministic world reload on
-an API-21 x86_64 image measures +2.1%, +0.6% (inside noise) and +1.0% CPU, so
-`-Os` stays the Android default.  The profile's `m3g_tsa_getStripLengths`
-hotspot turned out to be a gprof artifact - the function is not called in-world
-- and the remaining per-draw setup is 1.1%; two bit-exact candidate rewrites
-(a strip pointer ring and a straight-line vertex path) measured slower or
-neutral, so only the profile note is kept
-(`docs/notes/2026-11-02-per-draw-residuals.md`).  And the load path - 3.08 G
-interpreter dispatches for read+prepare on a 22 MB world - gains 10% from two
-new bit-exact fusions with gcc `-O3` on the desktop but loses 1.5% with clang
-`-Os`, the codegen family the APK actually uses, so it is not merged;
-`docs/PERFORMANCE.md` has the tables.
-
-**A window resize now reaches the picture, not just the compositor.**  The
-activity used the surface's creation-time size forever: `surfaceChanged()` was
-an empty callback and the locked buffer kept its initial dimensions, so
-rotating the phone or resizing the window (multi-window, `adb shell wm size`)
-stretched a 320x640 buffer across 480x800.  `surfaceChanged()` now calls
-`nativeSetWindowSize()`, which re-applies `ANativeWindow_setBuffersGeometry()`
-and updates the cached size, and `display_present()` adopts the locked buffer's
-own dimensions.  Two 320x640 <-> 480x800 round trips on an API-21 image show
-`window buffer 320x640` -> `480x800 stride 480` and back, the status overlay
-reports the new size, and touch events at the scaled coordinates still hit the
-HUD pause icon and the menu rows; desktop ports compile the same entry point as
-a stub.  Commit `0f4cf05`.
-
-**Fuzzing round 2 found three more M3G bugs, one of them a class-table
-mistake.**  `AnimationTrack` was registered as extending `java/lang/Object`
-instead of `Object3D`, so `duplicate()`, `animate()`, `setUserID()` and casts
-threw `NoSuchMethodError`; the class table now says `Object3D` (7 checks).
-Because that grows the instance from 64 to 96 bytes, the saved-state ABI
-checker - which compares per-class field/method/array counts and the instance
-size - would refuse every state written by an older build.  Instead of shipping
-that break, `src/core/nj_save.c` now accepts a pure instance-size growth with
-identical declarations: it recomputes the legacy ABI hash with the old size and
-the non-static offsets shifted back by the growth, then walks the arena object
-table and refuses with a clear diagnostic if the state actually holds an
-instance of a migrated class.  The original `world.state` resumes
-(`class .../AnimationTrack: migrating legacy shape (saved inst=64, have
-inst=96)`), a legacy state that really contains such an instance is refused
-instead of half-loading, and `tools/m3g_fuzz2_state_evidence.sh` reruns all
-three cases.  Two UBSan overflows were fixed in the same wave:
-`Background.clear()` with an INT_MAX crop (`2147483647 + 1073741823`) now
-samples in double and wraps in 64 bits, and loader-built implicit strips whose
-`firstIndex` is INT_MAX no longer overflow in `jr_strip`/`jr_draw`.  The driver
-grew from 33 to 41 op families and 5 to 8 seeds (animation, skinned/morphing
-meshes, mipmaps, synthetic `.m3g` containers, immediate mode); a 3552-op wave
-runs with zero ASan/UBSan/LSan reports, and `test_m3g` is 865 -> 878 checks.
-Commit `8883341`.
-
-**A raster loop specialised for the APK's compiler scored a small win.**  Every
-earlier raster optimisation was measured on gcc `-O3`, but the phone APK is
-built with clang `-Os`, where the dominant `flat_texargb` span loop is 20% of
-in-world CPU.  It gained two bit-exact specialisations (a clamp-sampler variant
-with invariants hoisted, and the dominant flag combination with provably dead
-per-pixel branches removed): -0.95% for the first and -2.27% for both over 8
-ABBA rounds at clang `-Os` (8/8 rounds faster each time), -0.34% on the gcc
-`-O3` side, frame dumps identical.  Commit `3971629`.
-
-**The save-path fusions were the fourth "do not merge".**  Appending two bytes
-to `chunks.dat` turns the initial 22 MB save into the in-place `saveChunks0`
-path, whose 444M interpreter dispatches are dominated by byte-packing loops.
-The profile found six hot families covering about 20% of them; the two
-implemented fusions measure -11.3% for the whole save with desktop gcc `-O3`,
--3.1% with clang `-Os`, and -1.0% (inside the +/-3% run-to-run drift) on the
-actual x86_64 `-Os` APK, so nothing merged; the benchmark recipe and all tables
-are in `docs/notes/2026-11-02-save-path.md` (commit `d012e2e`).  The in-place
-quit save is 289 ms against 5,328 ms for the first full save, and a reload on
-the API-21 image reads 6,971 + 7,863 ms.
-
-**A JIT was built for the host, and the interpreter is still faster.**  The
-`src/core/nj_jit.c` contract only had testable backends for the phones, so we
-added a System V x86_64 backend (`src/core/nj_jit_x86_64.c`, 1,507 lines, 4,416
-assertions in `tests/test_jit_x86_64.c`) behind `NJ_ENABLE_JIT=1` to find the
-ceiling on the machine we can actually measure.  It compiles 32% of executed
-bytecodes into native blocks averaging 10.5 bytecodes, and it is slower:
-Minecraft desktop GEN 13.1 -> 20.8 s with gcc `-O3` (+34% wall) and 14.2 ->
-23.6 s with clang `-Os`; `bench.sh` 0.177 -> 0.279 s (+57%).  The cause is
-structural - a 5-10 bytecode block ends before the 15-20 ns C-to-JIT boundary
-pays off, and a JIT build also disables the interpreter's superinstructions.
-The infrastructure stays (opt-in, full ctest 141/141 with it on) and the note
-ranks the productive directions - compile fused sequences, chain blocks, keep
-the fusions - but completing the ARM64 backend is not justified on this data
-(`docs/notes/2026-11-02-jit_x86_64.md`, commit `3ba080f`).
-
-**A heavier in-world scene pays 2.8% for one projection hoist at `-Os`, and the
-field-lookup cache hit the same "do not merge" wall.**  The saved water scene
-is only ~1,400 tris/frame, so the round-7 benchmark saves a deterministic 2.3x
-view (3,283 tris/frame, 2,005,022 tris over 600 frames) by aiming at the
-shoreline before the state is written.  At clang `-Os` the frame profile is
-`jr_emit` 43.7%, `jr_project` 17.0% (44.1M calls), `jr_fetch` 8.1%, `sw_fog`
-2.0%, and `nj_crc_update` 5.3% that turned out to be the 34 MB snapshot load,
-not frame work.  `jr_project` divided by the reciprocal once per vertex and
-then multiplied by half-viewport values at four call sites; hoisting
-`0.5f*vw`/`0.5f*vh` into `m3g_jr` is bit-exact (0.5f*w is exact for w < 2^24)
-and measures -2.84% mean user CPU over 8 clean ABBA rounds (8/8 faster),
--3.12% on the gcc `-O3` side, with frame dumps identical to the pristine build
-(`docs/notes/2026-11-02-heavy-scene-os.md`, commit `6bb74c2`).  The other
-candidate from the on-device attribution - a per-VM pointer-triple memo for
-field/class resolution that skips the three `strcmp` validations - wins -2.7%
-on gcc `-O3` in-world, but is +0.2% at clang `-Os`, +1.2% on `bench.sh`, and
--1.8% on the APK with mixed signs inside a +/-2% spread, so only the profile
-note is kept (`docs/notes/2026-11-03-field-lookup.md`, commit `21989cd`).
-
-**M3G fuzz round 3, a background crop reset, and narrow textures.**  The seeded
-API fuzz driver grew to 46 op families and produced three real bugs, each with
-a pre-fix failing test: `Node.animate()` recursed without bound on a cyclic
-Group graph loaded from a `.m3g` (the loader links child references without an
-ancestor test) and now has the same depth-32 guard as the render walks;
-`Loader.load()` returned an array of nulls when every object was referenced
-(the roots fallback counted objects but the fill loop still skipped
-reference-marked ones), violating JSR 184's no-nulls guarantee; and a malformed
-`.m3g` could name a Material as a Mesh vertex buffer, so `jr_setup` read
-VertexBuffer offsets out of a foreign object - a class guard now draws
-nothing.  Separately, `Background.setImage()` resets the crop to the whole
-image per spec (毁灭战士3 binds two background images and never calls
-`setCrop`, so its stale 0x0 crop had skipped the blit entirely), ALPHA /
-LUMINANCE / LUMINANCE_ALPHA textures are widened to RGBA once per image and
-cached in the image's unused `_nj_mips` field (a new field would have broken
-every saved state: the snapshot loader compares per-class field counts), and
-the 34 declared-but-unseeded JSR 184 constants (Material flags, Fog modes,
-KeyframeSequence/AnimationTrack enums) are seeded.  The API audit shows the
-surface is otherwise complete - 30/30 spec classes, no missing members, one
-41-constant gap that needs an append-only saved-state migration
-(`docs/notes/2026-11-02-m3g-fuzz3.md`, `2026-11-03-background-coverage.md`,
-`2026-11-03-m3g-api-gaps.md`; commits `8e3ae85`, `dbddc20`, `0149f16`).  A
-mutation-fuzz pass over the 975 `.m3g` assets the 27 M3G corpus titles carry
-(10,000 mutants through `Loader`, `duplicate()`, the main getters and the
-raster path, under ASan+UBSan+LSan) found no memory-safety or leak defect: 846
-assets load standalone, and the 129 that need external PNGs throw the
-spec-required `IOException`.  The harness is committed as `tests/m3gmutdemo/`
-with `tools/m3g_mutation_fuzz.py`
-(`docs/notes/2026-11-03-m3g-mutation-fuzz.md`).
-
-**Android: audio focus, a BACK decision, the gamepad, and an honest measurement
-baseline.**  The port never requested audio focus, so MIDI kept playing over a
-phone call; it now requests in `onResume`, abandons in `onPause`, and
-pauses/resumes `MidiPlayer` on focus changes (verified by a GSM call on the
-emulator).  Held pad keys and hardware buttons are released on pause and when
-the port panel opens.  BACK is decided on release: a short press is one
-complete soft-right press/release pair to the MIDlet, a 550 ms hold opens the
-port panel, never both.  Gamepad KEYCODE_BUTTON_A/B/X/Y, previously dropped,
-map to fire, the soft keys, and game A/B/C/D.  An API-36 image runs the same
-create/reload/resize/audio matrix and finds only a BLUETOOTH_CONNECT
-runtime-permission gap (report-only, API 31+).  The headroom audit changes how
-we measure from now on: on this AVD the game is pinned at 60.0 fps by the
-emulator's vsync and uses only ~21% of the 16.7 ms budget (3.48 ms/frame guest
-CPU) with zero missed SurfaceFlinger frames, so fps and p99 cannot validate
-guest changes - `perf` attribution and guest CPU ms/frame can
-(`docs/notes/2026-11-03-android-headroom.md`,
-`2026-11-02-android-input.md`, `2026-11-03-input.md`; commits `404f4fc`,
-`cac808f`).
-
-## What was new in 0.5.3
-
-**Name lookups are memoised, so the 3D renderer stops re-resolving the same
-fields.** Minecraft PE's scene walk asks for the same M3G fields once per node
-per draw: a 1200-frame saved-world run made 22,400 `nj_class_lookup()` and
-14,000 `nj_field_lookup()` calls *per frame*, and each one probed the class
-table and the inherited field chain before answering. Both lookups now keep a
-memo in the VM, keyed by the pointer arguments; a hit is only used after the
-class, field and descriptor text are compared again, so a caller that reuses one
-buffer for different names falls through to a real lookup.  On the same saved
-world, 1200 headless 240x320 frames cost 2.433/2.447/2.474 s of user CPU against
-2.705/2.713/2.725 s before - **-9.2% to -10.1%** - and frame dumps are identical
-everywhere except the sky/cloud band the title animates from the wall clock.
-`--stats` reports `findcache=hits/misses`, and `tests/test_lookup_cache.c`
-(15 checks) pins the correctness side, including a reused buffer, a static
-request against an instance field, and a name-only (`desc == NULL`) lookup.
-The tables cost 9,232 B per VM at the defaults (`nj_vm_sizeof()` 7,040 ->
-16,272 B in this tree's Release build with JIT off; 4,624 B on a 32-bit build),
-and `-DNJ_FIELD_CACHE_SLOTS` / `-DNJ_CLASS_CACHE_SLOTS` trade the RAM back for
-targets where it matters.  Full ctest 140/140, corpus gate
-`fatal 0 / 400, known 4`.  See `docs/notes/2026-10-31-lookup-memo.md`.
-
-## What was new in 0.5.2
-
-**The SDL2 build is now a desktop client.** Run `build/nj2me` with no `.jar`
-and a library window opens: every runnable suite in your games directory gets a
-row with the icon and name the MIDlet itself declares. `O` browses for a jar,
-`S` opens settings, `R` rescans, `Enter`/click runs, `Esc`/`Q` quits, and
-drag-and-drop works both ways - drop a `.jar` on the window to run it, drop a
-folder to make it the library. Closing a game window or pressing `F10` comes
-back to the library instead of exiting. The launcher is drawn by the
-emulator's own rasteriser and built-in bitmap faces, so it needs no toolkit and
-renders Chinese game names; `--games`/`NJ2ME_GAMES` pick the directory,
-`--print-library` shows what it sees, and `nj2me game.jar` still runs one game
-exactly as before. See the [desktop client](#the-desktop-client) section and
-`docs/notes/2026-10-31-desktop-client.md`.
-
-**The game keys are rebindable, and the settings page covers the whole port.** A
-按键映射 page in the client maps all twelve game keys - arrows, fire, soft keys,
-clear, A-D - by pressing the key you want, and stores them by name in
-`client.conf` (`map_up = W`). Digits and `*`/`#` stay the phone keypad, and the
-port's own `F3`/`F5`/`F10`/`F11`/`F12`/`Tab` controls cannot be taken over. The
-same page now also edits the scale filter, fullscreen, software/accelerated
-renderer, heap size, mute and the network switch; `F11` toggles fullscreen in a
-game, and a direct `nj2me game.jar` run reads the same file for its heap and
-display choices. See `docs/notes/2026-10-31-key-mapping-and-settings.md`.
-
-**The frame rate is uncapped by default** on the desktop SDL2 port and on
-Android. Presenting as soon as the title has a frame is the lowest-latency
-setup, and the display paces what you actually see: the SDL2 renderer asks for
-vsync, and a SurfaceView only swaps at the panel's rate. Measured on this
-machine: a saved Minecraft PE world that ran 600 frames in 10.45 s (57.4 fps)
-under the 60 cap now runs them in 4.90 s (122.5 fps) on a 240 Hz laptop, and
-the same world draws 314 fps headless. The Android 帧率上限 setting is now
-不限制（默认）/ 60 / 30, still applied to the running VM without a restart;
-`--fps <n>` caps the command-line runner, and `debug.nj2me.fps` still overrides
-the launch cap. libretro keeps its 60 (the frontend owns the present cadence)
-and the ESP32 keeps 30, where the saving is real.
-
-**And the fog fix has a regression test**: a triangle whose apex is past
-`fog_far` and whose near edge sits at `fog_near` has to come out all fog colour
-deep inside - a per-vertex evaluator leaves the material colour mixed in there,
-which is exactly the Minecraft sky artefact. m3gdemo is 148 checks now.
-
-**And this is the first release with a Windows build.** The desktop client no
-longer stops at the platform it was compiled on: `nj2me.exe` is cross-compiled
-with mingw-w64 and ships in one zip next to the `SDL2.dll` it was linked
-against, a bilingual `README.txt` and the samples. Windows paths are UTF-16, so
-the library window lists, names and runs Chinese-named jars exactly as on Linux
-(`--print-library` on the corpus prints "400 games, 399 runnable" under wine),
-drag-and-drop and `F10`/`F11` behave the same, and settings live in
-`%APPDATA%\nano_j2me\client.conf`. The portability work stays inside
-`#if defined(_WIN32)`: wide file APIs, `FindFirstFileW` listings,
-`VirtualAlloc`/`VirtualProtect` for JIT code pages and `CommandLineToArgvW` for
-UTF-8 arguments, with the POSIX builds byte-identical. First-cut limits are in
-`docs/notes/2026-10-31-windows-build.md`: no libcurl network port, no libretro
-core, x86_64 only, and the binaries are unsigned.
-
-## What was new in 0.5.1
-
-**0.5.1 was the fog fix.** Minecraft PE's sky was a single flat sheet of fog
-colour: the rasteriser evaluated the fog factor per vertex, and every vertex of
-the game's sky plane sits past `fog_far`, so the whole sky took the fog colour
-while the reference draws a gradient from `(58,116,202)` at the top to
-`(105,183,228)` at the horizon. Fog is now a per-fragment quantity, computed
-from the interpolated `1/w` in every raster loop, the way GL ES defines it; a
-frame compared against FreeJ2ME-Plus over the same saved world went from a mean
-absolute difference of 41.4 to 13.8, with the sky matching within a few units
-per channel. The cost is 3-5% of the rasteriser. Between the fixed sky and the
-previous rounds' cloud and water fixes, Minecraft PE renders the sky, the
-clouds and the water the way the reference does - the clouds still read a
-little brighter, which the note writes down rather than hiding. (The crosshair
-is absent on purpose: the game hides it when it detects Nokia multipoint touch,
-which this runtime provides - that is the game's touch layout, not a rendering
-bug.)
-
-**And 0.5.1 raised the default frame cap from 30 to 60** on the SDL2 and
-Android ports: the phone counter had shown the emulator drawing a saved world
-at 59.4 fps with the cap lifted, so 30 was hiding half the motion at no real
-saving.
-
-Full changelog: [v0.5.2 release notes](https://github.com/lucinhu/nano_j2me/releases/tag/v0.5.2).
-
-## What's new in 0.5.0
-
-**0.5.0 gives `synchronized` real semantics.** The runtime used to have none:
-`monitorenter` recorded which frame held a monitor, `monitorexit` forgot it,
-and nothing ever blocked - on the theory that a cooperatively scheduled thread
-is never preempted inside a critical section. The quantum says otherwise, and
-a two-thread fixture printed `overlap=true` against the old runtime. The
-runtime now implements Java monitors: a contended `monitorenter` parks until
-the owner leaves, `Object.wait()` releases the monitor for the duration of the
-wait and reacquires it before `wait()` returns, `notify()`/`notifyAll()` check
-ownership and throw `IllegalMonitorStateException` when it is missing, and a
-synchronized method holds its monitor from before its first bytecode to the
-return, throw or unwind that ends its frame. There is no lock word in the
-object header - ownership is a scan of the (small) thread table - so object
-layout, heap footprint and the GC's view of an object do not change.
-`tests/lockdemo` holds the line: it reports `overlap=false` and the whole
-corpus still runs. The snapshot format went to v3 to carry monitor ownership
-and `Object.wait` state; a v2 snapshot is refused, not misread.
-
-Full changelog: [v0.5.0 release notes](https://github.com/lucinhu/nano_j2me/releases/tag/v0.5.0).
-
-## What was new in 0.4.1
-
-**0.4.1 makes the frame cap a setting, and the port's own counter is what said
-it should be.** Android had capped a phone at 30 fps since the port existed.
-`adb shell setprop debug.nj2me.stats 1` now has the port log the frames it
-actually posts - a MIDlet cannot report this, because a 30 Hz title sleeps its
-way to 30 frames a second whether the phone can draw them or not - and the API
-26 x86_64 emulator drawing a saved Minecraft PE world answered `59.4 fps` with
-the cap lifted. So the cap is the player's now: a 帧率上限 row in the library's
-display settings and in the game panel - 30 (the default), 60, or 不限制 -
-applied to the running game on its next frame. The runtime grew
-`nj_vm_set_frame_cap()` for it, because `nj_run()` copies the caller's `nj_port`
-into its frame loop and a UI-thread write to the port would never be read.
-`debug.nj2me.fps <n>` stays as the launch-time override for a measurement.
-
-Full changelog: [v0.4.1 release notes](https://github.com/lucinhu/nano_j2me/releases/tag/v0.4.1).
-
-## What was new in 0.4.0
-
-**0.4.0 is the release that runs Minecraft PE, and the one that stops three
-kinds of "the picture is wrong" from hiding in the rasteriser.** Since 0.3.0 the
-runtime gained a UDP datagram connection, automatic heap sizing on Android, and
-the JSR-75 and JSR-135 pieces the corpus actually names. Most of the release is
-what one demanding title exposed - and the gates that keep it exposed.
-
-* **Minecraft PE 0.6.1.** It boots, generates a world, draws it, and its LAN mode
-  joins over the new UDP `DatagramConnection`. The picture needed three fixes in
-  the JSR-184 sampler: texture coordinates follow the API's texel-centre
-  convention (texel *i* covers `[i/W,(i+1)/W)`), so a UV on an atlas tile
-  boundary no longer samples the previous tile; the level filter of
-  `Texture2D.setFiltering()` is honoured, so `FILTER_BASE_LEVEL` - the class
-  default, and what every title asks for - samples level 0 instead of a mip that
-  averages neighbouring tiles; and JSR 184's paletted `Image2D` constructor
-  expands its table, so `environment/clouds.png` comes out as clouds instead of
-  a field of palette indices. Water is clean, clouds are back.
-* **Frame pacing that lets a title's own threads run.** With a frame cap the
-  pacer used to sleep, which parked the whole VM: a game that generates and
-  renders on its own thread got 8 ms of every 33 ms at 30 fps. The wait is now
-  spent in the scheduler (85x the application's work per presented frame while
-  loading), and the cap is an absolute microsecond deadline, so `--fps 60` no
-  longer runs at 62.5 and `--fps 30` lands on 30 (Minecraft's 27.4 -> 29.5 fps).
-* **JSR-75 and vendor classes the corpus names.** `HttpsConnection` /
-  `SecurityInfo` / `SecureConnection` / `Certificate`, with an `http://`
-  connection that is deliberately *not* an `HttpsConnection`; the PIM contact
-  list (opens, and is honestly empty - what a fresh phone answers); Samsung's
-  `SM`/`SMS` (an `IOException` instead of a fabricated success); and JSR-135
-  `TempoControl`/`RateControl`, which re-time a MIDI song for real.
-* **Ports.** The ESP32-S3 image links again - its hand-written IDF source list
-  had gone stale, and `check_port_sources` now compares it with the desktop list
-  in both directions - and needs no resolver to format a datagram's address.
-  Android sizes the Java heap to the title by default.
-* **Gates.** Eight trimmed configurations build warning-free under `-Werror`
-  (that build caught a real `AffineTrans.setRotation` bug: a 60-degree rotation
-  shrank the model by half), the 400-title fast gate isolates each title's save
-  directory and reaches fatal 0 / known 4, and an exception that escapes into
-  the frame loop now prints where each thread was.
-* **Numbers.** 131 tests in `ctest`, the sanitized suite 131/131 green, and
-  **397 of 399** collected real games run - the two failures are the titles'
-  own (a truncated JAR and a licence check).
-
-Full 0.4.0 changelog: [v0.4.0 release notes](https://github.com/lucinhu/nano_j2me/releases/tag/v0.4.0).
-
-## Design commitments
-
-These are not aspirations; each one is enforced by a test or a gate.
-
-**Pure C99, no dependencies.** No C++, no libc requirement (freestanding builds
-set `NJ_USE_LIBC=0`), no zlib, no libpng, no JPEG library. DEFLATE, PNG and the
-rasterizer are all implemented here, because a microcontroller will not have
-them.
-
-**Zero mutable global state.** Every byte of runtime state belongs to an
-`nj_vm`. `nj_vm_destroy()` releases all of it and *returns how much it
-released*, so a caller can assert on it. A MIDlet can therefore be started,
-stopped and restarted indefinitely on a device that never reboots, and several
-VMs can coexist in one process. `tools/check_no_statics.sh` compiles the whole
-runtime and fails if any object file defines a symbol in a writable section.
-
-**One file to port.** `include/nj2me/nj_port.h` is the entire operating-system
-surface: about ten callbacks. A new platform is a new `nj_port` implementation,
-nothing else. See [docs/PORTING.md](docs/PORTING.md).
-
-**Correctness first, then size.** The interpreter implements the full CLDC 1.1
-instruction set including `long`, `double`, exceptions, `synchronized`,
-`multianewarray` and the legacy `jsr`/`ret`. Those are the parts small JVMs
-usually skip, and they are exactly the parts old games use.
-
-## Status
-
-| Component | State |
-|---|---|
-| ZIP/JAR reader, DEFLATE inflate | **done** — fuzzed, ASan/UBSan clean |
-| Class-file parser and linker | **done** |
-| Bytecode interpreter (CLDC 1.1) | **done** |
-| Object model, arena heap, mark & sweep GC | **done** |
-| Cooperative threads and scheduler | **done** |
-| Exceptions, C-to-Java bridge | **done** |
-| `java.lang` core, `Math`, `Thread`, wrappers | **done** |
-| `javax.microedition.lcdui` | **done** |
-| `javax.microedition.lcdui.game` | **done** |
-| `java.util`, `java.io`, RMS | **done** |
-| `javax.microedition.io` | **done** — `file://`, `http(s)://` (one optional `http_request` hook, the Android port wraps `HttpURLConnection`) and `socket://` (four optional `socket_*` hooks over TCP); any other scheme is refused by name |
-| `javax.bluetooth` | **discovery done** — `LocalDevice`, `DiscoveryAgent`, `UUID`, `DeviceClass`, `DataElement`, `ServiceRecord` and `RemoteDevice` over nine optional `bt_*` hooks; RFCOMM/L2CAP servers are the port's, and a port with no radio gets `BluetoothStateException` |
-| `javax.microedition.sensor` (JSR 256) | **done** — `findSensors`, connections, channels, ranges and data listeners, with the sensors themselves supplied by the port; conditions are refused rather than faked |
-| Software rasterizer | **done** |
-| `javax.microedition.m3g` (JSR 184) | **done** — scene graph, `.m3g` parser, keyframe tracks (TRS/color), skinned meshes, camera/light/fog, and a software rasterizer with depth, perspective-correct textures, mipmaps, two-sided lighting and texture transforms; the corpus audit closed every gap |
-| `javax.microedition.media` (JSR 135) | **done** — tones, MIDI, WAV, AMR-NB, MP3, and H.263 / MPEG-4 Part 2 video Players with `VideoControl`; playback is paced by the movie's real-time clock and a movie's own AMR-NB track plays with it |
-| Mascot Capsule Micro3D v3 | **done** — figures, affine/parallel/perspective projections, command lists (per-command and per-face colors), MTRA/MBAC; real titles render |
-| Execution engines | interpreter, plus opt-in baseline RV32 and ARM64 JITs (`NJ_ENABLE_JIT=1`) sharing a bounded per-VM hot-block cache; see [docs/JIT.md](docs/JIT.md) |
-| Decoders: PNG, JPEG, GIF, DEFLATE, WAV, AMR, MP3, MIDI, H.263, MPEG-4 Part 2, bitmap fonts | **done**, each behind its own switch (`NJ_ENABLE_*`) and all behind a pluggable registry, so a port can cut one or replace it with the platform's |
-| Ports: headless (reference) | **done** |
-| Ports: SDL2 | **done** — the desktop client: a games library with drag-and-drop, rebindable keys and a twelve-row settings page (see [the desktop client](#the-desktop-client)) |
-| Ports: Windows x86_64 (mingw-w64) | **done** — the same `nj2me.exe` built cross-platform: console runner plus the library window, UTF-8 paths through wide Win32 APIs, `%APPDATA%\nano_j2me` settings and saves; no libretro core or libcurl networking yet, x86_64 only. See [docs/notes/2026-10-31-windows-build.md](docs/notes/2026-10-31-windows-build.md) |
-| Ports: libretro / RetroArch | **done** — one native shared object that RetroArch loads as a core: RGB565 video, resampled audio, joypad/keyboard/touch input, core options for the handset profile, rotation, heap and button bindings, and per-game RecordStore/FileConnection saves. No JVM, no subprocess. See [docs/LIBRETRO.md](docs/LIBRETRO.md) |
-| Ports: Android (NDK + JNI) | **done** — one APK for Android 5.0 (API 21) and up, 4 ABIs, a launcher that shows each game's own name and icon and opens `.jar` files from a file manager, three configurable floating keypad layouts, sound through AAudio or OpenSL ES with MIDI handed to the phone's own synth, multi-touch, and auto-detected screen size; 2.79 MiB for all four ABIs (858 KiB for arm64 alone), runs on an API 21 emulator and an API 36 emulator |
-| Ports: ESP32-S3 (ESP-IDF, Xtensa) | **done** — real IDF build; boots the ROM, the full class library and a MIDlet on a 16 MB flash / 8 MB PSRAM board under Espressif's `esp-emu` (`tools/run_esp_emulator.sh`: `BENCH sum=-136042548`, 105,717,067 bytecodes — the desktop total), and runs the internal-RAM profile under QEMU. `tools/run_esp_emulator_ui.sh` also demonstrates the display, input and storage paths in the same emulator (240x320 frames decoded to PNG, keys injected over UART, JAR read from a mounted card). See [docs/PERFORMANCE.md](docs/PERFORMANCE.md#esp32-s3-measured-on-the-real-architecture) and [docs/FOOTPRINT.md](docs/FOOTPRINT.md#what-esp-emu-does-and-does-not-model-the-ui-demo) |
-| Ports: ESP32-C3 (ESP-IDF, RISC-V) | builds, links and boots; needs PSRAM for the VM |
-| Test suite | **171 registered tests passing** (`ctest`); configuration limits are recorded in [the verification ledger](docs/VERIFICATION.md) |
-| Focused sanitizer regressions | **9 groups passing** under ASan + UBSan + float-cast-overflow + leak detection; see [the verification ledger](docs/VERIFICATION.md) |
-
-Verified end to end: **Tumbleweed** (`net.frog_parrot.jump.Jump`, Apress 2004)
-plays on the headless port at 176x208 — scrolling ground, an animated sprite, a
-live score and countdown. See [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md).
-The collected corpus - 400 real games - stands at **398 running / 2 title-side
-failures** (a truncated JAR and a licence check); see
-[docs/CORPUS.md](docs/CORPUS.md).
 
 ## Building
 
-On Arch Linux there are AUR packages: [`nano-j2me`](https://aur.archlinux.org/packages/nano-j2me)
-builds the latest release, [`nano-j2me-git`](https://aur.archlinux.org/packages/nano-j2me-git)
-builds master.  Both install the desktop client, the static library and
-headers, the libretro core and a desktop entry - `yay -S nano-j2me`, or the same
-with `paru`.  Elsewhere:
-
 ```sh
 cmake -S . -B build -G Ninja
-cmake --build build                    # compiles.  Two seconds.  Nothing else.
+cmake --build build          # a few seconds, no dependencies
 ```
 
-To run the tests, generate their data once first:
+`build/nj2me` is the SDL2 desktop client when SDL2 is installed, the console
+runner otherwise. The libretro core is built by default as
+`build/libretro/nano_j2me_libretro.so`; `-DNJ_BUILD_LIBRETRO=OFF` turns it off.
+
+To run the test suite, generate its fixtures once (a JDK and Pillow are needed;
+the fixtures are ~1 MB of regenerable data):
 
 ```sh
-cmake --build build --target nj_fixtures   # needs a JDK; Pillow for PNG/JPEG
-ctest --test-dir build --output-on-failure
+cmake --build build --target nj_fixtures
+ctest --test-dir build --output-on-failure     # 190 tests
 ```
 
-**The fixture step is separate on purpose.**  It runs the PNG/JPEG/zip
-generators, compiles a dozen MIDlet JARs with `javac`, and - only if you ask for
-it - downloads two third-party games from GitHub.  Making that a dependency of
-every build turned `cmake --build` into a multi-second job that had nothing to do
-with compiling and would fail without a network.  It is now:
-
-* **off by default** - `cmake --build build` is a compile, full stop;
-* **explicit** - `--target nj_fixtures` when you want it;
-* **network-free by default** - `-DNJ_FIXTURES_FETCH_GAMES=ON` is what allows the
-  two downloads, because a build should not need GitHub to be reachable;
-* **guarded** - `ctest` reports which command to run instead of failing 25 tests
-  one at a time with "cannot open tests/fixtures/...".
-
-Set `-DNJ_GENERATE_FIXTURES=ON` at configure time to get the old behaviour back.
-
-The headless port is always available and is what the test suite uses. The SDL2
-port is built automatically when `libsdl2-dev` (or the equivalent) is installed.
-
-**Building the Windows zip from Linux** needs mingw-w64 and an SDL2 mingw
-package; `tools/build_windows.sh` downloads that package into the git-ignored
-`.local-tools/` the first time, cross-compiles with
-`tools/toolchain-mingw-w64.cmake` and writes
-`build/nj2me-0.5.2-windows-x86_64.zip` (the exe, the matching `SDL2.dll`, the
-samples and the README). The same toolchain file works by hand:
-
-```sh
-cmake -S . -B build-windows -DCMAKE_TOOLCHAIN_FILE=tools/toolchain-mingw-w64.cmake \
-      -DSDL2_INCLUDE_DIRS="$PWD/.local-tools/sdl2-mingw/SDL2-2.32.10/x86_64-w64-mingw32/include" \
-      -DSDL2_LIBRARIES="$PWD/.local-tools/sdl2-mingw/SDL2-2.32.10/x86_64-w64-mingw32/lib/libSDL2.dll.a" \
-      -DNJ_BUILD_TESTS=OFF -DNJ_BUILD_LIBRETRO=OFF
-cmake --build build-windows --target nj2me-cli
-```
-
-`wine` is set as the cross-running emulator, so `ctest` can run the Windows
-binaries where they were built; the portability notes and limits are in
-[docs/notes/2026-10-31-windows-build.md](docs/notes/2026-10-31-windows-build.md).
-
-The libretro core is built by default as `build/libretro/nano_j2me_libretro.so`
-(`-DNJ_BUILD_LIBRETRO=OFF` disables it). Copy it and its `.info` file into
-RetroArch's `cores/` directory and load a `.jar`; controls, core options, save
-locations and limitations are in [docs/LIBRETRO.md](docs/LIBRETRO.md).  A core
-is architecture-specific, so `tools/build_libretro_cores.sh` also cross-builds
-installable cores for Android (arm64-v8a, armeabi-v7a, x86_64) and ARM Linux
-(ARM64/ARMv7) - run it with `--list`.
-
-## In RetroArch
-
-Every release ships the six cores as
-`nano_j2me-0.4.0-libretro-cores.tar.gz`, so trying it does not need a
-cross-compiler.  For the core on this machine:
-
-```sh
-cmake -S . -B build -G Ninja
-cmake --build build --target nano_j2me_libretro -j
-```
-
-Copy `nano_j2me_libretro.so` and `nano_j2me_libretro.info` (they must stay
-together) into RetroArch's `cores/` directory, pick **Mobile - J2ME
-(nano_j2me)** under *Load Core*, then load the game's `.jar`.  Core options hold
-the handset profile, rotation, heap size, sound and button bindings; saves go to
-`<RetroArch save dir>/nano_j2me/<game folder>/`.  From a shell it is:
-
-```sh
-retroarch -L ~/.config/retroarch/cores/nano_j2me_libretro.so game.jar
-```
-
-
-## On-screen keys
-
-The SDL2 window draws **every J2ME key**, because a D-pad alone runs a platformer
-and nothing else:
-
-![on-screen keys](docs/images/sdl2-keys.png)
-
-* **soft-left / soft-right** top corners, where a phone had them
-* **D-pad** bottom-left, with **A / B / C / D** under it
-* **fire** in the bar between the D-pad and the game
-* **the twelve-key phone pad** on the right, with **clear** under it and
-  **volume / power** above it
-
-Click or tap them. A press that lands on a key is a key press and NOT also a
-pointer press, so a game with both a pointer UI and a keypad does not see two
-events from one tap.
-
-```sh
-F12 or Tab          show / hide, at run time
-NJ_SDL2_KEYS=0      start with them hidden
-```
-
-They are translucent and sit in the letterbox bars, so the game stays fully
-visible at the scales the window normally opens at. The port computes that
-letterbox itself rather than using `SDL_RenderSetLogicalSize`, precisely so the
-overlay can be drawn in window pixels instead of inside the 176x208 the game
-owns.
+The fixture step is separate on purpose: a plain `cmake --build` stays a compile
+with no network and no Java. `-DNJ_GENERATE_FIXTURES=ON` makes it automatic.
 
 ## Running a game
 
 ```sh
-build/nj2me --port sdl2 game.jar
+build/nj2me game.jar                    # SDL2 client, or the console runner
+build/nj2me                             # library window (no JAR argument)
 build/nj2me --port headless --dump-frames out/ game.jar
 ```
 
-Text comes from six built-in bitmap faces. To draw it with a TrueType file
-instead, name one — the em size of each face is fitted to the box the bitmap
-face occupied, so no baseline moves:
+Keyboard: arrows are the D-pad, `Enter`/`Space` fire, `F1`/`F2` the soft keys,
+`Backspace` clear, digits and `*`/`#` the phone pad, `F12`/`Tab` the on-screen
+keypad, `F11` fullscreen, `F10` back to the library. A gamepad works as a
+first-class controller. Text can be drawn with a TrueType file instead of the
+built-in bitmap faces (`--font <ttf>`); a malformed file is a warning, not a
+failure.
+
+Some titles check which handset they are on. A built-in profile answers as a
+real phone, identity properties included:
 
 ```sh
-build/nj2me --port sdl2 --font /usr/share/fonts/liberation/LiberationMono-Regular.ttf game.jar
-```
-
-An unreadable or malformed file is not fatal: the built-in faces stay in place
-and a warning is logged. Compile the rasteriser out with `-DNJ_ENABLE_TTF=0`
-to keep only the bitmaps. See `docs/PORTING.md` for the embedding details.
-
-## The desktop client
-
-The SDL2 build is a client as well as a port. With no `.jar` it opens a library
-of the games in your games directory: each row carries the icon and name the
-MIDlet declares, the file name and its size, and a broken archive stays
-visible, marked `bad` with the reason. `Enter`/click runs the selection, `O`
-browses for a jar, `R` rescans, `S` edits the games directory, scale, scale
-filter, fullscreen, renderer, gamepad, on-screen keys, fps cap, key bindings,
-heap size, mute and the network switch, and `Esc`/`Q` quits. Typing filters the
-list by name, file name or MIDlet class, `F1` shows every key the client and a
-game window accept, and `F2` stars the selected game. Whatever ran before is
-listed under `最近玩过` above the directory, newest first, so the game you keep
-coming back to is one row away. `F10`, or closing the game window, comes back
-to the library.
-
-Drag a `.jar` onto the launcher or onto a running game and it runs - a game in
-progress ends first; drag a directory onto the launcher and it becomes the
-library. Unreadable drops are refused with a toast and never interrupt a
-running title. The scan is incremental, so a directory of 400 suites is usable
-while it fills in.
-
-A controller is a first-class way to play: `A` fires, `B`/`X`/`Y` are the game
-keys, `LB`/`RB` the soft keys, `Back`/`Start` clear and game D, and the d-pad or
-left stick walks. It attaches and detaches while the client runs, holds produce
-one key press rather than a repeat storm, and the 手柄 row (`gamepad = 0`) or
-`NJ_SDL2_GAMEPAD=0` turns the whole thing off.
-
-```sh
-build/nj2me                          # library window
-build/nj2me --games /path/to/jars    # another library
-build/nj2me --client game.jar        # run, then fall back to the library
-build/nj2me --print-library          # what the library sees
-```
-
-Settings live in `$XDG_CONFIG_HOME/nano_j2me/client.conf` (default
-`~/.config/nano_j2me/client.conf`); the default games directory is
-`~/.local/share/nano_j2me/games`, created on demand. The key bindings are rows
-of that file too - `map_up = W`, `map_fire = J` and so on, with the names
-`SDL_GetKeyName()` prints; an empty value means the default key. A direct
-`nj2me game.jar` run reads the same file for heap, filter, fullscreen,
-renderer, mute and network, while `--scale`, `--fps`, `--keys` and `--heap` on
-the command line still win. Optional automatic heap growth is off by default
-and applies on the next game launch. Use `--heap-grow` or `--no-heap-grow` to
-explicitly override the setting. `--heap` still sets the initial size; the
-default growth limit is 128 MiB. The launcher is drawn by the runtime's own
-rasteriser and built-in faces, so Chinese game names render with no toolkit and
-no extra dependency. The window remembers the size it was left at
-(`window = 900x700`), a running game's window carries its display name, and
-`recent =`/`favorite =` lines in the same file hold the game you last played and
-the rows you starred - and the settings page's reset leaves both lists
-alone while the switches go back to their defaults. `F1` is where to look when a key
-is forgotten: it lists the library, game-window and settings keys and the
-settings file's path. See `docs/notes/2026-10-31-desktop-client.md`,
-`docs/notes/2026-10-31-key-mapping-and-settings.md`,
-`docs/notes/2026-10-31-client-polish.md` and
-`docs/notes/2026-10-31-recent-and-favorites.md`.
-
-## Telling a title which phone it is on
-
-A J2ME title asks `System.getProperty("microedition.platform")` to find out
-which handset it is running on, and some of them refuse to start on an answer
-they do not know — `1945空战英雄_6105` wants a platform that begins with
-`"Nokia"`. Name a built-in handset profile and the runtime answers as that
-phone, identity numbers and vendor keys included:
-
-```sh
-build/nj2me --list-devices                              # what is built in
-build/nj2me --device nokia6230 game.jar                 # run as a Nokia 6230
+build/nj2me --list-devices
+build/nj2me --device nokia6230 game.jar
 build/nj2me --prop microedition.platform=Nokia6230/05.50 game.jar
 ```
 
-`--prop key=value` may be repeated and wins over the profile; the default is
-`generic`, which answers only the port's own identity. The IMEI/IMSI values in
-the profiles are synthetic — a valid shape, nobody's number. See
-[the device section of docs/COMPATIBILITY.md](docs/COMPATIBILITY.md#the-device-a-title-believes-it-is-on)
-for what each profile answers and why.
+## Web version (WebAssembly)
 
-## Verifying the memory contract
+The same runtime compiles to WebAssembly with Emscripten. There is no
+server-side emulation and no pthreads: the interpreter is driven one frame per
+`requestAnimationFrame` through a virtual clock, so any static file host is
+enough, and imported games never leave the browser.
 
 ```sh
-# no writable global state anywhere in the runtime
-tools/check_no_statics.sh
-
-# create -> run -> destroy three times, identical teardown, zero residue
-build/test_vm tests/fixtures/hello.jar HelloWorld "hello from j2me"
-
-# the same, with the process-level leak checker
-gcc -std=c99 -g -O1 -fsanitize=address,undefined -Iinclude \
-    -o /tmp/t tests/test_vm.c src/core/*.c src/zip/*.c src/midp/*.c \
-    src/port/posix/nj_port_headless.c -lm
-ASAN_OPTIONS=detect_leaks=1 /tmp/t tests/fixtures/hello.jar HelloWorld
+tools/emsdk_setup.sh                    # once: installs the SDK into .local-tools/
+tools/build_web.sh                      # -> build/web/ (shell + nj2me.js + nj2me.wasm)
+python3 -m http.server -d build/web 8000
 ```
+
+Open `http://localhost:8000/`, drop a `.jar` in, play. The shell keeps the game
+library, save files and up to three save states per game in IndexedDB. The
+JavaScript⇄C API, persistence layout and limits are in
+[docs/WEB.md](docs/WEB.md); the harness (`tools/check_web.sh --all`) runs the
+Node API tests, a 41-title corpus and a real-Firefox page test.
+
+## Other builds
+
+```sh
+tools/build_android.sh                  # Android APK (standard edition)
+tools/build_android_legacy.sh           # Android 2.x legacy APK
+tools/build_windows.sh                  # Windows x86_64 zip (downloads SDL2 mingw)
+tools/build_libretro_cores.sh --list    # cross-built libretro cores
+```
+
+Load the libretro core in RetroArch as **Mobile - J2ME (nano_j2me)** and pick a
+`.jar`; controls, core options and save locations are in
+[docs/LIBRETRO.md](docs/LIBRETRO.md). For the ESP32-S3 see
+[docs/PORTING.md](docs/PORTING.md) and `tests/embedded/idf/`; the port is
+exercised under Espressif's `esp-emu` with `tools/run_esp_emulator.sh`.
+
+Optional accelerators stay off by default: a port-side GLES2 2D backend and
+M3G/ Micro3D fragment path (`NJ_BUILD_GLES2_ACCEL=ON`, see
+[docs/GLES2_BACKEND.md](docs/GLES2_BACKEND.md) and
+[docs/GLES2_3D.md](docs/GLES2_3D.md)), and JIT backends for RV32/ARM64
+(`NJ_ENABLE_JIT=1`, see [docs/JIT.md](docs/JIT.md)).
+
+## Status
+
+The runtime implements the parts old games actually use, and the gates keep it
+that way:
+
+| Area | State |
+|---|---|
+| CLDC 1.1 VM: class-file parser/linker, interpreter, arena heap + mark & sweep GC, green threads and monitors, exceptions | complete |
+| `java.lang`, `java.util`, `java.io`, RMS, JSR 75 `FileConnection` | complete |
+| MIDP 2.0 LCDUI and `lcdui.game` (Canvas, GameCanvas, TextBox, forms, lists, alerts, sprites, tiled layers) | complete |
+| JSR 135 media: tones, MIDI, WAV, AMR-NB, MP3, H.263 and MPEG-4 Part 2 video players | complete |
+| JSR 184 M3G: scene graph, `.m3g` parser, animation, skinned meshes, camera/light/fog, software rasterizer | complete |
+| Mascot Capsule Micro3D v3: figures, command lists, affine/parallel/perspective projections | complete |
+| Networking: `http(s)://` and `socket://` via portable port hooks; Bluetooth discovery and JSR 256 sensors | complete where a port supplies the radio |
+| Software rasterizer, bitmap fonts, image decoders, DEFLATE/ZIP | complete |
+| Execution engines | interpreter, plus opt-in RV32/ARM64 JITs |
+
+Compatibility is measured, not claimed: the 400-title corpus in
+[docs/CORPUS.md](docs/CORPUS.md) runs **398 titles**; the two failures are the
+titles' own (a truncated JAR and a licence check). Per-platform results, the
+test ledger and known limits are in
+[docs/PLATFORM_SUPPORT.md](docs/PLATFORM_SUPPORT.md) and
+[docs/VERIFICATION.md](docs/VERIFICATION.md).
+
+## Design commitments
+
+- **Pure C99, zero dependencies.** No C++, no libc requirement
+  (`-DNJ_USE_LIBC=0`), no external decoder libraries.
+- **Zero mutable global state.** All state belongs to an `nj_vm`.
+  `tools/check_no_statics.sh` fails the build if any object file defines a
+  writable symbol.
+- **One file to port.** `include/nj2me/nj_port.h` is the entire OS surface; a
+  new platform is a new `nj_port`, nothing else.
+- **Correct first, then small.** The interpreter handles the instructions small
+  JVMs skip on purpose — `long`, `double`, `synchronized`, `jsr`/`ret` — because
+  old games use them.
 
 ## Repository layout
 
 ```
-include/nj2me/     the public headers; nj_port.h is the porting contract
-src/core/          VM: heap, class loader, interpreter, threads, strings, app
-src/midp/          the class library (LCDUI, game, RMS, util, io, MIDlet)
-src/gfx/           software rasterizer, bitmap fonts, PNG decoder
-src/zip/           DEFLATE inflate and the ZIP/JAR reader
-src/port/posix/    headless and SDL2 ports
-src/port/android/  NDK port
-src/port/esp32/    ESP-IDF component
-src/port/libretro/ libretro core (RetroArch)
-src/runner/        the runner that ties a port to a MIDlet
-tests/             assertion-based test programs
-tools/             fixture generators and the no-statics gate
-docs/              architecture, porting, compatibility
+include/nj2me/      public headers; nj_port.h is the porting contract
+src/core/           VM: heap, class loader, interpreter, threads, app, save states
+src/midp/           class library: LCDUI, game, RMS, media, M3G, Micro3D, io, util
+src/gfx/            software rasterizer, fonts, PNG/JPEG/GIF codecs
+src/zip/            DEFLATE and the ZIP/JAR reader
+src/port/           headless, SDL2, Android, libretro, ESP32, web, GLES2
+src/runner/         the runner that ties a port to a MIDlet
+web/                the bundled browser shell (HTML/CSS/ES modules)
+tests/              assertion-based test programs and fixtures
+tools/              build, verification and porting tools
+docs/               architecture, porting, compatibility, performance
 ```
 
 ## Documentation
 
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — how the VM works and why
-- [docs/PORTING.md](docs/PORTING.md) — bringing it up on a new board
-- [docs/LIBRETRO.md](docs/LIBRETRO.md) — running the core in RetroArch
-- [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md) — what is implemented, what is not, and the failure modes that name themselves
+| Document | Contents |
+|---|---|
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | how the VM, class library and rasterizer fit together |
+| [docs/PORTING.md](docs/PORTING.md) | bringing the runtime up on a new board or frontend |
+| [docs/WEB.md](docs/WEB.md) | the WebAssembly port: API, persistence, verification |
+| [docs/LIBRETRO.md](docs/LIBRETRO.md) | building and using the RetroArch core |
+| [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md) | what is implemented, what is not, and how titles fail |
+| [docs/CORPUS.md](docs/CORPUS.md) | the 400-title compatibility corpus and its results |
+| [docs/PERFORMANCE.md](docs/PERFORMANCE.md) | measured performance, per platform |
+| [docs/VERIFICATION.md](docs/VERIFICATION.md) | the test ledger: what was run, on which build |
 
 ## Licence
 
-MIT — see [LICENSE](LICENSE).  The bundled test fixtures under `tests/` are
-generated by this repository's own tools and carry the same licence; the game
-JARs that `tools/fetch_test_games.sh` downloads are third-party and are not
-redistributed here.
+Runtime code is [MIT licensed](LICENSE), with attributed third-party MIT code
+covered by the [notice bundle](docs/licenses/third-party-code-MIT.txt). The AMR
+fallback uses [Apache-2.0 licensed numeric data](docs/AMR_DATA_LICENSES.md), and
+the bundled Liberation Mono / Source Han glyph data keeps its
+[SIL OFL 1.1 notices](docs/FONT_LICENSES.md). Codec provenance, source pins and
+implementation notes are recorded in
+[docs/CODEC_PROVENANCE.md](docs/CODEC_PROVENANCE.md). Game JARs used for testing
+are third-party and are not redistributed here.

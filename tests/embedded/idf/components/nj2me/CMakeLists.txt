@@ -69,6 +69,8 @@ idf_component_register(
         "${NJ_ROOT}/src/midp/nj_lib_nokia.c"
         "${NJ_ROOT}/src/midp/nj_lib_fc.c"
         "${NJ_ROOT}/src/gfx/nj_gfx.c"
+        "${NJ_ROOT}/src/gfx/nj_gfx_raster.c"
+        "${NJ_ROOT}/src/gfx/nj_gfx_triangles.c"
         "${NJ_ROOT}/src/gfx/nj_text.c"
         "${NJ_ROOT}/src/gfx/nj_font.c"
         "${NJ_ROOT}/src/gfx/nj_png.c"

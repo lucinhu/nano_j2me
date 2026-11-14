@@ -438,6 +438,25 @@ static int gamecanvas_owns_frame(nj_vm *vm)
            nj_class_is_subclass_of(current->cls, gamecanvas);
 }
 
+/*
+ * Leave a frame.  The outermost frame end is where threads parked by
+ * serviceRepaints() for the frame boundary resume: a title whose own loop is
+ * `repaint(); serviceRepaints(); step();` relies on the call blocking until
+ * the display serviced the frame, and the frame pump is the display here.
+ * Nested frames (a frame pumped while a paint or a blocking native is in
+ * flight) keep the waiters parked until the outermost one returns.
+ */
+static nj_status frame_return(nj_vm *vm, nj_status st)
+{
+    if (vm->in_frame != 0u) {
+        vm->in_frame--;
+    }
+    if (vm->in_frame == 0u) {
+        nj_vm_frame_done(vm);
+    }
+    return st;
+}
+
 nj_status nj_midp_frame(nj_vm *vm)
 {
     nj_event ev;
@@ -476,6 +495,7 @@ nj_status nj_midp_frame(nj_vm *vm)
         return NJ_ERR;
     }
     frame_start = nj_now_ms(vm);
+    vm->in_frame++;
 
     /* ---- input ---- */
     nj_midp_text_input_sync(vm);
@@ -516,7 +536,7 @@ nj_status nj_midp_frame(nj_vm *vm)
         }
     }
     if (!vm->running) {
-        return NJ_OK;
+        return frame_return(vm, NJ_OK);
     }
 
     /* ---- background threads ---- */
@@ -524,7 +544,7 @@ nj_status nj_midp_frame(nj_vm *vm)
         nj_status st = nj_scheduler_frame(vm, 8u);
         if (st != NJ_OK && st != NJ_ERR_HALT && st != NJ_ERR_YIELD &&
             st != NJ_ERR_TIMEOUT) {
-            return st;
+            return frame_return(vm, st);
         }
     }
     if (nj_has_exception(vm)) {
@@ -640,7 +660,7 @@ nj_status nj_midp_frame(nj_vm *vm)
     if (vm->state != NJ_VM_STOPPING) {
         frame_pace(vm, frame_start);
     }
-    return NJ_OK;
+    return frame_return(vm, NJ_OK);
 }
 
 nj_status nj_midp_run(nj_vm *vm)

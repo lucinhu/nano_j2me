@@ -926,6 +926,7 @@ NJFN(mascot_scene_flush)
             nj_ref tex=q->texture?nj_array_get_ref(refs,q->texture-1u):NULL;
             nj_ref env=q->environment?nj_array_get_ref(refs,q->environment-1u):NULL;
             int k;
+            nj_s4 raster_status;
             memset(&mat,0,sizeof(mat));mat.color=q->color;mat.blend=blend;mat.toon=q->toon;
             if(tex) {mat.flags|=NJ_MR_TEXTURED;mat.texture=nj_array_data(tex);mat.texture_len=(nj_s4)nj_array_length(tex);}
             if(q->material&NJ_MASCOT_MAT_COLORKEY)mat.flags|=NJ_MR_COLORKEY;
@@ -941,7 +942,14 @@ NJFN(mascot_scene_flush)
                 v[k].x=q->v[k].x;v[k].y=q->v[k].y;v[k].u=q->v[k].u;v[k].v=q->v[k].v;
                 v[k].light=q->v[k].light;v[k].eu=q->v[k].eu;v[k].ev=q->v[k].ev;
             }
-            if(nj_mascot_raster_draw(gfx.surf,x1,y1,x2,y2,v,&mat)!=NJ_MR_OK) {
+#if NJ_ENABLE_GFX_ACCEL
+            raster_status=nj_mascot_raster_draw_accel(gfx.surf,x1,y1,x2,y2,v,&mat,
+                                                     vm->port ? vm->port->gfx_raster : NULL,
+                                                     vm->port ? vm->port->gfx_raster_ud : NULL);
+#else
+            raster_status=nj_mascot_raster_draw(gfx.surf,x1,y1,x2,y2,v,&mat);
+#endif
+            if(raster_status!=NJ_MR_OK) {
                 m3_scene_reset(vm,self);
                 return nj_throw(vm,"java/lang/IllegalStateException","invalid Micro3D texture storage");
             }

@@ -29,6 +29,9 @@
 #define NJ_BOX_MDAT NJ_MP4_FOURCC('m', 'd', 'a', 't')
 #define NJ_BOX_TRAK NJ_MP4_FOURCC('t', 'r', 'a', 'k')
 #define NJ_BOX_TKHD NJ_MP4_FOURCC('t', 'k', 'h', 'd')
+#define NJ_BOX_MVHD NJ_MP4_FOURCC('m', 'v', 'h', 'd')
+#define NJ_BOX_EDTS NJ_MP4_FOURCC('e', 'd', 't', 's')
+#define NJ_BOX_ELST NJ_MP4_FOURCC('e', 'l', 's', 't')
 #define NJ_BOX_MDIA NJ_MP4_FOURCC('m', 'd', 'i', 'a')
 #define NJ_BOX_MDHD NJ_MP4_FOURCC('m', 'd', 'h', 'd')
 #define NJ_BOX_HDLR NJ_MP4_FOURCC('h', 'd', 'l', 'r')
@@ -36,6 +39,7 @@
 #define NJ_BOX_STBL NJ_MP4_FOURCC('s', 't', 'b', 'l')
 #define NJ_BOX_STSD NJ_MP4_FOURCC('s', 't', 's', 'd')
 #define NJ_BOX_STTS NJ_MP4_FOURCC('s', 't', 't', 's')
+#define NJ_BOX_CTTS NJ_MP4_FOURCC('c', 't', 't', 's')
 #define NJ_BOX_STSC NJ_MP4_FOURCC('s', 't', 's', 'c')
 #define NJ_BOX_STSZ NJ_MP4_FOURCC('s', 't', 's', 'z')
 #define NJ_BOX_STCO NJ_MP4_FOURCC('s', 't', 'c', 'o')
@@ -53,6 +57,18 @@ static nj_u4 nj_mp4_rd32(const nj_u1 *p)
 {
     return ((nj_u4)p[0] << 24) | ((nj_u4)p[1] << 16) |
            ((nj_u4)p[2] << 8) | (nj_u4)p[3];
+}
+
+static nj_u8 nj_mp4_rd64(const nj_u1 *p)
+{
+    return ((nj_u8)nj_mp4_rd32(p) << 32) | nj_mp4_rd32(p + 4u);
+}
+
+/* Avoid implementation-defined unsigned-to-signed conversions. */
+static nj_s8 nj_mp4_rds64(const nj_u1 *p)
+{
+    nj_u8 v = nj_mp4_rd64(p);
+    return v & ((nj_u8)1u << 63) ? -(nj_s8)(~v) - 1 : (nj_s8)v;
 }
 
 static nj_u4 nj_mp4_rd16(const nj_u1 *p)
@@ -142,8 +158,13 @@ typedef struct nj_mp4_cand {
     nj_u4 stco_at, stco_count;
     int   stco64;
     nj_u4 stts_at, stts_count;
+    nj_u4 ctts_at, ctts_count;
+    int   ctts_signed;
     nj_u4 stss_at, stss_count;
     nj_u4 cfg_at, cfg_size;   /* esds DecoderSpecificInfo payload           */
+    int have_elst, timing_feature;
+    nj_u8 edit_empty_duration, edit_segment_duration; /* movie ticks */
+    nj_s8 edit_media_time;                             /* track ticks */
 } nj_mp4_cand;
 
 /* Expandable (7-bit, MSB-continuation) descriptor length, as used by the
@@ -171,72 +192,73 @@ static void nj_mp4_cand_zero(nj_mp4_cand *c)
     memset(c, 0, sizeof(*c));
 }
 
-/* esds: walk the MPEG-4 systems descriptor hierarchy inside an 'esds' box
- * body and report the DecoderSpecificInfo (tag 0x04) payload: the MPEG-4 video
- * VOL or H.263 picture-config bytes, which the decoder needs before its first
- * frame.  Returns 1 when a config was found.  Every length is bounds checked
- * against `end', so a truncated descriptor ends the walk instead of escaping
- * the box. */
+/* The descriptor grammar has only three levels: ES(0x03), DecoderConfig
+ * (0x04), DecoderSpecificInfo(0x05). Each child is bounded by its own parent,
+ * including when another valid descriptor follows that parent in the box. */
+static int nj_mp4_esds_walk(const nj_u1 *b, nj_u4 at, nj_u4 end, int level,
+                            nj_u4 *found_at, nj_u4 *found_size)
+{
+    while (at < end) {
+        nj_u4 tag = b[at++], len, limit, sub;
+        if (!nj_mp4_descr_len(b, end, &at, &len) || len > end - at) return 0;
+        limit = at + len;
+        if (tag == 0x03u) {
+            nj_u1 flags;
+            if (level != 0 || len < 3u) return 0;
+            flags = b[at + 2u];
+            sub = at + 3u;
+            if (flags & 0x80u) {
+                if (limit - sub < 2u) return 0;
+                sub += 2u;
+            }
+            if (flags & 0x40u) {
+                nj_u4 url_size;
+                if (sub == limit) return 0;
+                /* URLlength is ONE byte, not an expandable descriptor size. */
+                url_size = b[sub++];
+                if (url_size > limit - sub) return 0;
+                sub += url_size;
+            }
+            if (flags & 0x20u) {
+                if (limit - sub < 2u) return 0;
+                sub += 2u;
+            }
+            if (!nj_mp4_esds_walk(b, sub, limit, 1, found_at, found_size)) return 0;
+        } else if (tag == 0x04u) {
+            /* objectType(1), streamType(1), buffer(3), two bitrates(4 each). */
+            if (level != 1 || len < 13u ||
+                !nj_mp4_esds_walk(b, at + 13u, limit, 2, found_at, found_size))
+                return 0;
+        } else if (tag == 0x05u) {
+            /* More than one DSI is ambiguous; never return a partial config. */
+            if (level != 2 || !len || *found_size) return 0;
+            *found_at = at;
+            *found_size = len;
+        }
+        at = limit;
+    }
+    return 1;
+}
+
+/* esds FullBox body, version/flags zero. Publish only a complete, unambiguous
+ * DSI payload after validating the entire nest, not the 0x04 fixed fields. */
+static int nj_mp4_esds_parse(const nj_u1 *b, nj_u4 at, nj_u4 end,
+                             nj_u4 *cfg_at, nj_u4 *cfg_size)
+{
+    nj_u4 found_at = 0, found_size = 0;
+    if (!b || !cfg_at || !cfg_size || at > end || end - at < 4u ||
+        nj_mp4_rd32(b + at) != 0u) return -1;
+    if (!nj_mp4_esds_walk(b, at + 4u, end, 0, &found_at, &found_size)) return -1;
+    if (!found_size) return 0;
+    *cfg_at = found_at;
+    *cfg_size = found_size;
+    return 1;
+}
+
 int nj_mp4_esds_find(const nj_u1 *b, nj_u4 at, nj_u4 end,
                      nj_u4 *cfg_at, nj_u4 *cfg_size)
 {
-    nj_u4 p = at + 4u;          /* skip version/flags */
-
-    if (b == NULL || cfg_at == NULL || cfg_size == NULL || p > end) {
-        return 0;
-    }
-    while (p < end) {
-        nj_u4 tag = b[p++];
-        nj_u4 len = 0;
-        nj_u4 dlen;
-        int   used;
-
-        used = nj_mp4_descr_len(b, end, &p, &len);
-        if (used == 0 || p + len > end) {
-            return 0;
-        }
-        dlen = p + len;
-        if (tag == 0x04u) {
-            *cfg_at = p;
-            *cfg_size = len;
-            return 1;
-        }
-        if (tag == 0x03u) {
-            /* ES_Descriptor: ES_ID(2) + flags(1) [+ dependsOn(2)] [+ url(1+len)]
-             * [+ OCR(2)], then nested descriptors. */
-            nj_u4 sub = p + 3u;
-
-            if (p + 3u > dlen) {
-                return 0;
-            }
-            if ((b[p + 2u] & 0x80u) != 0u) sub += 2u;
-            if ((b[p + 2u] & 0x40u) != 0u) {
-                nj_u4 ulen = 0;
-                sub += 1;
-                if (nj_mp4_descr_len(b, dlen, &sub, &ulen) == 0) {
-                    return 0;
-                }
-                sub += ulen;
-            }
-            if ((b[p + 2u] & 0x20u) != 0u) sub += 2u;
-            if (sub > dlen) {
-                return 0;
-            }
-            p = sub;
-            continue;
-        }
-        if (tag == 0x05u) {
-            /* DecoderConfigDescriptor: objectType(1) streamType(1) buffer(3)
-             * maxBitrate(4) avgBitrate(4). */
-            p += 13u;
-            if (p > dlen) {
-                return 0;
-            }
-            continue;
-        }
-        p = dlen;
-    }
-    return 0;
+    return nj_mp4_esds_parse(b, at, end, cfg_at, cfg_size) == 1;
 }
 
 /* stsd: exactly one sample entry.  The entry fourcc is all the selection code
@@ -301,8 +323,8 @@ static int nj_mp4_stsd_video_fields(nj_mp4_cand *c, const nj_u1 *b, nj_u4 size)
             cbody = coff + chdr;
             cblen = ctotal - chdr;
             if (ct == 0x65736473u /* 'esds' */) {
-                (void)nj_mp4_esds_find(b, cbody, cbody + cblen,
-                                       &c->cfg_at, &c->cfg_size);
+                if (nj_mp4_esds_parse(b, cbody, cbody + cblen,
+                                      &c->cfg_at, &c->cfg_size) < 0) return 0;
                 break;
             }
             coff += ctotal;
@@ -357,6 +379,17 @@ static int nj_mp4_parse_stbl(nj_mp4_cand *c, const nj_u1 *b, nj_u4 size,
             }
             c->stts_at = body + 8u;
             c->stts_count = n;
+        } else if (t == NJ_BOX_CTTS) {
+            nj_u4 n, vf;
+            if (c->ctts_at || blen < 8u) return 0;
+            vf = nj_mp4_rd32(b + body);
+            if (vf != 0u && vf != 0x01000000u) return 0;
+            n = nj_mp4_rd32(b + body + 4u);
+            if (n > NJ_MP4_MAX_ENTRIES || (nj_u8)8u + (nj_u8)n * 8u != blen)
+                return 0;
+            c->ctts_at = body + 8u;
+            c->ctts_count = n;
+            c->ctts_signed = (vf != 0u);
         } else if (t == NJ_BOX_STSC) {
             nj_u4 n;
             if (c->stsc_at != 0u || blen < 8u) {
@@ -491,7 +524,44 @@ static int nj_mp4_parse_mdia(nj_mp4_cand *c, const nj_u1 *b, nj_u4 size,
     return 1;
 }
 
-/* trak: tkhd dimensions plus mdia. */
+/* elst v0/v1: one media segment, optionally preceded by one empty edit.
+ * Unsupported but structurally valid shapes are recorded as FEATURE so track
+ * selection cannot silently discard the edits and play on the wrong timeline. */
+static int nj_mp4_parse_elst(nj_mp4_cand *c, const nj_u1 *b,
+                              nj_u4 body, nj_u4 len)
+{
+    nj_u4 vf, n, esz, i;
+    if (c->have_elst || len < 8u) return 0;
+    c->have_elst = 1;
+    vf = nj_mp4_rd32(b + body);
+    if (vf != 0u && vf != 0x01000000u) return 0;
+    n = nj_mp4_rd32(b + body + 4u);
+    esz = vf ? 20u : 12u;
+    if (n > NJ_MP4_MAX_ENTRIES || 8u + (nj_u8)n * esz != len) return 0;
+    if (!n || n > 2u) c->timing_feature = 1;
+    for (i = 0; i < n; i++) {
+        const nj_u1 *p = b + body + 8u + i * esz;
+        nj_u8 duration = vf ? nj_mp4_rd64(p) : nj_mp4_rd32(p);
+        nj_s8 media_time;
+        nj_u4 rate = nj_mp4_rd32(p + esz - 4u);
+        if (vf) media_time = nj_mp4_rds64(p + 8u);
+        else {
+            nj_u4 raw = nj_mp4_rd32(p + 4u);
+            media_time = raw & 0x80000000u ? (nj_s8)raw - 4294967296LL : (nj_s8)raw;
+        }
+        if (media_time < -1) return 0;
+        if (!duration || rate != 0x00010000u) c->timing_feature = 1;
+        if (n == 2u && i == 0u && media_time == -1) {
+            c->edit_empty_duration = duration;
+        } else if (i + 1u == n && media_time >= 0) {
+            c->edit_media_time = media_time;
+            c->edit_segment_duration = duration;
+        } else c->timing_feature = 1;
+    }
+    return 1;
+}
+
+/* trak: tkhd dimensions, mdia and a bounded edit-list container. */
 static int nj_mp4_parse_trak(nj_mp4_cand *c, const nj_u1 *b, nj_u4 size,
                              nj_u4 off, nj_u4 end)
 {
@@ -526,6 +596,15 @@ static int nj_mp4_parse_trak(nj_mp4_cand *c, const nj_u1 *b, nj_u4 size,
             if (!nj_mp4_parse_mdia(c, b, size, body, body + blen)) {
                 return 0;
             }
+        } else if (t == NJ_BOX_EDTS) {
+            nj_u4 pos = body, limit = body + blen;
+            while (pos < limit) {
+                nj_u4 et, eh, es;
+                if (!nj_mp4_box(b, size, pos, limit, &et, &eh, &es)) return 0;
+                if (et == NJ_BOX_ELST && !nj_mp4_parse_elst(c, b, pos + eh, es - eh))
+                    return 0;
+                pos += es;
+            }
         }
         off += total;
     }
@@ -538,7 +617,8 @@ static int nj_mp4_parse_trak(nj_mp4_cand *c, const nj_u1 *b, nj_u4 size,
         if (c->audio_handler) {
             return nj_mp4_stsd_audio_fields(c, b, size);
         }
-        return 0;
+        /* An unrelated metadata handler need not use either sample layout. */
+        return 1;
     }
     return 1;
 }
@@ -657,25 +737,41 @@ static int nj_mp4_select(nj_mp4 *m, const nj_mp4_cand *c, int kind)
     m->stco64 = c->stco64;
     m->stts_at = c->stts_at;
     m->stts_count = c->stts_count;
+    m->ctts_at = c->ctts_at;
+    m->ctts_count = c->ctts_count;
+    m->ctts_signed = c->ctts_signed;
     m->stss_at = c->stss_at;
     m->cfg_at = c->cfg_at;
     m->cfg_size = c->cfg_size;
     m->stss_count = c->stss_count;
 
-    /* stts runs must cover every sample exactly. */
-    total = 0;
-    for (i = 0; i < c->stts_count; i++) {
-        nj_u4 n = nj_mp4_rd32(m->data + c->stts_at + i * 8u);
-        if (n == 0u) {
-            return 0;
+    /* stts runs cover every sample exactly. The legacy DTS field is uint32;
+     * refuse an unrepresentable timeline instead of wrapping that cursor. */
+    {
+        nj_u8 ticks = 0;
+        total = 0;
+        for (i = 0; i < c->stts_count; i++) {
+            nj_u4 n = nj_mp4_rd32(m->data + c->stts_at + i * 8u);
+            nj_u4 delta = nj_mp4_rd32(m->data + c->stts_at + i * 8u + 4u);
+            total += n;
+            ticks += (nj_u8)n * delta;
+            if (!n || total > c->stsz_count || ticks > 0xffffffffu) return 0;
         }
-        total += n;
-        if (total > c->stsz_count) {
-            return 0;
-        }
+        if (total != c->stsz_count) return 0;
+        m->presentation_duration = c->duration ? c->duration : ticks;
+        m->presentation_start = 0;
+        m->presentation_end = (nj_s8)m->presentation_duration;
     }
-    if (total != c->stsz_count) {
-        return 0;
+    /* ctts has the same sample coverage, but offsets are unsigned in v0 and
+     * signed in v1. Empty/zero-length/over- or under-covering runs are damaged. */
+    if (c->ctts_at) {
+        total = 0;
+        for (i = 0; i < c->ctts_count; i++) {
+            nj_u4 n = nj_mp4_rd32(m->data + c->ctts_at + i * 8u);
+            total += n;
+            if (!n || total > c->stsz_count) return 0;
+        }
+        if (total != c->stsz_count) return 0;
     }
 
     /* stsc: first entry starts at chunk 1, each later run starts after the
@@ -767,6 +863,61 @@ static int nj_mp4_select(nj_mp4 *m, const nj_mp4_cand *c, int kind)
     return 1;
 }
 
+/* Scale a nonnegative movie boundary without a 64x32 intermediate overflow.
+ * Leave room for every representable DTS+CTTS when adding the mapped offset. */
+static int nj_mp4_edit_ticks(nj_u8 value, nj_u4 src, nj_u4 dst, nj_s8 *out)
+{
+    const nj_u8 limit = 9223372036854775807ULL - 8589934590ULL;
+    nj_u8 whole = value / src, part = ((value % src) * dst) / src, ticks;
+    if (whole > limit / dst) return 0;
+    ticks = whole * dst;
+    if (part > limit - ticks) return 0;
+    *out = (nj_s8)(ticks + part);
+    return 1;
+}
+
+static int nj_mp4_timeline(nj_mp4 *m, const nj_mp4_cand *c)
+{
+    nj_u8 end;
+    if (!c->have_elst) return NJ_MP4_OK;
+    if (c->timing_feature || !m->movie_timescale ||
+        c->edit_media_time > 4294967295LL ||
+        c->edit_segment_duration > ~(nj_u8)0 - c->edit_empty_duration)
+        return NJ_MP4_ERR_FEATURE;
+    end = c->edit_empty_duration + c->edit_segment_duration;
+    if (!nj_mp4_edit_ticks(c->edit_empty_duration, m->movie_timescale,
+                          m->timescale, &m->presentation_start) ||
+        !nj_mp4_edit_ticks(end, m->movie_timescale, m->timescale, &m->presentation_end))
+        return NJ_MP4_ERR_FEATURE;
+    m->has_edit = 1;
+    m->presentation_duration = (nj_u8)m->presentation_end;
+    m->presentation_offset = m->presentation_start - c->edit_media_time;
+    return NJ_MP4_OK;
+}
+
+static int nj_mp4_movie_scale(nj_mp4 *m, nj_u4 off, nj_u4 end)
+{
+    int have = 0;
+    while (off < end) {
+        nj_u4 t, h, n;
+        if (!nj_mp4_box(m->data, m->size, off, end, &t, &h, &n)) return 0;
+        if (t == NJ_BOX_MVHD) {
+            const nj_u1 *p = m->data + off + h;
+            nj_u4 vf, len = n - h;
+            if (have || len < 20u) return 0;
+            have = 1;
+            vf = nj_mp4_rd32(p);
+            if (vf == 0u) m->movie_timescale = nj_mp4_rd32(p + 12u);
+            else if (vf == 0x01000000u && len >= 32u)
+                m->movie_timescale = nj_mp4_rd32(p + 20u);
+            else return 0;
+            if (!m->movie_timescale) return 0;
+        }
+        off += n;
+    }
+    return 1;
+}
+
 /*
  * Top level: require ftyp first (the sniffer in nj_lib_media.c uses the same
  * marker), collect 'mdat' payload ranges, and find the one 'moov'.  A file
@@ -825,7 +976,8 @@ static int nj_mp4_open_kind(nj_mp4 *m, const void *data, nj_u4 size, int kind)
         }
         off += total;
     }
-    if (!have_ftyp || moov_off == 0u || m->mdat_count == 0) {
+    if (!have_ftyp || moov_off == 0u || m->mdat_count == 0 ||
+        !nj_mp4_movie_scale(m, moov_off, moov_end)) {
         return NJ_MP4_ERR_FORMAT;
     }
 
@@ -844,7 +996,9 @@ static int nj_mp4_open_kind(nj_mp4 *m, const void *data, nj_u4 size, int kind)
             if (type == NJ_BOX_TRAK) {
                 nj_mp4_cand c;
                 nj_mp4_cand_zero(&c);
-                if (nj_mp4_parse_trak(&c, b, size, off + hdr, off + total)) {
+                if (!nj_mp4_parse_trak(&c, b, size, off + hdr, off + total))
+                    return NJ_MP4_ERR_FORMAT;
+                {
                     if (c.video_handler && nj_mp4_codec_is_h263(c.codec)) {
                         if (!have_best) {
                             best = c;
@@ -865,10 +1019,12 @@ static int nj_mp4_open_kind(nj_mp4 *m, const void *data, nj_u4 size, int kind)
             if (!nj_mp4_select(m, &best, NJ_MP4_TRACK_VIDEO)) {
                 return NJ_MP4_ERR_FORMAT;
             }
+            if (nj_mp4_timeline(m, &best) != NJ_MP4_OK) return NJ_MP4_ERR_FEATURE;
         } else if (have_mp4v) {
             if (!nj_mp4_select(m, &mp4v, NJ_MP4_TRACK_VIDEO)) {
                 return NJ_MP4_ERR_FORMAT;
             }
+            if (nj_mp4_timeline(m, &mp4v) != NJ_MP4_OK) return NJ_MP4_ERR_FEATURE;
         } else {
             return NJ_MP4_ERR_NO_VIDEO;
         }
@@ -884,7 +1040,9 @@ static int nj_mp4_open_kind(nj_mp4 *m, const void *data, nj_u4 size, int kind)
             if (type == NJ_BOX_TRAK) {
                 nj_mp4_cand c;
                 nj_mp4_cand_zero(&c);
-                if (nj_mp4_parse_trak(&c, b, size, off + hdr, off + total)) {
+                if (!nj_mp4_parse_trak(&c, b, size, off + hdr, off + total))
+                    return NJ_MP4_ERR_FORMAT;
+                {
                     if (c.audio_handler) {
                         if (c.codec == NJ_MP4_CODEC_SAMR) {
                             if (!have_audio) {
@@ -903,6 +1061,7 @@ static int nj_mp4_open_kind(nj_mp4 *m, const void *data, nj_u4 size, int kind)
             if (!nj_mp4_select(m, &audio_cand, NJ_MP4_TRACK_AUDIO)) {
                 return NJ_MP4_ERR_FORMAT;
             }
+            if (nj_mp4_timeline(m, &audio_cand) != NJ_MP4_OK) return NJ_MP4_ERR_FEATURE;
         } else if (audio_other != 0) {
             return NJ_MP4_ERR_AUDIO_CODEC;
         } else {
@@ -930,6 +1089,15 @@ int nj_mp4_open_audio(nj_mp4 *mp4, const void *data, nj_u4 size)
     return nj_mp4_open_kind(mp4, data, size, NJ_MP4_TRACK_AUDIO);
 }
 
+static void nj_mp4_ctts_run(nj_mp4 *m)
+{
+    nj_u4 raw;
+    m->ctts_left = nj_mp4_rd32(m->data + m->ctts_at + m->ctts_idx * 8u);
+    raw = nj_mp4_rd32(m->data + m->ctts_at + m->ctts_idx * 8u + 4u);
+    m->composition_offset = m->ctts_signed && (raw & 0x80000000u) ?
+        (nj_s8)raw - 4294967296LL : (nj_s8)raw;
+}
+
 void nj_mp4_rewind(nj_mp4 *m)
 {
     nj_u4 count;
@@ -946,6 +1114,10 @@ void nj_mp4_rewind(nj_mp4 *m)
     m->stts_idx = 0u;
     m->stts_left = 0u;
     m->stss_idx = 0u;
+    m->ctts_idx = 0u;
+    m->ctts_left = 0u;
+    m->composition_offset = 0;
+    if (m->ctts_count) nj_mp4_ctts_run(m);
 
     count = nj_mp4_rd32(m->data + m->stts_at);
     m->stts_left = count;
@@ -997,7 +1169,8 @@ int nj_mp4_next(nj_mp4 *m, nj_mp4_sample *s)
     s->offset = off;
     s->size = size;
     s->dts = m->dts;
-    if (m->stts_left == 0u) {
+    s->pts = (nj_s8)m->dts + m->composition_offset + m->presentation_offset;
+    if (m->stts_left == 0u || (m->ctts_count && !m->ctts_left)) {
         return NJ_MP4_ERR_FORMAT;
     }
     s->duration = m->delta;
@@ -1018,6 +1191,13 @@ int nj_mp4_next(nj_mp4 *m, nj_mp4_sample *s)
     m->in_chunk++;
     m->chunk_used += size;
     m->dts += m->delta;
+    if (m->ctts_count) {
+        m->ctts_left--;
+        if (!m->ctts_left && m->ctts_idx + 1u < m->ctts_count) {
+            m->ctts_idx++;
+            nj_mp4_ctts_run(m);
+        }
+    }
     m->stts_left--;
     if (m->stts_left == 0u && m->stts_idx + 1u < m->stts_count) {
         m->stts_idx++;

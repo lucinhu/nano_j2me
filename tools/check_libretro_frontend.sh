@@ -11,6 +11,9 @@
 #
 # Environment:
 #   CORE   libretro core path (default: build/libretro/nano_j2me_libretro.so)
+#   HARNESS
+#          harness executable path (default: build/test_libretro_frontend;
+#          override it when this checkout's build/ belongs to another build)
 #   CC     C compiler (default: cc)
 #   HARNESS_CFLAGS
 #          extra compile and link flags for the harness (the sanitizer build
@@ -36,6 +39,26 @@
 #                  cadence RetroArch uses; steps 1-6 run the tight loop
 #   9. heap        automatic is the registered default and the size it resolves
 #                  to is logged at load
+#  10. bitmask     keychardemo with GET_INPUT_BITMASKS accepted: the core must
+#                  ask for RETRO_DEVICE_ID_JOYPAD_MASK and must not poll each
+#                  button separately; the fixture prints one KEYCHAR line per
+#                  delivered key, proving exactly-once delivery
+#  11. fallback    same fixture with GET_INPUT_BITMASKS rejected: the core must
+#                  fall back to per-button polls, still delivering eight keys
+#                  exactly once
+#  12. locale      FeatureDemo reports microedition.locale, both with the
+#                  default (auto -> en-US) and with nano_j2me_locale=ja-JP
+#  13. screen      FeatureDemo paints 176x208, 128x160 and 320x240 canvases;
+#                  AV geometry, Canvas size and non-black pixels are checked
+#  14. rumble      FeatureDemo calls Display.vibrate(400) and then vibrate(0):
+#                  the core must negotiate GET_RUMBLE_INTERFACE, drive only the
+#                  weak motor at full strength, and send a zero stop; the same
+#                  run combines it with nano_j2me_screen=320x240 rotation=90
+#  15. nokia       NokiDemo drives the Nokia DeviceControl path
+#                  (startVibra/stopVibra/vibrate) and must reach the same
+#                  rumble interface
+#  16. no-rumble   step 12 runs with the frontend refusing the interface and
+#                  asserts the core logs no rumble error/warning ("silent no-op")
 #
 # Exit codes: 0 all checks passed, 1 at least one check failed, 2 setup error
 # (missing core/fixture, compile failure, nothing to run).
@@ -51,7 +74,7 @@ cd "$ROOT" || exit 2
 CC=${CC:-cc}
 HARNESS_CFLAGS=${HARNESS_CFLAGS:-}
 CORE=${CORE:-$ROOT/build/libretro/nano_j2me_libretro.so}
-HARNESS=$ROOT/build/test_libretro_frontend
+HARNESS=${HARNESS:-$ROOT/build/test_libretro_frontend}
 FIXTURES=$ROOT/tests/fixtures
 
 case $CORE in
@@ -112,6 +135,28 @@ fi
       sed 's/^/   /' "$WORK/build.log"
    fi
    say ""
+
+# The locale/screen/rumble checks need a MIDlet that reports what only the Java
+# side can see and that keeps running long enough for vibration to be observed.
+# It is built into the temporary directory: no jar in tests/fixtures changes.
+FEATURE_JAR=
+say "== build feature fixture =="
+if command -v javac >/dev/null 2>&1 && command -v jar >/dev/null 2>&1 &&
+      command -v python3 >/dev/null 2>&1 &&
+      [ -f "$ROOT/tools/make_featuredemo_jar.sh" ]; then
+   FEATURE_JAR=$WORK/featuredemo.jar
+   if bash "$ROOT/tools/make_featuredemo_jar.sh" "$FEATURE_JAR" \
+         >"$WORK/feature-build.log" 2>&1; then
+      say "OK FeatureDemo fixture built ($FEATURE_JAR)"
+   else
+      say "SKIP FeatureDemo fixture: build failed"
+      tail -n 20 "$WORK/feature-build.log" | sed 's/^/   /'
+      FEATURE_JAR=
+   fi
+else
+   say "SKIP FeatureDemo fixture: need javac, jar and python3"
+fi
+say ""
 
 # run_one NAME -- harness args...
 # Runs the harness once, prints PASS/FAIL plus a diagnostic tail on failure.
@@ -289,6 +334,70 @@ if [ -f "$FIXTURES/loopdemo.jar" ]; then
    fi
 else
    skip "heap automatic: missing $FIXTURES/loopdemo.jar"
+fi
+
+# Input bitmasks.  The fixture prints exactly one KEYCHAR line per key that
+# reaches the MIDlet: eight presses must produce eight lines.  A core that
+# delivers a key twice prints more, and one that never sees the mask prints
+# fewer.  The second run refuses the environment call, so the per-button
+# fallback is covered by the same fixture and the same count.
+if [ -f "$FIXTURES/keychardemo.jar" ]; then
+   run_one "input bitmasks accepted: mask queried, keys delivered once (120 frames)" \
+      --core "$CORE" --jar "$FIXTURES/keychardemo.jar" --frames 120 \
+      --input-bitmask --expect-keychars 8 \
+      --save-dir "$WORK/save-bitmask"
+   run_one "input bitmasks rejected: per-button fallback, keys delivered once (120 frames)" \
+      --core "$CORE" --jar "$FIXTURES/keychardemo.jar" --frames 120 \
+      --input-check --expect-keychars 8 \
+      --save-dir "$WORK/save-bitmask-fallback"
+else
+   skip "input bitmasks: missing $FIXTURES/keychardemo.jar"
+fi
+
+if [ -n "$FEATURE_JAR" ]; then
+   # Default locale (auto) has to keep the historic en-US property, and the
+   # default canvas has to stay 240x320.  This run also refuses the rumble
+   # interface, so the core must log nothing about it.
+   run_one "locale auto -> en-US, default canvas, no rumble interface is silent" \
+      --core "$CORE" --jar "$FEATURE_JAR" --frames 120 \
+      --expect-locale en-US --expect-canvas 240x320 \
+      --save-dir "$WORK/save-feature-default"
+
+   run_one "locale option ja-JP reaches microedition.locale" \
+      --core "$CORE" --jar "$FEATURE_JAR" --frames 120 \
+      --set nano_j2me_locale=ja-JP --expect-locale ja-JP \
+      --save-dir "$WORK/save-feature-locale"
+
+   for SIZE in 176x208 128x160 320x240; do
+      run_one "screen option $SIZE: AV geometry, Canvas size, painted pixels" \
+         --core "$CORE" --jar "$FEATURE_JAR" --frames 60 \
+         --set "nano_j2me_screen=$SIZE" --expect-screen "$SIZE" \
+         --expect-canvas "$SIZE" --visual-required \
+         --save-dir "$WORK/save-feature-screen-$SIZE"
+   done
+
+   # 1200 paced frames (about 1.2 s) outlast the fixture's 400 ms buzz and the
+   # explicit vibrate(0) it issues after 600 ms.  Rotation is combined here so
+   # the rotated AV geometry is checked against a non-default canvas too.
+   run_one "rumble weak motor + stop, with screen 320x240 rotated 90" \
+      --core "$CORE" --jar "$FEATURE_JAR" --frames 1200 --pace-us 1000 \
+      --set nano_j2me_screen=320x240 --set nano_j2me_rotation=90 \
+      --rotation 90 --expect-screen 320x240 --expect-canvas 320x240 \
+      --rumble-check --visual-required --static-ok \
+      --save-dir "$WORK/save-feature-rumble"
+else
+   skip "locale/screen/rumble checks: no FeatureDemo fixture"
+fi
+
+# The Nokia DeviceControl wrapper is a separate Java-side entry point into the
+# same port hook, so exercise it with the fixture that already calls
+# startVibra/stopVibra/vibrate.
+if [ -f "$FIXTURES/nokiademo.jar" ]; then
+   run_one "Nokia DeviceControl startVibra/stopVibra/vibrate reaches rumble" \
+      --core "$CORE" --jar "$FIXTURES/nokiademo.jar" --frames 60 \
+      --rumble-check --save-dir "$WORK/save-nokia-rumble"
+else
+   skip "Nokia DeviceControl rumble: missing tests/fixtures/nokiademo.jar"
 fi
 
 say ""

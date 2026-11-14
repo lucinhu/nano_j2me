@@ -27,11 +27,14 @@
  * offset: the input is a game loader's file, so a wrong offset is a read of
  * somebody else's memory.
  *
- * Supported: ftyp, moov/mvhd, trak/tkhd, mdia/mdhd/hdlr, minf/stbl with stsd
- * (one visual entry), stts, stsc, stsz, stco/co64 and stss.  Fragmented
- * movies, multiple sample descriptions, edit lists with media time mapping and
- * external data references are refused.  B-frames are not a container
- * problem here (the sample table is still linear); a 'ctts' box is ignored.
+ * Supported: ftyp, moov/mvhd, trak/tkhd, mdia/mdhd/hdlr, minf/stbl with stsd,
+ * stts, ctts v0/v1, stsc, stsz, stco/co64 and stss. ELST v0/v1 supports one
+ * rate-1 media segment, optionally preceded by one empty edit; other edit
+ * shapes/rates return FEATURE. Samples stay in decode order, with signed PTS
+ * mapped onto the presentation timeline. Negative preroll PTS is retained;
+ * the caller must present/crop to the published presentation window. Container
+ * B-frame timestamps do not imply the selected video decoder supports B-frames.
+ * Parsing allocates nothing and borrows the immutable file for its lifetime.
  */
 #ifndef NJ_MP4_H
 #define NJ_MP4_H
@@ -74,12 +77,15 @@ extern "C" {
 #define NJ_MP4_TRACK_VIDEO  0
 #define NJ_MP4_TRACK_AUDIO  1
 
-/* One sample.  `offset' is absolute in the caller's buffer, `dts' is in the
- * track's media timescale (see mp4->timescale), `key' is 1 for a sync sample. */
+/* One sample in decode order. `offset' is absolute in the caller's buffer.
+ * DTS is the original decode time starting at zero. PTS includes CTTS and ELST
+ * and can be negative or nonmonotonic. All timestamps and duration use the
+ * track's media timescale. `key' is 1 for a sync sample. */
 typedef struct nj_mp4_sample {
     nj_u4 offset;
     nj_u4 size;
     nj_u4 dts;
+    nj_s8 pts;             /* signed presentation time, in track ticks       */
     nj_u4 duration;
     nj_u1 key;
 } nj_mp4_sample;
@@ -90,7 +96,18 @@ typedef struct nj_mp4 {
 
     /* Selected track. */
     nj_u4        timescale;      /* mdhd timescale, nonzero                  */
-    nj_u4        duration;       /* track duration in timescale units       */
+    nj_u4        duration;       /* original mdhd duration in track ticks   */
+    nj_u4        movie_timescale;/* mvhd scale; required only for edit lists */
+    int          has_edit;
+    /* Mapped presentation timeline, also in track ticks. The visible media
+     * window is [start,end); samples outside it remain available as preroll.
+     * Duration includes a leading empty edit. Movie edit boundaries are
+     * rescaled with floor (<1 track tick error). Without edits: [0,duration).
+     * pts = dts + ctts_offset + presentation_offset, never clamped to zero. */
+    nj_s8        presentation_offset;
+    nj_s8        presentation_start;
+    nj_s8        presentation_end;
+    nj_u8        presentation_duration;
     nj_u4        width;          /* video only; 0 on an audio track         */
     nj_u4        height;         /* video only                              */
     nj_u4        fps;            /* video only; rounded average, 0 unknown  */
@@ -112,6 +129,9 @@ typedef struct nj_mp4 {
     int          stco64;
     nj_u4        stts_at;
     nj_u4        stts_count;
+    nj_u4        ctts_at;        /* optional composition-offset run table    */
+    nj_u4        ctts_count;
+    int          ctts_signed;    /* version 1 offsets are signed             */
     nj_u4        stss_at;        /* 0 when not present (every sample sync)  */
     nj_u4        stss_count;
 
@@ -140,6 +160,9 @@ typedef struct nj_mp4 {
     nj_u4        delta;
     nj_u4        stts_idx;
     nj_u4        stts_left;
+    nj_u4        ctts_idx;
+    nj_u4        ctts_left;
+    nj_s8        composition_offset;
     nj_u4        stss_idx;
 } nj_mp4;
 
@@ -182,7 +205,7 @@ int nj_mp4_open_audio(nj_mp4 *mp4, const void *data, nj_u4 size);
 int nj_mp4_open(nj_mp4 *mp4, const void *data, nj_u4 size);
 
 /*
- * Find the DecoderSpecificInfo payload (tag 0x04) inside an 'esds' box body:
+ * Find the DecoderSpecificInfo payload (tag 0x05) inside an 'esds' box body:
  * `at' is the first byte of the box body (after the 8-byte box header) and
  * `end' the byte after it.  Returns 1 and fills *cfg_at / *cfg_size with the
  * payload location, or 0 when the box holds no decoder config.  Exposed so the

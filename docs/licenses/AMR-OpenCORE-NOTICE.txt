@@ -1,0 +1,108 @@
+AMR-NB numeric data attribution for nano_j2me
+
+Upstream: https://github.com/BelledonneCommunications/opencore-amr
+Revision: 3b67218fb8efb776bcd79e7445774e02d778321d
+License: Apache License, Version 2.0; see AMR-Apache-2.0.txt.
+
+Modified by nano_j2me: numeric constants were extracted into
+ tools/data/amr-opencore.json; generated data converts Q formats, selects
+ columns and reconstructs packet maps for the local decoder frame layout.
+No OpenCORE decoder implementation is included by this data import.
+These data are separately licensed; the project MIT license does not replace
+or remove these Apache terms or the attribution below.
+
+Original notices from the imported AMR-NB source files:
+
+/* ------------------------------------------------------------------
+ * Copyright (C) 1998-2009 PacketVideo
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either
+ * express or implied.
+ * See the License for the specific language governing permissions
+ * and limitations under the License.
+ * -------------------------------------------------------------------
+ */
+/****************************************************************************************
+Portions of this file are derived from the following 3GPP standard:
+
+    3GPP TS 26.073
+    ANSI-C code for the Adaptive Multi-Rate (AMR) speech codec
+    Available from http://www.3gpp.org
+
+(C) 2004, 3GPP Organizational Partners (ARIB, ATIS, CCSA, ETSI, TTA, TTC)
+Permission to distribute, modify and use this file under the standard license
+terms listed above has been obtained from the copyright holder.
+****************************************************************************************/
+
+The post_pro.cpp input carries the following later PacketVideo notice:
+
+/* ------------------------------------------------------------------
+ * Copyright (C) 1998-2010 PacketVideo
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either
+ * express or implied.
+ * See the License for the specific language governing permissions
+ * and limitations under the License.
+ * -------------------------------------------------------------------
+ */
+/****************************************************************************************
+Portions of this file are derived from the following 3GPP standard:
+
+    3GPP TS 26.073
+    ANSI-C code for the Adaptive Multi-Rate (AMR) speech codec
+    Available from http://www.3gpp.org
+
+(C) 2004, 3GPP Organizational Partners (ARIB, ATIS, CCSA, ETSI, TTA, TTC)
+Permission to distribute, modify and use this file under the standard license
+terms listed above has been obtained from the copyright holder.
+****************************************************************************************/
+
+Relevant attribution from OpenCORE's opencore/NOTICE follows. Other sections
+concern unimported MPEG-4/AAC/AMR-WB, snprintf, platform headers or other code
+and do not apply to this AMR-NB numeric-data import.
+
+/* ------------------------------------------------------------------
+ * Copyright (C) 2009 PacketVideo
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either
+ * express or implied.
+ * See the License for the specific language governing permissions
+ * and limitations under the License.
+ * -------------------------------------------------------------------
+ */
+
+-------------------------------------------------------------------------------
+Portions of this file are derived from the following 3GPP standard:
+ 
+    3GPP TS 26.073
+    ANSI-C code for the Adaptive Multi-Rate (AMR) speech codec
+    Available from http://www.3gpp.org
+ 
+(C) 2004, 3GPP Organizational Partners (ARIB, ATIS, CCSA, ETSI, TTA, TTC)
+Permission to distribute, modify and use this file under the standard license
+terms listed above has been obtained from the copyright holder.
+-------------------------------------------------------------------------------

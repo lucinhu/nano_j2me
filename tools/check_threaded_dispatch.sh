@@ -39,6 +39,7 @@ SRC=("$ROOT"/src/core/*.c "$ROOT"/src/midp/*.c "$ROOT"/src/gfx/*.c
      "$ROOT"/src/zip/*.c "$ROOT/src/runner/nj_run.c"
      "$ROOT/src/client/nj_library.c" "$ROOT/src/client/nj_client_config.c"
      "$ROOT/src/client/nj_client_ui.c"
+     "$ROOT/src/port/common/nj_system_amr.c"
      "$ROOT/src/port/posix/nj_port_headless.c" "$ROOT/apps/nj2me_main.c")
 WORK="$(mktemp -d)" || exit 1
 [ -d "$WORK" ] && [ ! -L "$WORK" ] || exit 1

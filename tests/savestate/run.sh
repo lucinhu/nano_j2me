@@ -69,7 +69,7 @@ n_field="$(printf '%s\n' "$save_out" | grep -c 'FIELD before=')"
 [ "$n_field" = 1 ]; say $? "the MIDlet started once and printed its banner ($n_field banner(s))"
 
 case "$save_out" in
-    *"saved state to $STATE after 5 frame(s)"*)
+    *"saved state to $STATE at frame 5"*)
         say 0 "the snapshot was written at the requested frame" ;;
     *) say 1 "the runner did not report writing the snapshot at frame 5" ;;
 esac

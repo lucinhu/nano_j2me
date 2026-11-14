@@ -230,7 +230,11 @@ NJFN(thread_start)
             return st;
         }
     }
-    t->state = NJ_THREAD_RUNNING;
+    /* nj_thread_start() already parked a thread whose synchronized run()
+     * monitor was held elsewhere; do not wake it from under its monitor. */
+    if (t->state != NJ_THREAD_BLOCKED) {
+        t->state = NJ_THREAD_RUNNING;
+    }
     return NJ_OK;
 }
 

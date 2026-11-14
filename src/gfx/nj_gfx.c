@@ -440,6 +440,10 @@ void nj_gfx_init(nj_gfx *g, nj_surface *surf)
     g->use_xor = 0;
     g->fill_rect = NULL;
     g->fill_ud = NULL;
+#if NJ_ENABLE_GFX_ACCEL
+    g->accel = NULL;
+    g->accel_ud = NULL;
+#endif
     g->font = nj_font_builtin(NJ_FONT_SIZE_MEDIUM, NJ_FONT_STYLE_PLAIN);
 
     if (surf) {
@@ -461,6 +465,21 @@ void nj_gfx_init(nj_gfx *g, nj_surface *surf)
         g->clip_w = 0;
         g->clip_h = 0;
     }
+}
+
+void nj_gfx_set_accel(nj_gfx *g, const nj_gfx_accel *backend, void *ud)
+{
+#if NJ_ENABLE_GFX_ACCEL
+    if (g) {
+        g->accel = backend && backend->version == NJ_GFX_ACCEL_VERSION
+                 ? backend : NULL;
+        g->accel_ud = g->accel ? ud : NULL;
+    }
+#else
+    (void)g;
+    (void)backend;
+    (void)ud;
+#endif
 }
 
 int nj_gfx_dev_x(const nj_gfx *g, int x)
@@ -1182,6 +1201,14 @@ void nj_gfx_fill_rect(nj_gfx *g, int x, int y, int w, int h)
     if (!nj_box_from_user(g, x, y, w, h, &bx0, &by0, &bx1, &by1)) {
         return;
     }
+#if NJ_ENABLE_GFX_ACCEL
+    if (g->accel && g->accel->fill_rect &&
+        g->accel->fill_rect(g->accel_ud, g, (int)bx0, (int)by0,
+                            (int)(bx1-bx0+1), (int)(by1-by0+1))
+            == NJ_GFX_ACCEL_DONE) {
+        return;
+    }
+#endif
     if (g->fill_rect && !g->use_xor &&
         (g->blend != NJ_BLEND_SRC_OVER || (g->color >> 24) == 255u) &&
         g->fill_rect(g->fill_ud, g->surf, (int)bx0, (int)by0,
@@ -1689,7 +1716,8 @@ static nj_u4 nj_src_pixel(const nj_u1 *base, nj_s8 off, int format)
              | ((nj_u4)base[off + 1] << 8)
              | (nj_u4)base[off + 2];
     }
-    return nj_word_get(base, off / 4);
+    /* off is a byte offset; an odd row pitch must not round it down. */
+    return nj_word_get(base + off, 0);
 }
 
 /* Destination pixel at `p` from 0xAARRGGBB, in the surface's own format. */
@@ -1962,6 +1990,9 @@ static void nj_region_draw(nj_gfx *g, const nj_u1 *src, nj_s8 src_stride_bytes,
 {
     int tw, th, bpp, src_bpp;
     int opaque = rop == NJ_ROP_OPAQUE;
+#if NJ_ENABLE_GFX_ACCEL
+    int requested_rop = rop;
+#endif
     nj_s8 X0, Y0, cx0, cy0, cx1, cy1, X, Y;
 
     if (!g || !nj_surface_ok(g->surf) || !src) {
@@ -2003,6 +2034,36 @@ static void nj_region_draw(nj_gfx *g, const nj_u1 *src, nj_s8 src_stride_bytes,
     if (cx0 > cx1 || cy0 > cy1) {
         return;
     }
+
+#if NJ_ENABLE_GFX_ACCEL
+    if (g->accel && g->accel->blit) {
+        nj_gfx_blit command;
+        command.pixels = src;
+        command.stride = src_stride_bytes;
+        command.format = src_format;
+        command.mask = mask;
+        command.mask_width = mask_stride;
+        command.mask_height = mask_height;
+        command.sx = sx;
+        command.sy = sy;
+        command.width = sw;
+        command.height = sh;
+        command.transform = transform;
+        command.rop = requested_rop;
+        command.xor_enabled = xor_on;
+        command.xor_color = xor_argb;
+        command.dx = dx;
+        command.dy = dy;
+        command.alpha = alpha;
+        command.clip_x = (int)cx0;
+        command.clip_y = (int)cy0;
+        command.clip_w = (int)(cx1-cx0+1);
+        command.clip_h = (int)(cy1-cy0+1);
+        if (g->accel->blit(g->accel_ud, g, &command) == NJ_GFX_ACCEL_DONE) {
+            return;
+        }
+    }
+#endif
 
     /*
      * The common case by a wide margin is a sprite blit: no transform, no
@@ -2545,6 +2606,23 @@ static void nj_region_draw(nj_gfx *g, const nj_u1 *src, nj_s8 src_stride_bytes,
             nj_gfx_blend_pixel(g->surf, (int)X, (int)Y, sp, alpha);
         }
     }
+}
+
+void nj_gfx_blit_software(const nj_gfx *g, const nj_gfx_blit *blit)
+{
+    nj_gfx software;
+    if (!g || !blit) {
+        return;
+    }
+    software = *g;
+    nj_gfx_set_accel(&software, NULL, NULL);
+    software.fill_rect = NULL;
+    software.fill_ud = NULL;
+    nj_region_draw(&software, blit->pixels, blit->stride, blit->format,
+                   blit->mask, blit->mask_width, blit->mask_height,
+                   blit->sx, blit->sy, blit->width, blit->height,
+                   blit->transform, blit->rop, blit->xor_enabled,
+                   blit->xor_color, blit->dx, blit->dy, blit->alpha);
 }
 
 /* Clamp a requested source region to the image; 0 when nothing is left. */

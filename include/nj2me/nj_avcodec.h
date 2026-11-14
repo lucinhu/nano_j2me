@@ -215,7 +215,19 @@ const nj_av_audio_ops *nj_avcodec_sw_amr(void);
 const nj_av_video_ops *nj_avcodec_sw_h263(void);
 const nj_av_video_ops *nj_avcodec_sw_m4v(void);
 
-/* Drop every provider and reinstall the compiled-in software defaults. */
+/*
+ * Decode a complete elementary AMR-NB storage stream into caller-owned 8 kHz
+ * mono signed 16-bit little-endian PCM. Returns the number of 20 ms AMR blocks
+ * written, or 0. Tries the port hook and registered providers in priority order;
+ * failed, stalled, malformed or incomplete output is discarded and the built-in
+ * decoder restarts from the original input. No partially decoded clip succeeds.
+ * cap must hold nj_amr_frames(data, len) * 320 bytes. Input and output must
+ * not overlap; overlap is rejected without writes. Disabled AMR returns 0.
+ */
+nj_u4 nj_avcodec_decode_amr(struct nj_vm *vm, const nj_u1 *data, nj_u4 len,
+                           nj_u1 *pcm, nj_u4 cap);
+
+/* Drop every provider and reinstall the software and available system defaults. */
 void nj_avcodec_reset(struct nj_vm *vm);
 
 #ifdef __cplusplus

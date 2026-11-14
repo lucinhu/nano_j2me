@@ -376,6 +376,8 @@ void *nj_app_resource(nj_vm *vm, nj_app *app, const char *name, nj_u4 *out_len)
 nj_status nj_app_get_property(nj_app *app, const char *attr,
                               char *out, nj_u4 out_size)
 {
+    nj_status st;
+
     if (!app || !attr || !out || out_size == 0u) {
         return NJ_ERR;
     }
@@ -383,8 +385,20 @@ nj_status nj_app_get_property(nj_app *app, const char *attr,
     if (!app->manifest) {
         return NJ_ERR;
     }
-    return nj_manifest_get(app->manifest, app->manifest_len, attr,
-                           out, out_size);
+    st = nj_manifest_get(app->manifest, app->manifest_len, attr,
+                         out, out_size);
+    /*
+     * The value goes to the MIDlet through MIDlet.getAppProperty() and is used
+     * as-is there.  Reference AMS implementations trim it (FreeJ2ME-Plus
+     * applies String.trim()), and titles rely on that: one corpus manifest
+     * ships "FeeMode: 0 " and feeds the value to an unguarded
+     * Integer.parseInt(), which would kill the MIDlet thread on the blank.
+     * The manifest reader stays byte-faithful; the AMS-facing value is clean.
+     */
+    if (st == NJ_OK) {
+        trim_in_place(out);
+    }
+    return st;
 }
 
 int nj_app_midlet_count(const nj_app *app)

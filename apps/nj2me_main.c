@@ -34,6 +34,17 @@ static void usage(const char *argv0)
 "\n"
 "options:\n"
 "  --port <name>        headless | sdl2        (default: sdl2 if built in)\n"
+#if NJ_HAVE_SDL2
+"  --graphics <mode>    software | gles2 (SDL2 game drawing; default: software)\n"
+"                       gles2 is experimental and requires the optional backend;\n"
+"                       unavailable builds reject it. Unsupported drawing falls\n"
+"                       back to software; acceleration is not guaranteed.\n"
+"                       Applies to direct games and every game from --client.\n"
+"                       Without this flag, legacy NJ_SDL2_GFX=gles2 is honored;\n"
+"                       explicit software overrides it. SDL presentation is separate.\n"
+#else
+"  --graphics <mode>    unavailable: this build has no SDL2 port\n"
+#endif
 "  --midlet <class>     run a specific MIDlet class instead of MIDlet-1\n"
 "  --font <file>        draw text with a TrueType face (default: built-in)\n"
 "  --heap <mb>          initial Java heap MB (saved setting; runtime default: %u)\n"
@@ -45,16 +56,21 @@ static void usage(const char *argv0)
 "  --fps <n>            frame rate cap (default: the port's own; 0 = uncapped)\n"
 "  --run-frames <n>     stop after n presented frames (for benchmarks)\n"
 "  --save-state <file>  write a VM snapshot at a frame boundary and keep going\n"
-"  --save-state-frame <n>  which frame boundary to snapshot (default: 1).\n"
-"                        A title that never returns to a frame boundary\n"
-"                        (Doom 3 joins its game thread in the MIDlet\n"
-"                        constructor) is never snapshotted; the run says so\n"
-"                        at the end.\n"
+"  --save-state-frame <n>  presented frame to snapshot at, or the first\n"
+"                        boundary after it (default: 1).\n"
+"                        With --save-state the MIDlet is started as a VM\n"
+"                        thread, so titles that run their frame loop inside\n"
+"                        startApp() can be snapshotted.  A title that never\n"
+"                        returns to a frame boundary at all (Doom 3 joins its\n"
+"                        game thread in the MIDlet constructor) is never\n"
+"                        snapshotted; the run says so at the end.\n"
 "  --load-state <file>  resume a snapshot instead of starting the MIDlet\n"
 "  --keys <script>      replay key and pointer events at given frames\n"
         "  --fs-dir <path>      root for file:// (JSR 75); no filesystem by default\n"
 "  --network            enable HTTP/HTTPS/TCP for the headless port\n"
 "  --stats              print bytecode and frame counters at the end\n"
+"  --verbose <1-3>      log level: 2 is the default, 3 adds decoder and\n"
+"                       media decisions (for diagnosing silent audio/video)\n"
 "  --device <name>      select handset properties and key convention\n"
 "  --prop <key>=<value> answer one more property (repeatable)\n"
 "  --list-devices       print the built-in handsets and exit\n"
@@ -144,6 +160,7 @@ static void usage(const char *argv0)
 
 typedef struct cli {
     const char *port_name;
+    int graphics_mode;           /* -1 legacy env, 0 software, 1 GLES2 */
     const char *jar;
     const char *midlet;
     const char *rms_dir;
@@ -162,6 +179,7 @@ typedef struct cli {
     int         network;
     int         where;
     int         run_frames;
+    int         verbose;
     const char *keys;
     const char *font;
     const char *device_name;
@@ -294,7 +312,11 @@ static int setup_port(const cli *c, nj_port *port,
         if (settings != NULL) {
             (void)nj_client_apply_game_settings(NULL, settings);
         }
-        st = nj_port_sdl2(port, "nano_j2me");
+        st = nj_port_sdl2_ex(port, "nano_j2me", c->graphics_mode);
+        if (st == NJ_ERR_UNSUPPORTED) {
+            fprintf(stderr, "this build has no GLES2 drawing backend; use --graphics software\n");
+            return 2;
+        }
         if (st != NJ_OK) {
             fprintf(stderr, "cannot create the SDL2 port (is DISPLAY set?)\n");
             return 1;
@@ -394,6 +416,7 @@ static int run_client_mode(const cli *c, const nj_run_opts *opts)
     co.rms_dir = c->rms_dir;
     co.fs_dir = c->fs_dir;
     co.heap_grow_override = c->grow_given ? (c->heap_grow ? 1 : -1) : 0;
+    co.graphics_mode = c->graphics_mode + 1;
     st = nj_client_run(&co);
     if (c->stats) {
         fprintf(stderr, "nano_j2me: exit status %d\n", (int)st);
@@ -488,6 +511,7 @@ int main(int argc, char **argv)
 #endif
 
     memset(&c, 0, sizeof(c));
+    c.graphics_mode = -1; /* Software by default, with legacy env opt-in. */
     c.dump_every = 1;
     c.fps = -1;              /* -1: leave the port's own cap alone */
     c.width = NJ_SCREEN_WIDTH;
@@ -509,6 +533,18 @@ int main(int argc, char **argv)
             return 0;
         } else if (strcmp(a, "--port") == 0 && i + 1 < argc) {
             c.port_name = argv[++i];
+        } else if (strcmp(a, "--graphics") == 0) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "--graphics requires software or gles2\n");
+                return 2;
+            }
+            a = argv[++i];
+            if (strcmp(a, "software") == 0) c.graphics_mode = 0;
+            else if (strcmp(a, "gles2") == 0) c.graphics_mode = 1;
+            else {
+                fprintf(stderr, "bad --graphics: %s (expected software or gles2)\n", a);
+                return 2;
+            }
         } else if (strcmp(a, "--midlet") == 0 && i + 1 < argc) {
             c.midlet = argv[++i];
         } else if (strcmp(a, "--font") == 0 && i + 1 < argc) {
@@ -601,6 +637,14 @@ int main(int argc, char **argv)
             c.where = 1;
         } else if (strcmp(a, "--run-frames") == 0 && i + 1 < argc) {
             c.run_frames = atoi(argv[++i]);
+        } else if (strcmp(a, "--verbose") == 0 && i + 1 < argc) {
+            c.verbose = atoi(argv[++i]);
+            if (c.verbose < 1) {
+                c.verbose = 1;
+            }
+            if (c.verbose > 3) {
+                c.verbose = 3;
+            }
         } else if (strcmp(a, "--save-state") == 0 && i + 1 < argc) {
             c.save_state = argv[++i];
             c.save_frame = 1;
@@ -619,6 +663,17 @@ int main(int argc, char **argv)
             c.jar = a;
         }
     }
+
+    if (c.graphics_mode != -1 && strcmp(c.port_name, "sdl2") != 0) {
+        fprintf(stderr, "--graphics is only supported with --port sdl2\n");
+        return 2;
+    }
+#if !NJ_HAVE_SDL2
+    if (c.graphics_mode != -1) {
+        fprintf(stderr, "this build has no SDL2 port; --graphics is unavailable\n");
+        return 2;
+    }
+#endif
 
     /*
      * Build the property table: the device profile first, the caller's own
@@ -657,6 +712,7 @@ int main(int argc, char **argv)
     opts.stats = c.stats;
     opts.where = c.where;
     opts.run_frames = (nj_u4)(c.run_frames > 0 ? c.run_frames : 0);
+    opts.verbose = c.verbose;
     opts.keys = c.keys;
     opts.font_path = c.font;
     opts.props = nprops > 0 ? props : NULL;

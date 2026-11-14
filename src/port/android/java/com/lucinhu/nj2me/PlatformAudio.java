@@ -3,45 +3,12 @@
  *
  * The platform's audio decoders, behind the port's media hooks.
  *
- * WHY MediaCodec, AND NOT MediaExtractor
- * --------------------------------------
- * The runtime reads the sample formats it always read (WAV, AU, raw PCM) and
- * renders MIDI itself, but a J2ME game also ships MP3 and AMR, and those are
- * codecs, not file parsers.  Android has them, in hardware on most devices,
- * behind MediaCodec - and behind MediaCodec alone is where this file stands.
- *
- * It used to hand the file to MediaExtractor first, and that is exactly what
- * does not work on the test device.  The extractor is not a library: it is a
- * separate system service, "media.extractor", and on an Android 16 emulator
- * that service never comes up inside an app process:
- *
- *     ServiceManagerCppClient: Waiting for service 'media.extractor' ...
- *     ServiceManagerCppClient: Service media.extractor didn't start.
- *     MediaExtractorFactory: extractor service not running
- *     NuMediaExtractor: initMediaExtractor: failed to create MediaExtractor
- *     nj2me: audio: the platform cannot decode these 2525 bytes
- *            (java.io.IOException: Failed to instantiate extractor.)
- *
- * so every setDataSource() threw and every compressed asset was refused.
- * MediaCodec is a different service ("media.codec"), it is running, and a probe
- * drove c2.android.amrnb.decoder straight on that same emulator and got all 51
- * AMR frames / 16320 PCM bytes back.  So the codec stays and the container
- * parsing moves in here, which for J2ME's two compressed formats is small:
- *
- *   AMR   "#!AMR\n" (narrowband) or "#!AMR-WB\n" (wideband), then one ToC byte
- *         plus its payload per 20 ms frame.  That walk IS the file format
- *         (RFC 4867), and it is the same one src/midp/nj_amr.c makes for the
- *         runtime's own decoder, frame for frame.
- *   MP3   an ID3v2 tag and/or a run of MPEG audio frames.  Their lengths do not
- *         have to be parsed: a frame header gives the sample rate and the
- *         channel mode the decoder is configured with, and the decoder finds
- *         the frames in a byte stream itself - that is what a streaming decoder
- *         is for.
- *
- * Anything else is refused with null, which is a real answer rather than a
- * failure: a J2ME sound is usually WAV, MIDI or AMR, and the runtime has its
- * own readers for all three.  The containers this file no longer opens (MP4,
- * Ogg) are ones the extractor never opened on this device either.
+ * AMR and MP3 keep their direct MediaCodec frame/stream paths: some systems
+ * have a working codec service but no working media.extractor service. AAC
+ * ADTS and audio-only MP4/M4A use MediaExtractor for access units and codec
+ * configuration, then the same bounded MediaCodec drain loop. Every track is
+ * inspected first; any video track refuses the audio hook so a movie cannot
+ * accidentally become an audio-only Player. Other audio codecs are refused.
  *
  * WHY AMR IS COUNTED AND MP3 IS DECODED
  * -------------------------------------
@@ -73,19 +40,24 @@
  * means "the platform will not decode this" (nothing recognised it, no decoder
  * for it, not 16-bit, longer than the cap) and is not an error.
  *
- * The bytes go to MediaCodec as they are, so nothing is written to the app's
- * cache any more, and there is no temp file to delete on the way out.
+ * AAC uses a private, short-lived cache file because API21 has no byte-array
+ * MediaDataSource. Its file descriptor, extractor and codec are released on
+ * every exit. All other supported streams go directly to MediaCodec.
  */
 package com.lucinhu.nj2me;
 
 import android.content.Context;
 import android.media.AudioFormat;
 import android.media.MediaCodec;
+import android.media.MediaExtractor;
 import android.media.MediaFormat;
 import android.util.Log;
 import android.util.LruCache;
 
 import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.nio.ByteBuffer;
 import java.util.Arrays;
 import java.util.HashSet;
@@ -164,7 +136,13 @@ final class PlatformAudio {
     private static final int LOG_ONCE_MAX = 8;
     private static final Set<String> LOGGED = new HashSet<String>();
 
-    /* The three decoders this file knows how to reach. */
+    /* API21 AAC input is staged only in this app-private cache directory. */
+    private static File cacheDirectory;
+    private static final int AAC_INPUT_CAP = 32 * 1024 * 1024;
+    private static final int AAC_TRACK_CAP = 64;
+    private static final String MIME_AAC = "audio/mp4a-latm";
+
+    /* The decoders this file knows how to reach. */
     private static final String MIME_AMR_NB = "audio/3gpp";
     private static final String MIME_AMR_WB = "audio/amrwb";
     private static final String MIME_MPEG = "audio/mpeg";
@@ -217,6 +195,7 @@ final class PlatformAudio {
     private static final int KIND_AMR_NB = 1;
     private static final int KIND_AMR_WB = 2;
     private static final int KIND_MPEG = 3;
+    private static final int KIND_AAC = 4;
 
     /*
      * MediaFormat's key for the PCM encoding.  Spelled out rather than taken
@@ -228,15 +207,9 @@ final class PlatformAudio {
     private PlatformAudio() {
     }
 
-    /*
-     * Called once from the Activity, before the VM can ask for audio.  The
-     * context has nothing to do any more - the decoder takes the bytes
-     * directly and never writes a temp file - but the hook stays: the Activity
-     * calls it, and an app that binds this port calls it whether or not this
-     * class still has a use for it.
-     */
-    static void init(Context context) {
-        /* nothing to bind */
+    /* Keep a directory, never an Activity, for API21's file-descriptor input. */
+    static synchronized void init(Context context) {
+        cacheDirectory = context == null ? null : context.getCacheDir();
     }
 
     /**
@@ -293,7 +266,7 @@ final class PlatformAudio {
         int kind = sniff(data);
         if (kind == KIND_UNKNOWN) {
             logOnce("unknown", "no platform decoder for these " + data.length
-                    + " bytes: the port reads AMR and MP3 streams, and the"
+                    + " bytes: the port reads AMR, MP3 and AAC audio, and the"
                     + " runtime reads its own sample formats");
             return null;
         }
@@ -328,7 +301,116 @@ final class PlatformAudio {
         if (kind == KIND_AMR_NB || kind == KIND_AMR_WB) {
             return decodeAmr(data, kind);
         }
-        return decodeMpeg(data);
+        return kind == KIND_AAC ? decodeAac(data) : decodeMpeg(data);
+    }
+
+    private static boolean audioShape(int rate, int channels) {
+        return rate > 0 && rate <= 192000 && (channels == 1 || channels == 2);
+    }
+
+    /* Preserve csd-0, AAC profile and container gapless metadata verbatim. The
+     * extractor is deliberately restricted to AAC, not a catch-all media hook. */
+    private static Clip decodeAac(byte[] data) throws Exception {
+        if (cacheDirectory == null || data.length > AAC_INPUT_CAP) {
+            logOnce("aac-input", "AAC needs an initialized private cache and at"
+                    + " most " + AAC_INPUT_CAP + " input bytes");
+            return null;
+        }
+        File temporary = File.createTempFile("nj-aac-", ".media", cacheDirectory);
+        MediaExtractor extractor = null;
+        try {
+            try (FileOutputStream file = new FileOutputStream(temporary)) {
+                file.write(data);
+            }
+            extractor = new MediaExtractor();
+            try (FileInputStream file = new FileInputStream(temporary)) {
+                extractor.setDataSource(file.getFD(), 0L, data.length);
+            }
+            int count = extractor.getTrackCount();
+            if (count <= 0 || count > AAC_TRACK_CAP) {
+                return null;
+            }
+            int selected = -1;
+            MediaFormat audio = null;
+            for (int i = 0; i < count; i++) {
+                MediaFormat track = extractor.getTrackFormat(i);
+                String mime = track.getString(MediaFormat.KEY_MIME);
+                /* Even an unknown video's codec is still video/*. A missing
+                 * MIME cannot prove the container is audio-only either. */
+                if (mime == null || mime.startsWith("video/")) {
+                    logOnce("aac-video", "refusing a video or unidentified track"
+                            + " in the platform audio hook");
+                    return null;
+                }
+                if (MIME_AAC.equals(mime)) {
+                    if (selected >= 0) {
+                        logOnce("aac-tracks", "refusing multiple AAC tracks");
+                        return null;
+                    }
+                    selected = i;
+                    audio = track;
+                }
+            }
+            if (audio == null || !audioShape(
+                    intOr(audio, MediaFormat.KEY_SAMPLE_RATE, 0),
+                    intOr(audio, MediaFormat.KEY_CHANNEL_COUNT, 0))) {
+                logOnce("aac-format", "no supported mono/stereo AAC track");
+                return null;
+            }
+            extractor.selectTrack(selected);
+            Decoded got = decodeLoop(audio, new ExtractorInput(extractor), true);
+            if (got == null || !audioShape(got.sampleRate, got.channelCount)) {
+                return null;
+            }
+            int bytesPerFrame = got.channelCount * 2;
+            if (got.pcm.length == 0 || got.pcm.length % bytesPerFrame != 0) {
+                logOnce("aac-frame", "AAC decoder produced empty or partial PCM frames");
+                return null;
+            }
+            return new Clip(data.length, got.sampleRate, got.channelCount,
+                    got.pcm.length / bytesPerFrame, bytesPerFrame, got.pcm);
+        } finally {
+            try {
+                if (extractor != null) extractor.release();
+            } catch (Throwable ignored) {
+                /* Never skip deleting the input if the service has died. */
+            }
+            if (!temporary.delete()) {
+                logOnce("aac-temp", "could not delete private AAC input file");
+            }
+        }
+    }
+
+    private static final class ExtractorInput implements Input {
+        private final MediaExtractor extractor;
+        private long lastUs;
+        private int samples;
+
+        ExtractorInput(MediaExtractor extractor) {
+            this.extractor = extractor;
+        }
+
+        public int next(ByteBuffer into) {
+            if (extractor.getSampleTrackIndex() < 0) return -1;
+            long time = Math.max(0L, extractor.getSampleTime());
+            /* AAC access units are complete, unencrypted frames. This also
+             * rejects newer partial-frame flags without newer API references. */
+            if ((extractor.getSampleFlags() & ~MediaExtractor.SAMPLE_FLAG_SYNC) != 0
+                    || ++samples > 100000) {
+                throw new IllegalArgumentException("unsupported AAC access unit");
+            }
+            int size = extractor.readSampleData(into, 0);
+            if (size <= 0 || size > into.capacity()) {
+                throw new IllegalArgumentException("AAC frame exceeds codec input buffer");
+            }
+            lastUs = time;
+            extractor.advance();
+            return size;
+        }
+
+        public long timestampUs() {
+            return lastUs;
+        }
     }
 
     /*
@@ -425,16 +507,21 @@ final class PlatformAudio {
      * wall clock, a decoder that contradicts itself mid-file - and each one
      * leaves a log line behind.
      *
-     * Nothing container-ish goes in: no csd, no duration, no codec config.  AMR
-     * and MP3 are raw frame streams and neither decoder needs any.  The
-     * timestamps are only there because MediaCodec wants a stamp per buffer.
+     * AMR and MP3 configure a raw stream; AAC passes the extractor's complete
+     * format, including codec-specific data. Input timestamps identify access
+     * units, while the returned PCM array defines the runtime's exact duration.
      */
     private static Decoded decodeLoop(String mime, int sampleRate, int channels,
                                       Input source) throws Exception {
-        MediaCodec codec = MediaCodec.createDecoderByType(mime);
+        return decodeLoop(MediaFormat.createAudioFormat(mime, sampleRate, channels),
+                source, false);
+    }
+
+    private static Decoded decodeLoop(MediaFormat format, Input source,
+                                       boolean strictAac) throws Exception {
+        MediaCodec codec = MediaCodec.createDecoderByType(
+                format.getString(MediaFormat.KEY_MIME));
         try {
-            MediaFormat format =
-                    MediaFormat.createAudioFormat(mime, sampleRate, channels);
             codec.configure(format, null, null, 0);
             codec.start();
 
@@ -486,7 +573,7 @@ final class PlatformAudio {
                     }
                     int rate = intOr(got, MediaFormat.KEY_SAMPLE_RATE, 0);
                     int ch = intOr(got, MediaFormat.KEY_CHANNEL_COUNT, 0);
-                    if (rate <= 0 || ch <= 0) {
+                    if (rate <= 0 || ch <= 0 || (strictAac && !audioShape(rate, ch))) {
                         logOnce("format", "the decoder reported " + rate
                                 + " Hz and " + ch + " channels");
                         return null;
@@ -508,8 +595,12 @@ final class PlatformAudio {
                 } else if (index >= 0) {
                     stalled = 0;
                     try {
-                        if (buffer.size > 0) {
-                            if (pcm.size() + buffer.size > PCM_CAP) {
+                        if (buffer.size < 0 || buffer.offset < 0) {
+                            return null;
+                        }
+                        if (buffer.size > 0
+                                && (buffer.flags & MediaCodec.BUFFER_FLAG_CODEC_CONFIG) == 0) {
+                            if ((strictAac && !shapeSeen) || buffer.size > PCM_CAP - pcm.size()) {
                                 logOnce("cap", "refusing more than " + PCM_CAP
                                         + " bytes of PCM: the runtime holds a"
                                         + " whole clip in memory");
@@ -523,8 +614,13 @@ final class PlatformAudio {
                             }
                             /* BufferInfo's window, not the whole buffer: the
                              * decoder is free to leave other samples in it. */
-                            decoded.position(buffer.offset);
+                            if (buffer.offset > decoded.capacity()
+                                    || buffer.size > decoded.capacity() - buffer.offset) {
+                                return null;
+                            }
+                            decoded.clear();
                             decoded.limit(buffer.offset + buffer.size);
+                            decoded.position(buffer.offset);
                             while (decoded.hasRemaining()) {
                                 int n = Math.min(decoded.remaining(), chunk.length);
                                 decoded.get(chunk, 0, n);
@@ -765,10 +861,28 @@ final class PlatformAudio {
         if (startsWith(data, MAGIC_AMR_NB)) {
             return KIND_AMR_NB;
         }
+        /* Check the container and ADTS before scanning arbitrary payload bytes
+         * for MPEG sync; ADTS shares MP3's leading 0xFF byte. */
+        if ((data.length >= 8 && data[4] == 'f' && data[5] == 't'
+                && data[6] == 'y' && data[7] == 'p') || isAdts(data, skipId3(data))) {
+            return KIND_AAC;
+        }
         if (startsWith(data, MAGIC_ID3) || findMpegHeader(data, 0) != null) {
             return KIND_MPEG;
         }
         return KIND_UNKNOWN;
+    }
+
+    private static boolean isAdts(byte[] data, int off) {
+        if (data.length - off < 7 || (data[off] & 0xFF) != 0xFF
+                || (data[off + 1] & 0xF6) != 0xF0
+                || ((data[off + 2] >> 2) & 0x0F) > 12) {
+            return false;
+        }
+        int header = (data[off + 1] & 1) == 0 ? 9 : 7;
+        int length = ((data[off + 3] & 3) << 11)
+                | ((data[off + 4] & 0xFF) << 3) | ((data[off + 5] & 0xE0) >> 5);
+        return length > header && length <= data.length - off;
     }
 
     /*

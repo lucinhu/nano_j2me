@@ -96,6 +96,11 @@ static int restore_native_object(nj_vm *vm, nj_ref object, nj_u4 offset, void *u
 #define NJ_SAVE_F_KNOWN         (NJ_SAVE_F_MOTOROLA | NJ_SAVE_F_WINDOW_DEPTH)
 #define NJ_SAVE_ENDIAN    0x01020304u
 #define NJ_SAVE_HDR_SIZE  176u
+/* Reserved header u32 at this offset: the file writer leaves it 0, the
+ * in-memory writer stores the blob's true total length so a frontend buffer
+ * is self-describing.  It is outside the CRC, so patching it after the body is
+ * written does not invalidate a blob. */
+#define NJ_SAVE_HDR_LEN_OFF 172u
 /* Explicit heaps may exceed the library default. Loading may use that
  * caller-selected capacity, but cannot request an arbitrary larger arena. */
 #define NJ_SAVE_HEAP_MAX(vm) ((vm)->heap_limit ? (nj_u8)(vm)->heap_limit : \
@@ -201,12 +206,17 @@ static nj_u8 get_u64(const nj_u1 *p)
 }
 
 /* ------------------------------------------------------------------ */
-/* Writer: streams to a FILE, keeps a running CRC of the body          */
+/* Writer: streams to a FILE, or appends to a growable malloc()d buffer, */
+/* keeping a running CRC of the body.  The memory target is how an      */
+/* embedder gets a blob it can hand to a frontend instead of a file.    */
 /* ------------------------------------------------------------------ */
 typedef struct nj_swriter {
-    FILE  *f;
-    nj_u4  crc;
-    int    err;
+    FILE   *f;      /* file target; NULL when writing to memory        */
+    nj_u1  *buf;    /* memory target, realloc()d; owned by the writer  */
+    nj_size len;    /* bytes written to buf                            */
+    nj_size cap;    /* bytes allocated for buf                         */
+    nj_u4   crc;
+    int     err;
 } nj_swriter;
 
 static int sw_raw(nj_swriter *w, const void *p, nj_size n)
@@ -214,9 +224,44 @@ static int sw_raw(nj_swriter *w, const void *p, nj_size n)
     if (w->err) {
         return 0;
     }
-    if (n != 0u && fwrite(p, 1, (size_t)n, w->f) != (size_t)n) {
-        w->err = 1;
-        return 0;
+    if (n == 0u) {
+        return 1;
+    }
+    if (w->f) {
+        if (fwrite(p, 1, (size_t)n, w->f) != (size_t)n) {
+            w->err = 1;
+            return 0;
+        }
+        return 1;
+    }
+    {
+        nj_size need = w->len + n;
+        nj_size ncap;
+        nj_u1 *grown;
+
+        if (need < w->len) {             /* nj_size is 32-bit */
+            w->err = 1;
+            return 0;
+        }
+        if (need > w->cap) {
+            ncap = (w->cap != 0u) ? w->cap : 4096u;
+            while (ncap < need) {
+                if (ncap > 0x7FFFFFFFu) {
+                    ncap = need;
+                    break;
+                }
+                ncap *= 2u;
+            }
+            grown = (nj_u1 *)realloc(w->buf, (size_t)ncap);
+            if (!grown) {
+                w->err = 1;
+                return 0;
+            }
+            w->buf = grown;
+            w->cap = ncap;
+        }
+        memcpy(w->buf + w->len, p, (size_t)n);
+        w->len = need;
     }
     return 1;
 }
@@ -1115,13 +1160,22 @@ static void save_header(nj_u1 *h, nj_vm *vm, nj_u4 abi, nj_u4 arena_crc,
     put_u32(h + 160, vm->exception_pc);
     put_u32(h + 164, class_index_of(vm, vm->app_class));
     put_u32(h + 168, vm->next_thread_id);
-    put_u32(h + 172, 0u);
+    /* Reserved: 0 for the file writer.  nj_vm_save_mem() patches the true
+     * total blob length here once the body is written (outside the CRC). */
+    put_u32(h + NJ_SAVE_HDR_LEN_OFF, 0u);
 }
 
-int nj_vm_save(nj_vm *vm, FILE *f)
+/*
+ * Write one complete snapshot to `w`: preflight, header, body, CRC.  Both the
+ * FILE path (nj_vm_save) and the in-memory path (nj_vm_save_mem) go through
+ * here, so the bytes are identical whichever entry point produced them.  The
+ * only difference is the reserved header length field, which nj_vm_save_mem
+ * patches in after the body is complete; it sits outside the CRC, so that is
+ * safe.
+ */
+static int save_blob(nj_vm *vm, nj_swriter *w)
 {
     nj_u1 hdr[NJ_SAVE_HDR_SIZE];
-    nj_swriter w;
     nj_save_ctx ctx;
     nj_u4 abi = 2166136261u;
     nj_u4 arena_crc;
@@ -1131,9 +1185,6 @@ int nj_vm_save(nj_vm *vm, FILE *f)
     nj_u8 midlet_ms;
     nj_status st;
 
-    if (!vm || !f) {
-        return NJ_ERR;
-    }
     if (!nj_vm_can_save(vm)) {
         return NJ_ERR_STATE;
     }
@@ -1167,12 +1218,9 @@ int nj_vm_save(nj_vm *vm, FILE *f)
 
     save_header(hdr, vm, abi, arena_crc, midlet_ms);
 
-    w.f = f;
-    w.crc = 0u;
-    w.err = 0;
 
     /* Header first, outside the CRC. */
-    if (!sw_raw(&w, hdr, NJ_SAVE_HDR_SIZE)) {
+    if (!sw_raw(w, hdr, NJ_SAVE_HDR_SIZE)) {
         return NJ_ERR;
     }
     /* Class table. */
@@ -1208,15 +1256,15 @@ int nj_vm_save(nj_vm *vm, FILE *f)
             }
         }
         if (len > 0xFFFFu ||
-            !sw_u16(&w, (nj_u2)len) ||
-            !sw_body(&w, name, len) ||
-            !sw_u16(&w, c ? c->instance_size : 0u) ||
-            !sw_u16(&w, c ? c->field_count : 0u) ||
-            !sw_u16(&w, c ? c->method_count : 0u) ||
-            !sw_u16(&w, c ? c->is_array : 0u) ||
-            !sw_u16(&w, c ? c->state : 0u) ||
-            !sw_u16(&w, 0u) ||
-            !sw_u32(&w, sbase)) {
+            !sw_u16(w, (nj_u2)len) ||
+            !sw_body(w, name, len) ||
+            !sw_u16(w, c ? c->instance_size : 0u) ||
+            !sw_u16(w, c ? c->field_count : 0u) ||
+            !sw_u16(w, c ? c->method_count : 0u) ||
+            !sw_u16(w, c ? c->is_array : 0u) ||
+            !sw_u16(w, c ? c->state : 0u) ||
+            !sw_u16(w, 0u) ||
+            !sw_u32(w, sbase)) {
             return NJ_ERR;
         }
     }
@@ -1224,22 +1272,22 @@ int nj_vm_save(nj_vm *vm, FILE *f)
     for (slot = 0u; slot < vm->nstatics; slot++) {
         nj_u8 bits;
         memcpy(&bits, &vm->statics[slot], sizeof(bits));
-        if (!sw_u64(&w, bits)) {
+        if (!sw_u64(w, bits)) {
             return NJ_ERR;
         }
     }
     /* The arena image. */
-    if (!sw_body(&w, vm->heap.base, vm->heap.bump)) {
+    if (!sw_body(w, vm->heap.base, vm->heap.bump)) {
         return NJ_ERR;
     }
     /* Interned strings. */
     for (i = 0u; i < vm->ninterned; i++) {
-        if (!sw_u32(&w, ref_off(vm, vm->interned[i]))) {
+        if (!sw_u32(w, ref_off(vm, vm->interned[i]))) {
             return NJ_ERR;
         }
     }
     /* Per-object class table. */
-    ctx.w = &w;
+    ctx.w = w;
     ctx.vm = vm;
     if (arena_walk(vm, save_object_cb, &ctx, NULL) != NJ_OK) {
         return NJ_ERR_STATE;
@@ -1250,29 +1298,100 @@ int nj_vm_save(nj_vm *vm, FILE *f)
         return NJ_ERR_STATE;
     }
     /* Records A. */
-    if (!save_records_a(vm, &w)) {
+    if (!save_records_a(vm, w)) {
         return NJ_ERR_STATE;
     }
     /* Threads. */
-    if (!save_threads(vm, &w)) {
+    if (!save_threads(vm, w)) {
         return NJ_ERR_STATE;
     }
     /* Records B. */
-    if (!save_records_b(vm, &w)) {
+    if (!save_records_b(vm, w)) {
         return NJ_ERR_STATE;
     }
     /* CRC. */
     {
         nj_u1 tail[4];
-        put_u32(tail, w.crc);
-        if (!sw_raw(&w, tail, 4u)) {
+        put_u32(tail, w->crc);
+        if (!sw_raw(w, tail, 4u)) {
             return NJ_ERR;
         }
+    }
+    return (w->err) ? NJ_ERR : NJ_OK;
+}
+
+int nj_vm_save(nj_vm *vm, FILE *f)
+{
+    nj_swriter w;
+    int rc;
+
+    if (!vm || !f) {
+        return NJ_ERR;
+    }
+    w.f = f;
+    w.buf = NULL;
+    w.len = 0u;
+    w.cap = 0u;
+    w.crc = 0u;
+    w.err = 0;
+    rc = save_blob(vm, &w);
+    if (rc != NJ_OK) {
+        return rc;
     }
     if (fflush(f) != 0) {
         return NJ_ERR;
     }
     return NJ_OK;
+}
+
+int nj_vm_save_mem(nj_vm *vm, nj_u1 **out_blob, nj_size *out_size)
+{
+    nj_swriter w;
+    int rc;
+
+    /* Clear the out-params first so the contract holds on every refusal. */
+    if (out_blob) {
+        *out_blob = NULL;
+    }
+    if (out_size) {
+        *out_size = 0u;
+    }
+    if (!vm || !out_blob || !out_size) {
+        return NJ_ERR;
+    }
+    w.f = NULL;
+    w.buf = NULL;
+    w.len = 0u;
+    w.cap = 0u;
+    w.crc = 0u;
+    w.err = 0;
+    rc = save_blob(vm, &w);
+    if (rc != NJ_OK) {
+        free(w.buf);
+        return rc;
+    }
+    /*
+     * Make the blob self-describing: record its true total length where a
+     * frontend-sized buffer carries zero padding.  This is outside the CRC,
+     * so patching it after the body and its checksum are complete leaves a
+     * blob that loads exactly like the file one.
+     */
+    put_u32(w.buf + NJ_SAVE_HDR_LEN_OFF, w.len);
+    *out_blob = w.buf;
+    *out_size = w.len;
+    return NJ_OK;
+}
+
+nj_size nj_vm_blob_max(const nj_vm *vm)
+{
+    nj_u8 bound;
+
+    if (!vm) {
+        return 0u;
+    }
+    bound = NJ_SAVE_BLOB_MAX(vm);
+    return (bound > (nj_u8)0xFFFFFFFFu) ? (nj_size)0xFFFFFFFFu
+                                        : (nj_size)bound;
 }
 
 int nj_vm_save_file(nj_vm *vm, const char *path)
@@ -1644,13 +1763,24 @@ static int apply_recordsB(nj_vm *vm, nj_sreader *r)
     goto fail;                                                             \
 } while (0)
 
-int nj_vm_load(nj_vm *vm, FILE *f)
+/*
+ * Verify and apply one buffered blob.  `blob` holds `buffer_len` bytes:
+ * either exactly one snapshot (the FILE path, whose header length field is
+ * 0), or one snapshot followed by zero padding (a frontend buffer sized
+ * from nj_vm_blob_max()).  When the writer recorded the true blob length at
+ * NJ_SAVE_HDR_LEN_OFF, that prefix is the blob and the padding after it is
+ * ignored.  `owned` says the buffer came from nj_host_alloc() in the FILE
+ * path and must be released here; the in-memory path borrows the caller's
+ * buffer, which is never written to or freed.
+ */
+static int nj_load_blob(nj_vm *vm, const nj_u1 *blob, nj_size buffer_len,
+                        int owned)
 {
     nj_u1 hdr[NJ_SAVE_HDR_SIZE];
-    nj_u1 *blob = NULL;
+    nj_u1 *owned_blob = owned ? (nj_u1 *)(void *)(uintptr_t)blob
+                              : NULL;
     nj_sreader rd;
     nj_size blob_len;
-    long flen;
     nj_class **map = NULL;
     nj_u4 *csbase = NULL;      /* saved statics_base per class             */
     nj_u2 *cstate = NULL;      /* saved class state per class              */
@@ -1675,44 +1805,39 @@ int nj_vm_load(nj_vm *vm, FILE *f)
     int threads_installed = 0;
     int rc = NJ_ERR_FORMAT;
 
-    if (!vm || !f || !vm->statics) {
+    if (!vm || !blob || !vm->statics) {
         return NJ_ERR;
-    }
-    /*
-     * The whole blob is buffered so the CRC is verified before anything in it
-     * is believed: a corrupted block header must not be able to walk the
-     * loader off the end of the arena.  A non-seekable stream is refused.
-     */
-    if (fseek(f, 0L, SEEK_END) != 0) {
-        return NJ_ERR_UNSUPPORTED;
-    }
-    flen = ftell(f);
-    if (flen < 0) {
-        return NJ_ERR_UNSUPPORTED;
     }
     /*
      * Sanity cap, not a heap cap: the blob carries the arena image plus every
      * live thread's stack image (NJ_MAX_STACK_SLOTS slots each), the statics
      * and the slot records - so a legitimate snapshot of a full heap is
-     * several megabytes larger than the heap itself.  Anything past this is a
-     * file that is not a snapshot, and is refused before it is buffered.
+     * several megabytes larger than the heap itself.  Anything past this is
+     * not a snapshot, and is refused before it is inspected.
      */
-    if ((nj_u8)flen > NJ_SAVE_BLOB_MAX(vm)) {
-        return NJ_ERR_FORMAT;
-    }
-    if (fseek(f, 0L, SEEK_SET) != 0) {
-        return NJ_ERR_UNSUPPORTED;
-    }
-    blob_len = (nj_size)flen;
-    if (blob_len < NJ_SAVE_HDR_SIZE + 4u) {
-        return NJ_ERR_FORMAT;
-    }
-    blob = (nj_u1 *)nj_host_alloc(vm, blob_len);
-    if (!blob) {
-        return NJ_ERR_NOMEM;
-    }
-    if (fread(blob, 1, (size_t)blob_len, f) != (size_t)blob_len) {
+    if ((nj_u8)buffer_len > NJ_SAVE_BLOB_MAX(vm) ||
+        buffer_len < NJ_SAVE_HDR_SIZE + 4u) {
         NJ_LOAD_FAIL(NJ_ERR_FORMAT);
+    }
+    /*
+     * How long is the blob inside this buffer?  A header written by
+     * nj_vm_save_mem() records the true total length at offset 172, so a
+     * frontend buffer allocated from nj_vm_blob_max() carries zero padding
+     * after the blob that must not enter the CRC or the parse.  A header that
+     * records 0 - every FILE written by nj_vm_save() - means the buffer is
+     * exactly one blob, which keeps existing .state files readable.
+     */
+    {
+        nj_u4 recorded = get_u32(blob + NJ_SAVE_HDR_LEN_OFF);
+
+        if (recorded == 0u) {
+            blob_len = buffer_len;
+        } else if ((nj_u8)recorded >= (nj_u8)NJ_SAVE_HDR_SIZE + 4u &&
+                   (nj_u8)recorded <= (nj_u8)buffer_len) {
+            blob_len = (nj_size)recorded;
+        } else {
+            NJ_LOAD_FAIL(NJ_ERR_FORMAT); /* nonsense recorded length */
+        }
     }
     /* CRC over everything after the header except the trailing CRC itself. */
     stored_crc = get_u32(blob + blob_len - 4u);
@@ -2344,10 +2469,27 @@ int nj_vm_load(nj_vm *vm, FILE *f)
     nj_host_free(vm, statics_old);
     statics_old = NULL;
     vm->gc_disabled = 0u;
+    /*
+     * The loader's working state is not needed past this point; free
+     * it before the collect so a collect failure cannot leak any of
+     * it.  The blob itself is borrowed on the in-memory path.
+     */
+    nj_host_free(vm, cinfo);
+    cinfo = NULL;
+    nj_host_free(vm, legacy_grow);
+    legacy_grow = NULL;
+    nj_host_free(vm, order);
+    order = NULL;
+    nj_host_free(vm, cstate);
+    cstate = NULL;
+    nj_host_free(vm, csbase);
+    csbase = NULL;
     nj_host_free(vm, map);
     map = NULL;
-    nj_host_free(vm, blob);
-    blob = NULL;
+    if (owned_blob) {
+        nj_host_free(vm, owned_blob);
+        owned_blob = NULL;
+    }
     /*
      * Rebuild the free lists by collecting: the sweep is the only code that
      * knows the allocator's bin layout, and it also drops whatever became
@@ -2356,11 +2498,6 @@ int nj_vm_load(nj_vm *vm, FILE *f)
     if (nj_gc_run(vm) != NJ_OK) {
         return NJ_ERR;
     }
-    nj_host_free(vm, cinfo);
-    nj_host_free(vm, order);
-    nj_host_free(vm, cstate);
-    nj_host_free(vm, csbase);
-    nj_host_free(vm, map);
     vm->motorola_softkeys = (nj_u1)(flags & NJ_SAVE_F_MOTOROLA);
     /* Host drawing history belongs to the application we replaced. A fresh
      * VM has none, and a successful live load must start at the same point.
@@ -2447,10 +2584,58 @@ fail:
     if (map) {
         nj_host_free(vm, map);
     }
-    if (blob) {
-        nj_host_free(vm, blob);
+    if (owned_blob) {
+        nj_host_free(vm, owned_blob);
     }
     return rc;
+}
+
+int nj_vm_load(nj_vm *vm, FILE *f)
+{
+    nj_u1 *blob;
+    long flen;
+
+    if (!vm || !f || !vm->statics) {
+        return NJ_ERR;
+    }
+    /*
+     * The whole blob is buffered so the CRC is verified before anything in
+     * it is believed: a corrupted block header must not be able to walk the
+     * loader off the end of the arena.  A non-seekable stream is refused.
+     */
+    if (fseek(f, 0L, SEEK_END) != 0) {
+        return NJ_ERR_UNSUPPORTED;
+    }
+    flen = ftell(f);
+    if (flen < 0) {
+        return NJ_ERR_UNSUPPORTED;
+    }
+    if ((nj_u8)flen > NJ_SAVE_BLOB_MAX(vm)) {
+        return NJ_ERR_FORMAT;
+    }
+    if (fseek(f, 0L, SEEK_SET) != 0) {
+        return NJ_ERR_UNSUPPORTED;
+    }
+    if (flen < (long)(NJ_SAVE_HDR_SIZE + 4u)) {
+        return NJ_ERR_FORMAT;
+    }
+    blob = (nj_u1 *)nj_host_alloc(vm, (nj_size)flen);
+    if (!blob) {
+        return NJ_ERR_NOMEM;
+    }
+    if (fread(blob, 1, (size_t)flen, f) != (size_t)flen) {
+        nj_host_free(vm, blob);
+        return NJ_ERR_FORMAT;
+    }
+    return nj_load_blob(vm, blob, (nj_size)flen, 1);
+}
+
+int nj_vm_load_mem(nj_vm *vm, const nj_u1 *blob, nj_size size)
+{
+    if (!vm || !blob || !vm->statics) {
+        return NJ_ERR;
+    }
+    return nj_load_blob(vm, blob, size, 0);
 }
 
 #undef NJ_LOAD_FAIL

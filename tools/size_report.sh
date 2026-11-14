@@ -50,7 +50,7 @@ DEFS="-DNJ_PIXFMT=NJ_PIXFMT_RGB565 -DNJ_ENABLE_PNG=1 -DNJ_ENABLE_JPEG=1 -DNJ_ENA
 [ "$LIBSTD" -eq 1 ] && DEFS="$DEFS -DNJ_USE_LIBC=1" || DEFS="$DEFS -DNJ_USE_LIBC=0"
 
 FILES=$(cd "$ROOT" && ls src/core/*.c src/midp/*.c src/gfx/*.c src/zip/*.c \
-                         src/port/esp32/nj_port_esp32.c 2>/dev/null)
+                         src/port/common/nj_system_amr.c src/port/esp32/nj_port_esp32.c 2>/dev/null)
 
 printf '%-34s %8s %8s %6s %6s\n' FILE text rodata data bss
 printf '%-34s %8s %8s %6s %6s\n' ---- ---- ------ ---- ---

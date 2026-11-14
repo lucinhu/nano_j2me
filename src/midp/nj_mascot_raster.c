@@ -25,6 +25,13 @@
 
 #include <string.h>
 
+#if NJ_ENABLE_GFX_ACCEL && NJ_USE_LIBC
+#include <stdlib.h>
+#define MR_ACCEL_COLLECT 1
+#else
+#define MR_ACCEL_COLLECT 0
+#endif
+
 /* The reference's fixed point. */
 #define MR_FP      12
 #define MR_FP_ONE  (1 << MR_FP)
@@ -643,8 +650,17 @@ typedef struct mr_vert {
     nj_s8 eu, ev;
 } mr_vert;
 
+typedef struct mr_coverage {
+    nj_s4 *keys;
+    nj_s4 x, y, width;
+    int any;
+} mr_coverage;
+
 typedef struct mr_state {
     nj_surface *dst;
+#if MR_ACCEL_COLLECT
+    mr_coverage *coverage;
+#endif
     const nj_mascot_texture *tex;
     const nj_mascot_texture *env;
     nj_u4 color;       /* 0x00RRGGBB */
@@ -1073,6 +1089,16 @@ static void mr_fill_segment(const mr_state *st,
          * the span is non-empty; empty spans keep a dummy pointer. */
         pp = xl < xr ? base + (nj_s8)y * stride + (nj_s8)xl * bpp : base;
         if (xl < xr) {
+#if MR_ACCEL_COLLECT
+            if (st->coverage) {
+                mr_coverage *coverage = st->coverage;
+                nj_s4 *row = coverage->keys
+                           + (size_t)(y - coverage->y) * coverage->width;
+                for (px = xl; px < xr; ++px) row[px - coverage->x] = 1;
+                coverage->any = 1;
+                goto mr_next_row;
+            }
+#endif
             switch (mode) {
 #if NJ_MASCOT_RASTER_SPANS
             case MR_MODE_TEX_SMOOTH_PUT:
@@ -1204,6 +1230,9 @@ static void mr_fill_segment(const mr_state *st,
                 break;
             }
         }
+#if MR_ACCEL_COLLECT
+mr_next_row:
+#endif
         x += dx;
         x2 += dx2;
         u += du_row;
@@ -1220,14 +1249,15 @@ static void mr_fill_segment(const mr_state *st,
  * short edge derivatives, then two segments (top..middle, middle..bottom)
  * clipped to [clip_y1, clip_y2).
  */
-void nj_mascot_raster_triangle(nj_surface *dst,
-                               nj_s4 clip_x1, nj_s4 clip_y1,
-                               nj_s4 clip_x2, nj_s4 clip_y2,
-                               const nj_mascot_vertex verts[3],
-                               nj_u4 color,
-                               const nj_mascot_texture *tex,
-                               const nj_mascot_texture *env,
-                               nj_u4 flags, nj_s4 blend, nj_u4 toon)
+static void mr_triangle(nj_surface *dst,
+                         nj_s4 clip_x1, nj_s4 clip_y1,
+                         nj_s4 clip_x2, nj_s4 clip_y2,
+                         const nj_mascot_vertex verts[3],
+                         nj_u4 color,
+                         const nj_mascot_texture *tex,
+                         const nj_mascot_texture *env,
+                         nj_u4 flags, nj_s4 blend, nj_u4 toon,
+                         mr_coverage *coverage)
 {
     mr_state st;
     mr_vert v[3];
@@ -1247,6 +1277,11 @@ void nj_mascot_raster_triangle(nj_surface *dst,
     }
     memset(&st, 0, sizeof st);
     st.dst = dst;
+#if MR_ACCEL_COLLECT
+    st.coverage = coverage;
+#else
+    (void)coverage;
+#endif
     st.tex = tex;
     st.env = env;
     st.color = color & 0x00FFFFFFu;
@@ -1534,6 +1569,19 @@ void nj_mascot_raster_triangle(nj_surface *dst,
     }
 }
 
+void nj_mascot_raster_triangle(nj_surface *dst,
+                               nj_s4 clip_x1, nj_s4 clip_y1,
+                               nj_s4 clip_x2, nj_s4 clip_y2,
+                               const nj_mascot_vertex verts[3],
+                               nj_u4 color,
+                               const nj_mascot_texture *tex,
+                               const nj_mascot_texture *env,
+                               nj_u4 flags, nj_s4 blend, nj_u4 toon)
+{
+    mr_triangle(dst, clip_x1, clip_y1, clip_x2, clip_y2, verts, color,
+                tex, env, flags, blend, toon, NULL);
+}
+
 /* ------------------------------------------------------------------ */
 /* Public material draw                                                */
 /* ------------------------------------------------------------------ */
@@ -1588,4 +1636,81 @@ nj_s4 nj_mascot_raster_draw(nj_surface *dst,
     nj_mascot_raster_triangle(dst, clip_x1, clip_y1, clip_x2, clip_y2,
                               verts, color, ptex, penv, flags, blend, toon);
     return NJ_MR_OK;
+}
+
+nj_s4 nj_mascot_raster_draw_accel(nj_surface *dst,
+                                  nj_s4 clip_x1, nj_s4 clip_y1,
+                                  nj_s4 clip_x2, nj_s4 clip_y2,
+                                  const nj_mascot_vertex verts[3],
+                                  const nj_mascot_material *mat,
+                                  nj_gfx_raster_fn fn, void *ud)
+{
+#if MR_ACCEL_COLLECT
+    if (fn && mat && verts && mr_surface_ok(dst)
+        && mat->blend == NJ_MR_BLEND_REPLACE
+        && ((nj_u4)mat->flags & ~(nj_u4)NJ_MR_SHADED) == 0
+        && !((mat->toon & 1u) && (mat->flags & NJ_MR_SHADED))) {
+        nj_s4 x1 = verts[0].x, x2 = x1, y1 = verts[0].y, y2 = y1;
+        nj_s4 light = verts[0].light;
+        nj_s4 i;
+        int bounded = 1;
+        for (i = 0; i < 3; ++i) {
+            /* Scene vertices are reference-clamped. Larger low-level inputs
+             * keep the original software behaviour, without narrowed DDA math. */
+            if (verts[i].x < -32768 || verts[i].x > 32767
+                || verts[i].y < -32768 || verts[i].y > 32767) bounded = 0;
+            if (verts[i].x < x1) x1 = verts[i].x;
+            if (verts[i].x > x2) x2 = verts[i].x;
+            if (verts[i].y < y1) y1 = verts[i].y;
+            if (verts[i].y > y2) y2 = verts[i].y;
+        }
+        if (x1 < clip_x1) x1 = clip_x1;
+        if (y1 < clip_y1) y1 = clip_y1;
+        if (x2 > clip_x2) x2 = clip_x2;
+        if (y2 > clip_y2) y2 = clip_y2;
+        if (x1 < 0) x1 = 0;
+        if (y1 < 0) y1 = 0;
+        if (x2 > dst->width) x2 = dst->width;
+        if (y2 > dst->height) y2 = dst->height;
+        if (bounded && x1 < x2 && y1 < y2
+            && (nj_s8)(x2 - x1) * (y2 - y1) <= 1048576) {
+            size_t count = (size_t)(x2 - x1) * (size_t)(y2 - y1);
+            nj_s4 *keys = (nj_s4 *)calloc(count, sizeof(*keys));
+            if (keys) {
+                mr_coverage coverage;
+                nj_gfx_raster packet;
+                nj_u4 drawn = 0;
+                int rc = NJ_GFX_ACCEL_DECLINE;
+                memset(&coverage, 0, sizeof coverage);
+                coverage.keys = keys;
+                coverage.x = x1; coverage.y = y1; coverage.width = x2 - x1;
+                /* Reuse the production DDA, including clipping and negative
+                 * slopes. The collector writes keys only, never the surface. */
+                mr_triangle(dst, x1, y1, x2, y2, verts, mat->color,
+                            NULL, NULL, (nj_u4)mat->flags, mat->blend,
+                            mat->toon, &coverage);
+                if (coverage.any) {
+                    memset(&packet, 0, sizeof packet);
+                    packet.version = NJ_GFX_RASTER_VERSION;
+                    packet.surface = dst;
+                    packet.x = x1; packet.y = y1;
+                    packet.width = x2 - x1; packet.height = y2 - y1;
+                    packet.keys = keys; packet.key_stride = packet.width;
+                    if (light < 0) light = 0;
+                    if (light > 4095) light = 4095;
+                    packet.color = mr_flat_color(mat->color,
+                                                 (nj_s8)(light >> 2) * 128);
+                    rc = fn(ud, &packet, &drawn);
+                }
+                free(keys);
+                if (!coverage.any || rc == NJ_GFX_ACCEL_DONE) return NJ_MR_OK;
+            }
+        }
+    }
+#else
+    (void)fn;
+    (void)ud;
+#endif
+    return nj_mascot_raster_draw(dst, clip_x1, clip_y1, clip_x2, clip_y2,
+                                 verts, mat);
 }

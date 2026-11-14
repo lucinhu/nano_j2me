@@ -766,6 +766,40 @@ struct nj_vm {
      * catch block.  A handset never re-enters paint(): the AMS paints on its
      * own thread and a paint is atomic. */
     nj_u1         paint_active;
+    /*
+     * Who is delivering that paint, and who is parked in serviceRepaints()
+     * waiting for it to finish.  On a handset a worker thread that publishes
+     * state, calls repaint()+serviceRepaints() and only then clears/restores
+     * the published state is safe because serviceRepaints() BLOCKS until the
+     * event thread has painted.  With a non-blocking serviceRepaints() the
+     * whole publication window fits inside the worker's bytecode quantum and
+     * the frame paint, which only reads the field later, never observes it:
+     * 明星制造梦工厂_11048 spins in `while (new) {}` at the top of paint()
+     * for exactly that reason.  Parking here restores the handset ordering
+     * without making paint() reentrant.
+     */
+    nj_thread    *paint_owner;
+    nj_thread    *paint_waiters[4];
+    nj_u1         npaint_waiters;
+    /*
+     * Threads parked in serviceRepaints() until the current frame ends.
+     *
+     * A title whose own loop is `repaint(); serviceRepaints(); step();` with
+     * no sleep - 魂斗罗_5652 does exactly that from its game thread - relies on
+     * the handset blocking the call until the display has serviced the frame.
+     * With an immediately returning serviceRepaints() the loop runs millions
+     * of redundant iterations per display frame (the corpus measured 1.46M
+     * native calls and 16M bytecodes per frame, 12.9fps).  Once the request
+     * has been coalesced into the frame paint, parking here paces the loop to
+     * one iteration per frame.  The frame hook wakes every waiter when the
+     * frame ends (nj_vm_frame_done), so a waiter can never be stranded.
+     */
+    nj_thread    *pace_waiters[4];
+    nj_u1         npace_waiters;
+    /* Nesting depth of nj_midp_frame().  Non-zero means a frame pump owns the
+     * VM, so a scheduler-owned thread may safely wait for the frame boundary;
+     * zero means (startApp and friends) parking would deadlock the caller. */
+    nj_u1         in_frame;
     /* Set while a Java callback (key, pointer, command) is being delivered.
      * A title may call repaint() and then spin until paint() clears a field -
      * TombRaiderMIDlet.u(I)V does exactly that - which can never finish when
@@ -874,6 +908,12 @@ struct nj_vm {
      */
     nj_u8   tris;
     nj_u8   m3g_renders;      /* Graphics3D.render() calls that were reached */
+    /*
+     * Deferred Graphics3D triangles (see nj_lib_m3g.c).  A private core-side
+     * journal committed as one ordered list before anything may observe the
+     * target.  NULL when nothing is queued; owned by the M3G module.
+     */
+    void   *m3g_journal;
     nj_u8   gfx_calls;      /* Graphics method calls that loaded the
                              * surface.  paints=N with gfx_calls=0 says the
                              * game painted and drew nothing; gfx_calls high
@@ -1394,6 +1434,17 @@ void       nj_vm_stop_reason(nj_vm *vm, nj_s4 exit_code, const char *why);
 nj_status  nj_vm_monitor_wait(nj_vm *vm, nj_thread *t, nj_ref obj, nj_s8 timeout_ms);
 int        nj_vm_monitor_notify(nj_vm *vm, nj_ref obj, int all);
 nj_status  nj_thread_sleep(nj_vm *vm, nj_thread *t, nj_s8 ms);
+/* Park a thread until the paint in flight on another thread has finished. */
+int        nj_vm_thread_wait_paint(nj_vm *vm, nj_thread *t);
+/* Wake every thread parked in serviceRepaints() for the finished paint. */
+void       nj_vm_paint_done(nj_vm *vm);
+/*
+ * Park a scheduler-owned thread in serviceRepaints() until the current frame
+ * ends, and wake those threads at the frame boundary.  This is the pacing
+ * contract a title's own paint loop relies on; see the fields in nj_vm.
+ */
+int        nj_vm_thread_wait_frame(nj_vm *vm, nj_thread *t);
+void       nj_vm_frame_done(nj_vm *vm);
 /*
  * Monitor operations.  Enter/exit take the thread explicitly: the interpreter
  * releases a synchronized method's monitor from inside a returning frame, and

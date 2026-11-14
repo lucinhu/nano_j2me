@@ -318,6 +318,21 @@ static void *vm_font_alloc(void *ud, nj_size n)
     return nj_host_alloc((nj_vm *)ud, n);
 }
 
+int nj_vm_use_font_data(nj_vm *vm, const nj_u1 *data, nj_u4 len)
+{
+    nj_u1 *owned;
+    if (vm == NULL || data == NULL || len == 0u) return 0;
+    owned = (nj_u1 *)nj_host_alloc(vm, len);
+    if (owned == NULL) return 0;
+    memcpy(owned, data, len);
+    if (nj_fontset_use_ttf(&vm->fonts, owned, len, vm_font_alloc, vm)
+        != NJ_FONTSET_SLOTS) {
+        nj_host_free(vm, owned);
+        return 0;
+    }
+    return 1;
+}
+
 int nj_vm_use_font_file(nj_vm *vm, const char *path)
 {
     const nj_u1 *data;
@@ -352,6 +367,14 @@ int nj_fontset_use_ttf(nj_fontset *fs, const nj_u1 *data, nj_u4 len,
     (void)len;
     (void)alloc;
     (void)ud;
+    return 0;
+}
+
+int nj_vm_use_font_data(nj_vm *vm, const nj_u1 *data, nj_u4 len)
+{
+    (void)vm;
+    (void)data;
+    (void)len;
     return 0;
 }
 

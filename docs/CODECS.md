@@ -1244,3 +1244,110 @@ switched off used to keep its whole object), and it requires each MP3 sub-switch
 trimming fails the build instead of quietly costing flash.  A release `nj2me` measured 3,571,544 bytes with both
 codecs, 3,546,152 without H.263 and 3,465,096 without MPEG-4 (3,414,432 with
 `NJ_ENABLE_VIDEO=0`).
+
+## 2026-11-13/14：媒体补全、时间线与真实平台验证
+
+这一轮把“最终包里可用的完整媒体功能”补到了可验证的状态；逐项证据与平台矩阵
+见 [PLATFORM_SUPPORT.md](PLATFORM_SUPPORT.md)。
+
+**WAV IMA ADPCM 双声道修复。** `wav_ima_decode` 原来把每个声道的样本都当成
+一帧、并且先写 L8 再写 R8（非交错），8 kHz 立体声 fixture 返回 6,099 帧
+（应为 3,051）、发布长度 24,396 字节超过 12,204 字节缓冲，49 个样本中 4,898
+个错误。现在按帧解交错、写最后一个声道前校验源字节、整块检查
+`(nj_u4)block <= len - pos`，不再有部分帧写入。新增
+`tests/test_wav_stereo.c`（22 case/5,208 检查，独立 FFmpeg PCM oracle，
+Release 与 ASan/UBSan/泄漏均通过）。
+
+**AMR DTX/舒适噪声。** 新增 SID 与 CN 帧解码（帧类型 3+8+9+9+6 位、
+hangover/插值/8 路 LSF 变化/31 位 PN/10 脉冲/all-pole/增益/高通/50 帧衰减），
+SID 的 80 个 Q15 残差来自固定版本 OpenCORE `q_plsf_3_tbl.cpp`
+（SHA `3ab12e9a…`），生成器/清单/校验脚本同步更新且不改动原有 44 个 PCM 表
+指纹。203 流/23,622 帧语音 PCM 逐位不变；DTX CN SNR 8.45–12.10 dB，纯 SID
+RMS 343.80346（OpenCORE 343.14002，31.03 dB）；48 万恶意帧 + 12 万混合 DTX
+帧在 ASan/UBSan/float-cast 下无未定义行为。明确记录非逐位一致的来源
+（LSF 加权、hangover、DTX→语音切换、SID 模式位、PLC、定点舍入），详见
+[SYSTEM_AMR.md](SYSTEM_AMR.md)。
+
+**MP4 容器与播放器时间线。** 解析器补齐 ESDS（旧实现返回 04 DecoderConfig
+23/65 字节而非 05 DSI 5 字节/VOL 47）、CTTS v0/v1 和 ELST（单段 rate 1，或
+前导空编辑+媒体段）。`test_mp4_timing` 14,359 项检查 + 8.2M fuzz。播放器改为
+按 PTS 调度：`video_time_us`/`video_next_time_us` 做饱和 ticks→µs 换算，
+capped 端口 `due = start + PTS`；`video_seek` 恢复迭代器到目标帧（旧实现会
+消费掉 seek 目标）；`video_decode_sample` 对 preroll/窗口外帧解码到宿主
+scratch，不污染可见 vbuf；`duration` 取 `presentation_end`；CTTS 非单调的
+重排容器在 `createPlayer` 明确拒绝（`video requires presentation reordering`）。
+`tests/test_media_timing.c` 1,097 项检查覆盖 VFR 间距、seek 目标像素、前导空
+编辑、非对齐编辑首帧、preroll 不显示、尾裁剪、暂停/恢复和重排拒绝。
+
+**电影音轨时间线。** 独立音频 ELST 映射到 PCM：`A=floor(offset*8000/scale)`，
+`[S,E)` 从 `max(0,S-A)` 拷贝、前导/尾部补零，`APCMN=E`；要求同一 track、
+`duration*8000 == nAMRFrames*160*audioScale`、无 CTTS、迭代器到 EOF。
+`tests/test_movie_amr_timing.c` 19 case/753,426 项检查（含真实 Player、
+前导静音、非帧对齐 preroll、双裁剪、独立音视频编辑、五帧打包、负偏移取整、
+容量边界、非连续 AMR 拒绝、正负 CTTS 拒绝）。
+
+**AAC（仅 Android 平台）。** `PlatformAudio.java` 用 API 21
+MediaExtractor/MediaCodec 支持 ADTS 和 audio-only M4A，拒绝任何视频轨与未知
+MIME，限制 32 MiB 输入/64 轨/100,000 单元、8 MiB PCM/20 s drain，保留 csd，
+缓存信息与解码格式一致，临时 FD 放应用缓存；AMR/MP3 保留原手工分帧（API 36
+模拟器的 Extractor 不可靠）。Android API 21 模拟器探针 11/11 PASS，PCM 与
+FFmpeg 对照：mono AAC 42.23 dB、stereo 68.53 dB、M4A 43.62/69.42 dB
+（lag 1,024）、旧 MP3 80.50 dB、旧 AMR 800/800 帧零 RMS；含视频轨的 MP4
+全部拒绝。Linux/Windows/libretro 核心仍没有 AAC 解码器，遇到时按不支持拒绝。
+
+**`VideoControl.getSnapshot` 签名修复。** 运行时原先注册成
+`(Ljava/lang/String;)Ljava/lang/Object;`，与 MIDP 声明的 `byte[]` 不符，真实
+MIDlet 抛 `NoSuchMethodError`。改为 `(Ljava/lang/String;)[B`（仅支持
+`"RGB888"`），`test_lib` 调用描述符同步更新。
+
+**带音轨电影跟随音频时钟。** uncapped 端口（Android 默认、libretro）保留
+“每次显式 pump 前进一帧”的确定性步进，但 `F_P_APCMN > 0` 时按音频时钟门控
+画面（`due = video_next_time_us/1000`，`now-start >= due`），否则 15 fps 片头
+会在 60 fps 渲染循环里 4 倍速放完、音画分离。新增
+`video_follows_audio_clock()` 回归（同毫秒两次 pump 不前进，+3,000 ms 后
+前进或 EOF）。
+
+**Android APK 内实测。** 最终 APK（SHA256 `0d124d47…`）在 API 21 模拟器上：
+M4V/H.263 解码后 RGB888 快照 176×144 并 `createRGBImage` 绘出 FFmpeg
+testsrc 彩条；PNG/GIF/JPEG（含 progressive）像素哈希与 Linux 一致；AudioDemo
+真实播放 WAV/AMR/ADPCM（OpenSL ES，状态 100→200→300→400）；Maze GLES2
+`fills=2964 blits=2136`，m3gdemo `rasters=16`；Minecraft 真实地形/天空/水
+正常渲染。已知限制：AAC 仅 Android、B 帧不支持、重排容器拒绝、无音轨的
+uncapped 视频仍按 pump 步进、模拟器缺 `EXT_frag_depth` 时三维批量回退软件。
+
+## 语料库真实标题解器实测（2026-11-14）
+
+命令行前端现在支持 `--verbose 3`（经 `nj_run_opts.verbose` 到
+`nj_vm_set_verbose()`，在打开应用前生效，不改变解码行为），日志会写明实际
+选中的解码器。首批 15 个带音频/视频资源的真实标题结果
+（证据：`.local-tools/debug-runs/goal13-verify/codec-media-probe.log`）：
+
+| 类型 | 标题 | 日志 |
+| --- | --- | --- |
+| MP3 | 哆啦A梦运动会_10939, 奥特曼-宇宙英雄超银河传说_2233 | `media: mp3 decoded MP3, 55296 frames` |
+| AMR 裸流 | Flippy跳跃大冒险_archive | 多条 `media: built-in decoded N AMR blocks` / `decoded N AMR frames from a stream into M PCM bytes` |
+| MP4/3GP 视频 | 毁灭战士3_10598 | `media: mpeg4-part2 movie 320x240, 189 samples`，MP4 AMR 轨 6001 帧 → 1,920,320 PCM 字节 |
+| MP4/3GP 视频 | 1942空战_10403 | `media: mpeg4-part2 movie 176x144, 275 samples` |
+| MIDI | 蓝白五子棋_9790 / 雷霆战机2012BT版_3101 | `media: built-in MIDI renderer, 355880 frames, 1 channels` / `756990 frames, 2 channels` |
+| WAV（流） | MinecraftJ2ME_PE_0.6.1_V2.2 | `media: streamed WAV 11025 Hz, 1 channel(s), N frames` |
+
+判定"静音标题"前要先进入游戏画面：固定 180 帧窗口常常停在菜单（美女滑雪
+胜地的 MIDI BGM 在选中地点后才开始，开心餐厅在 900 帧内根本没有创建
+Player）。`docs/notes/2026-11-14-audio-motion-probes.md` 记录了个案。
+
+## 语料库格式普查：哪些解码器真的有需求（2026-11-14）
+
+在决定"还缺哪个解码器"之前，先统计了 `tests/games` 全部 404 个 JAR 里
+音频/视频资源的真实格式（逐个读文件头/容器 box，而非只看扩展名）：
+
+| 格式 | 真实内容 | 结论 |
+| --- | --- | --- |
+| `.mp3` 50 个 | **全部 Layer III**（MPEG-1/2/2.5 单/双声道） | Layer I/II 无需求，维持不实现 |
+| `.wav` 466 个 | 全部 RIFF/WAVE PCM（fmt=1），8/16 bit，单/双声道 | ADPCM 只是测试 fixture/历史实现，语料库无 ADPCM 文件 |
+| `.mid` 3820 个 | 1446 个是标准 SMF（format 0 和 1 都有）；**2374 个不是音频**，是游戏把动画数据命名成 `.mid`（如 `data/animate/role_0_all.mid`，开头是帧索引不是 `MThd`） | SMF 0/1 覆盖即可，无需 RMI/XMF |
+| `.amr` 131 个 | 128 个是 `#!AMR` 窄带；3 个（毁灭战士3 的 `snd/*.amr`）实际是 **MP4 容器**（`ftypisom`） | 由容器嗅探处理，不是 AMR-WB 需求 |
+| `.3gp/.mp4` | stsd 采样条目只有 `samr`（AMR-NB）与 `mp4v`（MPEG-4 Part 2） | 无 AAC/H.264/高级 profile 需求；继续按文档拒绝不支持的 profile |
+
+因此"完善编解码"的优先级不是堆更多格式，而是把已支持格式的边界情况做稳：
+音频时钟/暂停恢复、MP4 轨道选择与分帧、超大 PCM 的堆预算（已在
+`2026-11-14-audio-motion-probes.md` 与 `SYSTEM_AMR.md` 记录）。

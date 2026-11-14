@@ -76,6 +76,7 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
     private PadView pad;
     private PadConfig padConfig;
     private TextView status;
+    private TextView graphicsPanelStatus;
     private TextView handleButton;
     private FrameLayout root;      /* the whole window: the handle is placed in it */
     private static volatile WeakReference<GameActivity> textActivity = new WeakReference<>(null);
@@ -268,6 +269,22 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
      * thread at the top of its next frame.
      */
     private static native void nativeSetFrameCap(long handle, int cap);
+
+    /** Launch choice only: 0 software, 1 experimental GLES2. Never changed mid-run. */
+    private static native void nativeSetGraphicsMode(long handle, int mode);
+    private static native boolean nativeGraphicsSupported();
+
+    /** [state, fills, blits, rasters, declines, requested], for this run only. */
+    private static native long[] nativeGraphicsInfo(long handle);
+
+    /** Also used by the library before a game exists. */
+    static boolean graphicsSupported() {
+        try {
+            return nativeGraphicsSupported();
+        } catch (UnsatisfiedLinkError e) {
+            return false;
+        }
+    }
 
     /** Drop the glyphs the port has cached (new typeface or anti-aliasing). */
     private static native void nativeGlyphReset(long handle);
@@ -756,6 +773,8 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
                                       heapMB, JarStore.rmsRoot(this).getAbsolutePath(),
                                       JarStore.fsRoot(this).getAbsolutePath());
             if (handle != 0) {
+                nativeSetGraphicsMode(handle,
+                        graphicsSupported() && Settings.gles2Experimental(this) ? 1 : 0);
                 nativeSetSpeed(handle, speed);
                 nativeSetFilter(handle, pictureAA);
                 nativeSetFrameCap(handle, Settings.frameCap(this));
@@ -1338,6 +1357,19 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
                 picAA ? "画面现在会做平滑；关掉是原来的方块像素"
                       : "画面缩放时是方块锯齿；铺满和自定义时打开更平滑",
                 picAA, null);
+        final boolean graphicsAvailable = graphicsSupported();
+        final boolean gles2 = graphicsAvailable && Settings.gles2Experimental(this);
+        LinearLayout graphicsRow = Md3.row(this, Md3.IC_SCREEN,
+                graphicsAvailable ? "GLES2 实验加速：" + (gles2 ? "开" : "关") + "（下次启动）"
+                                  : "GLES2 实验加速：不可用",
+                graphicsAvailable ? "下次启动游戏生效；支持的绘制交给 GPU，其余用软件。性能提升不保证。"
+                                  : "此安装包未含 GLES2，使用软件绘制。",
+                gles2, null);
+        graphicsRow.setEnabled(graphicsAvailable);
+        graphicsRow.setAlpha(graphicsAvailable ? 1f : 0.5f);
+        final TextView graphicsDetails = Md3.supporting(this, "");
+        graphicsPanelStatus = graphicsDetails;
+        updateGraphicsPanel(readGraphicsInfo());
         final int frameCap = Settings.frameCap(this);
         LinearLayout fpsRow = Md3.row(this, Md3.IC_PLAY,
                 "帧率上限：" + Settings.frameCapText(frameCap),
@@ -1365,6 +1397,9 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
         box.addView(Md3.divider(this));
         box.addView(fpsRow);
         box.addView(Md3.divider(this));
+        box.addView(graphicsRow);
+        box.addView(graphicsDetails, Md3.gap(this, 6));
+        box.addView(Md3.divider(this));
         box.addView(menuRow);
         box.addView(Md3.divider(this));
         box.addView(save);
@@ -1375,6 +1410,26 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
                 .setView(Md3.scroller(this, box))
                 .setNegativeButton("关闭", null), this);
 
+        dlg.setOnDismissListener(new android.content.DialogInterface.OnDismissListener() {
+            @Override
+            public void onDismiss(android.content.DialogInterface dialog) {
+                if (graphicsPanelStatus == graphicsDetails) {
+                    graphicsPanelStatus = null;
+                }
+            }
+        });
+        if (graphicsAvailable) {
+            graphicsRow.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    Settings.setGles2Experimental(GameActivity.this, !gles2);
+                    dlg.dismiss();
+                    toast("已选择" + (!gles2 ? " GLES2 实验加速" : "软件绘制")
+                            + "，下次启动游戏生效；本局保持不变");
+                    showPanel();
+                }
+            });
+        }
         adjust.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
@@ -1585,6 +1640,54 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
 
 
 
+    /** The same lifetime lock as nativeDestroy; the returned array is a CPU snapshot. */
+    private long[] readGraphicsInfo() {
+        synchronized (lock) {
+            return handle != 0 ? nativeGraphicsInfo(handle) : null;
+        }
+    }
+
+    private static String graphicsStateText(long[] info) {
+        if (info == null || info.length < 6) {
+            return "绘制状态暂不可用";
+        }
+        switch ((int) info[0]) {
+            case 0:
+                return "软件绘制（本局未启用 GLES2）";
+            case 1:
+                return "GLES2 等待启动";
+            case 2:
+                return info[1] > 0 || info[2] > 0 || info[3] > 0
+                        || (info.length >= 8 && info[6] > 0)
+                        ? "GLES2 已就绪，已执行 GPU 绘制"
+                        : "GLES2 已就绪，等待支持的绘制";
+            case 3:
+                return "GLES2 出错，已回退软件";
+            case 4:
+                return "本局运行已结束";
+            case 5:
+                return "此安装包未含 GLES2，使用软件绘制";
+            default:
+                return "绘制状态暂不可用";
+        }
+    }
+
+    private void updateGraphicsPanel(long[] info) {
+        if (graphicsPanelStatus == null) {
+            return;
+        }
+        String detail = "本局状态：" + graphicsStateText(info);
+        if (info != null && info.length >= 6) {
+            detail += "\n本局启动选择：" + (info[5] == 1 ? "GLES2 实验加速" : "软件绘制")
+                    + "\nGPU 填充 " + info[1] + " · 图像 " + info[2] + " · 栅格 " + info[3]
+                    + "\n转交软件 " + info[4] + " 次";
+            if (info.length >= 8) {
+                detail += "\nGPU 三角形 " + info[6] + " · 三维批次 " + info[7];
+            }
+        }
+        graphicsPanelStatus.setText(detail);
+    }
+
     private void refreshStatus() {
         String s;
         int[] det = null;
@@ -1621,7 +1724,10 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
                 JarStore.noteDetected(this, jarName, detW, detH);
             }
         }
-        status.setText(jarTitle + "  " + screenW + "x" + screenH + "\n" + s);
+        long[] graphics = readGraphicsInfo();
+        updateGraphicsPanel(graphics);
+        status.setText(jarTitle + "  " + screenW + "x" + screenH + "\n" + s
+                + "\n" + graphicsStateText(graphics));
     }
 
     /**

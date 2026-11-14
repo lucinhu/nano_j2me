@@ -4,8 +4,8 @@
  * MPEG-4 Visual (Part 2) bitstream framing: start codes and the video object
  * layer header.  Decoding pictures lives in the provider registered with
  * nj_avcodec; this header is what the container reader and that provider agree
- * on.  Field order follows the reference decoder (ffmpeg
- * libavcodec/mpeg4videodec.c, decode_vol_header), not memory.
+ * on.  Runtime syntax/predictor adaptations retain the OxideAV MIT notice in
+ * nj_m4v.c; the provenance note documents original framing and reconstruction.
  */
 #ifndef NJ_M4V_H
 #define NJ_M4V_H
@@ -109,10 +109,8 @@ int nj_m4v_ac_sym(int sym, int *run, int *level, int *last);
 int nj_m4v_scan_index(int k);
 
 /* Coefficient scan orders: 0 = the plain zigzag, 1 = the alternate horizontal
- * scan, 2 = the alternate vertical scan.  Modes 1 and 2 are the reference's
- * ff_alternate_horizontal_scan / ff_alternate_vertical_scan, the orders an
- * intra block uses when AC prediction is on (ISO/IEC 14496-2 7.4.3.4); they are
- * not plain row- and column-major orders. */
+ * scan, 2 = the alternate vertical scan (Figure 7-4).  The alternate orders
+ * apply when AC prediction is on; they are not row/column-major orders. */
 int nj_m4v_scan_index_mode(int k, int mode);
 
 /* Decodes one intra AC block using the given scan mode (see above).  The public
@@ -120,7 +118,7 @@ int nj_m4v_scan_index_mode(int k, int mode);
 int nj_m4v_ac_block_scan(const nj_u1 *b, nj_u4 n, nj_u4 *pos, nj_s4 *coef,
                          int k, int qscale, int scan_mode);
 
-/* ROUNDED_DIV() as the reference defines it (round half away from zero); used
+/* Integer division rounded half away from zero; used
  * to rescale an AC prediction when the neighbour macroblock had a different
  * quantiser. */
 int nj_m4v_rounded_div(int a, int b);
@@ -157,12 +155,13 @@ int nj_m4v_decode_intra_block_ex(const nj_u1 *b, nj_u4 n, nj_u4 *pos, nj_s4 *coe
 int nj_m4v_decode_intra_block(const nj_u1 *b, nj_u4 n, nj_u4 *pos,
                               nj_s4 *coef, int luma, int dc_pred, int qscale);
 
-/* FFmpeg's Simple IDCT, the transform the reference decoder uses for MPEG-4
- * Part 2, transcribed so the output is bit-exact instead of accurate to one
- * level.  nj_m4v_idct() returns the pixel-domain residual (the inter path adds
- * it to its prediction); nj_m4v_idct_put() takes the intra block whose DC
- * carries the mid-grey bias and writes clipped pixels, exactly like
- * ff_simple_idct_put_int16_8bit. */
+/* Separable inverse cosine transform using an original 20-bit basis matrix
+ * (H.263 6.2.4 equation).  Integer rounding may differ from other decoders.
+ * nj_m4v_idct() returns the pixel-domain residual; nj_m4v_idct_put() clips
+ * transformed intra pixels to 0..255.  Intra DC already carries its image
+ * level, so put does not add a 128 bias.  This replacement covers the transform
+ * only; see docs/notes/2026-11-12-mpeg4-independent-implementation.md for the
+ * decoder's remaining provenance blockers. */
 void nj_m4v_idct(const nj_s4 *coef, int *out);
 void nj_m4v_idct_put(const nj_s4 *coef, int *out);
 
@@ -222,35 +221,33 @@ int nj_m4v_decode_ivop(const nj_u1 *b, nj_u4 n, nj_u4 *pos,
                        nj_s4 *grids, nj_u1 *yp, int ys,
                        nj_u1 *up, int us, nj_u1 *vp, int vs);
 
-/* One motion-vector component: the ff_mvtab VLC, a sign bit and f_code-1
- * range bits, added to `pred' and wrapped into the 5+f_code-bit signed range
- * (ituh263dec.c ff_h263_decode_motion).  Returns 0xffff on a broken stream. */
+/* One motion-vector component: Table B-12 magnitude, sign and f_code-1
+ * residual bits, reconstructed with the predictor and signed interval wrap.
+ * Returns 0xffff on a broken stream; a zero motion code preserves pred. */
 int nj_m4v_decode_mv(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int pred, int f_code);
 
-/* The H.263/MPEG-4 median predictor of one 8x8 block's motion vector
- * (h263.c ff_h263_pred_motion).  mvx/mvy hold one (x,y) pair per 8x8 block
+/* Figure 7-34 median predictor for one 8x8 block.
+ * mvx/mvy hold one (x,y) pair per 8x8 block
  * with `pad' pairs of border before block (0,0) and `wrap' pairs per block
  * row; block 0..3 are the luma blocks in raster order.  `first_slice_line'
- * forces the reference's first-row behaviour and `resync_x' is the slice's
- * first macroblock column (0 for the single-slice VOPs this decoder takes). */
+ * identifies the packet's first row and `resync_x' its first macroblock
+ * column.  Internal frame drivers retain the complete packet start index. */
 void nj_m4v_pred_motion(const nj_s2 *mvx, const nj_s2 *mvy, int wrap, int pad,
                         int mbx, int mby, int block, int first_slice_line,
                         int resync_x, int *px, int *py);
 
-/* Half-pel motion compensation of one 8x8 block with edge emulation, written
- * to out[64] in raster order.  `shift' is 0 for luma (integer part mv>>1,
- * half-pel flag mv&1) and 1 for 4:2:0 chroma (integer part mv>>2, flag
- * (mv&3)!=0), the reference's H.263 chroma mapping (mpeg_motion_internal).
- * `no_rounding' is the P-VOP's vop_rounding_type: when set, the half-pel
- * averages truncate instead of rounding up, which is a different picture on
- * every pixel whose sum is odd (mpegvideo_dec.c picks put_no_rnd_pixels_tab
- * for that case). */
+/* Half-pel motion compensation of one 8x8 block with edge replication,
+ * written to out[64] in raster order.  H.263 6.1.2 Figure 13 defines the
+ * bilinear averages; Table 18 defines chroma fractional-position mapping.
+ * `shift' is 0 for half-pel luma vectors, 1 for quarter-pel chroma vectors;
+ * each non-integral chroma position maps to the half-pel.  `no_rounding'
+ * supplies RCONTROL (0 or 1) in the interpolation equations. */
 void nj_m4v_mc_block8(int sx, int sy, int mx, int my, const nj_u1 *pl,
                       int stride, int fw, int fh, int shift, int no_rounding,
                       nj_u1 *out);
 
-/* ff_h263_round_chroma: the single chroma vector made from the sum of the
- * four 8x8 luma vectors of a 4MV macroblock. */
+/* H.263 F.2 Table F.1: convert the sum of four luma vectors into one
+ * chroma vector, in half-pixel units. */
 int nj_m4v_chroma_round(int x);
 
 /* Decodes one P-VOP: skipped macroblocks are copied from the previous
@@ -264,10 +261,8 @@ int nj_m4v_decode_pvop(const nj_u1 *b, nj_u4 n, nj_u4 *pos,
                        const nj_u1 *py, int pys, const nj_u1 *pu, int pus,
                        const nj_u1 *pv, int pvs);
 
-/* The DC prediction grid and the dequantised intra DC coefficient are stored
- * around this bias: MPEG-4 predicts from mid-grey, and the reference IDCT
- * writes the coefficient directly, so the reconstruction subtracts the bias
- * and lets the IDCT add the 128 back. */
+/* Neutral DC prediction for unavailable neighbours: 128 at transform scale 8.
+ * Intra reconstruction transforms the dequantized DC directly, without bias. */
 #define NJ_M4V_DC_GREY 1024
 
 /* Converts a 4:2:0 picture with the BT.601 limited-range matrix into RGB565.

@@ -62,6 +62,7 @@
 #define _XOPEN_SOURCE 700
 
 #include <dlfcn.h>
+#include <ctype.h>
 #include <errno.h>
 #include <signal.h>
 #include <stdarg.h>
@@ -109,10 +110,22 @@ struct config
    int static_ok;
    unsigned min_nonblack;
    int timeout_s;
+
+   /* Frontend feature negotiation.  These are decided before the core's
+    * retro_set_environment() call, because that is when a core asks whether
+    * the frontend supports bitmask input and a rumble interface. */
+   int input_bitmask;
+   int expect_keychars;
+   int rumble_check;
+   unsigned screen_expect_w;
+   unsigned screen_expect_h;
+   char expect_locale[32];
+   char expect_canvas[32];
 };
 
 static struct config cfg = {
-   "", "", "", 180u, 0u, 0, 0, 0, 0, 0, 0u, 0, 0, 1u, 30
+   "", "", "", 180u, 0u, 0, 0, 0, 0, 0, 0u, 0, 0, 1u, 30, 0, 0, 0, 0u, 0u,
+   "", ""
 };
 
 /* ------------------------------------------------------------------ */
@@ -172,6 +185,7 @@ struct env_state
 
    int set_geometry_calls;
    int set_av_info_calls;
+   int set_av_info_outside_run;
    struct retro_system_av_info av_info_override;
    struct retro_game_geometry geometry_override;
 
@@ -187,6 +201,28 @@ struct env_state
    int missing_key_count;
 
    unsigned long long set_rotation_invalid;
+
+   /* RETRO_ENVIRONMENT_GET_INPUT_BITMASKS: the harness answers this before
+    * retro_init(); input_state() then serves the mask query when enabled. */
+   int bitmask_supported;
+   unsigned long long bitmask_calls;
+
+   /* RETRO_ENVIRONMENT_GET_RUMBLE_INTERFACE and the callbacks it hands out. */
+   int rumble_interface_supported;
+   unsigned long long rumble_interface_calls;
+   retro_set_rumble_state_t rumble_cb;
+   unsigned long long rumble_calls;
+   unsigned long long rumble_nonzero;
+   unsigned long long rumble_stops;
+   unsigned rumble_effect_mask;
+   unsigned rumble_max_strength;
+   unsigned long long rumble_error_lines;
+
+   /* Observations made from the fixture's own log lines. */
+   unsigned long long keychar_lines;
+   char locale_seen[32];
+   char canvas_seen[32];
+   int feature_lines;
 };
 
 /* ------------------------------------------------------------------ */
@@ -222,7 +258,8 @@ struct session_stats
 
    unsigned long long poll_calls;
    unsigned long long input_state_calls;
-   unsigned long long input_joypad_queries;
+   unsigned long long input_joypad_queries;   /* per-button queries only */
+   unsigned long long input_mask_queries;     /* RETRO_DEVICE_ID_JOYPAD_MASK */
    unsigned long long input_pressed_queries;
    unsigned long long input_pointer_queries;
    unsigned long long input_keyboard_queries;
@@ -279,6 +316,7 @@ static struct
    struct env_state env;
    struct session_stats ses;
    int have_geometry;
+   int in_retro_run;
    unsigned expected_width;
    unsigned expected_height;
    unsigned long long total_runs;
@@ -554,6 +592,26 @@ static void note_unknown_command(unsigned cmd)
           cmd);
 }
 
+static bool RETRO_CALLCONV h_set_rumble_state(unsigned port,
+                                              enum retro_rumble_effect effect,
+                                              uint16_t strength)
+{
+   if (port != 0)
+      return false;
+   g.env.rumble_calls++;
+   if (effect == RETRO_RUMBLE_STRONG || effect == RETRO_RUMBLE_WEAK)
+      g.env.rumble_effect_mask |= 1u << (unsigned)effect;
+   if (strength)
+   {
+      g.env.rumble_nonzero++;
+      if (strength > g.env.rumble_max_strength)
+         g.env.rumble_max_strength = strength;
+   }
+   else
+      g.env.rumble_stops++;
+   return true;
+}
+
 static bool RETRO_CALLCONV h_environment(unsigned cmd, void *data)
 {
    switch (cmd & 0xffffu)
@@ -720,6 +778,13 @@ static bool RETRO_CALLCONV h_environment(unsigned cmd, void *data)
          return true;
 
       case (RETRO_ENVIRONMENT_SET_SYSTEM_AV_INFO & 0xffffu):
+         /* libretro.h permits driver reinitialization only inside retro_run.
+          * Initial geometry is queried through retro_get_system_av_info. */
+         if (!g.in_retro_run)
+         {
+            g.env.set_av_info_outside_run++;
+            return false;
+         }
          if (!data)
             return false;
          g.env.set_av_info_calls++;
@@ -823,8 +888,19 @@ static bool RETRO_CALLCONV h_environment(unsigned cmd, void *data)
          return true;
 
       case (RETRO_ENVIRONMENT_GET_INPUT_BITMASKS & 0xffffu):
-         /* false => per-button values in retro_input_state_t (we do that). */
-         return false;
+         /* true => the core may poll one RETRO_DEVICE_ID_JOYPAD_MASK value
+          * instead of asking for every button. */
+         g.env.bitmask_calls++;
+         return g.env.bitmask_supported != 0;
+
+      case (RETRO_ENVIRONMENT_GET_RUMBLE_INTERFACE & 0xffffu):
+         g.env.rumble_interface_calls++;
+         if (!g.env.rumble_interface_supported || !data)
+            return false;
+         ((struct retro_rumble_interface *)data)->set_rumble_state =
+            h_set_rumble_state;
+         g.env.rumble_cb = h_set_rumble_state;
+         return true;
 
       case (RETRO_ENVIRONMENT_GET_AUDIO_VIDEO_ENABLE & 0xffffu):
          if (data)
@@ -860,6 +936,46 @@ static void RETRO_CALLCONV h_log(enum retro_log_level level,
    g.env.log_lines++;
    if (level >= 0 && level <= RETRO_LOG_ERROR)
       level_name = level_names[(int)level];
+
+   /* The fixtures report through System.out, which the core forwards to the
+    * frontend log.  Count the lines a feature check consumes rather than
+    * re-parsing the whole log after the fact. */
+   if (strstr(buffer, "KEYCHAR code="))
+      g.env.keychar_lines++;
+   if (level >= RETRO_LOG_WARN && strstr(buffer, "rumble"))
+      g.env.rumble_error_lines++;
+   {
+      static const char locale_prefix[] = "FEATURE locale=";
+      static const char canvas_prefix[] = "FEATURE canvas=";
+      const char *p = strstr(buffer, locale_prefix);
+      if (p)
+      {
+         size_t n = 0;
+         p += sizeof(locale_prefix) - 1;
+         while (p[n] && !isspace((unsigned char)p[n]) &&
+                n + 1 < sizeof(g.env.locale_seen))
+         {
+            g.env.locale_seen[n] = p[n];
+            n++;
+         }
+         g.env.locale_seen[n] = '\0';
+         g.env.feature_lines++;
+      }
+      p = strstr(buffer, canvas_prefix);
+      if (p)
+      {
+         size_t n = 0;
+         p += sizeof(canvas_prefix) - 1;
+         while (p[n] && !isspace((unsigned char)p[n]) &&
+                n + 1 < sizeof(g.env.canvas_seen))
+         {
+            g.env.canvas_seen[n] = p[n];
+            n++;
+         }
+         g.env.canvas_seen[n] = '\0';
+         g.env.feature_lines++;
+      }
+   }
 
    if (g.env.log_lines <= LOG_LINE_LIMIT)
    {
@@ -1027,9 +1143,23 @@ static int16_t RETRO_CALLCONV h_input_state(unsigned port, unsigned device,
    switch (device)
    {
       case RETRO_DEVICE_JOYPAD:
+         if (id == RETRO_DEVICE_ID_JOYPAD_MASK)
+         {
+            s->input_mask_queries++;
+            if (g_pad_state)
+               s->input_pressed_queries++;
+            return (int16_t)(g_pad_state & 0xffffu);
+         }
          s->input_joypad_queries++;
          if (g_pad_state)
             s->input_pressed_queries++;
+         if (g.env.bitmask_supported)
+         {
+            /* A frontend that advertises bitmasks expects the core to use
+             * the mask query.  Answering individual buttons here would hide
+             * a core that ignored the negotiation. */
+            return 0;
+         }
          if (id > 15)
             return 0;
          return (g_pad_state & (1u << id)) ? 1 : 0;
@@ -1175,6 +1305,9 @@ static void session_reset(void)
    g_pad_state = 0;
    g_pointer_pressed = 0;
    memset(g_key_down, 0, sizeof(g_key_down));
+   g.env.locale_seen[0] = '\0';
+   g.env.canvas_seen[0] = '\0';
+   g.env.feature_lines = 0;
 }
 
 static void session_teardown(void)
@@ -1246,6 +1379,32 @@ static void input_apply(unsigned frame, unsigned total)
 
    if (!cfg.input_check)
       return;
+
+   /* --expect-keychars asks for a sparse, easy-to-count schedule: one press
+    * of each of the eight bound buttons, two frames on and six off.  The
+    * bitmask path and the per-button fallback path drive the same schedule,
+    * so the KEYCHAR line count proves "exactly once" in both. */
+   if (cfg.expect_keychars > 0)
+   {
+      unsigned step;
+      if (frame < 20)
+      {
+         g_pad_state = 0;
+         g_pointer_pressed = 0;
+         return;
+      }
+      step = frame - 20;
+      slot = step / 8;
+      if (slot < 8 && (step % 8) < 2)
+      {
+         g_pad_state = 1u << joy_ids[slot];
+         g.ses.pressed_frames++;
+      }
+      else
+         g_pad_state = 0;
+      g_pointer_pressed = 0;
+      return;
+   }
    start = total > 8 ? total / 4 : 0;
    if (frame < start)
       return;
@@ -1302,7 +1461,9 @@ static void run_frames(unsigned count)
       if (cfg.pace_us)
          sleep_us(cfg.pace_us);
       audio_mark = g.ses.audio_batch_calls + g.ses.audio_sample_calls;
+      g.in_retro_run = 1;
       api.run();
+      g.in_retro_run = 0;
       g.ses.runs++;
       if (g.ses.audio_batch_calls + g.ses.audio_sample_calls == audio_mark)
          g.ses.runs_without_audio++;
@@ -1345,10 +1506,20 @@ static void check_after_load(int cycle)
 {
    struct retro_system_av_info av;
    const struct retro_game_geometry *geom;
-   int portrait, landscape_ok;
+   unsigned want_w = cfg.screen_expect_w ? cfg.screen_expect_w : 240u;
+   unsigned want_h = cfg.screen_expect_h ? cfg.screen_expect_h : 320u;
+   unsigned rot_w = want_h, rot_h = want_w;
+   int portrait, rotated_ok, base_ok;
+   int rot_swaps = cfg.rotation_expect_set &&
+                   (cfg.rotation_expect_code == 1 ||
+                    cfg.rotation_expect_code == 3);
 
    memset(&av, 0, sizeof(av));
    api.get_system_av_info(&av);
+   check("av_info_load_lifecycle", g.env.set_av_info_outside_run == 0,
+         "cycle=%d SET_SYSTEM_AV_INFO outside retro_run=%d (initial A/V "
+         "must use retro_get_system_av_info)",
+         cycle, g.env.set_av_info_outside_run);
 
    g.expected_width = av.geometry.base_width;
    g.expected_height = av.geometry.base_height;
@@ -1360,18 +1531,20 @@ static void check_after_load(int cycle)
           av.geometry.max_width, av.geometry.max_height,
           av.timing.fps, av.timing.sample_rate, av.geometry.aspect_ratio);
 
-   portrait = (av.geometry.base_width == 240 &&
-               av.geometry.base_height == 320);
-   landscape_ok = cfg.rotation_expect_set &&
-                  (cfg.rotation_expect_code == 1 ||
-                   cfg.rotation_expect_code == 3) &&
-                  av.geometry.base_width == 320 &&
-                  av.geometry.base_height == 240;
+   portrait = (av.geometry.base_width == want_w &&
+               av.geometry.base_height == want_h);
+   rotated_ok = rot_swaps &&
+                av.geometry.base_width == rot_w &&
+                av.geometry.base_height == rot_h;
+   base_ok = portrait || rotated_ok;
 
-   check("av_base_geometry_240x320", portrait || landscape_ok,
-         "base=%ux%u expected 240x320 (320x240 accepted when the core "
-         "internally rotates for --rotation 90/270)",
-         av.geometry.base_width, av.geometry.base_height);
+   check(cfg.screen_expect_w ? "av_screen_option_geometry"
+                             : "av_base_geometry_240x320",
+         base_ok,
+         "base=%ux%u expected %ux%u (rotated %ux%u accepted when the core "
+         "rotates internally for --rotation 90/270)",
+         av.geometry.base_width, av.geometry.base_height, want_w, want_h,
+         rot_w, rot_h);
 
    check("av_max_geometry_at_least_base",
          av.geometry.max_width >= av.geometry.base_width &&
@@ -1423,16 +1596,23 @@ static void check_after_load(int cycle)
             note("--rotation 0: core did not call SET_ROTATION (acceptable; "
                  "no rotation requested)");
       }
+      else if (!g.env.rotation_set && cfg.rotation_expect_code == 2 && portrait)
+      {
+         /* Internal half-turns preserve dimensions; geometry cannot prove
+          * pixel orientation, but they do not require SET_ROTATION. */
+         note("--rotation 180: internal rotation accepted with 240x320 "
+              "geometry; pixel orientation is not checked");
+      }
       else if (!g.env.rotation_set &&
-               av.geometry.base_width == 320 &&
-               av.geometry.base_height == 240)
+               av.geometry.base_width == rot_w &&
+               av.geometry.base_height == rot_h)
       {
          /* Some cores implement --rotation by swapping the reported output
           * geometry themselves instead of asking the frontend to rotate.  That
           * is a legitimate alternative to SET_ROTATION, so accept it. */
          note("--rotation %u: core did not call SET_ROTATION but reports "
-              "rotated 320x240 geometry (internal rotation accepted)",
-              cfg.rotation_expect_code * 90u);
+              "rotated %ux%u geometry (internal rotation accepted)",
+              cfg.rotation_expect_code * 90u, rot_w, rot_h);
       }
       else
       {
@@ -1486,6 +1666,9 @@ static void check_session(int cycle)
            s->nonblack_min == ~0ULL ? 0ULL : s->nonblack_min,
            s->nonblack_max, total_pixels, s->frames_with_content, s->runs,
            distinct, s->frame_hash_count);
+       if (s->frame_hash_count)
+          note("last sampled frame hash=%016llx",
+               (unsigned long long)s->frame_hashes[s->frame_hash_count - 1]);
 
       if (cfg.visual_required)
       {
@@ -1541,23 +1724,115 @@ static void check_session(int cycle)
    if (cfg.input_check)
    {
       printf("[info] input: input_state_calls=%llu joypad_queries=%llu "
-             "pressed_queries=%llu pointer_queries=%llu keyboard_queries=%llu "
-             "keyboard_events=%llu pressed_frames=%llu poll_calls=%llu\n",
+             "mask_queries=%llu pressed_queries=%llu pointer_queries=%llu "
+             "keyboard_queries=%llu keyboard_events=%llu pressed_frames=%llu "
+             "poll_calls=%llu\n",
              s->input_state_calls, s->input_joypad_queries,
-             s->input_pressed_queries, s->input_pointer_queries,
-             s->input_keyboard_queries, s->keyboard_events,
-             s->pressed_frames, s->poll_calls);
+             s->input_mask_queries, s->input_pressed_queries,
+             s->input_pointer_queries, s->input_keyboard_queries,
+             s->keyboard_events, s->pressed_frames, s->poll_calls);
       check("input_pressed_state_polled", s->input_pressed_queries > 0,
             "the core must poll retro_input_state while a button is held "
             "(pressed_queries=%llu)",
             s->input_pressed_queries);
+      if (cfg.input_bitmask)
+      {
+         check("input_bitmask_negotiated", g.env.bitmask_calls > 0,
+               "core never asked GET_INPUT_BITMASKS (calls=%llu)",
+               g.env.bitmask_calls);
+         check("input_bitmask_mask_query_used", s->input_mask_queries > 0,
+               "frontend enabled bitmasks but the core sent no "
+               "RETRO_DEVICE_ID_JOYPAD_MASK query (mask_queries=%llu)",
+               s->input_mask_queries);
+         check("input_bitmask_no_per_button_polling",
+               s->input_joypad_queries == 0,
+               "frontend enabled bitmasks but the core still polled %llu "
+               "individual button(s)",
+               s->input_joypad_queries);
+      }
+      else
+      {
+         check("input_bitmask_fallback_per_button",
+               s->input_joypad_queries > 0 && s->input_mask_queries == 0,
+               "frontend rejected bitmasks; core must fall back to per-button "
+               "polls (joypad=%llu mask=%llu)",
+               s->input_joypad_queries, s->input_mask_queries);
+      }
       check("input_keyboard_callback_registered",
-            g.env.keyboard_cb_set && s->keyboard_events > 0,
+            g.env.keyboard_cb_set &&
+               (s->keyboard_events > 0 || cfg.expect_keychars > 0),
             "SET_KEYBOARD_CALLBACK registered=%d keyboard_events=%llu",
             g.env.keyboard_cb_set, s->keyboard_events);
       if (g.env.input_descriptor_count == 0)
          note("core did not register input descriptors (cosmetic only)");
    }
+
+   if (cfg.expect_keychars > 0)
+      check("keychar_exactly_once",
+            g.env.keychar_lines == (unsigned long long)cfg.expect_keychars,
+            "fixture printed %llu KEYCHAR line(s), expected exactly %d "
+            "(duplicate delivery would exceed it, dropped input would fall "
+            "short)",
+            g.env.keychar_lines, cfg.expect_keychars);
+
+   if (cfg.rumble_check)
+   {
+      printf("[info] rumble: interface_calls=%llu calls=%llu nonzero=%llu "
+             "stops=%llu max_strength=%u effects=0x%x\n",
+             g.env.rumble_interface_calls, g.env.rumble_calls,
+             g.env.rumble_nonzero, g.env.rumble_stops,
+             g.env.rumble_max_strength, g.env.rumble_effect_mask);
+      check("rumble_interface_negotiated",
+            g.env.rumble_interface_calls > 0 && g.env.rumble_cb != NULL,
+            "core did not ask GET_RUMBLE_INTERFACE or ignored the table "
+            "(calls=%llu cb=%s)",
+            g.env.rumble_interface_calls,
+            g.env.rumble_cb ? "set" : "null");
+      check("rumble_weak_motor_only",
+            g.env.rumble_effect_mask == (1u << RETRO_RUMBLE_WEAK),
+            "effects seen=0x%x expected only RETRO_RUMBLE_WEAK (bit %u)",
+            g.env.rumble_effect_mask, (unsigned)RETRO_RUMBLE_WEAK);
+      check("rumble_nonzero_sent", g.env.rumble_nonzero > 0,
+            "no nonzero rumble strength reached set_rumble_state()");
+      check("rumble_full_strength", g.env.rumble_max_strength == 0xffffu,
+            "max strength=%u expected 0xffff (weak motor at full scale)",
+            g.env.rumble_max_strength);
+      check("rumble_stop_sent", g.env.rumble_stops > 0,
+            "no zero-strength call reached set_rumble_state()");
+   }
+
+   /* With no frontend rumble interface the core must stay silent: a missing
+    * motor is normal, not an error, and must never spam the log. */
+   check("rumble_absent_is_silent", g.env.rumble_error_lines == 0,
+         "%llu warning/error log line(s) mention rumble",
+         g.env.rumble_error_lines);
+
+   if (cfg.expect_locale[0])
+      check("locale_property", strcmp(g.env.locale_seen, cfg.expect_locale) == 0,
+            "fixture saw microedition.locale='%s', expected '%s'",
+            g.env.locale_seen, cfg.expect_locale);
+
+   if (cfg.expect_canvas[0])
+      check("canvas_size", strcmp(g.env.canvas_seen, cfg.expect_canvas) == 0,
+            "fixture saw Canvas %s, expected %s", g.env.canvas_seen,
+            cfg.expect_canvas);
+}
+
+/* Re-sign a deliberately edited nano_j2me envelope, so a font-identity
+ * mismatch is tested independently of ordinary checksum corruption. */
+static void state_resign(unsigned char *blob, size_t len)
+{
+   uint32_t crc = 0xffffffffu;
+   size_t i;
+   unsigned bit;
+   for (i = 0; i < len; i++) {
+      if (i >= 12 && i < 16) continue;
+      crc ^= blob[i];
+      for (bit = 0; bit < 8; bit++)
+         crc = (crc >> 1) ^ ((crc & 1u) ? 0xedb88320u : 0);
+   }
+   crc = ~crc;
+   for (bit = 0; bit < 4; bit++) blob[12 + bit] = (unsigned char)(crc >> (8 * bit));
 }
 
 static void check_serialize_roundtrip(size_t size_at_load)
@@ -1567,6 +1842,16 @@ static void check_serialize_roundtrip(size_t size_at_load)
    int ok;
 
    size = api.serialize_size();
+   if (g.env.shutdown_requested) {
+      /* notifyDestroyed() has already ended this VM; it has no running frame
+       * boundary to save. Advertising the format still remains valid. */
+      unsigned char byte = 0xA5;
+      check("serialize_stopped_refused", !api.serialize(&byte, 1),
+            "an exited MIDlet must safely refuse serialization");
+      return;
+   }
+   check("serialize_size_stable", size == size_at_load,
+         "size at load=%zu after frames=%zu", size_at_load, size);
    if (size == 0)
    {
       check("serialize_size_stable", 0,
@@ -1580,6 +1865,13 @@ static void check_serialize_roundtrip(size_t size_at_load)
       check("serialize_roundtrip", 0, "out of memory (%zu bytes)", size);
       return;
    }
+   buffer[0] = 0xA5;
+   check("serialize_small_buffer_refused", !api.serialize(buffer, 1) &&
+         buffer[0] == 0xA5, "undersized output must be refused without writing");
+   check("serialize_null_refused", !api.serialize(NULL, size),
+         "NULL output must be refused");
+   check("unserialize_null_refused", !api.unserialize(NULL, size),
+         "NULL input must be refused");
    ok = api.serialize(buffer, size);
    check("serialize_writes_state", ok, "retro_serialize(%zu) returned %d",
          size, ok);
@@ -1591,7 +1883,54 @@ static void check_serialize_roundtrip(size_t size_at_load)
       check("unserialize_restores_state", ok,
             "retro_unserialize(%zu) returned %d", size, ok);
       if (ok)
+      {
          run_frames(1);
+         /* A damaged blob has to be refused, and the session has to survive
+          * the refusal: the current game must remain active, and this
+          * mock frontend keeps calling it like RetroArch would. */
+         /* Corrupt the version field inside the blob header.  The tail of
+          * the buffer is padding (serialize_size is an upper bound), so
+          * flipping the last byte would not be observed by the loader. */
+         buffer[4] ^= 0xFF;
+         ok = api.unserialize(buffer, size);
+         check("unserialize_rejects_version", !ok,
+               "corrupted version must be rejected (returned %d)", ok);
+          buffer[4] ^= 0xFF;
+          buffer[64] ^= 0xFF;
+          ok = api.unserialize(buffer, size);
+          check("unserialize_rejects_payload", !ok,
+                "corrupted payload must be rejected (returned %d)", ok);
+          buffer[64] ^= 0xFF;
+          {
+              uint32_t total = (uint32_t)buffer[8] | ((uint32_t)buffer[9] << 8) |
+                               ((uint32_t)buffer[10] << 16) | ((uint32_t)buffer[11] << 24);
+              if (total >= 64 && total <= size) {
+                 buffer[60] ^= 1;
+                 state_resign(buffer, total);
+                 check("unserialize_rejects_other_font", !api.unserialize(buffer, size),
+                       "valid-checksum state with different font identity must be refused");
+                 buffer[60] ^= 1;
+                 state_resign(buffer, total);
+                 check("unserialize_accepts_resigned_state", api.unserialize(buffer, size),
+                       "restoring original font identity and checksum must succeed");
+              }
+           }
+           check("unserialize_rejects_truncation", !api.unserialize(buffer, 64),
+                "truncated payload must be rejected");
+          run_frames(4);
+          check("unserialize_refusal_keeps_running", !g.env.shutdown_requested,
+                "the session must remain active after refused states");
+          check("serialize_after_refused_restore", api.serialize(buffer, size),
+                "the live VM must remain saveable after refused states");
+          api.reset();
+          run_frames(4);
+          check("unserialize_after_reset", api.unserialize(buffer, size),
+                "same-content state must load into a fresh VM after reset");
+          run_frames(4);
+          check("serialize_size_after_restore", api.serialize_size() == size,
+                "serialization upper bound must remain stable after restore");
+         run_frames(1);
+      }
    }
    free(buffer);
 }
@@ -1641,10 +1980,12 @@ static int run_game_cycle(int cycle)
       check("serialize_unsupported_returns_false", !ok,
             "serialize_size()==0 but retro_serialize() returned %d", ok);
    }
-   else if (cfg.cycle)
-      check_serialize_roundtrip(serialize_size);
    else
-      note("serialize roundtrip only exercised in --cycle mode");
+   {
+      /* The roundtrip runs in every mode: a core that advertises save states
+       * has to save and restore them whether or not this is a --cycle run. */
+      check_serialize_roundtrip(serialize_size);
+   }
 
    api.unload_game();
    check_session(cycle);
@@ -1695,7 +2036,19 @@ static void usage(FILE *out, const char *argv0)
            "sample is emitted\n"
            "  --input-check      drive joypad/keyboard/pointer and require the "
            "core to poll\n"
-           "  --expect-load-fail fail unless retro_load_game rejects --jar\n"
+           "  --input-bitmask    advertise RETRO_ENVIRONMENT_GET_INPUT_BITMASKS "
+           "and require\n"
+           "                     the core to use the joypad mask query\n"
+           "  --expect-keychars N require exactly N KEYCHAR lines from the "
+           "fixture\n"
+           "                     (implies a sparse 8-press input schedule)\n"
+           "  --rumble-check     provide a rumble interface and require "
+           "weak-motor on/off\n"
+           "  --expect-screen WxH require this av_info base geometry\n"
+           "  --expect-canvas WxH require the fixture to report this canvas "
+           "size\n"
+           "  --expect-locale S  require the fixture to report this "
+           "microedition.locale\n"
            "  --cycle            load/run/unload twice in the same process\n"
            "  --rotation N       expect SET_ROTATION for N degrees "
            "(0/90/180/270) or raw code 0..3\n"
@@ -1744,6 +2097,27 @@ static int add_override(const char *assignment)
    return 1;
 }
 
+static int parse_size(const char *text, unsigned *w, unsigned *h)
+{
+   char *end = NULL;
+   unsigned long a, b;
+
+   if (!text || !*text)
+      return 0;
+   errno = 0;
+   a = strtoul(text, &end, 10);
+   if (errno || !end || (*end != 'x' && *end != 'X') || end == text ||
+       a == 0 || a > 8192)
+      return 0;
+   errno = 0;
+   b = strtoul(end + 1, &end, 10);
+   if (errno || !end || *end || b == 0 || b > 8192)
+      return 0;
+   *w = (unsigned)a;
+   *h = (unsigned)b;
+   return 1;
+}
+
 static int parse_args(int argc, char **argv)
 {
    int i;
@@ -1776,6 +2150,35 @@ static int parse_args(int argc, char **argv)
          cfg.audio_required = 1;
       else if (strcmp(arg, "--input-check") == 0)
          cfg.input_check = 1;
+      else if (strcmp(arg, "--input-bitmask") == 0)
+      {
+         cfg.input_check = 1;
+         cfg.input_bitmask = 1;
+      }
+      else if (strcmp(arg, "--expect-keychars") == 0 && i + 1 < argc)
+      {
+         unsigned value;
+         if (!parse_uint(argv[++i], &value) || value > 4096)
+            goto bad_value;
+         cfg.expect_keychars = (int)value;
+      }
+      else if (strcmp(arg, "--rumble-check") == 0)
+         cfg.rumble_check = 1;
+      else if (strcmp(arg, "--expect-screen") == 0 && i + 1 < argc)
+      {
+         if (!parse_size(argv[++i], &cfg.screen_expect_w,
+                         &cfg.screen_expect_h))
+            goto bad_value;
+      }
+      else if (strcmp(arg, "--expect-canvas") == 0 && i + 1 < argc)
+      {
+         unsigned w, h;
+         if (!parse_size(argv[++i], &w, &h))
+            goto bad_value;
+         snprintf(cfg.expect_canvas, sizeof(cfg.expect_canvas), "%ux%u", w, h);
+      }
+      else if (strcmp(arg, "--expect-locale") == 0 && i + 1 < argc)
+         snprintf(cfg.expect_locale, sizeof(cfg.expect_locale), "%s", argv[++i]);
       else if (strcmp(arg, "--expect-load-fail") == 0)
          cfg.expect_load_fail = 1;
       else if (strcmp(arg, "--cycle") == 0)
@@ -1941,6 +2344,10 @@ int main(int argc, char **argv)
    if (!parse_args(argc, argv))
       return 2;
 
+   /* Negotiation happens in retro_set_environment(), before retro_init(). */
+   g.env.bitmask_supported = cfg.input_bitmask;
+   g.env.rumble_interface_supported = cfg.rumble_check;
+
    printf("[nano_j2me libretro mock frontend harness]\n");
    resolve_path(cfg.core_path, g.core_abs, sizeof(g.core_abs));
    resolve_path(cfg.jar_path, g.jar_abs, sizeof(g.jar_abs));
@@ -2054,6 +2461,9 @@ int main(int argc, char **argv)
    }
 
    api.deinit();
+   check("av_info_lifecycle", g.env.set_av_info_outside_run == 0,
+         "SET_SYSTEM_AV_INFO outside retro_run=%d across init/load/reset/"
+         "unload/deinit", g.env.set_av_info_outside_run);
    dlclose(g.lib);
    g.lib = NULL;
    session_teardown();

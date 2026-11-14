@@ -598,7 +598,7 @@ static nj_status client_run_game(const nj_client_run_options *options,
         SDL_setenv("NJ_SDL2_KEYS", options->keys_visible ? "1" : "0", 1);
     }
     client_window_title(jar, title, (int)sizeof(title));
-    st = nj_port_sdl2(&port, title);
+    st = nj_port_sdl2_ex(&port, title, options->graphics_mode - 1);
     if (st != NJ_OK) {
         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
                      "client: cannot create the game window: %s",
@@ -661,9 +661,15 @@ nj_status nj_client_run(const nj_client_run_options *options)
     int launcher_h;
     int quit = 0;
 
-    if (options == NULL || options->game == NULL) {
-        return NJ_ERR;
+    if (options == NULL || options->game == NULL ||
+        options->graphics_mode < 0 || options->graphics_mode > 2) return NJ_ERR;
+#if !defined(NJ_SDL2_GLES2) || !NJ_SDL2_GLES2
+    if (options->graphics_mode == 2) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                     "client: this build has no GLES2 drawing backend; use --graphics software");
+        return NJ_ERR_UNSUPPORTED;
     }
+#endif
     if (options->settings != NULL) {
         settings = options->settings;
     } else {

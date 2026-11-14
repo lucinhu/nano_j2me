@@ -18,7 +18,8 @@
  * they agree to 85-93 dB, which is where a different summation order starts to
  * show.  (ffmpeg's OTHER AMR decoder, libopencore_amrnb, is a further 14-45 dB
  * away from both: the two references disagree with each other by that much, so
- * this test anchors to the one the code was written from.)
+ * these assertions retain that historical floating-point baseline. They are
+ * regression checks, not TS 26.073 fixed-point conformance vectors.)
  *
  * The vectors are a frame header plus a fixed payload pattern, generated below
  * rather than copied from a game, so nothing here is anybody's asset.
@@ -241,6 +242,194 @@ static void test_provider_matches_direct_decode(void)
 }
 #endif /* NJ_ENABLE_AMR */
 
+#if NJ_ENABLE_AMR
+/* All-one MR67 payloads have legal framing but an unstable gain history.
+ * This used to overflow float-to-int, then turn NaN into a PCM integer. Check
+ * recovery through the public API, including the next independently coded
+ * frame; sanitizer builds diagnose either undefined conversion as well. */
+static void test_numeric_recovery(void)
+{
+    enum { BAD_FRAMES = 128, FRAME_BYTES = 18 };
+    nj_u1 input[6 + BAD_FRAMES * FRAME_BYTES + 32];
+    nj_u1 pcm[BAD_FRAMES * BYTES_PER_FRAME + BYTES_PER_FRAME + 16];
+    nj_u1 good_file[64], good_pcm[BYTES_PER_FRAME];
+    nj_u4 len = 6u, good_len, reset = BAD_FRAMES, i;
+    memcpy(input, "#!AMR\n", 6u);
+    for (i = 0; i < BAD_FRAMES; ++i) {
+        input[len++] = (nj_u1)((3u << 3) | 4u);
+        memset(input + len, 0xFF, FRAME_BYTES - 1);
+        len += FRAME_BYTES - 1;
+    }
+    memset(pcm, 0xA5, sizeof(pcm));
+    ok(nj_amr_decode(input, len, pcm) == BAD_FRAMES,
+       "runaway gains preserve the promised frame count");
+    ok(pcm[BAD_FRAMES * BYTES_PER_FRAME] == 0xA5,
+       "runaway gains do not overwrite the output canary");
+    for (i = 0; i < BAD_FRAMES; ++i) {
+        if (all_zero(pcm + i * BYTES_PER_FRAME, SAMPLES_PER_FRAME)) {
+            reset = i;
+            break;
+        }
+    }
+    ok(reset < BAD_FRAMES, "runaway excitation triggers a silent recovery frame");
+    if (reset == BAD_FRAMES) return;
+    memcpy(good_file, "#!AMR\n", 6u);
+    good_len = add_frame(good_file, 6u, 7);
+    ok(nj_amr_decode(good_file, good_len, good_pcm) == 1u,
+       "standalone recovery reference decodes");
+    len = 6u + (reset + 1u) * FRAME_BYTES;
+    len = add_frame(input, len, 7);
+    memset(pcm, 0xA5, sizeof(pcm));
+    ok(nj_amr_decode(input, len, pcm) == reset + 2u,
+       "a valid frame following numeric recovery decodes");
+    ok(memcmp(pcm + (reset + 1u) * BYTES_PER_FRAME, good_pcm,
+              BYTES_PER_FRAME) == 0,
+       "numeric recovery clears corrupt history before the next valid frame");
+    ok(pcm[(reset + 2u) * BYTES_PER_FRAME] == 0xA5,
+       "recovery and the next frame preserve the output canary");
+}
+
+/* Build format fields, not a decoder's parameter data. SID bit positions
+ * follow TS 26.092 table 1 and TS 26.093 STI/mode indication. */
+static void sid_field(nj_u1 *out, int first, int count, unsigned value)
+{
+    int bit;
+    for (bit = 0; bit < count; ++bit) {
+        unsigned mask = 1u << (7 - (first + bit) % 8);
+        if ((value >> (count - 1 - bit)) & 1u)
+            out[1 + (first + bit) / 8] |= (nj_u1)mask;
+        else out[1 + (first + bit) / 8] &= (nj_u1)~mask;
+    }
+}
+
+static nj_u4 add_sid(nj_u1 *out, nj_u4 len, int energy, int update, int good)
+{
+    memset(out + len, 0, 6);
+    out[len] = (nj_u1)((8u << 3) | (good ? 4u : 0u));
+    sid_field(out + len, 29, 6, (unsigned)energy);
+    sid_field(out + len, 35, 1, (unsigned)update);
+    sid_field(out + len, 36, 3, 7u);
+    return len + 6u;
+}
+
+static void test_sid_and_bad_frames(void)
+{
+    enum { LONG_FRAMES = 300 };
+    static nj_u1 a[4096], b[4096];
+    static nj_u1 x[LONG_FRAMES * BYTES_PER_FRAME + 16];
+    static nj_u1 y[LONG_FRAMES * BYTES_PER_FRAME + 16];
+    nj_u4 len, other, i, end;
+    double high_energy, low_energy;
+    memcpy(a, "#!AMR\n", 6);
+    len = add_sid(a, 6u, 40, 1, 1);
+    for (i = 1; i < 32; ++i) a[len++] = header(15);
+    memset(x, 0xA5, sizeof(x));
+    ok(nj_amr_frames(a, len) == 32u, "SID_UPDATE plus NO_DATA counts 32 frames");
+    ok(nj_amr_decode(a, len, x) == 32u, "SID_UPDATE and continuous CN decode");
+    ok(x[32 * BYTES_PER_FRAME] == 0xA5, "CN preserves the output canary");
+    ok(!all_zero(x + 10 * BYTES_PER_FRAME, 22 * SAMPLES_PER_FRAME),
+       "NO_DATA after SID keeps generating comfort noise");
+    high_energy = (double)sumsq_of(x + 10 * BYTES_PER_FRAME, 22 * SAMPLES_PER_FRAME);
+    /* External OpenCORE reference: RMS 343.140019 for these 3520 samples.
+     * Floating-point CNG is not bit exact; assert its decoded SID level. */
+    ok(high_energy > 330.0 * 330.0 * 3520.0 &&
+       high_energy < 356.0 * 356.0 * 3520.0,
+       "SID energy and LP gain agree with the external oracle level");
+    ok(nj_amr_decode(a, len, y) == 32u && memcmp(x, y, 32 * BYTES_PER_FRAME) == 0,
+       "CN random state is deterministic and local to each decode");
+    sid_field(a + 6, 29, 6, 32u);
+    ok(nj_amr_decode(a, len, y) == 32u, "lower SID energy decodes");
+    low_energy = (double)sumsq_of(y + 10 * BYTES_PER_FRAME, 22 * SAMPLES_PER_FRAME);
+    ok(high_energy > 15.5 * low_energy && high_energy < 16.5 * low_energy,
+       "eight SID energy steps multiply power by sixteen");
+
+    len = add_sid(a, 6u, 32, 1, 1);
+    for (i = 1; i < 8; ++i) a[len++] = header(15);
+    end = len;
+    len = add_sid(a, len, 40, 1, 1);
+    for (i = 9; i < 24; ++i) a[len++] = header(15);
+    memcpy(b, a, len);
+    sid_field(b + end, 29, 6, 32u);
+    ok(nj_amr_decode(a, len, x) == 24u && nj_amr_decode(b, len, y) == 24u,
+       "second SID_UPDATE interpolates a changed energy model");
+    ok(memcmp(x, y, 8 * BYTES_PER_FRAME) == 0 &&
+       memcmp(x + 8 * BYTES_PER_FRAME, y + 8 * BYTES_PER_FRAME,
+              16 * BYTES_PER_FRAME) != 0,
+       "SID_UPDATE affects only its own frame and subsequent CN");
+    high_energy = (double)sumsq_of(x + 16 * BYTES_PER_FRAME, 8 * SAMPLES_PER_FRAME);
+    low_energy = (double)sumsq_of(y + 16 * BYTES_PER_FRAME, 8 * SAMPLES_PER_FRAME);
+    ok(high_energy > 15.0 * low_energy && high_energy < 17.0 * low_energy,
+       "SID_UPDATE converges to the new logarithmic energy");
+
+    /* In CN, SPEECH_BAD has exactly the same effect as NO_DATA, including
+     * following good speech. This checks that no unusable payload is read. */
+    len = add_sid(a, 6u, 40, 1, 1);
+    a[len++] = header(15);
+    len = add_frame(a, len, 7);
+    memcpy(b, a, 12);
+    other = add_frame(b, 12u, 3);
+    b[12] &= (nj_u1)~4u;
+    memset(b + 13, 0xFF, 17);
+    other = add_frame(b, other, 7);
+    ok(nj_amr_decode(a, len, x) == 3u && nj_amr_decode(b, other, y) == 3u,
+       "CN bad-speech and no-data sequences decode through speech resumption");
+    ok(memcmp(x, y, 3 * BYTES_PER_FRAME) == 0,
+       "bad speech in CN ignores all payload and preserves CN state");
+    ok(!all_zero(x + 2 * BYTES_PER_FRAME, SAMPLES_PER_FRAME),
+       "good speech leaves CN and produces speech samples");
+
+    len = add_sid(a, 6u, 40, 1, 1);
+    len = add_sid(a, len, 12, 1, 0); /* SID_BAD */
+    len = add_frame(a, len, 1);
+    memcpy(b, a, len);
+    memset(b + 13, 0xFF, 5);
+    ok(nj_amr_decode(a, len, x) == 3u && nj_amr_decode(b, len, y) == 3u &&
+       memcmp(x, y, 3 * BYTES_PER_FRAME) == 0,
+       "SID_BAD cannot replace frequency or energy with corrupt parameters");
+    a[12] = b[12] = header(8);
+    sid_field(a + 12, 35, 1, 0u);
+    sid_field(b + 12, 35, 1, 0u);
+    ok(nj_amr_decode(a, len, x) == 3u && nj_amr_decode(b, len, y) == 3u &&
+       memcmp(x, y, 3 * BYTES_PER_FRAME) == 0,
+       "SID_FIRST ignores its untransmitted codec parameters");
+
+    len = build(a, mix_modes, 1);
+    end = len;
+    len = add_frame(a, len, 7);
+    a[end] &= (nj_u1)~4u;
+    memcpy(b, a, len);
+    memset(b + end + 1, 0xFF, 31);
+    len = add_frame(a, len, 4);
+    other = add_frame(b, end + 32u, 4);
+    ok(nj_amr_decode(a, len, x) == 3u && nj_amr_decode(b, other, y) == 3u &&
+       memcmp(x, y, 3 * BYTES_PER_FRAME) == 0,
+       "Q=0 in speech mode cannot feed corrupt payload into later speech");
+    ok(all_zero(x + BYTES_PER_FRAME, SAMPLES_PER_FRAME),
+       "speech erasure uses explicit conservative muting");
+
+    len = add_sid(a, 6u, 40, 1, 1);
+    for (i = 1; i < LONG_FRAMES; ++i) a[len++] = header(15);
+    memset(x, 0xA5, sizeof(x));
+    ok(nj_amr_decode(a, len, x) == LONG_FRAMES,
+       "missing SID updates keep their full output duration");
+    ok(!all_zero(x + 10 * BYTES_PER_FRAME, SAMPLES_PER_FRAME) &&
+       all_zero(x + (LONG_FRAMES - 1) * BYTES_PER_FRAME, SAMPLES_PER_FRAME),
+       "SID timeout gradually mutes CN after prolonged update loss");
+    ok(x[LONG_FRAMES * BYTES_PER_FRAME] == 0xA5,
+       "long CN loss preserves the output canary");
+
+    len = add_sid(a, 6u, 63, 1, 1);
+    for (i = 1; i < LONG_FRAMES; ++i) {
+        if (i % 8 == 0) len = add_sid(a, len, 63, 1, 1);
+        else a[len++] = header(15);
+    }
+    memset(x, 0xA5, sizeof(x));
+    ok(nj_amr_decode(a, len, x) == LONG_FRAMES &&
+       x[LONG_FRAMES * BYTES_PER_FRAME] == 0xA5,
+       "maximum SID energy stays finite and bounded under sanitizers");
+}
+#endif
+
 int main(void)
 {
     static nj_u1 file[4096];
@@ -331,9 +520,8 @@ int main(void)
     /*
      * A SID frame is six bytes: 39 bits of comfort noise plus the header, which
      * is what RFC 4867 Table 1a says and what the reference demuxer reads.  The
-     * decoder has no comfort noise generator, so it answers with silence - but
-     * it must still walk the stream by the right six bytes, or the speech frame
-     * behind it is read as the middle of a header.
+     * SID_FIRST enters comfort noise with its initialized model, and still
+     * walks by six bytes so the following speech is read at its own header.
      */
     memcpy(file, "#!AMR\n", 6u);
     len = 6u;
@@ -350,7 +538,7 @@ int main(void)
     memset(pcm, 0xAA, sizeof(pcm));
     got = nj_amr_decode(file, len, pcm);
     ok(got == 3u, "the speech frames behind a SID frame still decode");
-    ok(all_zero(pcm, SAMPLES_PER_FRAME), "a SID frame decodes to silence");
+    ok(!all_zero(pcm, SAMPLES_PER_FRAME), "SID_FIRST initializes comfort noise");
     ok(sumsq_of(pcm + BYTES_PER_FRAME, 2 * SAMPLES_PER_FRAME) > 0L,
        "the frames after the SID frame are not silence");
 
@@ -397,6 +585,8 @@ int main(void)
        "a trailing reserved header is not counted");
 
 #if NJ_ENABLE_AMR
+    test_numeric_recovery();
+    test_sid_and_bad_frames();
     test_provider_matches_direct_decode();
 #endif
     printf("\n%d checks, %d failures\n", checks, fails);

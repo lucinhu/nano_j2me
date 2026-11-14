@@ -55,6 +55,11 @@ int nj_run(const nj_port *port, const nj_run_opts *opts);
 /* Built-in ports (see nj_port.h for the full contract). */
 nj_status nj_port_headless(nj_port *out);
 nj_status nj_port_sdl2(nj_port *out, const char *title);
+/* Per-instance drawing selection: -1 reads NJ_SDL2_GFX for compatibility,
+ * 0 forces software, 1 requests experimental GLES2. Invalid modes return NJ_ERR;
+ * an explicit GLES2 request in a software-only build returns NJ_ERR_UNSUPPORTED.
+ * The ordinary constructor is equivalent to mode -1. No environment mutation. */
+nj_status nj_port_sdl2_ex(nj_port *out, const char *title, int graphics_mode);
 
 /* Release a port created by the functions above.  Safe to call twice. */
 void nj_port_shutdown(nj_port *port);

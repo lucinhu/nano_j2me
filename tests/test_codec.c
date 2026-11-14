@@ -26,6 +26,7 @@
 #include "nj2me/nj.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 static int checks;
@@ -194,6 +195,82 @@ static void test_builtin(nj_vm *vm)
         CHECK_EQ(img->pixels[5] & 0xFF000000u, 0x00000000u,
                  "the fully transparent pixel stayed transparent");
         nj_image_release(vm, img);
+    }
+}
+
+static void test_png_probe_bounds(nj_vm *vm)
+{
+    static const unsigned char legal[][2] = {
+        {0,1}, {0,2}, {0,4}, {0,8}, {0,16},
+        {2,8}, {2,16}, {3,1}, {3,2}, {3,4}, {3,8},
+        {4,8}, {4,16}, {6,8}, {6,16}
+    };
+    static const unsigned char invalid[][2] = {
+        {0,0}, {8,1}, {11,12}, {11,14}, {12,'J'},
+        {19,0}, {23,0}, {16,0x80}, {20,0x80},
+        {24,0}, {24,3}, {24,4}, {24,32},
+        {25,1}, {25,5}, {25,7}, {26,1}, {27,1}, {28,2}
+    };
+    nj_image_info info;
+    unsigned char header[29];
+    nj_u4 n;
+    size_t i;
+
+    printf("PNG header bounds and IHDR validity\n");
+    /* Exact allocations expose p[24]/p[25] reads on the former 24-byte
+     * threshold under ASan. A complete 29-byte header needs no image decode. */
+    for (n = 1u; n <= 29u; n++) {
+        unsigned char *p = (unsigned char *)malloc((size_t)n);
+        nj_status want = n == 29u ? NJ_OK : NJ_ERR_FORMAT;
+        CHECK(p != NULL, "allocate exact-length PNG header");
+        if (!p) return;
+        memcpy(p, k_png, n);
+        CHECK_EQ(nj_codec_png_software.info(p, n, &info), want,
+                 "provider rejects incomplete IHDR payloads");
+        CHECK_EQ(nj_image_probe(vm, p, n, &info, "png-software"), want,
+                 "registered PNG probe rejects incomplete IHDR payloads");
+        if (n == 29u) {
+            CHECK_EQ(info.width, 3, "header-only width");
+            CHECK_EQ(info.height, 2, "header-only height");
+        }
+        free(p);
+    }
+    CHECK_EQ(nj_codec_png_software.info(NULL, 29u, &info), NJ_ERR_FORMAT,
+             "NULL header is refused");
+    CHECK_EQ(nj_codec_png_software.info(k_png, 29u, NULL), NJ_ERR_FORMAT,
+             "NULL probe output is refused");
+    CHECK_EQ(nj_codec_png_software.info(k_png, 0u, &info), NJ_ERR_FORMAT,
+             "zero-length header is refused");
+
+    for (i = 0u; i < sizeof(invalid) / sizeof(invalid[0]); i++) {
+        memcpy(header, k_png, sizeof(header));
+        header[invalid[i][0]] = invalid[i][1];
+        CHECK_EQ(nj_image_probe(vm, header, sizeof(header), &info,
+                               "png-software"), NJ_ERR_FORMAT,
+                 "malformed IHDR is refused");
+    }
+    /* Indexed samples cannot be 16-bit; RGB samples cannot be sub-byte. */
+    memcpy(header, k_png, sizeof(header));
+    header[24] = 16; header[25] = 3;
+    CHECK_EQ(nj_image_probe(vm, header, sizeof(header), &info, "png-software"),
+             NJ_ERR_FORMAT, "16-bit palette indices are refused");
+    header[24] = 1; header[25] = 2;
+    CHECK_EQ(nj_image_probe(vm, header, sizeof(header), &info, "png-software"),
+             NJ_ERR_FORMAT, "1-bit RGB is refused");
+    for (i = 0u; i < sizeof(legal) / sizeof(legal[0]); i++) {
+        int interlace;
+        for (interlace = 0; interlace <= 1; interlace++) {
+            memcpy(header, k_png, sizeof(header));
+            header[24] = legal[i][1]; header[25] = legal[i][0];
+            header[28] = (unsigned char)interlace;
+            CHECK_EQ(nj_image_probe(vm, header, sizeof(header), &info,
+                                   "png-software"), NJ_OK,
+                     "legal PNG colour/depth/interlace headers still probe");
+            CHECK_EQ(info.width, 3, "valid header width");
+            CHECK_EQ(info.height, 2, "valid header height");
+            CHECK_EQ(info.has_alpha, legal[i][0] == 4 || legal[i][0] == 6,
+                     "intrinsic alpha follows colour type");
+        }
     }
 }
 
@@ -378,6 +455,7 @@ int main(void)
             return 2;
         }
         test_builtin(vm);
+        test_png_probe_bounds(vm);
         test_precedence(vm);
         test_unavailable(vm);
         nj_vm_destroy(vm);

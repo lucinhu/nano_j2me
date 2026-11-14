@@ -965,10 +965,10 @@ static const nj_builtin_method dutils_methods[] = {
  * to ask.  Three titles collected here call into this class, and on a device
  * it is four side effects with nothing to observe afterwards.
  *
- * There is no port hook for them yet, so they succeed and do nothing.  That is
- * a deliberate choice over throwing: a game that vibrates on a hit is playable
- * without the buzz, and refusing the call would take the whole game down for a
- * missing motor.  If a port ever grows a hook, these four are where it lands.
+ * Vibration now has a port hook (nj_port.vibrate); lights and the backlight do
+ * not, so those stay successful no-ops.  That is a deliberate choice over
+ * throwing: a game that vibrates on a hit is playable without the buzz, and
+ * refusing the call would take the whole game down for a missing motor.
  */
 static const nj_builtin_method devctl_methods[] = {
     M("setLights",       "(II)V",  NJ_ACC_STATIC | NJ_ACC_PUBLIC),
@@ -986,6 +986,25 @@ NJFN(nokia_dc_ok)
     (void)vm;
     (void)args;
     (void)ret;
+    return NJ_OK;
+}
+
+/*
+ * vibrate(duration) is the short form of startVibra(); like it, it forwards to
+ * the port hook when the port has one and validates a negative duration the
+ * way the Nokia reference does.
+ */
+NJFN(nokia_dc_vibrate)
+{
+    nj_s4 ms = NJ_ARG_INT(args, 0);
+
+    if (ms < 0) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException",
+                        "negative duration");
+    }
+    if (vm->port && vm->port->vibrate) {
+        vm->port->vibrate(vm->port->ud, (int)ms);
+    }
     return NJ_OK;
 }
 
@@ -1220,7 +1239,7 @@ const nj_native_entry nj_lib_nokia_table[] = {
     { NJ_C_DEVCTL, "setLights",      "(II)V",  nokia_dc_ok },
     { NJ_C_DEVCTL, "setLights",      "(III)V", nokia_dc_ok },
     { NJ_C_DEVCTL, "flashLights",    "(I)V",   nokia_dc_ok },
-    { NJ_C_DEVCTL, "vibrate",        "(I)V",   nokia_dc_ok },
+    { NJ_C_DEVCTL, "vibrate",        "(I)V",   nokia_dc_vibrate },
     { NJ_C_DEVCTL, "startVibra",     "(IJ)V",  nokia_dc_startVibra },
     { NJ_C_DEVCTL, "stopVibra",      "()V",    nokia_dc_stopVibra },
     { NJ_C_DEVCTL, "flashLights",    "(J)V",   nokia_dc_ok },

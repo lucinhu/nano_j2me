@@ -3423,7 +3423,9 @@ NJFN(timer_init)
         nj_thread_destroy(vm, nt);
         return nj_throw(vm, "java/lang/InternalError", "timer thread entry");
     }
-    nt->state = NJ_THREAD_RUNNING;
+    if (nt->state != NJ_THREAD_BLOCKED) {
+        nt->state = NJ_THREAD_RUNNING;
+    }
     return NJ_OK;
 }
 

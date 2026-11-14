@@ -7,6 +7,7 @@
  */
 #include "nj2me/nj.h"
 #include "nj2me/nj_avcodec.h"
+#include "nj2me/nj_system_amr.h"
 
 #include "../core/nj_internal.h"
 
@@ -119,6 +120,108 @@ const nj_av_video_ops *nj_avcodec_find_video(struct nj_vm *vm,
     return NULL;
 }
 
+#if NJ_ENABLE_AMR
+static void *amr_vm_alloc(void *ud, nj_u4 n)
+{
+    return nj_host_alloc((nj_vm *)ud, n);
+}
+
+static void amr_vm_free(void *ud, void *p)
+{
+    nj_host_free((nj_vm *)ud, p);
+}
+#endif
+
+nj_u4 nj_avcodec_decode_amr(struct nj_vm *vm, const nj_u1 *data, nj_u4 len,
+                           nj_u1 *pcm, nj_u4 cap)
+{
+#if NJ_ENABLE_AMR
+    nj_u4 frames, want, i;
+    nj_av_mem mem;
+    if (!vm || !data || !pcm) return 0u;
+    frames = nj_amr_frames(data, len);
+    if (!frames || frames > 0xffffffffu / 320u) return 0u;
+    want = frames * 320u;
+    if (want > cap) return 0u;
+    /* Every failed provider retries from the original compressed input. Refuse
+     * overlap before any service can overwrite bytes needed by that retry. */
+    {
+        uintptr_t in_at = (uintptr_t)data, out_at = (uintptr_t)pcm;
+        if ((out_at >= in_at && out_at - in_at < len) ||
+            (in_at > out_at && in_at - out_at < want)) return 0u;
+    }
+
+    /* The legacy port hook is also a system backend. Validate both passes so
+     * a failed or short native decode never replaces a complete sound clip. */
+    if (vm->port && vm->port->audio_decode) {
+        nj_u4 bytes = 0u, rate = 0u, channels = 0u;
+        if (vm->port->audio_decode(vm->port->ud, data, len, NULL, 0u,
+                                  &bytes, &rate, &channels) == NJ_OK &&
+            bytes == want && rate == 8000u && channels == 1u &&
+            vm->port->audio_decode(vm->port->ud, data, len, pcm, want,
+                                  &bytes, &rate, &channels) == NJ_OK &&
+            bytes == want && rate == 8000u && channels == 1u) {
+            nj_logf(vm, 3, "media: system port decoded %u AMR blocks", frames);
+            return frames;
+        }
+    }
+    mem.ud = vm;
+    mem.alloc = amr_vm_alloc;
+    mem.free = amr_vm_free;
+    for (i = 0u; i < vm->av_audio_n; ++i) {
+        const nj_av_audio_ops *ops = vm->av_audio[i];
+        nj_av_info info;
+        nj_av_dec *dec;
+        const char *err = NULL;
+        nj_u4 used = 0u, input = 0u;
+        if (!ops || ops == nj_avcodec_sw_amr() ||
+            ops->format != NJ_AV_AUDIO_AMR || !ops->accepts ||
+            !ops->open || !ops->decode || !ops->close ||
+            !ops->accepts(data, len)) continue;
+        memset(&info, 0, sizeof(info));
+        dec = ops->open(data, len, &mem, &info, &err);
+        if (!dec) continue;
+        if (info.format == NJ_AV_AUDIO_AMR && info.rate == 8000u &&
+            info.channels == 1u) {
+            while (used < want) {
+                nj_av_step step;
+                int rc;
+                memset(&step, 0, sizeof(step));
+                step.in = data + input;
+                step.in_len = len - input;
+                step.out = pcm + used;
+                step.out_cap = want - used;
+                rc = ops->decode(dec, &step);
+                if ((rc != NJ_AV_OK && rc != NJ_AV_ERR_AGAIN) ||
+                    step.in_used > len - input || step.out_used > want - used ||
+                    step.frames > (want - used) / 2u ||
+                    step.out_used != step.frames * 2u ||
+                    (step.in_used == 0u && step.out_used == 0u)) break;
+                input += step.in_used;
+                used += step.out_used;
+            }
+        }
+        ops->close(dec);
+        if (used == want) {
+            nj_logf(vm, 3, "media: %s decoded %u AMR blocks",
+                    ops->name ? ops->name : "audio provider", frames);
+            return frames;
+        }
+        nj_logf(vm, 3, "media: %s incomplete; retrying AMR from the start",
+                ops->name ? ops->name : "audio provider");
+    }
+    /* Do not allocate a second whole-file PCM buffer for the software path. */
+    if (nj_amr_decode(data, len, pcm) == frames) {
+        nj_logf(vm, 3, "media: built-in decoded %u AMR blocks", frames);
+        return frames;
+    }
+    return 0u;
+#else
+    (void)vm; (void)data; (void)len; (void)pcm; (void)cap;
+    return 0u;
+#endif
+}
+
 const nj_av_audio_ops *nj_avcodec_sw_mp3(void)
 {
 #if !NJ_MP3_EXPERIMENTAL
@@ -198,6 +301,12 @@ void nj_avcodec_reset(struct nj_vm *vm)
     if (a != NULL) {
         (void)nj_avcodec_install_audio(vm, a);
     }
+#if NJ_ENABLE_SYSTEM_AMR
+    a = nj_avcodec_system_amr();
+    if (a != NULL) {
+        (void)nj_avcodec_install_audio(vm, a);
+    }
+#endif
 #endif
 }
 

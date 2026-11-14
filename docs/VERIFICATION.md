@@ -29,6 +29,39 @@ repeated unless the code changed the path the verification used.
   (frames, logs and stitched screenshots are bulk); the row names the
   directory, and the commit carries the text that quotes it.
 
+## 2026-11-11 Complete ZIP names and Image resource lookup
+
+VERIFIED a reproducible resource lookup defect: truncated ZIP CENTRAL names
+could alias a different entry, and Image.createImage(String) could lose the
+end of a UTF-8 path. Lookup now compares full CENTRAL names and exact lengths;
+Image retains its stack fast path for short names and allocates a complete
+buffer for longer names. Decoder error messages use bounded appends. Public
+ZIP entry layout, Java builtin members and snapshot format are unchanged.
+See the [resource compatibility record](notes/2026-11-11-image-resource-names.md).
+
+The same self-contained real-JAR fixture records **11589 passed / 57 failed**
+with the old library and **11646 passed / 0 failed** after repair, in both
+ordinary Release and strict sanitizer builds. All 57 old failures belong to
+new cases; the original 11499 LCDUI checks remain intact. Three VM rounds
+release 1020 host blocks each. Original ZIP/inflate/manifest **423/0** and
+codec/provider **54/0** also pass in both profiles. Strict runs enable ASAN,
+UBSAN, float-cast-overflow and leak detection with no diagnostics. The two
+libraries retain their 76 member order and 74 unchanged payloads; only ZIP
+and LCDUI change. Old/new LCDUI share the same compiled fixture object.
+
+This is focused verification, not a new full-171 or formal benchmark run.
+New fault injection for OOM/provider exceptions was not performed. Old ZIP
+lookup prevented the 254/255-byte malformed-image cases from reaching decode;
+no old sanitizer overflow reproduction is claimed. Evidence is under
+`.local-tools/debug-runs/image-resource-20261111-{source,lead}/`.
+
+OPEN JB1: a separate single instrumented run of the pre-repair e32374c runtime
+completed all five phases and displayed Results. Paint and serially boundaries
+returned NJ_OK despite the same single caught division-by-zero log. The earlier
+cube stall was not reproduced, its cause remains unknown, and diagnostic scores
+are excluded from formal results. No observer code enters the product. Evidence:
+`.local-tools/debug-runs/jb1-state-20261111-{diagnostic,lead}/`.
+
 ## 2026-11-11 Four-JAR benchmark observation at e32374c
 
 VERIFIED four sequential runs using the published `e32374c37fe1ec56d79f4e5988f787fe2de35b96`

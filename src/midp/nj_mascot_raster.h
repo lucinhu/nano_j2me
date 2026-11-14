@@ -51,6 +51,7 @@
 #define NJ_MASCOT_RASTER_H
 
 #include "nj2me/nj.h"
+#include "nj2me/nj_gfx_raster.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -222,6 +223,18 @@ nj_s4 nj_mascot_raster_draw(nj_surface *dst,
                             nj_s4 clip_x2, nj_s4 clip_y2,
                             const nj_mascot_vertex verts[3],
                             const nj_mascot_material *mat);
+
+/* Optional synchronous merge of exact CPU coverage for constant-colour,
+ * REPLACE triangles. No target pixels are drawn while collecting coverage.
+ * Unsupported materials, unavailable bounded scratch storage, or a declining
+ * callback execute nj_mascot_raster_draw unchanged. With acceleration disabled
+ * (or NJ_USE_LIBC=0) this entry is exactly the software path. */
+nj_s4 nj_mascot_raster_draw_accel(nj_surface *dst,
+                                  nj_s4 clip_x1, nj_s4 clip_y1,
+                                  nj_s4 clip_x2, nj_s4 clip_y2,
+                                  const nj_mascot_vertex verts[3],
+                                  const nj_mascot_material *mat,
+                                  nj_gfx_raster_fn fn, void *ud);
 
 /* Low-level variant taking already-validated texture views; same clipping
  * and vertex units as nj_mascot_raster_draw.  Does not validate the views.

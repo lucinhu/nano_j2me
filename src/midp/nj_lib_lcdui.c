@@ -635,6 +635,8 @@ void nj_midp_present(nj_vm *vm)
     if (!vm) {
         return;
     }
+    /* Publish every deferred 3D batch before the frame is read. */
+    nj_m3g_flush(vm);
     /* Safety net for frames the runner did not paint itself: the Alert
      * timeout still fires at the frame boundary. */
     alert_frame_check(vm);
@@ -661,7 +663,7 @@ void nj_midp_present(nj_vm *vm)
 
             if (scr && buf && img_view(vm, buf, &view)) {
                 nj_gfx blit;
-                nj_gfx_init(&blit, scr);
+                nj_midp_gfx_init(vm, &blit, scr);
                 nj_gfx_draw_image(&blit, &view, 0, 0, 0, 0, view.width,
                                   view.height);
             }
@@ -763,6 +765,9 @@ static int gfx_load(nj_vm *vm, nj_ref g_obj, nj_gfx *g, nj_surface *surf_scratch
     if (!vm || !g_obj) {
         return 0;
     }
+    /* A deferred Graphics3D batch may still be queued for this very surface;
+     * any Graphics call can draw over it or read it back. */
+    nj_m3g_flush(vm);
     target = rget_hot(vm, g_obj, NJ_HF_G_TGT, G_CLS, F_G_TGT, D_IMAGE);
     s = nj_midp_surface(vm, target, surf_scratch);
     if (!s) {
@@ -775,7 +780,7 @@ static int gfx_load(nj_vm *vm, nj_ref g_obj, nj_gfx *g, nj_surface *surf_scratch
      * paints rising while this does not.
      */
     vm->gfx_calls++;
-    nj_gfx_init(g, s);
+    nj_midp_gfx_init(vm, g, s);
     if (vm->port) {
         g->fill_rect = vm->port->gfx_fill_rect;
         g->fill_ud = vm->port->ud;
@@ -2512,12 +2517,17 @@ NJFN(img_createImage_name)
 {
     nj_ref name = NJ_ARG_REF(args, 0);
     nj_app *app = (nj_app *)vm->loader_ud;
-    char cname[256];
-    const char *why;
-    void *data;
-    nj_u4 len = 0u;
-    nj_ref out = NULL;
-    nj_image *dec;
+    char small_name[256];
+    char *cname = small_name;
+    int required;
+    nj_u4 n = 0u;
+    void *data = NULL;
+    nj_image *dec = NULL;
+    const char *why = NULL;
+    nj_ref out;
+    img_decode_alloc allocation;
+    nj_codec_req req;
+    nj_status st;
 
     if (!name) {
         return nj_throw(vm, "java/lang/NullPointerException", "name is null");
@@ -2525,41 +2535,68 @@ NJFN(img_createImage_name)
     if (!app) {
         return nj_throw(vm, "java/io/IOException", "no application is loaded");
     }
-    if (nj_string_to_utf8(name, cname, (int)sizeof(cname)) <= 0) {
+    /* Converter length is an int and each UTF-16 unit uses at most 3 bytes. */
+    if (nj_string_length(name) > 0x7fffffffu / 3u) {
+        return nj_throw_oom(vm);
+    }
+    required = nj_string_to_utf8(name, small_name, (int)sizeof(small_name));
+    if (required <= 0) {
         return nj_throw(vm, "java/io/IOException", "bad resource name");
     }
-    data = nj_app_resource(vm, app, cname, &len);
-    if (!data || len == 0u) {
-        if (data) {
-            nj_host_free(vm, data);
-        }
-        return nj_throw(vm, "java/io/IOException", cname);
+    if (required >= (int)sizeof(small_name)) {
+        if (required == 0x7fffffff) { return nj_throw_oom(vm); }
+        cname = (char *)nj_host_alloc(vm, (nj_size)required + 1u);
+        if (!cname) { return nj_throw_oom(vm); }
+        (void)nj_string_to_utf8(name, cname, required + 1);
     }
-    why = NULL;
-    dec = nj_image_decode_mem(vm, data, len, &why);
+    data = nj_app_resource(vm, app, cname, &n);
+    if (!data || n == 0u) {
+        st = nj_throw(vm, "java/io/IOException", cname);
+        goto done;
+    }
+    /* Match byte[]/stream decode: keep provider exceptions and distinguish a
+     * failed allocator hook from malformed image bytes. */
+    allocation.vm = vm;
+    allocation.failed = 0;
+    memset(&req, 0, sizeof(req));
+    req.data = data;
+    req.size = n;
+    req.vm = vm;
+    req.alloc = img_decode_alloc_mem;
+    req.dealloc = img_decode_free_mem;
+    req.ud = &allocation;
+    req.want_alpha = 1;
+    req.out_format = NJ_CODEC_OUT_ANY;
+    req.err = &why;
+    dec = nj_image_decode(vm, &req, &why);
     nj_host_free(vm, data);
+    data = NULL;
+    if (nj_has_exception(vm)) { st = NJ_ERR; goto done; }
     if (!dec || !dec->pixels || dec->width <= 0 || dec->height <= 0) {
-        if (dec) {
-            nj_image_release(vm, dec);
-        }
-        /* The resource name alone says nothing about why it would not decode. */
+        if (allocation.failed) { st = nj_throw_oom(vm); goto done; }
         if (why != NULL && why[0] != '\0') {
             char msg[256];
-            int n = fmt_put_max(msg, 0, (int)sizeof(msg) - 1, cname);
-            n = fmt_put(msg, n, ": ");
-            n = fmt_put_max(msg, n, (int)sizeof(msg) - 1, why);
-            msg[n] = '\0';
-            return nj_throw(vm, "java/io/IOException", msg);
+            int at = fmt_put_max(msg, 0, (int)sizeof(msg) - 1, cname);
+            at = fmt_put_max(msg, at, (int)sizeof(msg) - 1, ": ");
+            at = fmt_put_max(msg, at, (int)sizeof(msg) - 1, why);
+            msg[at] = '\0';
+            st = nj_throw(vm, "java/io/IOException", msg);
+        } else {
+            st = nj_throw(vm, "java/io/IOException", cname);
         }
-        return nj_throw(vm, "java/io/IOException", cname);
+        goto done;
     }
     out = nj_midp_image_adopt(vm, dec->pixels, dec->width, dec->height);
-    nj_image_release(vm, dec);
-    if (!out) {
-        return vm->exception ? NJ_ERR : nj_throw_oom(vm);
-    }
+    if (!out) { st = vm->exception ? NJ_ERR : nj_throw_oom(vm); goto done; }
     ret->r = out;
-    return NJ_OK;
+    st = NJ_OK;
+
+done:
+    if (dec) { nj_image_release(vm, dec); }
+    nj_host_free(vm, data);
+    /* nj_throw copied any message before the dynamic name is freed. */
+    if (cname != small_name) { nj_host_free(vm, cname); }
+    return st;
 }
 
 NJFN(img_createRGBImage)
@@ -2677,6 +2714,8 @@ NJFN(img_getRGB)
     if (y + h > ih) { h = ih - y; }
     if (w < 0) { w = 0; }
     if (h < 0) { h = 0; }
+    /* Queued Graphics3D draws must land before Java observes the pixels. */
+    nj_m3g_flush(vm);
     px = nj_midp_image_pixels(vm, self);
     if (!px) {
         return nj_throw(vm, "java/lang/IllegalStateException", "image has no pixels");
@@ -4139,6 +4178,22 @@ NJFN(c_serviceRepaints)
      * waits for the frame-driven paint).  repaint_pending stays set for the
      * next frame's paint instead of being burned here.
      */
+    /*
+     * A paint is in flight on another thread.  MIDP: serviceRepaints() blocks
+     * until the pending repaints have been serviced, and that blocking is
+     * observable: a worker that publishes state, calls repaint() then
+     * serviceRepaints() and only afterwards undoes the publication relies on
+     * paint() running while the state is published.  Returning immediately
+     * let the whole window fit inside the worker's bytecode quantum and the
+     * frame paint never saw it - 明星制造梦工厂_11048 spins in paint()'s
+     * `while (new) {}` forever.  The in-flight paint is atomic, so the worker
+     * parks; nj_midp_paint() wakes it when the paint completes.
+     */
+    if (vm->paint_active && vm->paint_owner != th) {
+        if (nj_vm_thread_wait_paint(vm, th)) {
+            return NJ_ERR_TIMEOUT;
+        }
+    }
     if (vm->repaint_pending && !vm->in_paint) {
         if (!vm->painted_in_frame) {
             vm->in_paint = 1u;
@@ -4150,6 +4205,26 @@ NJFN(c_serviceRepaints)
              * its repaint before presentation and callback delivery. */
             vm->repaint_pending = NJ_MIDP_REPAINT_COALESCED;
         }
+    }
+    /*
+     * A title whose own loop is `repaint(); serviceRepaints(); step();` with
+     * no sleep relies on the handset blocking until the display has serviced
+     * each frame: 魂斗罗_5652 does that from its game thread and, with an
+     * immediately returning serviceRepaints(), ran ~700k redundant loop
+     * iterations per display frame (1.46M native calls and 16M bytecodes per
+     * frame, 12.9fps).  Once the request has been folded into the frame paint
+     * (the branch above), park a scheduler-owned thread until the frame pump
+     * ends the frame; the loop then runs one step per frame, which is the
+     * cadence the title is written for.  The MIDlet main thread is excluded:
+     * it can be inside startApp() before any frame loop exists, so parking it
+     * would deadlock.  A UI callback has already had its paint delivered by
+     * c_paint_now(), and a thread inside paint() must not park again.
+     */
+    if (vm->in_frame != 0u && th != nj_thread_main(vm) &&
+        vm->in_callback == 0u && vm->in_paint == 0u &&
+        vm->repaint_pending != 0u && vm->npace_waiters < 4u &&
+        nj_vm_thread_wait_frame(vm, th)) {
+        return NJ_ERR_TIMEOUT;
     }
     return NJ_OK;
 }
@@ -4859,7 +4934,7 @@ static int form_move(nj_vm *vm, nj_ref form, int delta)
     nj_s4 n = fget(vm, form, NJ_C_FORM, "fmCount", D_INT);
     int next, step, previous;
     if (!surface || n <= 0) return 0;
-    nj_gfx_init(&g, surface);
+    nj_midp_gfx_init(vm, &g, surface);
     ui_setup(vm, &g, form, &uf);
     m = form_layout(vm, form, &uf, 1);
     step = uf.content_h/2;
@@ -5611,7 +5686,7 @@ static int nj_midp_pointer_inner(nj_vm *vm, int x, int y, int kind)
         if (!s || x < 0 || x >= s->width || y < 0 || y >= s->height) {
             return 0;
         }
-        nj_gfx_init(&g, s);
+        nj_midp_gfx_init(vm, &g, s);
         ui_setup(vm, &g, d, &uf);
         if (y >= uf.content_y && y < uf.content_y + uf.content_h) {
             if (isa(vm, d, NJ_C_TEXTBOX)) {
@@ -5681,14 +5756,23 @@ nj_status nj_midp_paint(nj_vm *vm)
 {
     nj_status st;
     nj_u1 prev;
+    nj_thread *prev_owner;
 
     if (!vm) {
         return NJ_ERR;
     }
     prev = vm->paint_active;
+    prev_owner = vm->paint_owner;
+    vm->paint_owner = vm->cur;
     vm->paint_active = 1u;
     st = nj_midp_paint_body(vm);
     vm->paint_active = prev;
+    vm->paint_owner = prev_owner;
+    if (prev == 0u && st == NJ_OK) {
+        /* A serviceRepaints() caller on another thread was waiting for this
+         * paint; it may continue after the call now. */
+        nj_vm_paint_done(vm);
+    }
     return st;
 }
 
@@ -5834,7 +5918,7 @@ static nj_status nj_midp_paint_body(nj_vm *vm)
                 nj_gfx blit;
                 nj_image view;
                 if (img_view(vm, buf, &view)) {
-                    nj_gfx_init(&blit, scr);
+                    nj_midp_gfx_init(vm, &blit, scr);
                     nj_gfx_draw_image(&blit, &view, 0, 0, 0, 0, view.width,
                                       view.height);
                 }
@@ -5852,14 +5936,14 @@ static nj_status nj_midp_paint_body(nj_vm *vm)
         if (nj_midp_surface(vm, buf, &buf_surf)) {
             nj_gfx g;
             nj_image view;
-            nj_gfx_init(&g, &buf_surf);
+            nj_midp_gfx_init(vm, &g, &buf_surf);
             displayable_render(vm, &g, d);
             /* A Screen has no buffer field of its own - canvas_ensure_buffer
              * returns a fresh image for it - so the screen must be updated
              * here, before the temporary is dropped. */
             if (img_view(vm, buf, &view)) {
                 nj_gfx blit;
-                nj_gfx_init(&blit, scr);
+                nj_midp_gfx_init(vm, &blit, scr);
                 nj_gfx_draw_image(&blit, &view, 0, 0, 0, 0, view.width,
                                   view.height);
             }
@@ -11031,6 +11115,7 @@ static nj_status dg_get_pixels(nj_vm *vm, nj_value *args, nj_value *ret, int ele
 
 NJFN(dg_getPixels)
 {
+    nj_m3g_flush(vm);   /* read the frame only after queued 3D work commits */
     return dg_get_pixels(vm, args, ret, 2);
 }
 

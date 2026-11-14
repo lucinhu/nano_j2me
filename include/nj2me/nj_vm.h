@@ -79,6 +79,13 @@ nj_u4   nj_vm_destroy(nj_vm *vm);
  */
 int     nj_vm_use_font_file(nj_vm *vm, const char *path);
 
+/* Same font installation from memory, without requiring port file hooks.
+ * Copies data into VM-owned storage; the caller may release its input after
+ * this call. Install before starting/restoring Java code. Returns 1 on success,
+ * 0 on invalid/unsupported font or allocation failure, preserving current faces.
+ * Supports TrueType glyf outlines (including TTC), not CFF/OTTO fonts. */
+int     nj_vm_use_font_data(nj_vm *vm, const nj_u1 *data, nj_u4 len);
+
 /*
  * Install the port's own glyph source, for a platform whose text stack is
  * reachable only through an API rather than a font file.
@@ -116,6 +123,31 @@ int     nj_vm_set_primary_fonts(nj_vm *vm, const nj_font *const *fonts,
                                 int count);
 
 nj_status nj_vm_start_app(nj_vm *vm, nj_ref midlet);  /* calls MIDlet.startApp() */
+/*
+ * Queue MIDlet.startApp() on the main Java thread without executing it.
+ * Unlike nj_vm_start_app(), this returns even when startApp() contains an
+ * endless game loop. Drive execution with nj_midp_frame() afterwards (or the
+ * scheduler); between calls the Java frames are suspended without a C call
+ * stack, so nj_vm_can_save() can accept them. This does not make constructors,
+ * blocking natives or synchronous UI callbacks asynchronous. A host that owns
+ * frame timing (for example, a frontend-driven virtual clock) should disable
+ * the internal frame cap with nj_vm_set_frame_cap(vm, 0); its port.idle can
+ * wait for the next host tick without the internal pacer's deadline loop.
+ *
+ * Call only from the VM-owning host thread, outside a native, frame hook or
+ * callback, after nj_vm_new_midlet() has completed. The main Java thread must
+ * be runnable and have no frames; a second start while it is active returns
+ * NJ_ERR_STATE without replacing the queued call. This is not host-thread
+ * synchronization and does not make concurrent VM access safe.
+ *
+ * Returns NJ_OK once queued, NJ_ERR for NULL/invalid references,
+ * NJ_ERR_STATE for a stopped, busy or reentrant VM, or NJ_ERR_UNSUPPORTED for
+ * a native/abstract startApp() (only bytecode can be queued). Method lookup
+ * and stack errors raise a Java exception and return an error. Errors thrown
+ * later by startApp() are delivered by the normal scheduler/frame loop, not
+ * by this call. Construction/class initialization remain synchronous.
+ */
+nj_status nj_vm_start_app_async(nj_vm *vm, nj_ref midlet);
 /*
  * Create a MIDlet instance.
  *
@@ -410,6 +442,20 @@ void nj_vm_set_frame_cap(nj_vm *vm, int cap);
 int nj_vm_frame_cap(const nj_vm *vm);
 
 /*
+ * How much the runtime logs through the port's `log` hook: 0 is errors only,
+ * 1 adds warnings, 2 (the startup default) adds informational lines, 3 adds
+ * decoder and media decisions.  Clamped to 0..3.
+ *
+ * This is a debugging aid, not behaviour: nothing in the runtime changes what
+ * it does at a higher level, it only says more about it.  Ports that own
+ * their output channel (Android logcat, a libretro frontend log) can leave the
+ * default; the command line front end exposes it as --verbose.
+ */
+void nj_vm_set_verbose(nj_vm *vm, int level);
+
+int nj_vm_verbose(const nj_vm *vm);
+
+/*
  * Save and restore the state of a running VM ("save state").
  *
  * nj_vm_save() photographs the whole Java world: the object arena, the static
@@ -444,12 +490,49 @@ int nj_vm_frame_cap(const nj_vm *vm);
  * nj_vm_load() consumes a blob and returns NJ_OK, NJ_ERR_FORMAT (corrupt,
  * truncated, wrong ABI, wrong JAR) or NJ_ERR_NOMEM.  A failed load leaves the
  * VM unusable: create a fresh one and try again.
+ *
+ * nj_vm_save_mem()/nj_vm_load_mem() are the same snapshot over a byte buffer
+ * instead of a FILE, for an embedder that hands the blob to a frontend.
  */
 int  nj_vm_can_save(const nj_vm *vm);
 int  nj_vm_save(nj_vm *vm, FILE *f);
 int  nj_vm_load(nj_vm *vm, FILE *f);
 int  nj_vm_save_file(nj_vm *vm, const char *path);
 int  nj_vm_load_file(nj_vm *vm, const char *path);
+
+/*
+ * In-memory snapshots, for embedders that move a save state around as bytes
+ * rather than as a file: a libretro core's retro_serialize() and
+ * retro_unserialize() are the first such caller.
+ *
+ * nj_vm_save_mem() produces exactly the bytes nj_vm_save() writes - same
+ * header, same body, same CRC32 - except that the header's reserved u32 at
+ * offset 172 records the blob's true total length (the file writer leaves it
+ * zero).  The blob is malloc()d and belongs to the caller, who frees it with
+ * free().  The arguments are NULL-checked; on failure *out_blob is NULL and
+ * *out_size is 0.
+ *
+ * A frontend allocates retro_serialize_size() bytes and hands that whole
+ * buffer to the core, so it is usually larger than the blob.  The recorded
+ * length is what tells nj_vm_load_mem() where the blob ends: the CRC and the
+ * parse only cover that prefix and any zero padding after it is ignored.  A
+ * header that records 0 - every .state file written by nj_vm_save(), and any
+ * mem blob whose length was deliberately cleared - means "the buffer is
+ * exactly one blob", which keeps existing files readable. A nonzero length
+ * outside the supplied buffer or shorter than a header plus CRC is refused
+ * as malformed rather than falling back to the buffer size. The caller's
+ * buffer is read, never modified or freed.  Errors are the same as
+ * nj_vm_load()'s, and a failed load leaves the VM unusable.
+ *
+ * nj_vm_blob_max() is a cheap, side-effect-free upper bound on the size of a
+ * snapshot of this VM; it is what a frontend's retro_serialize_size() should
+ * return.  It only reads the VM's configuration (heap budget and build
+ * constants), never the heap contents, so it can be called on a running VM at
+ * any time.  An actual blob is usually much smaller.
+ */
+int     nj_vm_save_mem(nj_vm *vm, nj_u1 **out_blob, nj_size *out_size);
+int     nj_vm_load_mem(nj_vm *vm, const nj_u1 *blob, nj_size size);
+nj_size nj_vm_blob_max(const nj_vm *vm);
 
 /*
  * Diagnostic: describe where every live thread currently is.

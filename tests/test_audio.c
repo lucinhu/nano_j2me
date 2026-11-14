@@ -109,34 +109,27 @@ static int bounded_free(void *ud)
     return BOUNDED_LIMIT;
 }
 
-/*
- * A port that can decode the same file differently.
- *
- * The runtime's own AMR decoder is the fallback; this is what a phone with a
- * hardware codec, or a desktop with libavcodec, fills in instead - and the
- * port wins, because it answers first.  It reports 32 bytes of silence -- 16
- * frames at 8000 Hz, i.e. a 2000 microsecond file -- so the assertions can
- * tell the port's numbers (2000) from the runtime's (80000).
- */
+/* A complete port decode wins. A truncated size query must fall back before
+ * rendering: the fixture has four 20 ms packets, hence 640 PCM16 samples. */
+static int g_amr_port_complete;
+static int g_amr_port_renders;
 static nj_status fake_amr_decode(void *ud, const nj_u1 *in, nj_u4 in_len,
                                  nj_u1 *out, nj_u4 out_cap, nj_u4 *out_len,
                                  nj_u4 *sample_rate, nj_u4 *channels)
 {
+    nj_u4 bytes = g_amr_port_complete ? 1280u : 32u;
     (void)ud;
+    if (in_len < 6u || memcmp(in, "#!AMR\n", 6u) != 0)
+        return NJ_ERR_UNSUPPORTED;
     *sample_rate = 8000u;
     *channels = 1u;
-    if (!out) {
-        *out_len = 32u;
+    *out_len = bytes;
+    if (!out)
         return NJ_OK;
-    }
-    if (out_cap < 32u) {
+    if (out_cap < bytes)
         return NJ_ERR_FORMAT;
-    }
-    if (in_len < 6u || in[0] != '#' || in[2] != 'A') {
-        return NJ_ERR_UNSUPPORTED;   /* decline anything that is not AMR */
-    }
-    memset(out, 0, 32u);
-    *out_len = 32u;
+    memset(out, 0, bytes);
+    g_amr_port_renders++;
     return NJ_OK;
 }
 
@@ -372,13 +365,11 @@ int main(int argc, char **argv)
         nj_port_shutdown(&port);
     }
 
-    /*
-     * The same fixture again, with a port that has a decoder of its own.  The
-     * rounds above assert what the runtime's own AMR decoder produces; this
-     * asserts the difference the hook exists to make, and that the numbers
-     * come from the port rather than from a guess the runtime made.
-     */
-    {
+    /* Exercise the Java Player path with both a complete native decode and a
+     * truncated native response. Both must retain the full clip duration. */
+    for (g_amr_port_complete = 0; g_amr_port_complete <= 1;
+         g_amr_port_complete++) {
+        g_amr_port_renders = 0;
         memset(&cap, 0, sizeof(cap));
         if (nj_port_headless_ex(&port, 176, 208, 0, NULL) == NJ_OK) {
             port.log = cap_log;
@@ -398,8 +389,12 @@ int main(int argc, char **argv)
                strcmp(v, "400") == 0,
                "an AMR player reaches STARTED through the port's decoder");
             ok(field(cap.buf, "AUDIO amr=", v, sizeof(v)) &&
-               strcmp(v, "2000") == 0,
-               "the duration is the port's PCM, not a guess");
+               strcmp(v, "80000") == 0,
+               "native decoding and fallback both preserve the complete AMR duration");
+            ok(g_amr_port_renders == g_amr_port_complete,
+               "only a complete port response is accepted for rendering");
+            ok(nj_port_headless_pcm_frames(&port) == 4410 + 640 + 2020,
+               "all WAV, AMR and ADPCM samples reach the device");
             nj_port_shutdown(&port);
         }
     }

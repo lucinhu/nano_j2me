@@ -48,11 +48,18 @@
 /* Archive descriptor (allocated by the caller's allocator)            */
 /* ------------------------------------------------------------------ */
 
+/* Full CENTRAL names borrow the archive image; the public entry stays small. */
+typedef struct nj_zip_name {
+    nj_u4 off;
+    nj_u4 len;
+} nj_zip_name;
+
 struct nj_zip {
     const nj_u1  *data;        /* borrowed archive image          */
     nj_u4         size;
     int           count;       /* usable (non-directory) entries  */
     nj_zip_entry *entries;
+    nj_zip_name  *names;        /* tail of the same allocation as entries */
     void         *(*mem_alloc)(void *ud, nj_size n);
     void          (*mem_free)(void *ud, void *p);
     void          *mem_ud;
@@ -254,6 +261,7 @@ nj_zip *nj_zip_open(const void *data, nj_u4 size, const nj_zip_alloc *alloc)
     nj_cd_rec rec;
     nj_zip *z;
     int rc;
+    nj_size slots;
 
     if (d == NULL || size < NJ_ZIP_EOCD_SIZE) {
         return NULL;
@@ -307,14 +315,24 @@ nj_zip *nj_zip_open(const void *data, nj_u4 size, const nj_zip_alloc *alloc)
     z->mem_free = fn_free;
     z->mem_ud = ud;
 
+    slots = (nj_size)(usable > 0 ? usable : 1);
+    if (slots > (nj_size)-1 /
+                    ((nj_size)sizeof(nj_zip_entry) + sizeof(nj_zip_name))) {
+        if (fn_free != NULL) { fn_free(ud, z); }
+        return NULL;
+    }
     z->entries = (nj_zip_entry *)fn_alloc(
-        ud, (nj_size)sizeof(nj_zip_entry) * (nj_size)(usable > 0 ? usable : 1));
+        ud, slots * ((nj_size)sizeof(nj_zip_entry) + sizeof(nj_zip_name)));
     if (z->entries == NULL) {
         if (fn_free != NULL) {
             fn_free(ud, z);
         }
         return NULL;
     }
+
+    /* Both structures contain only <=4-byte-aligned fields, and entry size
+     * is a multiple of that alignment. Keep the existing two allocations. */
+    z->names = (nj_zip_name *)(void *)(z->entries + slots);
 
     /* Pass 2: fill the entry array (directory entries are dropped). */
     it.off = cd_off;
@@ -332,6 +350,8 @@ nj_zip *nj_zip_open(const void *data, nj_u4 size, const nj_zip_alloc *alloc)
             continue;                    /* cannot happen after pass 1 */
         }
         e = &z->entries[z->count];
+        z->names[z->count].off = rec.name_off;
+        z->names[z->count].len = rec.name_len;
         copy_len = (nj_u4)rec.name_len;
         if (copy_len > (nj_u4)(NJ_ZIP_NAME_MAX - 1)) {
             copy_len = (nj_u4)(NJ_ZIP_NAME_MAX - 1);   /* truncate safely */
@@ -438,15 +458,35 @@ static int name_eq_ci(const char *a, const char *b)
     return name_lower(*a) == name_lower(*b);
 }
 
+/* Pass 1 already validated the complete CENTRAL span. Never compare a long
+ * entry through entry.name, which is only its public enumeration prefix. */
+static int name_eq_full(const nj_zip *z, int index, const char *name, int fold)
+{
+    const nj_zip_name *n = &z->names[index];
+    const nj_u1 *full = z->data + n->off;
+    nj_u4 i;
+    for (i = 0u; i < n->len; ++i) {
+        char a = (char)full[i], b = name[i];
+        if (b == '\0') { return 0; }
+        if (fold) { a = name_lower(a); b = name_lower(b); }
+        if (a != b) { return 0; }
+    }
+    return name[n->len] == '\0';
+}
+
 const nj_zip_entry *nj_zip_find(const nj_zip *z, const char *name)
 {
     int i;
+    size_t len;
 
     if (z == NULL || name == NULL) {
         return NULL;
     }
+    len = strlen(name);
     for (i = 0; i < z->count; i++) {
-        if (name_eq(z->entries[i].name, name)) {
+        if (z->names[i].len == len && (z->names[i].len < NJ_ZIP_NAME_MAX ?
+                name_eq(z->entries[i].name, name) :
+                name_eq_full(z, i, name, 0))) {
             return &z->entries[i];
         }
     }
@@ -456,12 +496,16 @@ const nj_zip_entry *nj_zip_find(const nj_zip *z, const char *name)
 const nj_zip_entry *nj_zip_find_ci(const nj_zip *z, const char *name)
 {
     int i;
+    size_t len;
 
     if (z == NULL || name == NULL) {
         return NULL;
     }
+    len = strlen(name);
     for (i = 0; i < z->count; i++) {
-        if (name_eq_ci(z->entries[i].name, name)) {
+        if (z->names[i].len == len && (z->names[i].len < NJ_ZIP_NAME_MAX ?
+                name_eq_ci(z->entries[i].name, name) :
+                name_eq_full(z, i, name, 1))) {
             return &z->entries[i];
         }
     }

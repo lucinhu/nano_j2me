@@ -184,7 +184,10 @@ DEADLINE=$((START_TS + TIMEOUT))
 KILLED_EARLY=0
 KILLED_HARD=0
 set +e
+# Distro RetroArch may initialize its Qt companion even with null video.
+# Give Qt a headless backend rather than aborting for lack of DISPLAY.
 env -u DISPLAY -u WAYLAND_DISPLAY \
+    QT_QPA_PLATFORM="${QT_QPA_PLATFORM:-offscreen}" \
     HOME="$WORK/home" \
     XDG_CONFIG_HOME="$WORK/xdg" \
     XDG_CACHE_HOME="$WORK/cache" \

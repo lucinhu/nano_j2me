@@ -974,7 +974,10 @@ public class LibraryActivity extends Activity {
                 + "，" + (Settings.pictureAntiAlias(this) ? "画面平滑" : "画面不平滑")
                 + "，" + Settings.frameCapText(Settings.frameCap(this));
         String f = Settings.fontFile(this);
-        return f == null ? aa + "，系统字体" : aa + "，字体：" + new File(f).getName();
+        String summary = f == null ? aa + "，系统字体" : aa + "，字体：" + new File(f).getName();
+        return summary + (GameActivity.graphicsSupported()
+                ? "，下次：" + (Settings.gles2Experimental(this) ? "GLES2 实验加速" : "软件绘制")
+                : "，软件绘制（本包未含 GLES2）");
     }
 
     /**
@@ -990,7 +993,7 @@ public class LibraryActivity extends Activity {
         final String path = Settings.fontFile(this);
         LinearLayout box = Md3.body(this);
         box.addView(Md3.title(this, "显示设置"));
-        box.addView(Md3.supporting(this, "随时可改；正在运行的游戏回到游戏画面时用上"),
+        box.addView(Md3.supporting(this, "字体、平滑和帧率返回游戏时生效；GLES2 选择在下次启动游戏时生效"),
                 Md3.gap(this, 6));
         final AlertDialog d = Md3.show(new AlertDialog.Builder(this)
                 .setView(Md3.scroller(this, box))
@@ -1062,6 +1065,29 @@ public class LibraryActivity extends Activity {
                         displayDialog();
                     }
                 }), Md3.gap(this, 12));
+        final boolean graphicsAvailable = GameActivity.graphicsSupported();
+        final boolean gles2 = graphicsAvailable && Settings.gles2Experimental(this);
+        LinearLayout graphicsRow = Md3.row(this, Md3.IC_SCREEN,
+                graphicsAvailable ? "GLES2 实验加速：" + (gles2 ? "开" : "关") + "（下次启动）"
+                                  : "GLES2 实验加速：不可用",
+                graphicsAvailable ? "下次启动游戏生效；支持的绘制交给 GPU，其余用软件。性能提升不保证。"
+                                  : "此安装包未含 GLES2，使用软件绘制。",
+                gles2, null);
+        graphicsRow.setEnabled(graphicsAvailable);
+        graphicsRow.setAlpha(graphicsAvailable ? 1f : 0.5f);
+        if (graphicsAvailable) {
+            graphicsRow.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    Settings.setGles2Experimental(LibraryActivity.this, !gles2);
+                    d.dismiss();
+                    toast("已选择" + (!gles2 ? " GLES2 实验加速" : "软件绘制")
+                            + "，下次启动游戏生效；本局保持不变");
+                    displayDialog();
+                }
+            });
+        }
+        box.addView(graphicsRow, Md3.gap(this, 12));
     }
 
     /** What the glyph cache holds right now, for the sweep row. */

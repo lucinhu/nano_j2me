@@ -1,6 +1,7 @@
 MIT License
 
 Copyright (c) 2026 lucinhu
+Copyright (c) 2026 nano_j2me contributors
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -19,3 +20,21 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+Scope and third-party material
+------------------------------
+The permission above covers original nano_j2me code and material explicitly
+provided under MIT by its authors. It does not relicense third-party material.
+The runtime implementation is MIT licensed, including third-party MIT code
+whose full attributions are preserved in docs/licenses/third-party-code-MIT.txt.
+Numeric data for the built-in AMR fallback are separately licensed under
+Apache License 2.0; see docs/AMR_DATA_LICENSES.md and the complete license and
+attributions in docs/licenses/AMR-Apache-2.0.txt and
+  docs/licenses/AMR-OpenCORE-NOTICE.txt.
+Bundled font-derived bitmap data are separately licensed under SIL OFL 1.1;
+see docs/FONT_LICENSES.md and the full font notices in docs/licenses/.
+These data retain their own terms in source and binary packages. Selecting a
+system decoder or an external font does not relicense bundled fallback data.
+Platform services and external fonts retain their respective terms.
+Source provenance and the bounded implementation reviews are recorded in
+docs/CODEC_PROVENANCE.md. The combined package is not MIT-only.

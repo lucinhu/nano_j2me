@@ -3,7 +3,8 @@
  *
  * Software rasterizer.  Everything MIDP Graphics needs, implemented over a
  * plain linear pixel buffer, with a translate + clip state exactly like
- * javax.microedition.lcdui.Graphics.
+ * javax.microedition.lcdui.Graphics. Optional nj_gfx_accel callbacks may perform
+ * synchronous 2D operations; the software implementation is always retained.
  *
  * Pixel formats: NJ_PIXFMT_RGB565 (default, embedded panels),
  *                NJ_PIXFMT_RGB888, NJ_PIXFMT_ARGB8888.
@@ -234,6 +235,8 @@ int nj_font_chars_that_fit(const nj_font *f, const nj_u2 *s, int len, int avail)
 /* ------------------------------------------------------------------ */
 /* Graphics state                                                      */
 /* ------------------------------------------------------------------ */
+struct nj_gfx_accel;
+
 typedef struct nj_gfx {
     nj_surface *surf;
     nj_u4 color;       /* current color, 0xAARRGGBB */
@@ -247,7 +250,15 @@ typedef struct nj_gfx {
     int   use_xor;
     nj_gfx_fill_fn fill_rect;
     void *fill_ud;
+#if NJ_ENABLE_GFX_ACCEL
+    const struct nj_gfx_accel *accel;
+    void *accel_ud;
+#endif
 } nj_gfx;
+
+/* Per-context backend; NULL or an unknown version selects software. With
+ * NJ_ENABLE_GFX_ACCEL=0 this is a no-op and nj_gfx has no backend fields. */
+void nj_gfx_set_accel(nj_gfx *g, const struct nj_gfx_accel *backend, void *ud);
 
 /* Initialize `g` for `surf`; clip becomes the whole surface, color black,
  * font = MEDIUM PLAIN. */
@@ -341,6 +352,59 @@ void nj_gfx_draw_region(nj_gfx *g, const nj_image *src,
                         int transform, int is_xor, nj_u4 xor_argb,
                         const nj_image *clip_src,
                         int dx, int dy, int rop);
+
+/* ------------------------------------------------------------------ */
+/* Optional synchronous 2D backend (no GL/Vulkan types or dependencies) */
+/* ------------------------------------------------------------------ */
+#define NJ_GFX_ACCEL_VERSION 1u
+#define NJ_GFX_ACCEL_DONE    1
+#define NJ_GFX_ACCEL_DECLINE 0
+
+/* Borrowed source and mask; byte layouts match nj_image. Source stride is in
+ * bytes, mask rows contain mask_width ARGB8888 words. dx/dy are USER space;
+ * clip_* is the final nonempty DEVICE rectangle, after transform and clipping.
+ * Image entry points clamp source bounds; raw drawRGB buffer validity remains
+ * the caller's responsibility. The surface, source and mask remain
+ * authoritative CPU memory: a pointer is not a texture cache ID.
+ * rop preserves NJ_ROP_OPAQUE; alpha is global weight in [0,255]. */
+typedef struct nj_gfx_blit {
+    const nj_u1 *pixels;
+    nj_s8 stride;
+    int format;
+    const nj_u1 *mask;
+    int mask_width, mask_height;
+    int sx, sy, width, height;
+    int transform, rop;
+    int xor_enabled;
+    nj_u4 xor_color;
+    int dx, dy, alpha;
+    int clip_x, clip_y, clip_w, clip_h;
+} nj_gfx_blit;
+
+/* Return DONE only after the entire operation is complete in CPU pixels,
+ * with exactly the software renderer's clipping, alpha, ROP, transform, XOR
+ * and pixel-format semantics. Any other return declines the operation and
+ * MUST leave all CPU pixels unchanged with no pending writes. Unsupported
+ * formats/features and lost contexts should decline BEFORE writing. GPU work
+ * may use a private target and commit after a successful wait/readback.
+ *
+ * All arguments are borrowed until return. Do not retain them, call the VM,
+ * or recursively invoke the backend. State and resources belong to the port;
+ * synchronize and release them before freeing source/target memory. Fields
+ * may be NULL independently. No asynchronous GPU-resident surface is implied.
+ * fill_rect receives an already-clipped DEVICE rectangle and the complete
+ * color/blend/XOR state in g. blit covers image/region/drawRGB operations.
+ * Software primitives and the old opaque fill callback remain available. */
+typedef struct nj_gfx_accel {
+    nj_u4 version;
+    int (*fill_rect)(void *ud, const nj_gfx *g, int x, int y, int w, int h);
+    int (*blit)(void *ud, const nj_gfx *g, const nj_gfx_blit *blit);
+} nj_gfx_accel;
+
+/* Reference execution of a callback's blit, with ALL acceleration disabled.
+ * Useful for conformance tests and a backend's own software implementation.
+ * Only pass the unmodified descriptor/state received by the blit callback. */
+void nj_gfx_blit_software(const nj_gfx *g, const nj_gfx_blit *blit);
 
 /* Alpha-blended fill of an arbitrary region with coverage 0..255. */
 void nj_gfx_blend_pixel(nj_surface *s, int x, int y, nj_u4 argb, int alpha);

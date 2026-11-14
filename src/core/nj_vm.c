@@ -1494,7 +1494,28 @@ nj_status vm_invoke(nj_vm *vm, nj_ref obj, const char *cls,
         }
         if (st == NJ_ERR_YIELD && th->state == NJ_THREAD_RUNNING &&
             th->nframes > saved_frames) {
-            continue;   /* quantum expired mid-call: resume it */
+            /*
+             * Quantum expired mid-call: a C caller cannot be suspended, so
+             * this frame is resumed here.  Resuming it immediately starved
+             * every other Java thread, though: a paint() that spins until its
+             * loader thread makes progress (明星制造梦工厂_11048: paint loops
+             * at one pc while dream/g.run() sleeps) never let that loader run,
+             * because the scheduler only ever sees the main thread.  Give the
+             * other runnable threads one quantum first, exactly as the
+             * blocked-native pump below does - the callback is inside a C
+             * call, so keep the scheduler from entering it (in_c_call) and
+             * from nesting another pump (in_call_pump).
+             */
+            if (!vm->in_call_pump) {
+                int prev_in_c_call = th->in_c_call;
+
+                th->in_c_call = 1;
+                vm->in_call_pump = 1;
+                (void)nj_scheduler_step(vm);
+                vm->in_call_pump = 0;
+                th->in_c_call = prev_in_c_call;
+            }
+            continue;
         }
         /*
          * The native returned NJ_ERR_YIELD, not NJ_ERR_TIMEOUT: the TIMEOUT
@@ -1879,6 +1900,53 @@ nj_status nj_vm_start_app(nj_vm *vm, nj_ref midlet)
     vm->app_class = midlet->cls;
     return nj_call_special(vm, midlet, midlet->cls->name, "startApp", "()V",
                            NULL, NULL);
+}
+
+nj_status nj_vm_start_app_async(nj_vm *vm, nj_ref midlet)
+{
+    nj_thread *th;
+    nj_method *m;
+    nj_status st;
+    nj_u2 i;
+
+    if (!vm || !midlet || !nj_heap_owns_object_fast(vm, midlet) || !midlet->cls) {
+        return NJ_ERR;
+    }
+    th = nj_thread_main(vm);
+    if (!vm->running || vm->state == NJ_VM_STOPPING || !th ||
+        th->state != NJ_THREAD_RUNNING || th->nframes != 0 ||
+        vm->native_depth || vm->in_frame_hook || vm->in_call_pump ||
+        vm->in_paint || vm->in_callback || vm->in_exception_new ||
+        vm->exception || (vm->cur && vm->cur->nframes != 0)) {
+        return NJ_ERR_STATE;
+    }
+    for (i = 0u; i < vm->nthreads; i++) {
+        if (vm->threads[i] && vm->threads[i]->in_c_call) {
+            return NJ_ERR_STATE;
+        }
+    }
+    /* The constructor already initialized the MIDlet's class. Resolve exactly
+     * like the synchronous invokespecial bridge, but do not enter nj_exec():
+     * ownership of this frame belongs to the outer cooperative scheduler. */
+    m = bridge_lookup(vm, midlet->cls, "startApp", "()V", 0);
+    if (!m) {
+        return nj_throw(vm, "java/lang/NoSuchMethodError", "startApp");
+    }
+    if (!m->code) {
+        return NJ_ERR_UNSUPPORTED;
+    }
+    if (m->max_locals < 1u) {
+        return nj_throw(vm, "java/lang/VerifyError", "startApp");
+    }
+    th->stack_mem[0].r = midlet;
+    st = nj_frame_push(vm, th, m, th->stack_mem, 1u);
+    if (st != NJ_OK) {
+        return st;
+    }
+    vm->cur = th;
+    vm->app = midlet;
+    vm->app_class = midlet->cls;
+    return NJ_OK;
 }
 
 /* ------------------------------------------------------------------ */

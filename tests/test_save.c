@@ -610,6 +610,303 @@ static void test_restored_media(nj_port *base, const nj_u1 *jar, nj_u4 jar_len)
     if (state) { fclose(state); }
 }
 
+#if NJ_ENABLE_MEDIA && NJ_ENABLE_AMR
+#include "nj2me/nj_avcodec.h"
+#include "nj_midp.h"
+
+/* A real AMR Player owns heap PCM after decoding.  Its decoder has already
+ * closed before the snapshot, and the restoring VM has no codec installed.
+ * Position-dependent PCM distinguishes resuming at 40 ms from replaying zero. */
+#define SAVE_AMR_BYTES 71u
+#define SAVE_AMR_PCM_BYTES 1600u
+static struct {
+    int codec_opens, codec_closes, pcm_opens, pcm_closes;
+    int room, queued, written;
+    nj_u1 output[SAVE_AMR_PCM_BYTES];
+} save_amr_probe;
+
+typedef struct save_amr_decoder {
+    nj_av_mem mem;
+} save_amr_decoder;
+
+static nj_u1 save_amr_sample_byte(nj_u4 i)
+{
+    return (nj_u1)(37u + i * 13u + i / 97u);
+}
+static int save_amr_accepts(const nj_u1 *data, nj_u4 len)
+{
+    return data && len == SAVE_AMR_BYTES && memcmp(data, "#!AMR\n", 6u) == 0;
+}
+static nj_av_dec *save_amr_open(const nj_u1 *data, nj_u4 len,
+                                const nj_av_mem *mem, nj_av_info *info,
+                                const char **err)
+{
+    save_amr_decoder *dec;
+    (void)err;
+    if (!save_amr_accepts(data, len)) { return NULL; }
+    dec = (save_amr_decoder *)mem->alloc(mem->ud, sizeof(*dec));
+    if (!dec) { return NULL; }
+    dec->mem = *mem; /* The wrapper's memory-hook descriptor is borrowed. */
+    memset(info, 0, sizeof(*info));
+    info->format = NJ_AV_AUDIO_AMR;
+    info->rate = 8000u;
+    info->channels = 1u;
+    info->frames = 800u;
+    save_amr_probe.codec_opens++;
+    return (nj_av_dec *)dec;
+}
+static int save_amr_decode(nj_av_dec *dec, nj_av_step *step)
+{
+    nj_u4 i;
+    (void)dec;
+    if (step->out_cap < SAVE_AMR_PCM_BYTES) { return NJ_AV_ERR_CORRUPT; }
+    for (i = 0u; i < SAVE_AMR_PCM_BYTES; i++) {
+        step->out[i] = save_amr_sample_byte(i);
+    }
+    step->in_used = step->in_len;
+    step->out_used = SAVE_AMR_PCM_BYTES;
+    step->frames = 800u;
+    return NJ_AV_OK;
+}
+static void save_amr_close(nj_av_dec *opaque)
+{
+    save_amr_decoder *dec = (save_amr_decoder *)opaque;
+    nj_av_mem mem = dec->mem;
+    save_amr_probe.codec_closes++;
+    mem.free(mem.ud, dec);
+}
+static const nj_av_audio_ops save_amr_ops = {
+    "snapshot-amr", NJ_AV_AUDIO_AMR, save_amr_accepts, save_amr_open,
+    save_amr_decode, NULL, save_amr_close, 2u
+};
+static int save_amr_pcm_open(void *ud, int rate, int channels)
+{
+    (void)ud;
+    CHECK(rate == 8000 && channels == 1, "AMR snapshot PCM format");
+    save_amr_probe.pcm_opens++;
+    return 0;
+}
+static void save_amr_pcm_close(void *ud)
+{
+    (void)ud;
+    save_amr_probe.pcm_closes++;
+}
+static int save_amr_pcm_free(void *ud)
+{
+    (void)ud;
+    return save_amr_probe.room;
+}
+static int save_amr_pcm_queued(void *ud)
+{
+    (void)ud;
+    return save_amr_probe.queued;
+}
+static int save_amr_pcm_write(void *ud, const nj_s2 *pcm, int frames)
+{
+    int take = frames < save_amr_probe.room ? frames : save_amr_probe.room;
+    int bytes = take * 2;
+    (void)ud;
+    CHECK(bytes >= 0 && save_amr_probe.written + bytes <= (int)SAVE_AMR_PCM_BYTES,
+          "AMR snapshot capture stays within expected whole clip");
+    if (bytes < 0 || save_amr_probe.written + bytes > (int)SAVE_AMR_PCM_BYTES) {
+        return 0;
+    }
+    memcpy(save_amr_probe.output + save_amr_probe.written, pcm, (size_t)bytes);
+    save_amr_probe.written += bytes;
+    return take;
+}
+static void save_amr_finish(nj_vm *vm, nj_ref player)
+{
+    int i;
+    for (i = 0; i < 32 && obj_int_field(vm, player, TEST_PLAYER, "pState", "I") == 400; i++) {
+        nj_media_frame(vm);
+    }
+    CHECK(i < 32 && obj_int_field(vm, player, TEST_PLAYER, "pState", "I") == 300,
+          "restored AMR playback completes in bounded pump calls");
+}
+static void test_restored_amr_player(nj_port *base, const nj_u1 *jar,
+                                     nj_u4 jar_len, int playing)
+{
+    nj_port port = *base;
+    nj_vm *source = NULL, *target = NULL;
+    nj_app *source_app = NULL, *target_app = NULL;
+    nj_ref array, stream, player, pcm, vector;
+    nj_value args[2], ret;
+    nj_u1 amr[SAVE_AMR_BYTES], expected[SAVE_AMR_PCM_BYTES];
+    nj_u1 *blob = NULL;
+    nj_size blob_len = 0u;
+    nj_u4 i, j, root_mark;
+    int host_opens, host_closes;
+
+    memset(&save_amr_probe, 0, sizeof(save_amr_probe));
+    memcpy(amr, "#!AMR\n", 6u);
+    for (i = 0u; i < 5u; i++) {
+        amr[6u + i * 13u] = 0x04u; /* Five complete AMR-NB mode-0 blocks. */
+        for (j = 0u; j < 12u; j++) {
+            amr[7u + i * 13u + j] = (nj_u1)(11u + j * 37u + i * 17u);
+        }
+    }
+    for (i = 0u; i < SAVE_AMR_PCM_BYTES; i++) { expected[i] = save_amr_sample_byte(i); }
+    port.audio_decode = NULL;
+    port.pcm_open = save_amr_pcm_open;
+    port.pcm_close = save_amr_pcm_close;
+    port.pcm_free = save_amr_pcm_free;
+    port.pcm_queued = save_amr_pcm_queued;
+    port.pcm_write = save_amr_pcm_write;
+    source = nj_vm_create(&port, HEAP_BYTES);
+    CHECK(source != NULL, "AMR snapshot source VM exists");
+    if (!source) { goto done; }
+    CHECK(start_fixture(source, jar, jar_len, &source_app), "AMR snapshot fixture starts");
+    if (!source_app) { goto done; }
+    CHECK(nj_avcodec_install_audio(source, &save_amr_ops) > 0,
+          "AMR snapshot installs sentinel decoder");
+    root_mark = nj_root_mark(source);
+    array = nj_root(source, nj_byte_array_new(source, sizeof(amr)));
+    stream = nj_root(source, nj_object_new(source, "java/io/ByteArrayInputStream"));
+    CHECK(array && stream, "AMR snapshot input objects exist");
+    if (!array || !stream) { goto done; }
+    memcpy(array->u.bytes, amr, sizeof(amr));
+    args[0].r = array;
+    CHECK(nj_call_special(source, stream, "java/io/ByteArrayInputStream", "<init>",
+                          "([B)V", args, NULL) == NJ_OK, "AMR snapshot input stream initializes");
+    args[0].r = stream;
+    args[1].r = NULL;
+    memset(&ret, 0, sizeof(ret));
+    CHECK(nj_call_static(source, "javax/microedition/media/Manager", "createPlayer",
+          "(Ljava/io/InputStream;Ljava/lang/String;)Ljavax/microedition/media/Player;",
+          args, &ret) == NJ_OK, "AMR snapshot creates an actual Java Player");
+    player = nj_root(source, ret.r);
+    CHECK(player != NULL, "AMR snapshot Player exists");
+    if (!player) { goto done; }
+    vector = field_child_b(source);
+    args[0].r = player;
+    args[1].i = 0;
+    CHECK(vector && nj_call(source, vector, "java/util/Vector", "setElementAt",
+          "(Ljava/lang/Object;I)V", args, NULL) == NJ_OK,
+          "AMR Player is rooted in the saved MIDlet object graph");
+    nj_root_release(source, root_mark);
+    pcm = obj_ref_field(source, player, TEST_PLAYER, "pData", "[B");
+    CHECK(pcm && pcm->length == SAVE_AMR_PCM_BYTES &&
+          memcmp(pcm->u.bytes, expected, sizeof(expected)) == 0,
+          "actual AMR Player contains complete provider PCM in the VM heap");
+    CHECK(save_amr_probe.codec_opens == 1 && save_amr_probe.codec_closes == 1,
+          "AMR provider is fully closed before save");
+    if (playing) {
+        /* All 800 samples were handed to the device, but its last 480 samples
+         * have not played.  A snapshot must forget that queue frontier and
+         * resume from audible sample 320, even though pPushed reached the end. */
+        save_amr_probe.room = 128;
+        save_amr_probe.queued = 480;
+        CHECK(nj_call(source, player, TEST_PLAYER, "start", "()V", NULL, NULL) == NJ_OK,
+              "source AMR starts with a queued device tail");
+        for (i = 0u; i < 32u &&
+             obj_int_field(source, player, TEST_PLAYER, "pPushed", "I") < 800; i++) {
+            nj_media_frame(source);
+        }
+        CHECK(i < 32u && obj_int_field(source, player, TEST_PLAYER, "pState", "I") == 400 &&
+              obj_int_field(source, player, TEST_PLAYER, "pPushed", "I") == 800 &&
+              save_amr_probe.written == (int)SAVE_AMR_PCM_BYTES &&
+              memcmp(save_amr_probe.output, expected, sizeof(expected)) == 0,
+              "playing source has pushed the whole clip while its tail remains queued");
+    } else {
+        args[0].j = 40000;
+        args[1].bits = 0u;
+        CHECK(nj_call(source, player, TEST_PLAYER, "setMediaTime", "(J)J", args, &ret) == NJ_OK &&
+              ret.j == 40000, "source AMR seeks to 40 ms");
+        CHECK(nj_call(source, player, TEST_PLAYER, "start", "()V", NULL, NULL) == NJ_OK &&
+              nj_call(source, player, TEST_PLAYER, "stop", "()V", NULL, NULL) == NJ_OK,
+              "source AMR pauses before the blocked PCM device consumes more");
+        CHECK(save_amr_probe.written == 0 &&
+              obj_int_field(source, player, TEST_PLAYER, "pPushed", "I") == 320,
+              "paused source position is exactly 320 samples");
+    }
+    CHECK(nj_call(source, player, TEST_PLAYER, "getMediaTime", "()J", NULL, &ret) == NJ_OK &&
+          ret.j == 40000, "source AMR audible position is exactly 40 ms before save");
+    CHECK(source->nroots == 0u && nj_vm_save_mem(source, &blob, &blob_len) == NJ_OK,
+          "actual AMR Player saves through the memory API");
+    if (!blob) { goto done; }
+    CHECK(obj_int_field(source, player, TEST_PLAYER, "pState", "I") == (playing ? 400 : 300) &&
+          obj_int_field(source, player, TEST_PLAYER, "pPushed", "I") == (playing ? 800 : 320) &&
+          nj_call(source, player, TEST_PLAYER, "getMediaTime", "()J", NULL, &ret) == NJ_OK &&
+          ret.j == 40000, "saving leaves source AMR playback and queue frontier unchanged");
+    /* The old process/device is gone before restoring the independent blob. */
+    CHECK(nj_call(source, player, TEST_PLAYER, "close", "()V", NULL, NULL) == NJ_OK,
+          "source AMR releases its device after the snapshot is captured");
+    host_opens = save_amr_probe.pcm_opens;
+    host_closes = save_amr_probe.pcm_closes;
+    target = nj_vm_create(&port, HEAP_BYTES);
+    CHECK(target != NULL, "AMR snapshot restores into a fresh VM");
+    if (!target) { goto done; }
+    target_app = nj_app_open(target, jar, jar_len);
+    CHECK(target_app != NULL, "AMR target attaches the same MIDlet app");
+    CHECK(nj_avcodec_install_audio(target, NULL) == 0 &&
+          nj_avcodec_find_audio(target, amr, sizeof(amr)) == NULL,
+          "restoring VM has no native or software provider installed");
+    CHECK(target_app && nj_vm_load_mem(target, blob, blob_len) == NJ_OK,
+          "actual AMR snapshot loads from memory");
+    player = vector_at(target, field_child_b(target), 0u);
+    CHECK(player != NULL, "restored MIDlet graph retains its AMR Player");
+    if (!player) { goto done; }
+    pcm = obj_ref_field(target, player, TEST_PLAYER, "pData", "[B");
+    CHECK(pcm && pcm->length == SAVE_AMR_PCM_BYTES &&
+          memcmp(pcm->u.bytes, expected, sizeof(expected)) == 0,
+          "restored AMR heap PCM is byte-exact without any decoder");
+    CHECK(nj_call(target, player, TEST_PLAYER, "getMediaTime", "()J", NULL, &ret) == NJ_OK &&
+          ret.j == 40000 && obj_int_field(target, player, TEST_PLAYER, "pPushed", "I") == 320 &&
+          obj_int_field(target, player, TEST_PLAYER, "pState", "I") == 300,
+          "restore preserves audible AMR time and resumes from sample 320");
+    CHECK(obj_int_field(target, player, TEST_PLAYER, "pOpen", "Z") == 0 &&
+          obj_int_field(target, player, TEST_PLAYER, "pStream", "Z") == 0 &&
+          obj_int_field(target, player, TEST_PLAYER, "pPlat", "Z") == 0 &&
+          obj_int_field(target, player, TEST_PLAYER, "pAvK", "Z") == 0 &&
+          obj_ref_field(target, player, TEST_PLAYER, "pMidi", "[B") == NULL &&
+          save_amr_probe.pcm_opens == host_opens && save_amr_probe.pcm_closes == host_closes &&
+          save_amr_probe.codec_opens == 1 && save_amr_probe.codec_closes == 1 &&
+          nj_avcodec_find_audio(target, amr, sizeof(amr)) == NULL,
+          "loading retains no native provider handle and opens no host resource");
+    /* The source device's queued samples cannot cross into the new VM. */
+    save_amr_probe.queued = 0;
+    save_amr_probe.written = 0;
+    memset(save_amr_probe.output, 0, sizeof(save_amr_probe.output));
+    save_amr_probe.room = 128;
+    CHECK(nj_call(target, player, TEST_PLAYER, "start", "()V", NULL, NULL) == NJ_OK,
+          "restored AMR starts using heap PCM with no codec available");
+    save_amr_finish(target, player);
+    CHECK(save_amr_probe.written == 960 &&
+          memcmp(save_amr_probe.output, expected + 640u, 960u) == 0,
+          "snapshot resume emits exactly the remaining three AMR blocks from 40 ms");
+    CHECK(nj_call(target, player, TEST_PLAYER, "getMediaTime", "()J", NULL, &ret) == NJ_OK &&
+          ret.j == 100000, "restored AMR reaches its exact 100 ms duration");
+    save_amr_probe.written = 0;
+    save_amr_probe.room = 0;
+    args[0].j = 20000;
+    args[1].bits = 0u;
+    CHECK(nj_call(target, player, TEST_PLAYER, "setMediaTime", "(J)J", args, &ret) == NJ_OK &&
+          ret.j == 20000, "restored AMR can seek back to 20 ms");
+    CHECK(nj_call(target, player, TEST_PLAYER, "start", "()V", NULL, NULL) == NJ_OK &&
+          nj_call(target, player, TEST_PLAYER, "stop", "()V", NULL, NULL) == NJ_OK,
+          "restored AMR can pause at the new seek position");
+    save_amr_probe.room = 128;
+    CHECK(nj_call(target, player, TEST_PLAYER, "start", "()V", NULL, NULL) == NJ_OK,
+          "restored AMR resumes after an explicit seek and stop");
+    save_amr_finish(target, player);
+    CHECK(save_amr_probe.written == 1280 &&
+          memcmp(save_amr_probe.output, expected + 320u, 1280u) == 0 &&
+          save_amr_probe.codec_opens == 1 && save_amr_probe.codec_closes == 1,
+          "restored seek/resume emits exact PCM without reopening the AMR decoder");
+    CHECK(nj_call(target, player, TEST_PLAYER, "close", "()V", NULL, NULL) == NJ_OK,
+          "restored AMR closes safely");
+ done:
+    if (target_app) { nj_app_close(target, target_app); }
+    nj_vm_destroy(target);
+    if (source_app) { nj_app_close(source, source_app); }
+    nj_vm_destroy(source);
+    CHECK(save_amr_probe.pcm_opens == save_amr_probe.pcm_closes,
+          "AMR snapshot source and restored devices close exactly once");
+    free(blob);
+}
+#endif /* NJ_ENABLE_MEDIA && NJ_ENABLE_AMR */
+
 static int restore_rtc_year;
 static int restore_rtc(void *ud, nj_datetime *out)
 {
@@ -817,6 +1114,527 @@ static void test_restored_softkeys(nj_port *port, const nj_u1 *jar, nj_u4 jar_le
         nj_vm_destroy(source);
         fclose(state);
     }
+}
+
+/*
+ * The in-memory API a libretro core needs: retro_serialize() gets a malloc'd
+ * blob from nj_vm_save_mem() and retro_unserialize() hands a frontend buffer
+ * to nj_vm_load_mem().  A frontend allocates retro_serialize_size() bytes -
+ * nj_vm_blob_max() - which is normally much larger than the blob, so the
+ * loader must find the blob's real end from the length the writer recorded in
+ * the header instead of trusting the buffer size.
+ */
+static void test_mem_api(const nj_port *port, const nj_u1 *jar, nj_u4 jar_len)
+{
+    nj_vm *source = NULL, *target = NULL;
+    nj_app *source_app = NULL, *target_app = NULL;
+    nj_u1 *blob = NULL, *blob2 = NULL, *orig = NULL;
+    nj_u1 *padded = NULL, *corrupt = NULL, *nolen = NULL;
+    nj_size len = 0u, len2 = 0u, blob_max;
+    nj_ref b;
+    FILE *state = NULL;
+    int i;
+
+    source = nj_vm_create(port, HEAP_BYTES);
+    CHECK(source != NULL, "mem: source VM");
+    if (!source) {
+        return;
+    }
+    CHECK(start_fixture(source, jar, jar_len, &source_app),
+          "mem: fixture MIDlet starts");
+    for (i = 0; i < 5; i++) {
+        (void)nj_midp_frame(source);
+    }
+    b = field_child_b(source);
+    CHECK(b != NULL && vector_size(source, b) == 2,
+          "mem: the source VM has MIDlet state to snapshot");
+
+    /* retro_serialize_size(): the worst case, not this VM's actual size. */
+    blob_max = nj_vm_blob_max(source);
+    CHECK(nj_vm_blob_max(NULL) == 0u, "nj_vm_blob_max(NULL) is 0");
+    {
+        nj_u8 heap_max;
+
+        if (source->heap_limit != 0u) {
+            heap_max = (nj_u8)source->heap_limit;
+        } else {
+            heap_max = (nj_u8)source->heap.size > (nj_u8)NJ_MAX_HEAP
+                     ? (nj_u8)source->heap.size : (nj_u8)NJ_MAX_HEAP;
+        }
+        CHECK(blob_max == (nj_size)(heap_max +
+                                    (nj_u8)NJ_MAX_THREADS *
+                                        (nj_u8)NJ_MAX_STACK_SLOTS * 8u +
+                                    4u * 1024u * 1024u),
+              "nj_vm_blob_max() is the documented worst-case bound");
+    }
+
+    /* NULL arguments are rejected; an unsaveable VM clears the out-params. */
+    CHECK(nj_vm_save_mem(NULL, &blob, &len) == NJ_ERR,
+          "nj_vm_save_mem(NULL VM) is refused");
+    {
+        nj_u1 *null_vm_blob = (nj_u1 *)(uintptr_t)1u;
+        nj_size null_vm_len = 7u;
+
+        CHECK(nj_vm_save_mem(NULL, &null_vm_blob, &null_vm_len) == NJ_ERR,
+              "nj_vm_save_mem(NULL VM) with valid out-params is refused");
+        CHECK(null_vm_blob == NULL && null_vm_len == 0u,
+              "save_mem NULL-VM refusal also clears the out-params");
+    }
+    CHECK(nj_vm_save_mem(source, NULL, &len) == NJ_ERR,
+          "nj_vm_save_mem(NULL out_blob) is refused");
+    CHECK(nj_vm_save_mem(source, &blob, NULL) == NJ_ERR,
+          "nj_vm_save_mem(NULL out_size) is refused");
+    {
+        nj_u1 *fail_blob = (nj_u1 *)(uintptr_t)1u;
+        nj_size fail_len = 7u;
+
+        source->in_paint = 1;
+        CHECK(nj_vm_save_mem(source, &fail_blob, &fail_len) == NJ_ERR_STATE,
+              "save_mem refuses while painting");
+        CHECK(fail_blob == NULL && fail_len == 0u,
+              "a refused save_mem clears its out-params");
+        source->in_paint = 0;
+    }
+
+    CHECK(nj_vm_save_mem(source, &blob, &len) == NJ_OK, "nj_vm_save_mem()");
+    CHECK(blob != NULL && len > 0u, "save_mem returns a non-empty, malloc'd blob");
+    CHECK(len <= blob_max, "nj_vm_blob_max() bounds the real blob");
+    if (!blob || len < 180u) {
+        goto done;
+    }
+    {
+        nj_u4 recorded = (nj_u4)blob[172] | ((nj_u4)blob[173] << 8) |
+                         ((nj_u4)blob[174] << 16) | ((nj_u4)blob[175] << 24);
+
+        CHECK(recorded == (nj_u4)len,
+              "the header records the true blob length at offset 172");
+    }
+    CHECK(nj_vm_save_mem(source, &blob2, &len2) == NJ_OK,
+          "a second save_mem() succeeds");
+    CHECK(blob2 != NULL && blob2 != blob && len2 == len,
+          "each save_mem() returns its own independent blob");
+    CHECK(blob2 && len2 == len && memcmp(blob, blob2, (size_t)len) == 0,
+          "two memory snapshots are byte-identical");
+
+    orig = (nj_u1 *)malloc((size_t)len);
+    CHECK(orig != NULL, "mem: reference copy of the blob");
+    if (orig) {
+        memcpy(orig, blob, (size_t)len);
+    }
+
+    /* The FILE path is untouched by the new API: same bytes, offset 172 still
+     * zero (outside the CRC), and the memory blob is exactly the file size. */
+    state = tmpfile();
+    CHECK(state != NULL, "mem: file comparison stream opens");
+    if (state) {
+        long n = 0L;
+
+        CHECK(nj_vm_save(source, state) == NJ_OK, "the FILE path still saves");
+        CHECK(fseek(state, 0L, SEEK_END) == 0 &&
+              (n = ftell(state)) == (long)len &&
+              fseek(state, 0L, SEEK_SET) == 0,
+              "the memory blob is exactly as long as the file blob");
+        if (n == (long)len) {
+            nj_u1 *file_bytes = (nj_u1 *)malloc((size_t)len);
+
+            CHECK(file_bytes != NULL, "mem: file bytes buffer");
+            if (file_bytes &&
+                fread(file_bytes, 1, (size_t)len, state) == (size_t)len) {
+                CHECK(file_bytes[172] == 0u && file_bytes[173] == 0u &&
+                      file_bytes[174] == 0u && file_bytes[175] == 0u,
+                      "the FILE path still leaves offset 172 zero");
+                CHECK(memcmp(file_bytes, blob, 172u) == 0 &&
+                      memcmp(file_bytes + 176u, blob + 176u,
+                             (size_t)(len - 176u)) == 0,
+                      "file and memory blobs are identical outside offset 172");
+            }
+            free(file_bytes);
+        }
+        /* A memory blob written to a file is still a valid .state file: the
+         * recorded length equals the file length, so both readers agree. */
+        rewind(state);
+        CHECK(fwrite(blob, 1, (size_t)len, state) == (size_t)len,
+              "mem: a memory blob can be written as a .state file");
+        rewind(state);
+        {
+            nj_vm *file_vm = nj_vm_create(port, HEAP_BYTES);
+            nj_app *file_app = NULL;
+
+            CHECK(file_vm != NULL, "mem: file-interop VM");
+            if (file_vm) {
+                file_app = nj_app_open(file_vm, jar, jar_len);
+                CHECK(file_app != NULL, "mem: file-interop VM attaches the JAR");
+                CHECK(nj_vm_load(file_vm, state) == NJ_OK,
+                      "the FILE API loads a blob written by save_mem");
+                CHECK(vector_size(file_vm, field_child_b(file_vm)) == 2,
+                      "the file-loaded memory blob restores the same state");
+            }
+            if (file_app) {
+                nj_app_close(file_vm, file_app);
+            }
+            nj_vm_destroy(file_vm);
+        }
+        fclose(state);
+        state = NULL;
+    }
+
+    /* restore the blob into a fresh VM exactly like nj_vm_load_file() */
+    target = nj_vm_create(port, HEAP_BYTES);
+    CHECK(target != NULL, "mem: target VM");
+    if (!target) {
+        goto done;
+    }
+    target_app = nj_app_open(target, jar, jar_len);
+    CHECK(target_app != NULL, "mem: the target VM attaches the same JAR");
+    CHECK(nj_vm_load_mem(target, blob, len) == NJ_OK, "nj_vm_load_mem()");
+    CHECK(nj_midp_current(target) != NULL,
+          "the restored VM still has its current Displayable");
+    b = field_child_b(target);
+    CHECK(b != NULL, "FieldChild.b survived the memory restore");
+    CHECK(vector_size(target, b) == 2, "the restored Vector still holds 2");
+    CHECK(str_eq(vector_at(target, b, 0u), "first") &&
+          str_eq(vector_at(target, b, 1u), "second"),
+          "the restored Vector still holds \"first\" and \"second\"");
+    CHECK(interned_holds(target, vector_at(target, b, 0u)),
+          "the restored String is still the interned literal");
+    (void)nj_midp_frame(target);
+    CHECK(!nj_has_exception(target),
+          "the memory-restored VM still runs a frame");
+
+    /* A frontend buffer is nj_vm_blob_max() bytes, mostly zero padding. */
+    padded = (nj_u1 *)calloc((size_t)blob_max, 1u);
+    CHECK(padded != NULL, "mem: a frontend-sized buffer is allocated");
+    if (padded) {
+        nj_vm *padded_vm = nj_vm_create(port, HEAP_BYTES);
+        nj_app *padded_app = NULL;
+
+        memcpy(padded, blob, (size_t)len);
+        CHECK(padded_vm != NULL, "mem: padded-target VM");
+        if (padded_vm) {
+            padded_app = nj_app_open(padded_vm, jar, jar_len);
+            CHECK(padded_app != NULL, "mem: padded-target VM attaches the JAR");
+            CHECK(nj_vm_load_mem(padded_vm, padded, blob_max) == NJ_OK,
+                  "nj_vm_load_mem() accepts a padded frontend buffer");
+            CHECK(vector_size(padded_vm, field_child_b(padded_vm)) == 2,
+                  "the padded buffer restores the same MIDlet state");
+        }
+        if (padded_app) {
+            nj_app_close(padded_vm, padded_app);
+        }
+        nj_vm_destroy(padded_vm);
+        free(padded);
+        padded = NULL;
+    }
+
+    /* A header whose reserved field is 0 (every .state file) means "the
+     * buffer is exactly one blob": the backward-compatible path. */
+    nolen = (nj_u1 *)malloc((size_t)len);
+    CHECK(nolen != NULL, "mem: legacy-shaped blob copy");
+    if (nolen) {
+        nj_vm *nolen_vm = nj_vm_create(port, HEAP_BYTES);
+        nj_app *nolen_app = NULL;
+
+        memcpy(nolen, blob, (size_t)len);
+        memset(nolen + 172u, 0, 4u);
+        CHECK(nolen_vm != NULL, "mem: legacy-shaped restore VM");
+        if (nolen_vm) {
+            nolen_app = nj_app_open(nolen_vm, jar, jar_len);
+            CHECK(nolen_app != NULL, "mem: legacy-shaped VM attaches the JAR");
+            CHECK(nj_vm_load_mem(nolen_vm, nolen, len) == NJ_OK,
+                  "a zero length field means the buffer is exactly one blob");
+            CHECK(vector_size(nolen_vm, field_child_b(nolen_vm)) == 2,
+                  "the legacy-shaped blob restores the same MIDlet state");
+        }
+        if (nolen_app) {
+            nj_app_close(nolen_vm, nolen_app);
+        }
+        nj_vm_destroy(nolen_vm);
+        free(nolen);
+        nolen = NULL;
+    }
+
+    /* ---- refusals: corrupt body, truncation, impossible sizes -------- */
+    corrupt = (nj_u1 *)malloc((size_t)len);
+    CHECK(corrupt != NULL, "mem: corrupt blob copy");
+    if (corrupt) {
+        nj_u4 at = len / 2u;
+
+        memcpy(corrupt, blob, (size_t)len);
+        if (at < 180u) {
+            at = 180u;
+        }
+        corrupt[at] ^= 0x5Au;
+        {
+            nj_vm *v = nj_vm_create(port, HEAP_BYTES);
+
+            CHECK(v != NULL, "mem: corrupt-blob VM");
+            if (v) {
+                CHECK(nj_vm_load_mem(v, corrupt, len) == NJ_ERR_FORMAT,
+                      "a corrupted body byte is refused with NJ_ERR_FORMAT");
+                nj_vm_destroy(v);
+            }
+        }
+        {
+            nj_vm *v = nj_vm_create(port, HEAP_BYTES);
+
+            CHECK(v != NULL, "mem: truncation VM");
+            if (v) {
+                CHECK(nj_vm_load_mem(v, blob, len - 4u) == NJ_ERR_FORMAT,
+                      "a truncated blob is refused with NJ_ERR_FORMAT");
+                nj_vm_destroy(v);
+            }
+        }
+        {
+            nj_vm *v = nj_vm_create(port, HEAP_BYTES);
+
+            CHECK(v != NULL, "mem: short-buffer VM");
+            if (v) {
+                CHECK(nj_vm_load_mem(v, blob, 179u) == NJ_ERR_FORMAT,
+                      "a buffer shorter than a snapshot header is refused");
+                nj_vm_destroy(v);
+            }
+        }
+        {
+            nj_vm *v = nj_vm_create(port, HEAP_BYTES);
+
+            CHECK(v != NULL, "mem: oversized-buffer VM");
+            if (v) {
+                CHECK(nj_vm_load_mem(v, blob, 0xFFFFFFFFu) == NJ_ERR_FORMAT,
+                      "a buffer past the worst-case bound is refused");
+                nj_vm_destroy(v);
+            }
+        }
+        /* Only zero has the legacy fallback meaning. Nonzero impossible
+         * lengths must not silently reinterpret the full buffer as a blob. */
+        for (i = 0; i < 2; i++) {
+            nj_vm *v = nj_vm_create(port, HEAP_BYTES);
+
+            memcpy(corrupt, blob, (size_t)len);
+            memset(corrupt + 172u, i == 0 ? 0 : 0xFF, 4u);
+            if (i == 0) { corrupt[172] = 1u; }
+            CHECK(v != NULL, "mem: malformed declared-length VM");
+            if (v) {
+                CHECK(nj_vm_load_mem(v, corrupt, len) == NJ_ERR_FORMAT,
+                      "a nonzero impossible declared length is refused");
+                nj_vm_destroy(v);
+            }
+        }
+        free(corrupt);
+        corrupt = NULL;
+    }
+    /* Padding cannot repair a truncated body/CRC, even though the supplied
+     * frontend buffer is large enough to contain the declared true length. */
+    padded = (nj_u1 *)calloc((size_t)blob_max, 1u);
+    CHECK(padded != NULL, "mem: padded-truncation buffer");
+    if (padded) {
+        nj_vm *v = nj_vm_create(port, HEAP_BYTES);
+
+        memcpy(padded, blob, (size_t)len - 4u);
+        CHECK(v != NULL, "mem: padded-truncation VM");
+        if (v) {
+            CHECK(nj_vm_load_mem(v, padded, blob_max) == NJ_ERR_FORMAT,
+                  "zero padding does not hide a missing snapshot CRC");
+            nj_vm_destroy(v);
+        }
+    }
+
+    /* The API borrows the caller's bytes: it must not have written them. */
+    if (orig) {
+        CHECK(memcmp(orig, blob, (size_t)len) == 0,
+              "nj_vm_load_mem() never modifies the caller's buffer");
+    }
+
+ done:
+    if (target_app) {
+        nj_app_close(target, target_app);
+    }
+    nj_vm_destroy(target);
+    if (source_app) {
+        nj_app_close(source, source_app);
+    }
+    nj_vm_destroy(source);
+    if (state) {
+        fclose(state);
+    }
+    free(nolen);
+    free(corrupt);
+    free(padded);
+    free(orig);
+    free(blob2);
+    free(blob);
+}
+
+/* The old synchronous startApp bridge never returns for LoopDemo. A frame
+ * hook could draw while it slept, but could never take a safe snapshot: the
+ * bridge still owned a C stack. Queue it instead and prove a real sleeping
+ * bytecode frame survives save/restore and continues painting and executing. */
+static void test_async_start(const nj_port *base)
+{
+    nj_port port = *base;
+    nj_vm *source = NULL, *target = NULL;
+    nj_app *source_app = NULL, *target_app = NULL;
+    nj_u1 *jar = NULL, *blob = NULL;
+    nj_u4 jar_len = 0u;
+    nj_size len = 0u;
+    nj_ref midlet, exc = NULL;
+    nj_thread *main_thread;
+    nj_u4 saved_pc, saved_id;
+    nj_s8 saved_wake;
+    nj_u8 before_insns;
+    int saved_painted, i;
+
+    port.fps_cap = 0;
+    jar = slurp("tests/fixtures/loopdemo.jar", &jar_len);
+    CHECK(jar != NULL, "async: LoopDemo fixture opens");
+    if (!jar) { goto done; }
+    source = nj_vm_create(&port, HEAP_BYTES);
+    CHECK(source != NULL, "async: source VM creates");
+    if (!source) { goto done; }
+    source_app = nj_app_open(source, jar, jar_len);
+    CHECK(source_app != NULL, "async: source attaches LoopDemo");
+    if (!source_app) { goto done; }
+    midlet = nj_vm_new_midlet(source, "LoopDemo", &exc);
+    CHECK(midlet != NULL && exc == NULL, "async: LoopDemo constructor completes");
+    if (!midlet) { goto done; }
+    main_thread = nj_thread_main(source);
+    CHECK(main_thread && main_thread->nframes == 0,
+          "async: constructor leaves main thread idle");
+    if (!main_thread) { goto done; }
+    CHECK(nj_vm_start_app_async(NULL, midlet) == NJ_ERR &&
+          nj_vm_start_app_async(source, NULL) == NJ_ERR,
+          "async: NULL arguments are refused");
+    source->native_depth++;
+    CHECK(nj_vm_start_app_async(source, midlet) == NJ_ERR_STATE &&
+          main_thread->nframes == 0, "async: native reentry cannot queue a frame");
+    source->native_depth--;
+    source->in_frame_hook = 1u;
+    CHECK(nj_vm_start_app_async(source, midlet) == NJ_ERR_STATE &&
+          main_thread->nframes == 0, "async: frame-hook reentry is refused");
+    source->in_frame_hook = 0u;
+    source->running = 0u;
+    CHECK(nj_vm_start_app_async(source, midlet) == NJ_ERR_STATE &&
+          main_thread->nframes == 0, "async: stopped VM cannot queue a frame");
+    source->running = 1u;
+    {
+        nj_method *start = nj_method_lookup(midlet->cls, "startApp", "()V");
+        const nj_u1 *code;
+        CHECK(start != NULL, "async: bytecode entry resolves");
+        if (!start) { goto done; }
+        code = start->code;
+        start->code = NULL;
+        CHECK(nj_vm_start_app_async(source, midlet) == NJ_ERR_UNSUPPORTED &&
+              main_thread->nframes == 0, "async: non-bytecode entry is refused");
+        start->code = code;
+    }
+    before_insns = source->insns;
+    CHECK(nj_vm_start_app_async(source, midlet) == NJ_OK,
+          "async: endless startApp queues without executing");
+    CHECK(source->insns == before_insns && main_thread->nframes == 1 &&
+          main_thread->frames[0].pc == 0u && !nj_midp_current(source),
+          "async: queue has not run startApp bytecode");
+    CHECK(nj_vm_start_app_async(source, midlet) == NJ_ERR_STATE &&
+          main_thread->nframes == 1, "async: duplicate start preserves queued frame");
+    CHECK(nj_vm_can_save(source), "async: queued bytecode is immediately saveable");
+    for (i = 0; i < 6; i++) {
+        fake_now += 16u;
+        CHECK(nj_midp_frame(source) == NJ_OK,
+              "async: outer frame pump returns from endless startApp");
+        CHECK(nj_vm_can_save(source), "async: every outer boundary is saveable");
+    }
+    CHECK(nj_midp_current(source) != NULL && !nj_has_exception(source),
+          "async: startApp installed its Displayable without exception");
+    saved_painted = obj_int_field(source, nj_midp_current(source),
+                                  "LoopDemo$Screen", "painted", "I");
+    CHECK(saved_painted >= 6, "async: Java paint callbacks execute while startApp sleeps");
+    CHECK(main_thread->nframes == 1 && main_thread->state == NJ_THREAD_SLEEPING &&
+          strcmp(main_thread->frames[0].m->name, "startApp") == 0 &&
+          !main_thread->in_c_call && !source->native_depth && !source->in_frame_hook,
+          "async: main retains a sleeping Java frame without a native C stack");
+    if (main_thread->nframes != 1) { goto done; }
+    saved_pc = main_thread->frames[0].pc;
+    saved_id = main_thread->id;
+    saved_wake = main_thread->wake_at_ms;
+    CHECK(nj_vm_save_mem(source, &blob, &len) == NJ_OK,
+          "async: sleeping endless startApp saves to memory");
+    if (!blob) { goto done; }
+    target = nj_vm_create(&port, HEAP_BYTES);
+    CHECK(target != NULL, "async: restore VM creates");
+    if (!target) { goto done; }
+    target_app = nj_app_open(target, jar, jar_len);
+    CHECK(target_app != NULL, "async: restore VM attaches LoopDemo");
+    if (!target_app) { goto done; }
+    CHECK(nj_vm_load_mem(target, blob, len) == NJ_OK,
+          "async: restore suspended startApp into fresh VM");
+    main_thread = nj_thread_main(target);
+    CHECK(main_thread && target->nthreads == source->nthreads &&
+          main_thread->id == saved_id && main_thread->nframes == 1 &&
+          main_thread->state == NJ_THREAD_SLEEPING && main_thread->wake_at_ms == saved_wake &&
+          main_thread->frames[0].pc == saved_pc &&
+          main_thread->frames[0].locals[0].r == target->app,
+          "async: restore preserves thread, sleep, PC and rebased receiver");
+    CHECK(obj_int_field(target, nj_midp_current(target),
+                        "LoopDemo$Screen", "painted", "I") == saved_painted,
+          "async: restore preserves Java paint counter");
+    before_insns = target->insns;
+    for (i = 0; i < 4; i++) {
+        fake_now += 16u;
+        CHECK(nj_midp_frame(target) == NJ_OK && nj_vm_can_save(target),
+              "async: restored endless loop advances through safe outer frames");
+    }
+    CHECK(main_thread && main_thread->nframes == 1 &&
+          main_thread->state == NJ_THREAD_SLEEPING && main_thread->wake_at_ms > saved_wake &&
+          target->insns > before_insns && !nj_has_exception(target),
+          "async: restored startApp actually wakes, executes and sleeps again");
+    CHECK(obj_int_field(target, nj_midp_current(target),
+                        "LoopDemo$Screen", "painted", "I") >= saved_painted + 4,
+          "async: restored Java paint callbacks continue");
+ done:
+    if (target_app) { nj_app_close(target, target_app); }
+    nj_vm_destroy(target);
+    if (source_app) { nj_app_close(source, source_app); }
+    nj_vm_destroy(source);
+    free(blob);
+    free(jar);
+}
+
+/* A conventional startApp that returns must also leave the scheduler's main
+ * thread idle again, with the same Java side effects as synchronous startup. */
+static void test_async_returning(const nj_port *base, const nj_u1 *jar,
+                                 nj_u4 jar_len)
+{
+    nj_port port = *base;
+    nj_vm *vm;
+    nj_app *app = NULL;
+    nj_ref midlet, exc = NULL, values;
+    nj_thread *th;
+    int i;
+
+    port.fps_cap = 0;
+    vm = nj_vm_create(&port, HEAP_BYTES);
+    CHECK(vm != NULL, "async finite: VM creates");
+    if (!vm) { return; }
+    app = nj_app_open(vm, jar, jar_len);
+    CHECK(app != NULL, "async finite: FieldDemo attaches");
+    if (!app) { goto done; }
+    midlet = nj_vm_new_midlet(vm, "FieldDemo", &exc);
+    CHECK(midlet != NULL && exc == NULL, "async finite: constructor completes");
+    if (!midlet) { goto done; }
+    CHECK(nj_vm_start_app_async(vm, midlet) == NJ_OK,
+          "async finite: startApp queues");
+    th = nj_thread_main(vm);
+    for (i = 0; i < 4; i++) {
+        fake_now += 16u;
+        CHECK(nj_midp_frame(vm) == NJ_OK && nj_vm_can_save(vm),
+              "async finite: bounded frame pumps remain saveable");
+    }
+    CHECK(th && th->nframes == 0 && th->state == NJ_THREAD_RUNNING &&
+          !nj_has_exception(vm), "async finite: returning startApp leaves main idle");
+    values = field_child_b(vm);
+    CHECK(values != NULL && vector_size(vm, values) == 2 && nj_midp_current(vm),
+          "async finite: Java initialization matches synchronous startup");
+ done:
+    if (app) { nj_app_close(vm, app); }
+    nj_vm_destroy(vm);
 }
 
 int main(void)
@@ -1194,8 +2012,15 @@ after_vm_b:
     test_reordered_classes(&port, jar, jar_len);
     test_large_heap(&port, jar, jar_len);
     test_restored_media(&port, jar, jar_len);
+#if NJ_ENABLE_MEDIA && NJ_ENABLE_AMR
+    test_restored_amr_player(&port, jar, jar_len, 0);
+    test_restored_amr_player(&port, jar, jar_len, 1);
+#endif
     test_restored_softkeys(&port, jar, jar_len);
     test_clock_restore(&port, jar, jar_len);
+    test_mem_api(&port, jar, jar_len);
+    test_async_start(&port);
+    test_async_returning(&port, jar, jar_len);
 
     /* ---- teardown ---------------------------------------------------- */
     if (app_a) {

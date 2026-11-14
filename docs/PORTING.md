@@ -40,10 +40,11 @@ has no stat/mtime operation; the direct libc fallback can use host mtime. Supply
 `now` for epoch-based timestamps, and make `file_write` report the actual byte
 count: short/failed writes are errors, not a successful saved mutation.
 
-### Two pointers, two jobs
+### Callback contexts
 
-`nj_port.ud` is **yours**: the runtime hands it back to every callback except
-`log`, so it normally points at a struct you allocated in your port
+`nj_port.ud` is **yours**: the runtime hands it back to callbacks except
+`log` and the optional graphics callbacks (`gfx_accel_ud` / `gfx_raster_ud`),
+so it normally points at a struct you allocated in your port
 constructor. `nj_port.user` is the **embedder's**: it is passed to `log` only,
 so an application can capture `System.out` without knowing anything about your
 internals.
@@ -64,6 +65,31 @@ is chosen at compile time by `NJ_PIXFMT`:
 `display_present(x, y, w, h)` receives the smallest rectangle that changed.
 A panel driven over SPI should DMA just that rectangle; a port that would rather
 not bother can ignore the arguments and push the whole buffer.
+
+### Optional 2D hardware acceleration
+
+With `NJ_ENABLE_GFX_ACCEL=1`, a port may install a versioned `nj_gfx_accel`
+table and its own context in `gfx_accel` / `gfx_accel_ud`. Rectangle fills and
+image/region/drawRGB blits can use platform hardware; each unsupported operation
+falls back to the existing software rasterizer. A successful callback must
+complete all CPU-visible pixel writes before returning. This keeps readback,
+mutable images, snapshots and mixed software drawing coherent.
+
+The default is `0`; both configurations retain the entire software path. No
+OpenGL or Vulkan dependency enters the VM/gfx core. This table covers synchronous
+2D operations. See
+[the backend contract and implementation example](GRAPHICS_ACCELERATION.md)
+for build flags, lifetime rules, pixel semantics and the limits of GPU readback.
+An opt-in [GLES2 implementation](GLES2_BACKEND.md) is available as the separate
+`nj2me_gles2` target (`NJ_BUILD_GLES2_ACCEL=ON`); the platform supplies a dedicated
+current context. Existing frontends retain their default software renderer.
+
+For M3G/Mascot, `gfx_raster` / `gfx_raster_ud` provide a separate optional
+[fragment interface](GLES2_3D.md). The core retains exact CPU coverage and depth
+quantization; the port may merge opaque constant colour/depth on the GPU.
+A `DONE` result must commit CPU colour, depth and the `drawn` result together;
+`DECLINE` must leave all three unchanged. Unsupported primitives retain their
+original software path. SDL2/Android reuse their dedicated GLES2 contexts.
 
 ## Rule: a port owns no global state either
 
@@ -663,6 +689,67 @@ Thirteen things in that shell are worth copying, because each one is a rule a pl
   an older snapshot, but an older binary refuses a newer one (it sees
   `ninterned` above its fixed bound, reports a format error and, at the CLI,
   starts fresh). Snapshots within the old limit remain interchangeable.
+
+## Worked example: the browser (Emscripten)
+
+The web target is a host-driven embedder: JavaScript owns the tab's frame clock,
+so a port cannot call the blocking `nj_run()` loop. The pieces are:
+
+| piece | where |
+| --- | --- |
+| the port itself, plus the `njw_*` exports | `src/port/web/nj_web.c` |
+| the JavaScript⇄C API (options, frames, input, audio, saves) | `include/nj2me/nj_web.h` |
+| the bundled shell | `web/` |
+| Emscripten build and `build/web/` assembly | `tools/build_web.sh` |
+| SDK install | `tools/emsdk_setup.sh` |
+| Node API/corpus tests and the Playwright page test | `tools/check_web.sh`, `tools/web_test/` |
+
+The decisions that matter when porting to a browser:
+
+- **One frame per animation frame.** After `nj_vm_new_midlet()` the runner queues
+  `nj_vm_start_app_async()` and calls `nj_midp_frame()` once per host tick from
+  the JavaScript `requestAnimationFrame` callback. No Asyncify and no pthreads
+  are needed because the runtime itself never blocks on a thread primitive.
+- **Host-owned clock.** Call `nj_vm_set_frame_cap(vm, 0)` and report
+  `fps_cap = 0`, then make `port.millis` return a virtual clock the host advances.
+  While the MIDlet instance is being constructed, `sleep_ms`/`idle` must
+  fast-forward the whole requested delay, or a splash-screen constructor freezes
+  a JavaScript frame. During play, advance the clock by the host delta plus small
+  fast-forwards for `sleep_ms` so a Java thread parked in a blocking native or a
+  `Thread.sleep()` can make progress inside one pump (`web/nj_web.c` uses 1 ms for
+  the first calls of a pump and at most 50 ms after that).
+- **Install the frame hook.** `nj_vm_set_frame_hook()` is what runs a frame while
+  a Java thread waits inside a blocking C call, same as the other ports.
+- **No executable memory.** Leave `code_alloc`/`code_free`/`code_commit` `NULL`
+  and run the interpreter — wasm cannot map pages executable, exactly like the
+  ESP32 target.
+- **File I/O through libc.** With `NJ_USE_LIBC=1` the runtime uses the C library,
+  so the port can leave `file_*`/`dir_*` `NULL` and Emscripten's virtual FS backs
+  RecordStore and `FileConnection`. Mount IDBFS (or a custom backend) in the host
+  if those files should survive a reload; see [WEB.md](WEB.md#persistence).
+- **Audio is pulled, not pushed.** Tone/PCM hooks write into a bounded ring. The
+  host copies frames out with `njw_audio_read()` each animation frame and reports
+  scheduled-but-unheard frames back, so media time stays honest. Do not flush the
+  ring on `tone_stop()`/`pcm_close()`: the virtual clock can finish a blocking
+  `Manager.playTone()` inside one pump and the host has not pulled the audio yet.
+- **Display.** Return your own RGB565 buffer from `display_init()` and let the
+  runtime draw into it; `display_present()` is called once per frame with the
+  full rect, which is where the reference port expands to RGBA8888 for
+  `<canvas>`. Add `display_idle` only if you have a cheaper present path.
+- **The browser is an embedder, not an OS.** A wasm build passes
+  `-sMODULARIZE=1 -sEXPORT_ES6=1 -sENVIRONMENT=web,worker,node
+  -sALLOW_MEMORY_GROWTH=1 -sFORCE_FILESYSTEM=1 -lidbfs.js`, keeps
+  `-sINVOKE_RUN=0` with a trivial `main()`, and exports `njw_*` plus
+  `malloc`/`free`. Networking/sockets/Bluetooth/sensors stay `NULL` until a port
+  adds `fetch`/WebSocket shims; the class library refuses those APIs by name
+  instead of hanging.
+- **Testing.** A Node harness must write the JAR with `FS.writeFile()` (host
+  paths do not exist in the wasm FS), pump a fixed `1000/60` ms step for
+  determinism, and compare RGBA dumps; the real page test uses Playwright
+  against a headless browser and drives the shell through its UI.
+
+See [WEB.md](WEB.md) for the API, clock model, shell and the executed
+verification.
 
 ## Worked example: a bare-metal board
 

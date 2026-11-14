@@ -349,20 +349,49 @@ static int png_accepts(const void *data, nj_u4 size)
 
 static nj_status png_info(const void *data, nj_u4 size, nj_image_info *out)
 {
-    /* Walk to IHDR: 8 magic + 4 length + 4 type + 8 payload. */
+    /* Header only: signature, length/type and all 13 IHDR payload bytes.
+     * The decoder checks the CRC policy and the remaining chunks. */
     const nj_u1 *p = (const nj_u1 *)data;
-    if (size < 24u || !png_accepts(data, size)) {
+    nj_u4 w, h;
+    int depth, colour;
+    if (!data || !out || size < 29u || !png_accepts(data, size)) {
         return NJ_ERR_FORMAT;
     }
-    if (memcmp(p + 12, "IHDR", 4u) != 0) {
+    if (memcmp(p + 12, "IHDR", 4u) != 0 ||
+        p[8] != 0u || p[9] != 0u || p[10] != 0u || p[11] != 13u) {
         return NJ_ERR_FORMAT;
     }
-    out->width  = (int)(((nj_u4)p[16] << 24) | ((nj_u4)p[17] << 16) |
-                        ((nj_u4)p[18] << 8) | (nj_u4)p[19]);
-    out->height = (int)(((nj_u4)p[20] << 24) | ((nj_u4)p[21] << 16) |
-                        ((nj_u4)p[22] << 8) | (nj_u4)p[23]);
-    out->bits_per_pixel = (int)p[24];
-    out->has_alpha = (p[25] == 4u || p[25] == 6u) ? 1 : 0;
+    w = ((nj_u4)p[16] << 24) | ((nj_u4)p[17] << 16) |
+        ((nj_u4)p[18] << 8) | (nj_u4)p[19];
+    h = ((nj_u4)p[20] << 24) | ((nj_u4)p[21] << 16) |
+        ((nj_u4)p[22] << 8) | (nj_u4)p[23];
+    /* PNG dimensions are unsigned 31-bit, nonzero values. No allocation is
+     * made here; the decoder applies its own resource limits. */
+    if (!w || !h || w > 0x7FFFFFFFu || h > 0x7FFFFFFFu ||
+        p[26] != 0u || p[27] != 0u || p[28] > 1u) {
+        return NJ_ERR_FORMAT;
+    }
+    depth = (int)p[24];
+    colour = (int)p[25];
+    switch (colour) {
+    case 0:
+        if (depth != 1 && depth != 2 && depth != 4 && depth != 8 && depth != 16)
+            return NJ_ERR_FORMAT;
+        break;
+    case 3:
+        if (depth != 1 && depth != 2 && depth != 4 && depth != 8)
+            return NJ_ERR_FORMAT;
+        break;
+    case 2: case 4: case 6:
+        if (depth != 8 && depth != 16) return NJ_ERR_FORMAT;
+        break;
+    default:
+        return NJ_ERR_FORMAT;
+    }
+    out->width = (int)w;
+    out->height = (int)h;
+    out->bits_per_pixel = depth;
+    out->has_alpha = (colour == 4 || colour == 6) ? 1 : 0;
     out->format = NJ_CODEC_FMT_PNG;
     return NJ_OK;
 }

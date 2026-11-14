@@ -24,6 +24,7 @@ final class Settings {
     private static final String PICTURE_AA = "pictureAntiAlias";
     private static final String FONT_FILE = "fontFile";
     private static final String FRAME_CAP = "frameCap";
+    private static final String GLES2_EXPERIMENTAL = "gles2Experimental";
 
     private Settings() {
     }
@@ -78,6 +79,15 @@ final class Settings {
 
     static void setFrameCap(Context ctx, int cap) {
         prefs(ctx).edit().putInt(FRAME_CAP, cap).apply();
+    }
+
+    /** Experimental GPU drawing, off by default; sampled only at game creation. */
+    static boolean gles2Experimental(Context ctx) {
+        return prefs(ctx).getBoolean(GLES2_EXPERIMENTAL, false);
+    }
+
+    static void setGles2Experimental(Context ctx, boolean on) {
+        prefs(ctx).edit().putBoolean(GLES2_EXPERIMENTAL, on).apply();
     }
 
     /** The cap as a row title reads it. */

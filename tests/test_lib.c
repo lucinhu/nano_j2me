@@ -2732,20 +2732,20 @@ static nj_av_dec *fake_amr_open(const nj_u1 *data, nj_u4 len,
     info->format = NJ_AV_AUDIO_AMR;
     info->rate = 8000u;
     info->channels = 1u;
-    info->frames = 4u;
+    info->frames = 160u;
     return (nj_av_dec *)&state;
 }
 
 static int fake_amr_decode(nj_av_dec *dec, nj_av_step *step)
 {
-    nj_s2 *out = (nj_s2 *)(void *)step->out;
     nj_u4 room = step->out_cap / 2u;
-    nj_u4 n = room > 4u ? 4u : room;
+    nj_u4 n = room > 160u ? 160u : room;
     nj_u4 i;
 
     (void)dec;
     for (i = 0; i < n; i++) {
-        out[i] = (nj_s2)0x1234;
+        step->out[2u * i] = 0x34u;
+        step->out[2u * i + 1u] = 0x12u;
     }
     step->out_used = n * 2u;
     step->frames = n;
@@ -2772,8 +2772,10 @@ static const nj_av_audio_ops fake_amr_ops = {
 
 static void test_amr_player_uses_the_installed_decoder(nj_vm *vm)
 {
+    /* One complete mode-0 block: TOC plus 12 bytes, giving 160 PCM samples. */
     static const nj_u1 amr[] = {
-        0x23u, 0x21u, 0x41u, 0x4du, 0x52u, 0x0au, 0x3cu, 0x00u,
+        0x23u, 0x21u, 0x41u, 0x4du, 0x52u, 0x0au, 0x04u,
+        0x00u, 0x00u, 0x00u, 0x00u, 0x00u, 0x00u,
         0x00u, 0x00u, 0x00u, 0x00u, 0x00u, 0x00u
     };
     nj_ref bar;
@@ -2815,10 +2817,10 @@ static void test_amr_player_uses_the_installed_decoder(nj_vm *vm)
     pcm = (f != NULL) ? nj_field_read_ref(vm, player, f) : NULL;
     OK_MSG(pcm != NULL, "the Player holds PCM");
     if (pcm != NULL) {
-        OK_MSG(pcm->length == 8u,
-               "four sentinel frames are eight bytes (got %u)",
+        OK_MSG(pcm->length == 320u,
+               "160 sentinel PCM samples are 320 bytes (got %u)",
                (unsigned)pcm->length);
-        for (i = 0; i + 1 < (int)pcm->length && i + 1 < 8; i += 2) {
+        for (i = 0; i + 1 < (int)pcm->length; i += 2) {
             if (pcm->u.bytes[i] != 0x34u || pcm->u.bytes[i + 1] != 0x12u) {
                 sentinel = 0;
             }
@@ -2826,8 +2828,8 @@ static void test_amr_player_uses_the_installed_decoder(nj_vm *vm)
         OK_MSG(sentinel, "the installed decoder produced the samples");
     }
     f = nj_field_lookup(vm, PLAYER, "pFrames", "I", 0);
-    OK_MSG(f != NULL && nj_field_read_int(vm, player, f) == 4,
-           "the Player reports the provider's frame count");
+    OK_MSG(f != NULL && nj_field_read_int(vm, player, f) == 160,
+           "the Player reports the complete AMR block's PCM sample count");
     /*
      * Put the software providers back in the order nj_avcodec_reset() installs
      * them: a later test creates an MP3 Player and must not be looking at a
@@ -2897,21 +2899,10 @@ static void test_video_player_pumps_a_frame(nj_vm *vm)
     }
 }
 
-/* The same Player path, for MPEG-4 Part 2: createPlayer must build a video
- * Player from an mp4v 3GP through the provider seam, and the pump must hand
- * the pinned reference RGB565 frames to the screen buffer.  The decoded
- * hashes come from FFmpeg's own output (tests/m4v_clip.h), so this checks
- * pixels, not just plumbing. */
-static nj_u4 test_lib_fnv(const nj_u1 *p, nj_u4 n)
-{
-    nj_u4 h = 2166136261u;
-
-    while (n-- > 0u) {
-        h ^= *p++;
-        h *= 16777619u;
-    }
-    return h;
-}
+/* MPEG-4 Player frames are checked against external reference pixels with
+ * bounded reconstruction drift; normative transform accuracy is a separate
+ * gate in tests/private/test_m4v_equations.c. */
+#include "private/m4v_reference.h"
 
 static void test_video_player_mp4v(nj_vm *vm)
 {
@@ -2966,12 +2957,11 @@ static void test_video_player_mp4v(nj_vm *vm)
     for (frame = 0; frame < M4V_CLIP_FRAMES; frame++) {
         nj_media_frame(vm);
         if (vbuf != NULL &&
-            test_lib_fnv(vbuf->u.bytes, vbuf->length) !=
-                m4v_clip_rgb_hash[frame]) {
+            !m4v_reference_clip_rgb(vbuf->u.bytes, vbuf->length, frame)) {
             bad++;
         }
     }
-    OK_MSG(bad == 0, "every pumped mp4v frame matches the reference pixels");
+    OK_MSG(bad == 0, "every pumped mp4v frame satisfies the RGB565 reference drift bounds");
     f = nj_field_lookup(vm, PLAYER, "pPushed", "I", 0);
     OK_MSG(f != NULL && nj_field_read_int(vm, player, f) == M4V_CLIP_FRAMES,
            "the pump decoded every sample");
@@ -3384,7 +3374,7 @@ static void test_video_control_mp4v(nj_vm *vm)
     ret.bits = 0u;
     st = nj_call(vm, vc, "javax/microedition/media/control/VideoControl",
                  "getSnapshot",
-                 "(Ljava/lang/String;)Ljava/lang/Object;", a, &ret);
+                 "(Ljava/lang/String;)[B", a, &ret);
     OK_MSG(st != NJ_OK && nj_take_exception(vm) != 0,
            "getSnapshot refuses an encoding it does not produce");
 
@@ -3394,7 +3384,7 @@ static void test_video_control_mp4v(nj_vm *vm)
     ret.bits = 0u;
     st = nj_call(vm, vc, "javax/microedition/media/control/VideoControl",
                  "getSnapshot",
-                 "(Ljava/lang/String;)Ljava/lang/Object;", a, &ret);
+                 "(Ljava/lang/String;)[B", a, &ret);
     OK_MSG(st == NJ_OK && ret.r != 0 &&
            ret.r->length ==
                (nj_u4)(M4V_CLIP_WIDTH * M4V_CLIP_HEIGHT * 3),
@@ -3451,17 +3441,27 @@ static void test_video_control_mp4v(nj_vm *vm)
  * three real corpus movies are the same shape (109/624/172 samples holding
  * 545/624/860 frames - the longer ones bundle five frames per sample).
  */
+#include "private/amr_movie_fixture.h"
 static void test_movie_amr_track(nj_vm *vm)
 {
     nj_u1 pcm[(nj_u4)M4V_AV_AUDIO_FRAMES * 320u];
+    nj_u1 clip[NJ_TEST_AMR_MOVIE_BYTES];
     nj_u4 frames, i, nonzero = 0u;
 
+    /* The demuxer-only fixture has partial blocks and an incomplete damr;
+     * the shared movie path now validates AMR at each sample boundary. */
+    memset(pcm, 0xa5, sizeof(pcm));
+    OK_MSG(nj_media_movie_amr_decode(vm, m4v_av_3gp, sizeof(m4v_av_3gp),
+                                     pcm, sizeof(pcm)) == 0u,
+           "malformed movie AMR is refused");
+    for (i = 0u; i < sizeof(pcm); ++i) if (pcm[i] != 0xa5u) break;
+    OK_MSG(i == sizeof(pcm), "malformed AMR leaves output untouched");
+    OK_MSG(nj_test_amr_movie_fixture(clip, 0), "valid five-block movie AMR fixture");
     memset(pcm, 0, sizeof(pcm));
-    frames = nj_media_movie_amr_decode(vm, m4v_av_3gp,
-                                       (nj_u4)sizeof(m4v_av_3gp), pcm,
+    frames = nj_media_movie_amr_decode(vm, clip, sizeof(clip), pcm,
                                        (nj_u4)sizeof(pcm));
-    OK_MSG(frames != 0u,
-           "the double-track fixture's AMR track decodes (got %u frames)",
+    OK_MSG(frames == M4V_AV_AUDIO_FRAMES,
+           "the double-track fixture's AMR track decodes all blocks (got %u frames)",
            (unsigned)frames);
     if (frames != 0u) {
         for (i = 0u; i < frames * 320u; i++) {

@@ -34,11 +34,11 @@
  *
  * What is deliberately not emulated: the handset shell, JAD files (the JAR's
  * manifest names the MIDlet), network and Bluetooth (leave HttpConnection
- * refused by name rather than pretending), MIDI-to-GM handoff (the runtime
- * renders MIDI itself into the same PCM path) and save states (a snapshot has
- * to be taken by the thread that owns the VM; that needs a request queue this
- * first version does not have - retro_serialize_size() says 0 instead of
- * promising something it cannot deliver).
+ * refused by name rather than pretending) and MIDI-to-GM handoff (the runtime
+ * renders MIDI itself into the same PCM path).  Save states are supported:
+ * the frontend asks from its own thread, so retro_serialize() hands a request
+ * to the VM thread - only the thread that owns the VM may take a snapshot -
+ * and waits for it to reach a frame boundary (see "Save states" below).
  *
  * Copyright (C) 2026  nano_j2me contributors - MIT, like the rest of the tree.
  */
@@ -59,6 +59,18 @@
 
 #include "libretro.h"
 #include "nj2me/nj.h"
+#include "nj2me/nj_inflate.h"
+#include "../posix/nj_posix_dir.h"
+
+#ifndef NJ_LIBRETRO_HW
+#  define NJ_LIBRETRO_HW 0
+#endif
+#if NJ_LIBRETRO_HW
+#  if !NJ_ENABLE_GFX_ACCEL
+#    error "NJ_LIBRETRO_HW requires NJ_ENABLE_GFX_ACCEL=1"
+#  endif
+#  include "nj_libretro_hw.h"
+#endif
 
 /* ------------------------------------------------------------------ */
 /* Platform layer: threads, clocks, directories                       */
@@ -69,7 +81,9 @@
 /* ------------------------------------------------------------------ */
 
 #if defined(_WIN32)
-#  define WIN32_LEAN_AND_MEAN
+#  if !defined(WIN32_LEAN_AND_MEAN)
+#    define WIN32_LEAN_AND_MEAN
+#  endif
 #  include <windows.h>
 #  include <direct.h>
 #  include <process.h>
@@ -92,6 +106,13 @@ static void lr_cond_wait(lr_cond *c, lr_mutex *m)
     (void)SleepConditionVariableCS(c, m, INFINITE);
 }
 static void lr_cond_broadcast(lr_cond *c) { WakeAllConditionVariable(c); }
+
+/* Timed wait in real milliseconds: 1 when signalled, 0 on timeout (the
+ * pthread/Win32 return values are not part of the port surface). */
+static int lr_cond_wait_ms(lr_cond *c, lr_mutex *m, unsigned ms)
+{
+    return SleepConditionVariableCS(c, m, (DWORD)ms) ? 1 : 0;
+}
 
 static unsigned __stdcall lr_thread_tramp(void *p)
 {
@@ -147,6 +168,25 @@ static void lr_cond_wait(lr_cond *c, lr_mutex *m)
 }
 static void lr_cond_broadcast(lr_cond *c) { (void)pthread_cond_broadcast(c); }
 
+/* Timed wait in real milliseconds: 1 when signalled, 0 on timeout. */
+static int lr_cond_wait_ms(lr_cond *c, lr_mutex *m, unsigned ms)
+{
+    struct timespec ts;
+    int rc;
+
+    if (clock_gettime(CLOCK_REALTIME, &ts) != 0) {
+        return 0;
+    }
+    ts.tv_sec  += (time_t)(ms / 1000u);
+    ts.tv_nsec += (long)(ms % 1000u) * 1000000L;
+    if (ts.tv_nsec >= 1000000000L) {
+        ts.tv_sec  += 1;
+        ts.tv_nsec -= 1000000000L;
+    }
+    rc = pthread_cond_timedwait(c, m, &ts);
+    return rc == 0 ? 1 : 0;
+}
+
 static int lr_thread_start(lr_thread *t, void *(*fn)(void *), void *arg)
 {
     return pthread_create(t, NULL, fn, arg) == 0 ? 0 : -1;
@@ -178,6 +218,18 @@ static void lr_mkdir(const char *path) { (void)mkdir(path, 0755); }
 
 #endif
 
+#if NJ_LIBRETRO_HW
+#  if defined(_WIN32)
+typedef DWORD lr_thread_id;
+static lr_thread_id lr_thread_self(void) { return GetCurrentThreadId(); }
+static int lr_thread_equal(lr_thread_id a, lr_thread_id b) { return a == b; }
+#  else
+typedef pthread_t lr_thread_id;
+static lr_thread_id lr_thread_self(void) { return pthread_self(); }
+static int lr_thread_equal(lr_thread_id a, lr_thread_id b) { return pthread_equal(a, b); }
+#  endif
+#endif
+
 /* ------------------------------------------------------------------ */
 /* Constants and core state                                           */
 /* ------------------------------------------------------------------ */
@@ -196,10 +248,69 @@ static void lr_mkdir(const char *path) { (void)mkdir(path, 0755); }
 #define LR_PHASE_LOAD 1  /* virtual clock fast-forwards: load must not wait  */
 #define LR_PHASE_RUN  2  /* virtual clock driven by retro_run()             */
 
+/* Save-state request queue (frontend thread asks, VM thread serves). */
+#define LR_REQ_NONE 0
+#define LR_REQ_SAVE 1
+/* How long retro_serialize() waits for a frame boundary before it gives up.
+ * The frontend is blocked while it waits, so this may not be forever: a
+ * MIDlet stuck inside a native call must not hang RetroArch. */
+#define LR_STATE_TIMEOUT_MS 4000u
+/* Snapshot envelope: explicit little-endian fields, CRC over header + payload.
+ * The VM's snapshot format still enforces its own architecture/ABI checks. */
+#define LR_REQ_LOAD 2
+#define LR_STATE_HEADER 64u
+#define LR_STATE_MAGIC 0x524c4a4eu /* NJLR */
+#define LR_STATE_VERSION 2u /* adds external font identity at byte 60 */
+
 typedef struct lr_opt_value {
     const char *value;
     const char *label;
 } lr_opt_value;
+
+#if NJ_LIBRETRO_HW
+#define LR_HW_EMPTY     0
+#define LR_HW_PENDING   1
+#define LR_HW_EXECUTING 2
+#define LR_HW_COMPLETE  3
+#define LR_HW_FILL      1
+#define LR_HW_BLIT      2
+#define LR_HW_RASTER    3
+#define LR_HW_TRIANGLES 4
+#define LR_HW_TRIANGLES_LIST 5
+#define LR_HW_BUDGET_MS 2u
+#define LR_HW_MAX_OPS   256u
+#define LR_HW_QUEUE_MS  100u
+
+typedef struct lr_hw_request {
+    int kind;
+    const nj_gfx *gfx;
+    int x, y, w, h;
+    const nj_gfx_blit *blit;
+    const nj_gfx_raster *raster;
+    const nj_gfx_triangles *triangles;
+    const nj_gfx_triangles_list *triangles_list;
+    nj_u4 *result;
+} lr_hw_request;
+
+typedef struct lr_hw {
+    /* gl_lock serializes frontend GL sections with reset/destroy. Worker never
+     * takes it. Fields below ready/gate/slot are protected by nj_lr.lock. */
+    lr_mutex gl_lock;
+    struct retro_hw_render_callback callback;
+    const nj_libretro_hw_driver *driver;
+    void *context;
+    int requested, accepted, ready, gate, slot, rc;
+    unsigned generation;
+    lr_hw_request request;
+    lr_thread_id worker, gl_thread;
+    int worker_known, gl_section;
+    int parked;
+    unsigned long long park_until;
+    unsigned long long fills, blits, rasters, triangles, triangle_lists,
+                       declines;
+    unsigned long long queued, executed, cancelled, presents;
+} lr_hw;
+#endif
 
 typedef struct nj_lr {
     /* ---- frontend callbacks (registered once) ---- */
@@ -227,7 +338,26 @@ typedef struct nj_lr {
     int   heap_mb;
     int   sound;
     int   pointer;
+    int   font_mode;  /* 0 = auto, 1 = frontend system directory, 2 = builtin */
+    unsigned char *font_data; /* pinned for this session, including state loads */
+    size_t font_size;
+    nj_u4 font_crc;
     int   button_key[8]; /* nj_key for A, B, X, Y, L, R, Select, Start */
+    char  locale[16];    /* resolved microedition.locale, "en-US" = default */
+    int   screen_w, screen_h; /* requested canvas; 0 = the built-in size */
+
+    /* Property overrides appended to the selected device profile for this
+     * session.  The VM borrows the table, so it must outlive the VM. */
+    nj_device_prop *sys_props;
+    nj_u4           nsys_props;
+
+    /* ---- frontend feature negotiation ---- */
+    int                      input_bitmask; /* frontend accepts the mask call */
+    retro_set_rumble_state_t rumble_cb;     /* NULL: no rumble interface    */
+    int                      rumble_active;
+    int                      rumble_sent;
+    uint64_t                 rumble_deadline_ms;
+    int                      rumble_warned;
 
     /* ---- the runtime ---- */
     nj_port        port;
@@ -250,6 +380,10 @@ typedef struct nj_lr {
     int            out_w, out_h;
     int            fb_format; /* NJ_PIXFMT_* */
     int            lr_pixfmt; /* RETRO_PIXEL_FORMAT_* */
+
+#if NJ_LIBRETRO_HW
+    lr_hw          hw;
+#endif
 
     /* ---- clocks / synchronization ---- */
     lr_mutex          lock;
@@ -278,6 +412,16 @@ typedef struct nj_lr {
     int16_t  prev_l, prev_r;
     int16_t  mix[LR_FRAMES_PER_RUN * 2];
 
+    /* ---- save states ---- */
+    int            req_kind;
+    int            req_done;
+    int            req_busy;
+    int            req_rc;
+    nj_u1         *req_blob;      /* request/result owned by the queue */
+    nj_size        req_size;
+    nj_u4          jar_crc;
+    nj_size        state_bound;   /* retro_serialize_size() answer          */
+
     /* ---- paths ---- */
     char save_dir[1024];
     char base_dir[2048];
@@ -294,6 +438,328 @@ static nj_lr g_core;
 static nj_lr *core(void) { return &g_core; }
 
 static void lr_log(nj_lr *s, enum retro_log_level level, const char *fmt, ...);
+
+#if NJ_LIBRETRO_HW
+/* Closing the gate cancels only unclaimed work. EXECUTING must finish before
+ * the caller may release borrowed CPU memory; COMPLETE is an immutable result.
+ * Caller holds s->lock. No GL or frontend callbacks under that lock. */
+static void lr_hw_close_gate(nj_lr *s)
+{
+    s->hw.gate = 0;
+    if (s->hw.slot == LR_HW_PENDING) {
+        s->hw.rc = NJ_GFX_ACCEL_DECLINE;
+        s->hw.slot = LR_HW_COMPLETE;
+        s->hw.cancelled++;
+    }
+    lr_cond_broadcast(&s->cond);
+}
+
+static int lr_hw_submit(nj_lr *s, const lr_hw_request *request)
+{
+    lr_hw *h = &s->hw;
+    uint64_t deadline;
+    int rc = NJ_GFX_ACCEL_DECLINE;
+    lr_mutex_lock(&s->lock);
+    if (s->phase != LR_PHASE_RUN || s->stop || s->vm_done ||
+        s->req_kind != LR_REQ_NONE || !h->worker_known ||
+        !lr_thread_equal(h->worker, lr_thread_self()) ||
+        !h->ready || !h->gate || h->slot != LR_HW_EMPTY) {
+        h->declines++;
+        lr_mutex_unlock(&s->lock);
+        return rc;
+    }
+    h->request = *request;
+    h->slot = LR_HW_PENDING;
+    h->queued++;
+    deadline = lr_real_ms() + LR_HW_QUEUE_MS;
+    lr_cond_broadcast(&s->cond);
+    while (h->slot != LR_HW_COMPLETE) {
+        if (h->slot == LR_HW_PENDING &&
+            (!h->gate || !h->ready || s->stop ||
+             s->req_kind != LR_REQ_NONE || lr_real_ms() >= deadline)) {
+            lr_hw_close_gate(s);
+            break;
+        }
+        /* Never timeout EXECUTING: the frontend may already have committed
+         * CPU color/depth. Returning DECLINE here would double-render/UAF. */
+        (void)lr_cond_wait_ms(&s->cond, &s->lock, 10u);
+    }
+    rc = h->rc;
+    memset(&h->request, 0, sizeof h->request);
+    h->slot = LR_HW_EMPTY;
+    if (rc == NJ_GFX_ACCEL_DONE) {
+        if (request->kind == LR_HW_FILL) h->fills++;
+        else if (request->kind == LR_HW_BLIT) h->blits++;
+        else if (request->kind == LR_HW_RASTER) h->rasters++;
+        else if (request->kind == LR_HW_TRIANGLES) h->triangles++;
+        else if (request->kind == LR_HW_TRIANGLES_LIST) h->triangle_lists++;
+    } else h->declines++;
+    lr_cond_broadcast(&s->cond);
+    lr_mutex_unlock(&s->lock);
+    return rc;
+}
+
+static int lr_hw_fill(void *ud, const nj_gfx *g, int x, int y, int w, int h)
+{
+    lr_hw_request r;
+    memset(&r, 0, sizeof r);
+    r.kind = LR_HW_FILL; r.gfx = g; r.x = x; r.y = y; r.w = w; r.h = h;
+    return lr_hw_submit((nj_lr *)ud, &r);
+}
+
+static int lr_hw_blit(void *ud, const nj_gfx *g, const nj_gfx_blit *blit)
+{
+    lr_hw_request r;
+    memset(&r, 0, sizeof r);
+    r.kind = LR_HW_BLIT; r.gfx = g; r.blit = blit;
+    return lr_hw_submit((nj_lr *)ud, &r);
+}
+
+static int lr_hw_raster(void *ud, const nj_gfx_raster *packet, nj_u4 *drawn)
+{
+    lr_hw_request r;
+    memset(&r, 0, sizeof r);
+    r.kind = LR_HW_RASTER; r.raster = packet; r.result = drawn;
+    return lr_hw_submit((nj_lr *)ud, &r);
+}
+
+static int lr_hw_triangles(void *ud, const nj_gfx_triangles *packet, nj_u4 *submitted)
+{
+    lr_hw_request r;
+    memset(&r, 0, sizeof r);
+    r.kind = LR_HW_TRIANGLES; r.triangles = packet; r.result = submitted;
+    return lr_hw_submit((nj_lr *)ud, &r);
+}
+
+
+static const nj_gfx_accel lr_hw_accel = {
+    NJ_GFX_ACCEL_VERSION, lr_hw_fill, lr_hw_blit
+};
+
+/* GL section identity is backed by libretro's current-context guarantee. The
+ * ABI exposes no native context handle and offers no portable make-current. */
+static int lr_hw_is_current(void *ud)
+{
+    nj_lr *s = (nj_lr *)ud;
+    return s->hw.gl_section && lr_thread_equal(s->hw.gl_thread, lr_thread_self());
+}
+
+static nj_libretro_gl_proc lr_hw_get_proc(void *ud, const char *name)
+{
+    nj_lr *s = (nj_lr *)ud;
+    return s->hw.callback.get_proc_address ? s->hw.callback.get_proc_address(name) : NULL;
+}
+
+static void lr_hw_section(nj_lr *s, int active)
+{
+    s->hw.gl_thread = lr_thread_self();
+    s->hw.gl_section = active;
+}
+
+static void RETRO_CALLCONV lr_hw_context_destroy(void)
+{
+    nj_lr *s = core();
+    lr_hw *h = &s->hw;
+    if (!s->sync_ready) return;
+    lr_mutex_lock(&h->gl_lock);
+    lr_mutex_lock(&s->lock);
+    h->ready = 0;
+    h->generation++;
+    lr_hw_close_gate(s);
+    lr_mutex_unlock(&s->lock);
+    lr_hw_section(s, 1);
+    if (h->context) h->driver->destroy(h->context, 0);
+    h->context = NULL;
+    lr_hw_section(s, 0);
+    lr_mutex_unlock(&h->gl_lock);
+    lr_log(s, RETRO_LOG_INFO, "hardware context destroyed; CPU drawing continues");
+}
+
+static void RETRO_CALLCONV lr_hw_context_reset(void)
+{
+    nj_lr *s = core();
+    lr_hw *h = &s->hw;
+    nj_libretro_hw_config config;
+    const char *info = NULL;
+    int ready;
+    if (!s->sync_ready) return;
+    lr_mutex_lock(&h->gl_lock);
+    lr_mutex_lock(&s->lock);
+    h->ready = 0;
+    h->generation++;
+    lr_hw_close_gate(s);
+    lr_mutex_unlock(&s->lock);
+    /* reset without destroy means the OLD context is already dead. */
+    if (h->context) h->driver->destroy(h->context, 1);
+    h->context = NULL;
+    lr_hw_section(s, 1);
+    memset(&config, 0, sizeof config);
+    config.get_proc = lr_hw_get_proc;
+    config.is_current = lr_hw_is_current;
+    config.ud = s;
+    config.context_type = (int)h->callback.context_type;
+    config.major = h->callback.version_major;
+    config.minor = h->callback.version_minor;
+    if (h->accepted && h->driver && h->callback.get_proc_address &&
+        h->callback.get_current_framebuffer) {
+        h->context = h->driver->create(&config);
+    }
+    ready = h->context && h->driver->valid(h->context);
+    if (ready && h->driver->info) info = h->driver->info(h->context);
+    lr_log(s, ready ? RETRO_LOG_INFO : RETRO_LOG_WARN,
+           "hardware context %u: %s", h->generation,
+           info ? info : (ready ? "enabled" : "unavailable; CPU drawing, waiting for reset"));
+    lr_mutex_lock(&s->lock);
+    h->ready = ready;
+    lr_mutex_unlock(&s->lock);
+    lr_hw_section(s, 0);
+    lr_mutex_unlock(&h->gl_lock);
+}
+
+static int lr_hw_supported(enum retro_hw_context_type type)
+{
+    return type == RETRO_HW_CONTEXT_OPENGLES2 || type == RETRO_HW_CONTEXT_OPENGL ||
+           type == RETRO_HW_CONTEXT_OPENGLES3 || type == RETRO_HW_CONTEXT_OPENGLES_VERSION;
+}
+
+static void lr_hw_negotiate(nj_lr *s)
+{
+    lr_hw *h = &s->hw;
+    enum retro_hw_context_type preferred = RETRO_HW_CONTEXT_NONE;
+    enum retro_hw_context_type candidates[3];
+    bool choice;
+    unsigned i, count = 0;
+    if (!h->requested || !s->environ_cb) return;
+    h->driver = nj_libretro_hw_gl_driver();
+    if (!h->driver || !h->driver->create || !h->driver->destroy ||
+        !h->driver->begin || !h->driver->end || !h->driver->valid ||
+        !h->driver->present) return;
+    choice = s->environ_cb(RETRO_ENVIRONMENT_GET_PREFERRED_HW_RENDER, &preferred);
+    /* false with a concrete type means the frontend supports ONLY that API. */
+    if (!choice && preferred != RETRO_HW_CONTEXT_NONE && !lr_hw_supported(preferred)) {
+        lr_log(s, RETRO_LOG_WARN, "frontend requires unsupported hardware API %d; software", (int)preferred);
+        return;
+    }
+    if (lr_hw_supported(preferred)) candidates[count++] = preferred;
+    if (choice || preferred == RETRO_HW_CONTEXT_NONE) {
+        if (preferred != RETRO_HW_CONTEXT_OPENGLES2) candidates[count++] = RETRO_HW_CONTEXT_OPENGLES2;
+        if (preferred != RETRO_HW_CONTEXT_OPENGL) candidates[count++] = RETRO_HW_CONTEXT_OPENGL;
+    }
+    for (i = 0; i < count; i++) {
+        memset(&h->callback, 0, sizeof h->callback);
+        h->callback.context_type = candidates[i];
+        h->callback.context_reset = lr_hw_context_reset;
+        h->callback.context_destroy = lr_hw_context_destroy;
+        h->callback.bottom_left_origin = true;
+        if (candidates[i] == RETRO_HW_CONTEXT_OPENGLES_VERSION) {
+            h->callback.version_major = 3;
+            h->callback.version_minor = 0;
+        }
+        /* Some frontends synchronously reset during negotiation. */
+        h->accepted = 1;
+        if (s->environ_cb(RETRO_ENVIRONMENT_SET_HW_RENDER, &h->callback)) {
+            lr_log(s, RETRO_LOG_INFO, "hardware API %d accepted (software until context reset)", (int)candidates[i]);
+            return;
+        }
+        h->accepted = 0;
+    }
+    lr_log(s, RETRO_LOG_WARN, "hardware render rejected; using software video and drawing");
+}
+
+/* gl_lock remains held through pump, CPU snapshot and presentation. */
+static int lr_hw_begin(nj_lr *s)
+{
+    lr_hw *h = &s->hw;
+    int ready;
+    if (!h->accepted) return 0;
+    lr_mutex_lock(&h->gl_lock);
+    lr_hw_section(s, 1);
+    lr_mutex_lock(&s->lock);
+    ready = h->ready;
+    lr_mutex_unlock(&s->lock);
+    if (ready && h->context && h->driver->valid(h->context) &&
+        h->driver->begin(h->context)) return 1;
+    lr_mutex_lock(&s->lock);
+    h->ready = 0;
+    lr_hw_close_gate(s);
+    lr_mutex_unlock(&s->lock);
+    lr_hw_section(s, 0);
+    lr_mutex_unlock(&h->gl_lock);
+    return 0;
+}
+
+static void lr_hw_pump(nj_lr *s)
+{
+    lr_hw *h = &s->hw;
+    uint64_t deadline = lr_real_ms() + LR_HW_BUDGET_MS;
+    unsigned count = 0;
+    lr_mutex_lock(&s->lock);
+    while (h->ready && !s->stop && !s->vm_done && s->req_kind == LR_REQ_NONE &&
+           count < LR_HW_MAX_OPS && lr_real_ms() < deadline) {
+        if (h->slot == LR_HW_PENDING) {
+            lr_hw_request r = h->request;
+            int rc = NJ_GFX_ACCEL_DECLINE, valid;
+            h->slot = LR_HW_EXECUTING;
+            lr_mutex_unlock(&s->lock);
+            if (r.kind == LR_HW_FILL && h->driver->accel.fill_rect)
+                rc = h->driver->accel.fill_rect(h->context, r.gfx, r.x, r.y, r.w, r.h);
+            else if (r.kind == LR_HW_BLIT && h->driver->accel.blit)
+                rc = h->driver->accel.blit(h->context, r.gfx, r.blit);
+            else if (r.kind == LR_HW_RASTER && h->driver->raster)
+                rc = h->driver->raster(h->context, r.raster, r.result);
+            else if (r.kind == LR_HW_TRIANGLES && h->driver->triangles)
+                rc = h->driver->triangles(h->context, r.triangles, r.result);
+            else if (r.kind == LR_HW_TRIANGLES_LIST && h->driver->triangles_list)
+                rc = h->driver->triangles_list(h->context, r.triangles_list,
+                                               r.result);
+            valid = h->driver->valid(h->context);
+            lr_mutex_lock(&s->lock);
+            /* Preserve DONE even when validity changed after CPU commit. */
+            h->rc = rc;
+            h->slot = LR_HW_COMPLETE;
+            h->executed++;
+            if (!valid) { h->ready = 0; h->gate = 0; }
+            lr_cond_broadcast(&s->cond);
+            count++;
+        } else {
+            if (h->parked && h->park_until > s->vclock_frames * 1000u / 60u) break;
+            (void)lr_cond_wait_ms(&s->cond, &s->lock, 1u);
+        }
+    }
+    lr_hw_close_gate(s);
+    lr_mutex_unlock(&s->lock);
+}
+
+static int lr_hw_end(nj_lr *s)
+{
+    lr_hw *h = &s->hw;
+    nj_surface surface;
+    int presented = 0, restored, ready;
+    lr_mutex_lock(&s->lock);
+    ready = h->ready;
+    lr_mutex_unlock(&s->lock);
+    memset(&surface, 0, sizeof surface);
+    surface.pixels = s->send;
+    surface.width = s->out_w; surface.height = s->out_h;
+    surface.stride = s->out_w * s->bpp;
+    surface.format = s->fb_format;
+    if (ready && h->driver->valid(h->context))
+        presented = h->driver->present(h->context,
+                    h->callback.get_current_framebuffer(), &surface);
+    restored = h->driver->end(h->context);
+    if (!restored || !h->driver->valid(h->context)) {
+        lr_mutex_lock(&s->lock);
+        h->ready = 0;
+        lr_hw_close_gate(s);
+        lr_mutex_unlock(&s->lock);
+        presented = 0;
+    }
+    if (presented) h->presents++;
+    lr_hw_section(s, 0);
+    lr_mutex_unlock(&h->gl_lock);
+    return presented;
+}
+#endif
 
 /* The frontend calls this table's callback from its input thread. */
 static void RETRO_CALLCONV lr_keyboard_event(bool down, unsigned keycode,
@@ -315,6 +781,7 @@ static int   lr_pcm_open(void *ud, int rate, int channels);
 static int   lr_pcm_write(void *ud, const nj_s2 *samples, int frames);
 static void  lr_pcm_close(void *ud);
 static int   lr_pcm_free(void *ud);
+static void  lr_port_vibrate(void *ud, int ms);
 
 /* ------------------------------------------------------------------ */
 /* Small helpers                                                      */
@@ -509,6 +976,41 @@ static const lr_opt_value lr_switch_values[] = {
     { NULL, NULL }
 };
 
+static const lr_opt_value lr_font_values[] = {
+    { "auto", "Auto (system directory, then OS fonts)" },
+    { "system", "Frontend system directory only" },
+    { "builtin", "Built-in bitmap fonts" },
+    { NULL, NULL }
+};
+
+/* "auto" deliberately means the runtime default (en-US) rather than the host
+ * locale: a MIDlet's resources and text layout were authored for one locale,
+ * and the host's LANG is not a property of the handset being emulated. */
+static const lr_opt_value lr_locale_values[] = {
+    { "auto",  "Auto (en-US)"            },
+    { "en-US", "English (United States)" },
+    { "zh-CN", "Chinese (Simplified)"    },
+    { "zh-TW", "Chinese (Traditional)"   },
+    { "ja-JP", "Japanese"                },
+    { "ko-KR", "Korean"                  },
+    { "de-DE", "German"                  },
+    { "fr-FR", "French"                  },
+    { "es-ES", "Spanish"                 },
+    { "ru-RU", "Russian"                 },
+    { NULL, NULL }
+};
+
+/* The canvas the MIDlet sees.  The runtime derives the Canvas dimensions from
+ * the port width/height at MIDlet construction, so this needs a content
+ * reload; the frame buffer and reported AV geometry follow the same values. */
+static const lr_opt_value lr_screen_values[] = {
+    { "240x320", "240x320 (default)" },
+    { "176x208", "176x208 (Nokia S60)" },
+    { "128x160", "128x160 (small handset)" },
+    { "320x240", "320x240 (landscape QVGA)" },
+    { NULL, NULL }
+};
+
 /* Button binding values: every canonical nj_key name the runtime understands,
  * minus NONE (a binding may still be disabled by picking "NONE"). */
 static const lr_opt_value lr_key_values[] = {
@@ -598,17 +1100,43 @@ typedef struct lr_option_meta {
     const lr_opt_value *values;
 } lr_option_meta;
 
+#if NJ_LIBRETRO_HW
+static const lr_opt_value lr_renderer_values[] = {
+    { "software", "Software" }, { "hardware", "OpenGL hardware" }, { NULL, NULL }
+};
+#endif
+
 static const lr_option_meta lr_options[] = {
+#if NJ_LIBRETRO_HW
+    { "nano_j2me_renderer", "Renderer (restart required)",
+      "Optional frontend OpenGL drawing and presentation. Reload content after changing it.",
+      "system", "software", lr_renderer_values },
+#endif
     { "nano_j2me_device", "Device profile",
       "Which handset's properties Game MIDlets see. Restart the content after changing it.",
       "system", "generic", lr_device_values },
     { "nano_j2me_rotation", "Screen rotation",
-      "Rotates the picture only; the MIDlet keeps painting a 240x320 canvas.",
+      "Rotates the picture only; the MIDlet keeps painting its canvas at the "
+      "configured screen size.",
       "system", "0", lr_rotation_values },
+    { "nano_j2me_screen", "Screen size (restart required)",
+      "Canvas size the MIDlet sees. 240x320 is the built-in J2ME screen; the "
+      "other sizes emulate smaller or landscape handsets. Reload content after "
+      "changing it.",
+      "system", "240x320", lr_screen_values },
+    { "nano_j2me_locale", "Locale (restart required)",
+      "Value of the microedition.locale system property. Auto keeps the "
+      "runtime default en-US; the host's locale is not used. Reload content "
+      "after changing it.",
+      "system", "auto", lr_locale_values },
     { "nano_j2me_heap", "Java heap",
       "Size of the Java heap a MIDlet gets. Auto is a sixteenth of the host's "
       "RAM, 32-128 MB. Needs a content reload.",
       "system", "auto", lr_heap_values },
+    { "nano_j2me_font", "Font (restart required)",
+      "Auto tries nano_j2me/font.ttf or font.ttc in the frontend system directory, "
+      "then common OS fonts. Unsupported/missing fonts use built-in bitmaps.",
+      "system", "auto", lr_font_values },
     { "nano_j2me_sound", "Audio output",
       "Sample and tone audio from the MIDlet.", "audio", "enabled",
       lr_switch_values },
@@ -698,8 +1226,12 @@ static void lr_register_environment(nj_lr *s)
     unsigned version = 0;
     bool     no_game = false;
     unsigned level = 2;
+    uint64_t quirks = RETRO_SERIALIZATION_QUIRK_INCOMPLETE |
+                      RETRO_SERIALIZATION_QUIRK_ENDIAN_DEPENDENT |
+                      RETRO_SERIALIZATION_QUIRK_PLATFORM_DEPENDENT;
 
     if (!s->environ_cb) return;
+    (void)s->environ_cb(RETRO_ENVIRONMENT_SET_SERIALIZATION_QUIRKS, &quirks);
 
     lr_build_option_definitions();
 
@@ -709,6 +1241,24 @@ static void lr_register_environment(nj_lr *s)
                         (void *)lr_input_descriptors);
     (void)s->environ_cb(RETRO_ENVIRONMENT_SET_KEYBOARD_CALLBACK,
                         (void *)&lr_keyboard_callback_instance);
+
+    /* Bitmask polling is an optimisation, not a requirement: when the
+     * frontend declines, lr_read_joypad() keeps polling each button. */
+    s->input_bitmask =
+        s->environ_cb(RETRO_ENVIRONMENT_GET_INPUT_BITMASKS, NULL) ? 1 : 0;
+
+    /* A frontend without rumble is normal (headless, some handheld builds).
+     * There is deliberately no error or warning in that case. */
+    {
+        struct retro_rumble_interface rumble;
+        memset(&rumble, 0, sizeof rumble);
+        if (s->environ_cb(RETRO_ENVIRONMENT_GET_RUMBLE_INTERFACE, &rumble) &&
+            rumble.set_rumble_state) {
+            s->rumble_cb = rumble.set_rumble_state;
+        } else {
+            s->rumble_cb = NULL;
+        }
+    }
 
     if (s->environ_cb(RETRO_ENVIRONMENT_GET_CORE_OPTIONS_VERSION, &version)) {
         if (version >= 2 && s->environ_cb(RETRO_ENVIRONMENT_SET_CORE_OPTIONS_V2,
@@ -759,11 +1309,69 @@ static int lr_key_from_name(const char *name)
     return NJ_KEY_NONE;
 }
 
+static const char *lr_locale_value(const char *v)
+{
+    size_t i;
+
+    if (!v || !v[0]) return NULL;
+    for (i = 0; lr_locale_values[i].value; i++) {
+        if (strcmp(lr_locale_values[i].value, v) == 0) {
+            return lr_locale_values[i].value;
+        }
+    }
+    return NULL;
+}
+
+/* Build the property table handed to the VM: the selected handset profile
+ * followed by this session's overrides, last match wins (see nj_device.h).
+ * Without an override the VM borrows the profile's table directly. */
+static void lr_prepare_properties(nj_lr *s)
+{
+    const nj_device *dev = s->device;
+    nj_u4 count = dev ? dev->count : 0u;
+    nj_u4 i;
+
+    free(s->sys_props);
+    s->sys_props = NULL;
+    s->nsys_props = 0;
+
+    if (strcmp(s->locale, "en-US") == 0) return;
+
+    s->sys_props = (nj_device_prop *)calloc((size_t)count + 1u,
+                                           sizeof *s->sys_props);
+    if (!s->sys_props) {
+        lr_log(s, RETRO_LOG_WARN,
+               "locale: cannot allocate the property table; keeping en-US");
+        return;
+    }
+    for (i = 0; i < count; i++) {
+        s->sys_props[i] = dev->props[i];
+    }
+    s->sys_props[count].key = "microedition.locale";
+    s->sys_props[count].value = s->locale;
+    s->nsys_props = count + 1u;
+}
+
+/* Install the device profile, then the session overrides on top. Calling
+ * nj_vm_set_device() first also selects the profile's soft-key convention;
+ * nj_vm_set_system_properties() keeps that choice. */
+static void lr_install_properties(nj_lr *s, nj_vm *vm)
+{
+    if (!s->device) s->device = nj_device_default();
+    nj_vm_set_device(vm, s->device);
+    if (s->sys_props && s->nsys_props > 0u) {
+        nj_vm_set_system_properties(vm, s->sys_props, s->nsys_props);
+    }
+}
+
 static void lr_read_config(nj_lr *s)
 {
     const char *v;
     int i;
 
+#if NJ_LIBRETRO_HW
+    s->hw.requested = strcmp(lr_option(s, "nano_j2me_renderer", "software"), "hardware") == 0;
+#endif
     v = lr_option(s, "nano_j2me_device", "generic");
     s->device = nj_device_find(v);
     if (!s->device) s->device = nj_device_default();
@@ -773,6 +1381,40 @@ static void lr_read_config(nj_lr *s)
     if (s->rotation != 90 && s->rotation != 180 && s->rotation != 270) {
         s->rotation = 0;
     }
+
+    v = lr_option(s, "nano_j2me_screen", "240x320");
+    s->screen_w = s->screen_h = 0;
+    if (v && v[0] && strcmp(v, "240x320") != 0) {
+        int w = 0, h = 0;
+        int known = 0;
+        size_t k;
+        for (k = 0; lr_screen_values[k].value; k++) {
+            if (strcmp(lr_screen_values[k].value, v) == 0) known = 1;
+        }
+        if (known && sscanf(v, "%dx%d", &w, &h) == 2 &&
+            w >= 128 && w <= 640 && h >= 128 && h <= 640) {
+            s->screen_w = w;
+            s->screen_h = h;
+        } else {
+            lr_log(s, RETRO_LOG_WARN,
+                   "screen: unknown size '%s'; using 240x320", v);
+        }
+    }
+
+    v = lr_option(s, "nano_j2me_locale", "auto");
+    {
+        const char *loc = lr_locale_value(v);
+        if (strcmp(v ? v : "", "auto") == 0 || loc == NULL) {
+            if (v && v[0] && strcmp(v, "auto") != 0) {
+                lr_log(s, RETRO_LOG_WARN,
+                       "locale: unknown value '%s'; using en-US", v);
+            }
+            snprintf(s->locale, sizeof s->locale, "en-US");
+        } else {
+            snprintf(s->locale, sizeof s->locale, "%s", loc);
+        }
+    }
+    lr_prepare_properties(s);
 
     v = lr_option(s, "nano_j2me_heap", "auto");
     if (!v || !v[0] || strcmp(v, "auto") == 0) {
@@ -785,6 +1427,9 @@ static void lr_read_config(nj_lr *s)
         if (s->heap_mb > 512) s->heap_mb = 512;
     }
 
+    v = lr_option(s, "nano_j2me_font", "auto");
+    s->font_mode = strcmp(v, "builtin") == 0 ? 2 :
+                   (strcmp(v, "system") == 0 ? 1 : 0);
     s->sound = strcmp(lr_option(s, "nano_j2me_sound", "enabled"), "disabled") != 0;
     s->pointer = strcmp(lr_option(s, "nano_j2me_pointer", "enabled"),
                         "disabled") != 0;
@@ -793,6 +1438,86 @@ static void lr_read_config(nj_lr *s)
         s->button_key[i] = lr_key_from_name(
             lr_option(s, lr_button_key[i], lr_button_default[i]));
     }
+}
+
+/* Try fonts before creating Java UI objects. The session pins the accepted
+ * bytes so a file changed on disk cannot alter a restored VM's layout. */
+static int lr_try_font(nj_lr *s, const char *path)
+{
+    unsigned char *data;
+    size_t size;
+    if (!lr_read_file(path, &data, &size)) return 0;
+    if (!nj_vm_use_font_data(s->vm, data, (nj_u4)size)) {
+        lr_log(s, RETRO_LOG_WARN, "font: unsupported or invalid TrueType font: %s", path);
+        free(data);
+        return 0;
+    }
+    s->font_data = data;
+    s->font_size = size;
+    s->font_crc = nj_crc32(data, (nj_u4)size, 0);
+    lr_log(s, RETRO_LOG_INFO, "font: loaded %s (crc %08x)", path,
+           (unsigned)s->font_crc);
+    return 1;
+}
+
+static void lr_load_font(nj_lr *s)
+{
+    const char *dir = NULL;
+    char path[LR_PATH_MAX];
+    size_t i;
+    static const char *const filenames[] = { "font.ttf", "font.ttc" };
+#if defined(_WIN32)
+    static const char *const os_fonts[] = {
+        "Fonts/msyh.ttc", "Fonts/simsun.ttc", "Fonts/segoeui.ttf"
+    };
+    char windows_dir[MAX_PATH];
+#elif defined(__ANDROID__)
+    static const char *const os_fonts[] = {
+        "/system/fonts/NotoSansCJK-Regular.ttc",
+        "/system/fonts/DroidSansFallback.ttf", "/system/fonts/Roboto-Regular.ttf"
+    };
+#elif defined(__APPLE__)
+    static const char *const os_fonts[] = {
+        "/System/Library/Fonts/PingFang.ttc",
+        "/Library/Fonts/Arial Unicode.ttf", "/System/Library/Fonts/Helvetica.ttc"
+    };
+#else
+    static const char *const os_fonts[] = {
+        "/usr/share/fonts/wenquanyi/wqy-zenhei/wqy-zenhei.ttc",
+        "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
+        "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf",
+        "/usr/share/fonts/TTF/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+    };
+#endif
+    if (s->font_mode == 2) {
+        lr_log(s, RETRO_LOG_INFO, "font: using built-in OFL bitmap fonts");
+        return;
+    }
+    if (s->environ_cb &&
+        s->environ_cb(RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY, &dir) &&
+        dir && dir[0]) {
+        for (i = 0; i < sizeof filenames / sizeof filenames[0]; i++) {
+            int n = snprintf(path, sizeof path, "%s/nano_j2me/%s", dir, filenames[i]);
+            if (n > 0 && (size_t)n < sizeof path && lr_try_font(s, path)) return;
+        }
+    }
+    if (s->font_mode == 0) {
+        for (i = 0; i < sizeof os_fonts / sizeof os_fonts[0]; i++) {
+#if defined(_WIN32)
+            UINT n = GetWindowsDirectoryA(windows_dir, sizeof windows_dir);
+            int written;
+            if (!n || n >= sizeof windows_dir) break;
+            written = snprintf(path, sizeof path, "%s/%s", windows_dir, os_fonts[i]);
+            if (written <= 0 || (size_t)written >= sizeof path) continue;
+            if (lr_try_font(s, path)) return;
+#else
+            if (lr_try_font(s, os_fonts[i])) return;
+#endif
+        }
+    }
+    lr_log(s, RETRO_LOG_INFO, "font: no supported external font; using built-in OFL bitmap fonts");
 }
 
 /* ------------------------------------------------------------------ */
@@ -841,11 +1566,13 @@ static int lr_video_init(nj_lr *s)
     s->bpp = (int)lr_bytes_per_pixel(s->fb_format);
     pixel_size = (size_t)s->bpp;
 
-    /* The canvas the MIDlet sees is always 240x320; rotation happens when the
-     * finished frame is copied for the frontend, so the game's coordinate
+    /* The MIDlet paints a canvas of the configured size; rotation happens when
+     * the finished frame is copied for the frontend, so the game's coordinate
      * system never changes under it. */
-    s->fb_w = NJ_SCREEN_WIDTH  > 0 ? NJ_SCREEN_WIDTH  : 240;
-    s->fb_h = NJ_SCREEN_HEIGHT > 0 ? NJ_SCREEN_HEIGHT : 320;
+    s->fb_w = s->screen_w > 0 ? s->screen_w :
+              (NJ_SCREEN_WIDTH  > 0 ? NJ_SCREEN_WIDTH  : 240);
+    s->fb_h = s->screen_h > 0 ? s->screen_h :
+              (NJ_SCREEN_HEIGHT > 0 ? NJ_SCREEN_HEIGHT : 320);
     s->fb_stride = s->fb_w * s->bpp;
     if (s->rotation == 90 || s->rotation == 270) {
         s->out_w = s->fb_h;
@@ -1296,34 +2023,51 @@ static struct retro_keyboard_callback lr_keyboard_callback_instance = {
     lr_keyboard_event
 };
 
+/* Bit #N is RETRO_DEVICE_ID_JOYPAD_N, so the mask can answer every button in
+ * one call.  When the frontend did not accept GET_INPUT_BITMASKS, the same
+ * helper falls back to one input_state() call per button. */
+static int lr_pad_down(nj_lr *s, uint16_t mask, unsigned id)
+{
+    if (s->input_bitmask) {
+        return (int)((mask >> id) & 1u);
+    }
+    return s->input_cb(0, RETRO_DEVICE_JOYPAD, 0, id) != 0;
+}
+
 static void lr_read_joypad(nj_lr *s)
 {
     int i;
     int pressed[NJ_KEY_COUNT];
     int k;
+    uint16_t mask = 0;
 
     if (!s->input_cb) return;
+
+    if (s->input_bitmask) {
+        mask = (uint16_t)s->input_cb(0, RETRO_DEVICE_JOYPAD, 0,
+                                     RETRO_DEVICE_ID_JOYPAD_MASK);
+    }
 
     memset(pressed, 0, sizeof pressed);
     for (i = 0; i < 8; i++) {
         int id = (int)lr_button_id[i];
-        int down;
         if (s->button_key[i] == NJ_KEY_NONE) continue;
-        down = s->input_cb(0, RETRO_DEVICE_JOYPAD, 0, (unsigned)id) != 0;
-        if (down) pressed[s->button_key[i]] = 1;
+        if (lr_pad_down(s, mask, (unsigned)id)) {
+            pressed[s->button_key[i]] = 1;
+        }
     }
     /* The D-pad is always wired to the matching J2ME key; the binding table
      * above is for the face and shoulder buttons. */
-    if (s->input_cb(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_UP)) {
+    if (lr_pad_down(s, mask, RETRO_DEVICE_ID_JOYPAD_UP)) {
         pressed[NJ_KEY_UP] = 1;
     }
-    if (s->input_cb(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_DOWN)) {
+    if (lr_pad_down(s, mask, RETRO_DEVICE_ID_JOYPAD_DOWN)) {
         pressed[NJ_KEY_DOWN] = 1;
     }
-    if (s->input_cb(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_LEFT)) {
+    if (lr_pad_down(s, mask, RETRO_DEVICE_ID_JOYPAD_LEFT)) {
         pressed[NJ_KEY_LEFT] = 1;
     }
-    if (s->input_cb(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_RIGHT)) {
+    if (lr_pad_down(s, mask, RETRO_DEVICE_ID_JOYPAD_RIGHT)) {
         pressed[NJ_KEY_RIGHT] = 1;
     }
 
@@ -1375,6 +2119,66 @@ static void lr_read_pointer(nj_lr *s)
 }
 
 /* ------------------------------------------------------------------ */
+/* Rumble: the VM asks on its own thread, the frontend is called here  */
+/* ------------------------------------------------------------------ */
+/*
+ * A MIDlet may call Display.vibrate()/DeviceControl.startVibra() from any Java
+ * thread, but the libretro rumble callback belongs to the frontend's run
+ * thread.  The port hook therefore only records the request; retro_run()
+ * turns it into set_rumble_state() calls.  Duration is wall-clock ms so a
+ * slow frame does not stretch the buzz.
+ */
+static void lr_port_vibrate(void *ud, int ms)
+{
+    nj_lr *s = (nj_lr *)ud;
+
+    if (!s || !s->sync_ready) return;
+    if (ms < 0) ms = 0;
+
+    lr_mutex_lock(&s->lock);
+    s->rumble_active = ms > 0;
+    s->rumble_deadline_ms = lr_real_ms() + (uint64_t)ms;
+    lr_mutex_unlock(&s->lock);
+}
+
+/* One weak-motor channel is the honest mapping: the MIDlet asks for "buzz for
+ * N ms" and cannot address a second motor.  Strength is full while active. */
+static void lr_service_rumble(nj_lr *s)
+{
+    int want;
+
+    if (!s->rumble_cb) return;
+
+    lr_mutex_lock(&s->lock);
+    if (s->rumble_active && lr_real_ms() >= s->rumble_deadline_ms) {
+        s->rumble_active = 0;
+    }
+    want = s->rumble_active;
+    lr_mutex_unlock(&s->lock);
+
+    if (want == s->rumble_sent) return;
+    if (!s->rumble_cb(0, RETRO_RUMBLE_WEAK,
+                      (uint16_t)(want ? 0xFFFFu : 0u)) &&
+        want && !s->rumble_warned) {
+        lr_log(s, RETRO_LOG_WARN,
+               "the frontend rejected a rumble request; continuing without it");
+        s->rumble_warned = 1;
+    }
+    s->rumble_sent = want;
+}
+
+/* Called outside retro_run() (unload/deinit): never leave a motor running. */
+static void lr_rumble_release(nj_lr *s)
+{
+    if (s->rumble_cb && s->rumble_sent) {
+        (void)s->rumble_cb(0, RETRO_RUMBLE_WEAK, 0);
+    }
+    s->rumble_sent = 0;
+    s->rumble_active = 0;
+    s->rumble_deadline_ms = 0;
+}
+
+/* ------------------------------------------------------------------ */
 /* Clocks and port callbacks                                          */
 /* ------------------------------------------------------------------ */
 
@@ -1417,9 +2221,20 @@ static void lr_sleep_ms(void *ud, nj_u4 ms)
     }
     if (s->phase == LR_PHASE_RUN) {
         unsigned long long target = lr_virtual_ms(s) + ms;
-
-        while (!s->stop && lr_virtual_ms(s) < target) {
+        /* A request interrupts a host wait, without advancing game time.
+         * The scheduler has already parked the Java thread and returns to
+         * the outer frame boundary where snapshotting is safe. */
+        while (!s->stop && s->req_kind == LR_REQ_NONE &&
+               lr_virtual_ms(s) < target) {
+#if NJ_LIBRETRO_HW
+            s->hw.parked = 1;
+            s->hw.park_until = target;
+            lr_cond_broadcast(&s->cond);
+#endif
             lr_cond_wait(&s->cond, &s->lock);
+#if NJ_LIBRETRO_HW
+            s->hw.parked = 0;
+#endif
         }
         lr_mutex_unlock(&s->lock);
         return;
@@ -1441,8 +2256,17 @@ static void lr_idle(void *ud)
         s->load_ms += 1;
     } else if (s->phase == LR_PHASE_RUN) {
         unsigned long long target = lr_virtual_ms(s) + 1;
-        while (!s->stop && lr_virtual_ms(s) < target) {
+        while (!s->stop && s->req_kind == LR_REQ_NONE &&
+               lr_virtual_ms(s) < target) {
+#if NJ_LIBRETRO_HW
+            s->hw.parked = 1;
+            s->hw.park_until = target;
+            lr_cond_broadcast(&s->cond);
+#endif
             lr_cond_wait(&s->cond, &s->lock);
+#if NJ_LIBRETRO_HW
+            s->hw.parked = 0;
+#endif
         }
     }
     lr_mutex_unlock(&s->lock);
@@ -1500,6 +2324,28 @@ static void lr_port_init(nj_lr *s)
     s->port.name = "libretro";
     s->port.ud = s;
     s->port.user = s;
+#if NJ_LIBRETRO_HW
+    /* Stable callbacks survive copied nj_gfx and candidate VMs. Availability
+     * is checked per call; constructor/teardown never wait for retro_run. */
+    if (s->hw.requested) {
+        s->port.gfx_accel = &lr_hw_accel;
+        s->port.gfx_accel_ud = s;
+        s->port.gfx_raster = lr_hw_raster;
+        s->port.gfx_raster_ud = s;
+        s->port.gfx_triangles = lr_hw_triangles;
+        s->port.gfx_triangles_ud = s;
+        /*
+         * Deliberately no gfx_triangles_list here.  The frontend opens the
+         * hardware gate only for LR_HW_BUDGET_MS (2 ms) of each 60 Hz frame
+         * and lr_hw_submit declines instead of waiting when the gate is shut,
+         * so a deferred batch submitted at a render/barrier boundary is
+         * almost always rejected (measured 93k list declines, 2 accepted in
+         * 400 Minecraft frames) and every snapshot copy would be wasted.
+         * The single-packet path keeps the honest ~0.5% GPU hit rate; a
+         * real fix needs frontend-paced submission, not core batching.
+         */
+    }
+#endif
 
     s->port.millis = lr_port_millis;
     s->port.display_init = lr_display_init;
@@ -1509,6 +2355,7 @@ static void lr_port_init(nj_lr *s)
     s->port.log = lr_port_log;
     s->port.sleep_ms = lr_sleep_ms;
     s->port.idle = lr_idle;
+    s->port.vibrate = lr_port_vibrate;
 
     if (s->sound) {
         s->port.tone_play = lr_tone_play;
@@ -1522,11 +2369,18 @@ static void lr_port_init(nj_lr *s)
     s->port.width = s->fb_w;
     s->port.height = s->fb_h;
     s->port.scale = 1;
-    /* The runtime paces itself to 60 fps against our virtual clock; every
-     * sleep it asks for parks on the clock instead of burning real time. */
-    s->port.fps_cap = 60;
+    /* The frontend owns pacing. An uncapped MIDP frame yields once through
+     * port.idle; a snapshot request can interrupt that wait and finish the
+     * frame without advancing time. The runtime's capped pacer would keep
+     * polling its deadline while retro_serialize() has frozen the clock. */
+    s->port.fps_cap = 0;
     s->port.rms_dir = s->base_dir;
     s->port.fs_dir = s->fs_dir;
+    /* FileConnection resolves sandbox URLs to host paths before these calls,
+     * just as it does for the libc file/stat fallback used by this port. */
+    s->port.dir_open = nj_posix_dir_open;
+    s->port.dir_next = nj_posix_dir_next;
+    s->port.dir_close = nj_posix_dir_close;
 }
 
 static const char *lr_save_directory(nj_lr *s)
@@ -1559,6 +2413,262 @@ static void lr_prepare_directories(nj_lr *s)
 }
 
 /* ------------------------------------------------------------------ */
+/* Save states: the request queue                                     */
+/* ------------------------------------------------------------------ */
+/* Requests are serviced between scheduler frames on the VM thread. Sleeping
+ * Java threads remain parked; no native C stack is serialized. */
+static int lr_frame_hook(nj_vm *vm, void *ud);
+
+static nj_u4 lr_state_u32(const nj_u1 *p)
+{
+    return (nj_u4)p[0] | ((nj_u4)p[1] << 8) |
+           ((nj_u4)p[2] << 16) | ((nj_u4)p[3] << 24);
+}
+
+static void lr_state_put(nj_u1 *p, nj_u4 v)
+{
+    p[0] = (nj_u1)v; p[1] = (nj_u1)(v >> 8);
+    p[2] = (nj_u1)(v >> 16); p[3] = (nj_u1)(v >> 24);
+}
+
+static nj_u4 lr_device_crc(const nj_lr *s)
+{
+    const char *name = s->device ? s->device->name : "generic";
+    return nj_crc32(name, (nj_u4)strlen(name), 0);
+}
+
+static nj_u4 lr_state_crc(const nj_u1 *blob, nj_size size)
+{
+    nj_u4 crc = nj_crc32(blob, 12u, 0);
+    return nj_crc32(blob + 16u, size - 16u, crc);
+}
+
+static int lr_pack_state(nj_lr *s, nj_u1 **out, nj_size *out_size)
+{
+    nj_u1 *vm_blob = NULL, *blob;
+    nj_size vm_size = 0;
+    nj_size pixels = (nj_size)(s->fb_w * s->fb_h * s->bpp);
+    nj_size total;
+    int rc = nj_vm_save_mem(s->vm, &vm_blob, &vm_size);
+    if (rc != NJ_OK) return rc;
+    total = LR_STATE_HEADER + 2u * pixels + vm_size;
+    blob = (nj_u1 *)calloc(1, total);
+    if (!blob) { free(vm_blob); return NJ_ERR_NOMEM; }
+    lr_state_put(blob + 0, LR_STATE_MAGIC);
+    lr_state_put(blob + 4, LR_STATE_VERSION);
+    lr_state_put(blob + 8, total);
+    lr_state_put(blob + 16, s->jar_crc);
+    lr_state_put(blob + 20, vm_size);
+    lr_state_put(blob + 24, pixels);
+    lr_state_put(blob + 28, (nj_u4)s->rotation);
+    lr_state_put(blob + 32, (nj_u4)s->heap_mb);
+    lr_state_put(blob + 36, (nj_u4)s->sound);
+    lr_state_put(blob + 40, (nj_u4)s->pointer);
+    lr_state_put(blob + 44, lr_device_crc(s));
+    lr_state_put(blob + 48, (nj_u4)s->vclock_frames);
+    lr_state_put(blob + 52, (nj_u4)(s->vclock_frames >> 32));
+    lr_state_put(blob + 56, nj_crc32(NJ_VERSION_STRING,
+                                   (nj_u4)strlen(NJ_VERSION_STRING), 0));
+    lr_state_put(blob + 60, s->font_crc);
+    memcpy(blob + LR_STATE_HEADER, s->back, pixels);
+    memcpy(blob + LR_STATE_HEADER + pixels, s->front, pixels);
+    memcpy(blob + LR_STATE_HEADER + 2u * pixels, vm_blob, vm_size);
+    free(vm_blob);
+    lr_state_put(blob + 12, lr_state_crc(blob, total));
+    *out = blob;
+    *out_size = total;
+    return NJ_OK;
+}
+
+/* Build a candidate before touching the live VM. A refused/corrupt state must
+ * leave the running game, screen and input intact. No Java is executed by the
+ * loader, and the candidate's native media handles are cleared by load_mem. */
+static int lr_apply_state(nj_lr *s, const nj_u1 *blob, nj_size size)
+{
+    nj_size total, vm_size, pixels = (nj_size)(s->fb_w * s->fb_h * s->bpp);
+    nj_vm *candidate;
+    nj_app *app;
+    unsigned long long clock_old, clock_new;
+    int rc;
+    if (size < LR_STATE_HEADER || lr_state_u32(blob) != LR_STATE_MAGIC ||
+        lr_state_u32(blob + 4) != LR_STATE_VERSION) return NJ_ERR_FORMAT;
+    total = lr_state_u32(blob + 8);
+    vm_size = lr_state_u32(blob + 20);
+    if (total < LR_STATE_HEADER + 2u * pixels || total > size ||
+        vm_size != total - LR_STATE_HEADER - 2u * pixels ||
+        lr_state_u32(blob + 24) != pixels ||
+        lr_state_u32(blob + 12) != lr_state_crc(blob, total) ||
+        lr_state_u32(blob + 16) != s->jar_crc ||
+        lr_state_u32(blob + 28) != (nj_u4)s->rotation ||
+        lr_state_u32(blob + 32) != (nj_u4)s->heap_mb ||
+        lr_state_u32(blob + 36) != (nj_u4)s->sound ||
+        lr_state_u32(blob + 40) != (nj_u4)s->pointer ||
+        lr_state_u32(blob + 44) != lr_device_crc(s) ||
+        lr_state_u32(blob + 60) != s->font_crc ||
+        lr_state_u32(blob + 56) != nj_crc32(NJ_VERSION_STRING,
+                                      (nj_u4)strlen(NJ_VERSION_STRING), 0))
+        return NJ_ERR_FORMAT;
+    candidate = nj_vm_create(&s->port, (nj_size)s->heap_mb * 1024u * 1024u);
+    if (!candidate) return NJ_ERR_NOMEM;
+    app = nj_app_open(candidate, s->jar, (nj_u4)s->jar_size);
+    if (!app) { nj_vm_destroy(candidate); return NJ_ERR_FORMAT; }
+    if (s->font_data && !nj_vm_use_font_data(candidate, s->font_data,
+                                           (nj_u4)s->font_size)) {
+        nj_app_close(candidate, app);
+        nj_vm_destroy(candidate);
+        return NJ_ERR_NOMEM;
+    }
+    lr_install_properties(s, candidate);
+    (void)nj_vm_set_frame_hook(candidate, lr_frame_hook, s);
+    clock_new = (unsigned long long)lr_state_u32(blob + 48) |
+                ((unsigned long long)lr_state_u32(blob + 52) << 32);
+    lr_mutex_lock(&s->lock);
+    clock_old = s->vclock_frames;
+    s->vclock_frames = clock_new;
+    lr_mutex_unlock(&s->lock);
+    rc = nj_vm_load_mem(candidate, blob + LR_STATE_HEADER + 2u * pixels, vm_size);
+    if (rc != NJ_OK) {
+        lr_mutex_lock(&s->lock);
+        s->vclock_frames = clock_old;
+        lr_mutex_unlock(&s->lock);
+        nj_app_close(candidate, app);
+        nj_vm_destroy(candidate);
+        return rc;
+    }
+    /* Do not call the old MIDlet's destroyApp(): it may write external saves
+     * and must not run when loading a snapshot. */
+    nj_app_close(s->vm, s->app);
+    nj_vm_destroy(s->vm);
+    s->vm = candidate;
+    s->app = app;
+    s->midlet = NULL;
+    lr_mutex_lock(&s->lock);
+    memcpy(s->back, blob + LR_STATE_HEADER, pixels);
+    memcpy(s->front, blob + LR_STATE_HEADER + pixels, pixels);
+    memcpy(s->send, s->front, pixels);
+    s->posted++;
+    s->consumed = 0;
+    s->pcm_rd = s->pcm_wr = s->tone_rd = s->tone_wr = 0;
+    s->have_prev = 0;
+    s->src_pos = 0;
+    s->src_base = 0;
+    s->event_rd = s->event_wr = 0;
+    memset(s->key_down, 0, sizeof s->key_down);
+    s->ptr_down = 0;
+    lr_mutex_unlock(&s->lock);
+    lr_log(s, RETRO_LOG_INFO, "resumed from a save state");
+    return NJ_OK;
+}
+
+static void lr_serve_state_request(nj_lr *s)
+{
+    nj_u1 *blob;
+    nj_size size;
+    int kind, rc;
+    lr_mutex_lock(&s->lock);
+    kind = s->req_kind;
+    if (kind == LR_REQ_NONE || !nj_vm_can_save(s->vm)) {
+        lr_mutex_unlock(&s->lock);
+        return;
+    }
+    s->req_busy = 1;
+    blob = s->req_blob;
+    size = s->req_size;
+    lr_mutex_unlock(&s->lock);
+    if (kind == LR_REQ_SAVE) rc = lr_pack_state(s, &blob, &size);
+    else {
+        rc = lr_apply_state(s, blob, size);
+        free(blob);
+        blob = NULL;
+        size = 0;
+    }
+    lr_mutex_lock(&s->lock);
+    s->req_blob = blob;
+    s->req_size = size;
+    s->req_rc = rc;
+    s->req_kind = LR_REQ_NONE;
+    s->req_busy = 0;
+    s->req_done = 1;
+    lr_cond_broadcast(&s->cond);
+    lr_mutex_unlock(&s->lock);
+}
+
+/* Frontend owns returned SAVE data; LOAD input is copied so a cancelled wait
+ * never leaves a borrowed buffer in use by a late VM request. Once serving
+ * begins we join its completion; only waiting for a safe point has a timeout. */
+static int lr_request_state(nj_lr *s, int kind, const void *input,
+                            nj_size input_size, nj_u1 **out, nj_size *out_size)
+{
+    uint64_t deadline;
+    nj_u1 *copy = NULL;
+    int rc = NJ_ERR_STATE;
+    if (out) *out = NULL;
+    if (out_size) *out_size = 0;
+    if (!s->loaded || !s->thread_started) return rc;
+    if (input_size) {
+        copy = (nj_u1 *)malloc(input_size);
+        if (!copy) return NJ_ERR_NOMEM;
+        memcpy(copy, input, input_size);
+    }
+    lr_mutex_lock(&s->lock);
+    if (s->req_kind != LR_REQ_NONE || s->vm_done) {
+        lr_mutex_unlock(&s->lock);
+        free(copy);
+        return rc;
+    }
+#if NJ_LIBRETRO_HW
+    lr_hw_close_gate(s);
+#endif
+    s->req_kind = kind;
+    s->req_done = 0;
+    s->req_busy = 0;
+    s->req_blob = copy;
+    s->req_size = input_size;
+    lr_cond_broadcast(&s->cond);
+    deadline = lr_real_ms() + LR_STATE_TIMEOUT_MS;
+    while (!s->req_done && !s->vm_done) {
+        uint64_t now = lr_real_ms();
+        if (now >= deadline && !s->req_busy) break;
+        (void)lr_cond_wait_ms(&s->cond, &s->lock, 100u);
+    }
+    if (s->req_done) {
+        rc = s->req_rc;
+        if (out) { *out = s->req_blob; s->req_blob = NULL; }
+        if (out_size) *out_size = s->req_size;
+    }
+    free(s->req_blob);
+    s->req_blob = NULL;
+    s->req_size = 0;
+    s->req_kind = LR_REQ_NONE;
+    s->req_done = 0;
+    lr_mutex_unlock(&s->lock);
+    if (rc != NJ_OK) lr_log(s, RETRO_LOG_WARN,
+                           "save-state request refused (%d); the game continues", rc);
+    return rc;
+}
+
+/* Drives the MIDlet frame by frame and serves save-state requests between
+ * frames.  nj_midp_run() would hide exactly that boundary, so it is spelled
+ * out here; a snapshot must not be taken while a frame is in progress. */
+static void lr_run_frames(nj_lr *s)
+{
+    while (nj_vm_running(s->vm)) {
+        int stop;
+
+        lr_serve_state_request(s);
+        lr_mutex_lock(&s->lock);
+        stop = s->stop;
+        lr_mutex_unlock(&s->lock);
+        if (stop) {
+            return;
+        }
+        if (nj_midp_frame(s->vm) != NJ_OK) {
+            return;
+        }
+    }
+}
+
+/* ------------------------------------------------------------------ */
 /* VM thread                                                          */
 /* ------------------------------------------------------------------ */
 
@@ -1572,6 +2682,12 @@ static int lr_frame_hook(nj_vm *vm, void *ud)
     stop = s->stop;
     lr_mutex_unlock(&s->lock);
     if (stop) return 1;
+    /*
+     * This hook is pumped by the VM while a Java thread is parked inside a
+     * blocking native call, so it is not a safe point for a snapshot
+     * (nj_vm_can_save() refuses exactly that).  Save requests are served by
+     * lr_run_frames() between two frames instead.
+     */
     (void)nj_midp_frame(vm);
     return 0;
 }
@@ -1582,7 +2698,13 @@ static void *lr_vm_thread(void *arg)
     nj_status st;
     int stop;
 
-    st = nj_vm_start_app(s->vm, s->midlet);
+#if NJ_LIBRETRO_HW
+    lr_mutex_lock(&s->lock);
+    s->hw.worker = lr_thread_self();
+    s->hw.worker_known = 1;
+    lr_mutex_unlock(&s->lock);
+#endif
+    st = nj_vm_start_app_async(s->vm, s->midlet);
 
     lr_mutex_lock(&s->lock);
     stop = s->stop;
@@ -1607,9 +2729,8 @@ static void *lr_vm_thread(void *arg)
             stop = s->stop;
             lr_mutex_unlock(&s->lock);
             if (stop) break;
-            if (nj_midp_frame(s->vm) != NJ_OK) {
-                break;
-            }
+            lr_serve_state_request(s);
+            (void)nj_midp_frame(s->vm);
             waited++;
         }
 
@@ -1622,7 +2743,7 @@ static void *lr_vm_thread(void *arg)
                 lr_log(s, RETRO_LOG_WARN,
                        "the MIDlet installed no Displayable; nothing to show");
             } else {
-                (void)nj_midp_run(s->vm);
+                lr_run_frames(s);
             }
         }
     }
@@ -1640,6 +2761,10 @@ static void *lr_vm_thread(void *arg)
 
     lr_mutex_lock(&s->lock);
     s->vm_done = 1;
+#if NJ_LIBRETRO_HW
+    lr_hw_close_gate(s);
+    s->hw.worker_known = 0;
+#endif
     lr_cond_broadcast(&s->cond);
     lr_mutex_unlock(&s->lock);
     return NULL;
@@ -1652,6 +2777,10 @@ static void *lr_vm_thread(void *arg)
 static void lr_release_buffers(nj_lr *s)
 {
     free(s->jar);
+    free(s->font_data);
+    s->font_data = NULL;
+    s->font_size = 0;
+    s->font_crc = 0;
     free(s->back);
     free(s->front);
     free(s->send);
@@ -1670,13 +2799,18 @@ static void lr_release_buffers(nj_lr *s)
 
 static void lr_unload(nj_lr *s)
 {
-    s->phase = LR_PHASE_STOP;
-
-    if (s->thread_started) {
+    if (s->sync_ready) {
         lr_mutex_lock(&s->lock);
+        s->phase = LR_PHASE_STOP;
         s->stop = 1;
+#if NJ_LIBRETRO_HW
+        lr_hw_close_gate(s);
+#endif
         lr_cond_broadcast(&s->cond);
         lr_mutex_unlock(&s->lock);
+    }
+
+    if (s->thread_started) {
 
         if (s->vm) {
             /* A MIDlet may be inside startApp(), a sleep or destroyApp();
@@ -1699,7 +2833,26 @@ static void lr_unload(nj_lr *s)
         s->vm = NULL;
     }
 
+#if NJ_LIBRETRO_HW
+    if (s->loaded && s->hw.requested) {
+        lr_log(s, RETRO_LOG_INFO,
+               "GPU completion fills=%llu blits=%llu rasters=%llu triangles=%llu declines=%llu lists=%llu; RPC queued=%llu executed=%llu cancelled=%llu presents=%llu",
+               s->hw.fills, s->hw.blits, s->hw.rasters, s->hw.triangles,
+               s->hw.declines, s->hw.triangle_lists,
+               s->hw.queued, s->hw.executed, s->hw.cancelled, s->hw.presents);
+    }
+    s->hw.worker_known = 0;
+    s->hw.parked = 0;
+    s->hw.slot = LR_HW_EMPTY;
+    memset(&s->hw.request, 0, sizeof s->hw.request);
+    /* Keep GL resources until the frontend's context_destroy callback. Unload
+     * and reset do not carry a current-context guarantee. */
+#endif
     lr_release_buffers(s);
+    lr_rumble_release(s);
+    free(s->sys_props);
+    s->sys_props = NULL;
+    s->nsys_props = 0;
     s->midlet = 0;
     s->loaded = 0;
     s->vm_done = 0;
@@ -1713,6 +2866,16 @@ static void lr_unload(nj_lr *s)
     s->event_rd = s->event_wr = 0;
     memset(s->key_down, 0, sizeof s->key_down);
     s->ptr_down = 0;
+    /* Nothing is left running that could serve a pending save request. */
+    s->req_kind = LR_REQ_NONE;
+    s->req_done = 0;
+    s->req_busy = 0;
+    s->req_rc = NJ_ERR_STATE;
+    free(s->req_blob);
+    s->req_blob = NULL;
+    s->req_size = 0;
+    s->jar_crc = 0;
+    s->state_bound = 0;
     s->game_path[0] = '\0';
     s->stem[0] = '\0';
 }
@@ -1731,11 +2894,16 @@ static int lr_allocate_audio(nj_lr *s)
     return 1;
 }
 
-static bool lr_load(const struct retro_game_info *info)
+static bool lr_load(const struct retro_game_info *info, int resetting)
 {
     nj_lr *s = core();
     const char *midlet_class;
     nj_ref exc = 0;
+#if NJ_LIBRETRO_HW
+    int requested = s->hw.requested;
+#else
+    (void)resetting;
+#endif
 
     if (s->loaded) lr_unload(s);
     if (!info) return false;
@@ -1743,7 +2911,23 @@ static bool lr_load(const struct retro_game_info *info)
     s->phase = LR_PHASE_LOAD;
     s->stop = 0;
 
+#if NJ_LIBRETRO_HW
+    /* Reset rebuilds Java state without replacing the frontend's context.
+     * SET_HW_RENDER is only allowed during retro_load_game, and a frontend
+     * need not issue context_reset when retro_reset returns. */
+    if (!resetting) {
+        s->hw.accepted = 0;
+        s->hw.ready = 0;
+    }
+    s->hw.fills = s->hw.blits = s->hw.rasters = s->hw.triangles =
+        s->hw.triangle_lists = 0;
+    s->hw.declines = s->hw.queued = s->hw.executed = s->hw.cancelled = s->hw.presents = 0;
+#endif
     lr_read_config(s);
+#if NJ_LIBRETRO_HW
+    /* Changing the renderer requires content reload, not a Java reset. */
+    if (resetting) s->hw.requested = requested;
+#endif
 
     if (!lr_read_file(info->path, &s->jar, &s->jar_size)) {
         if (info->data && info->size > 0) {
@@ -1786,6 +2970,12 @@ static bool lr_load(const struct retro_game_info *info)
         lr_unload(s);
         return false;
     }
+    lr_load_font(s);
+    /* The largest blob this VM can produce; retro_serialize_size() reports it
+     * so the frontend can allocate the state file in one piece. */
+    s->state_bound = nj_vm_blob_max(s->vm) + LR_STATE_HEADER +
+                     2u * (nj_size)(s->fb_w * s->fb_h * s->bpp);
+    s->jar_crc = nj_crc32(s->jar, (nj_u4)s->jar_size, 0);
 
     s->app = nj_app_open(s->vm, s->jar, (nj_u4)s->jar_size);
     if (!s->app) {
@@ -1803,6 +2993,9 @@ static bool lr_load(const struct retro_game_info *info)
     }
 
     if (s->device) nj_vm_set_device(s->vm, s->device);
+    if (s->sys_props && s->nsys_props > 0u) {
+        nj_vm_set_system_properties(s->vm, s->sys_props, s->nsys_props);
+    }
     (void)nj_vm_set_frame_hook(s->vm, lr_frame_hook, s);
 
     /*
@@ -1820,6 +3013,9 @@ static bool lr_load(const struct retro_game_info *info)
         return false;
     }
 
+#if NJ_LIBRETRO_HW
+    if (!resetting) lr_hw_negotiate(s);
+#endif
     s->loaded = 1;
     lr_log(s, RETRO_LOG_INFO, "running %s (heap %d MB, device %s)",
            midlet_class, s->heap_mb,
@@ -1855,6 +3051,9 @@ RETRO_API void retro_set_environment(retro_environment_t cb)
     if (!s->sync_ready) {
         lr_mutex_init(&s->lock);
         lr_cond_init(&s->cond);
+#if NJ_LIBRETRO_HW
+        lr_mutex_init(&s->hw.gl_lock);
+#endif
         s->sync_ready = 1;
     }
     lr_register_environment(s);
@@ -1892,6 +3091,9 @@ RETRO_API void retro_init(void)
     if (!s->sync_ready) {
         lr_mutex_init(&s->lock);
         lr_cond_init(&s->cond);
+#if NJ_LIBRETRO_HW
+        lr_mutex_init(&s->hw.gl_lock);
+#endif
         s->sync_ready = 1;
     }
     if (s->environ_cb) {
@@ -1913,6 +3115,18 @@ RETRO_API void retro_deinit(void)
 
     lr_unload(s);
     if (s->sync_ready) {
+#if NJ_LIBRETRO_HW
+        lr_mutex_lock(&s->hw.gl_lock);
+        if (s->hw.context) {
+            /* No current-context guarantee at deinit. The frontend owns the
+             * context; free CPU bookkeeping only if it omitted destroy. */
+            lr_log(s, RETRO_LOG_WARN, "frontend omitted context_destroy; releasing CPU GL bookkeeping only");
+            s->hw.driver->destroy(s->hw.context, 1);
+            s->hw.context = NULL;
+        }
+        lr_mutex_unlock(&s->hw.gl_lock);
+        lr_mutex_destroy(&s->hw.gl_lock);
+#endif
         lr_mutex_destroy(&s->lock);
         lr_cond_destroy(&s->cond);
     }
@@ -1979,13 +3193,16 @@ RETRO_API void retro_reset(void)
     lr_unload(s);
     memset(&info, 0, sizeof info);
     info.path = path;
-    (void)lr_load(&info);
+    (void)lr_load(&info, 1);
 }
 
 RETRO_API void retro_run(void)
 {
     nj_lr *s = core();
-    int video_ready;
+    int video_ready, shutdown;
+#if NJ_LIBRETRO_HW
+    int hw_active = 0, hw_presented = 0;
+#endif
 
     if (!s->loaded) {
         /* The frontend may call retro_run() once before content is loaded
@@ -1993,7 +3210,11 @@ RETRO_API void retro_run(void)
          * answer. */
         static const uint16_t black[240 * 320];
         if (s->video_cb) {
-            s->video_cb(black, 240, 320, 240 * (int)sizeof(uint16_t));
+#if NJ_LIBRETRO_HW
+            if (s->hw.accepted) s->video_cb(NULL, 240, 320, 0);
+            else
+#endif
+                s->video_cb(black, 240, 320, 240 * (int)sizeof(uint16_t));
         }
         return;
     }
@@ -2001,6 +3222,10 @@ RETRO_API void retro_run(void)
     if (s->poll_cb) s->poll_cb();
     lr_read_joypad(s);
     if (s->pointer) lr_read_pointer(s);
+    lr_service_rumble(s);
+#if NJ_LIBRETRO_HW
+    hw_active = lr_hw_begin(s);
+#endif
 
     /*
      * Keep the critical section short: the VM thread has to take this same
@@ -2014,8 +3239,18 @@ RETRO_API void retro_run(void)
     /* One frontend frame is one virtual 60 Hz frame.  Everything the runtime
      * sleeps for is measured against this, so a paused frontend pauses the
      * MIDlet and a running one fast-forwards it. */
+#if NJ_LIBRETRO_HW
+    if (hw_active) s->hw.gate = 1;
+#endif
     s->vclock_frames++;
     lr_cond_broadcast(&s->cond);
+#if NJ_LIBRETRO_HW
+    if (hw_active) {
+        lr_mutex_unlock(&s->lock);
+        lr_hw_pump(s);
+        lr_mutex_lock(&s->lock);
+    }
+#endif
 
     if (s->posted > s->consumed) {
         if (s->front && s->send) {
@@ -2029,11 +3264,22 @@ RETRO_API void retro_run(void)
 
     lr_mutex_unlock(&s->lock);
 
+#if NJ_LIBRETRO_HW
+    if (hw_active) hw_presented = lr_hw_end(s);
+#endif
     video_ready = (s->video_cb != NULL && s->send != NULL);
     if (video_ready) {
         int pitch = s->out_w * s->bpp;
-        s->video_cb(s->send, (unsigned)s->out_w, (unsigned)s->out_h,
-                    (size_t)pitch);
+#if NJ_LIBRETRO_HW
+        if (s->hw.accepted) {
+            /* Once hardware was accepted, CPU pointers are never legal video
+             * data, including when context/presenter initialization failed. */
+            s->video_cb(hw_presented ? RETRO_HW_FRAME_BUFFER_VALID : NULL,
+                        (unsigned)s->out_w, (unsigned)s->out_h, 0);
+        } else
+#endif
+            s->video_cb(s->send, (unsigned)s->out_w, (unsigned)s->out_h,
+                        (size_t)pitch);
     }
 
     if (s->batch_cb) {
@@ -2045,35 +3291,32 @@ RETRO_API void retro_run(void)
         }
     }
 
-    if (s->vm_done && !s->shutdown_sent) {
-        lr_mutex_lock(&s->lock);
-        s->shutdown_sent = 1;
-        lr_mutex_unlock(&s->lock);
-        if (s->environ_cb) {
-            (void)s->environ_cb(RETRO_ENVIRONMENT_SHUTDOWN, NULL);
-        }
+    lr_mutex_lock(&s->lock);
+    shutdown = s->vm_done && !s->shutdown_sent;
+    if (shutdown) s->shutdown_sent = 1;
+    lr_mutex_unlock(&s->lock);
+    if (shutdown && s->environ_cb) {
+        (void)s->environ_cb(RETRO_ENVIRONMENT_SHUTDOWN, NULL);
     }
 }
 
 RETRO_API bool retro_load_game(const struct retro_game_info *info)
 {
     nj_lr *s = core();
-    int ok;
 
     if (!s->sync_ready) {
         lr_mutex_init(&s->lock);
         lr_cond_init(&s->cond);
+#if NJ_LIBRETRO_HW
+        lr_mutex_init(&s->hw.gl_lock);
+#endif
         s->sync_ready = 1;
     }
-    ok = lr_load(info);
-    if (ok) {
-        struct retro_system_av_info av;
-        retro_get_system_av_info(&av);
-        if (s->environ_cb) {
-            (void)s->environ_cb(RETRO_ENVIRONMENT_SET_SYSTEM_AV_INFO, &av);
-        }
-    }
-    return ok ? true : false;
+    /* The frontend queries retro_get_system_av_info() after loading. Sending
+     * SET_SYSTEM_AV_INFO here initializes its drivers before normal startup
+     * and can make Android EGL initialization fail on the second attempt.
+     * That environment call is only valid inside retro_run(). */
+    return lr_load(info, 0);
 }
 
 RETRO_API void retro_unload_game(void)
@@ -2093,24 +3336,49 @@ RETRO_API bool retro_load_game_special(unsigned type,
 
 RETRO_API size_t retro_serialize_size(void)
 {
-    /* A snapshot must be written by the thread that owns the VM; the request
-     * queue that would make that possible is not in this version.  Zero says
-     * so instead of promising a save state that would fail. */
-    return 0;
+    nj_lr *s = core();
+
+    if (!s->loaded || s->state_bound == 0) {
+        return 0;
+    }
+    /* A stable upper bound includes the VM arena and both framebuffers.
+     * The envelope records its true length; trailing zero padding is ignored
+     * when the frontend passes its full serialize_size() allocation back. */
+    return (size_t)s->state_bound;
 }
 
 RETRO_API bool retro_serialize(void *data, size_t size)
 {
-    (void)data;
-    (void)size;
-    return false;
+    nj_lr *s = core();
+    nj_u1 *blob = NULL;
+    nj_size blob_size = 0;
+
+    if (!data || size < (size_t)s->state_bound || !s->loaded) {
+        return false;
+    }
+    if (lr_request_state(s, LR_REQ_SAVE, NULL, 0, &blob, &blob_size) != NJ_OK || !blob) {
+        free(blob);
+        return false;
+    }
+    if ((size_t)blob_size > size) {
+        free(blob);
+        return false;
+    }
+    memcpy(data, blob, (size_t)blob_size);
+    if ((size_t)blob_size < size) {
+        memset((nj_u1 *)data + blob_size, 0, size - (size_t)blob_size);
+    }
+    free(blob);
+    return true;
 }
 
 RETRO_API bool retro_unserialize(const void *data, size_t size)
 {
-    (void)data;
-    (void)size;
-    return false;
+    nj_lr *s = core();
+    if (!s->loaded || !data || size < LR_STATE_HEADER ||
+        size > (size_t)s->state_bound) return false;
+    return lr_request_state(s, LR_REQ_LOAD, data, (nj_size)size,
+                            NULL, NULL) == NJ_OK;
 }
 
 RETRO_API void retro_cheat_reset(void) { }

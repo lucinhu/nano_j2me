@@ -1,0 +1,72 @@
+# libretro buildbot configuration (requires the libretro GitLab templates).
+# These targets have local build coverage, not a claim of a completed GitLab
+# pipeline. Windows also has Wine smoke coverage. Other consoles/Apple targets
+# are deliberately omitted until their SDKs and runtime support are verified.
+.core-defs:
+  variables:
+    CORENAME: nano_j2me
+    # CMake writes the core to <binary-dir>/libretro; the shared templates move
+    # $BUILD_DIR/$EXTRA_PATH/$LIBNAME into their artifact directory.
+    EXTRA_PATH: libretro
+    CORE_ARGS: >-
+      -DCMAKE_BUILD_TYPE=Release
+      -DNJ_BUILD_LIBRETRO=ON
+      -DNJ_BUILD_TESTS=OFF
+      -DNJ_BUILD_CLI=OFF
+      -DNJ_BUILD_SDL2=OFF
+      -DNJ_BUILD_EMBEDDED_PORTS=OFF
+      -DNJ_BUILD_POSIX_NETWORK=OFF
+      -DCMAKE_DISABLE_FIND_PACKAGE_ZLIB=ON
+
+include:
+  - project: 'libretro-infrastructure/ci-templates'
+    file: '/windows-cmake-mingw.yml'
+  - project: 'libretro-infrastructure/ci-templates'
+    file: '/linux-cmake.yml'
+  - project: 'libretro-infrastructure/ci-templates'
+    file: '/android-cmake.yml'
+
+stages:
+  - build-prepare
+  - build-shared
+  - build-static
+
+libretro-build-windows-x64:
+  extends:
+    - .libretro-windows-cmake-x86_64
+    - .core-defs
+
+libretro-build-windows-i686:
+  extends:
+    - .libretro-windows-cmake-x86
+    - .core-defs
+
+libretro-build-linux-x64:
+  extends:
+    - .libretro-linux-cmake-x86_64
+    - .core-defs
+
+libretro-build-linux-aarch64:
+  extends:
+    - .libretro-linux-cmake-aarch64
+    - .core-defs
+
+# Android templates rename nano_j2me_libretro.so to
+# nano_j2me_libretro_android.so before publishing, as required by the buildbot.
+android-armeabi-v7a:
+  extends:
+    - .libretro-android-cmake-armeabi-v7a
+    - .core-defs
+
+android-arm64-v8a:
+  extends:
+    - .libretro-android-cmake-arm64-v8a
+    - .core-defs
+
+android-x86_64:
+  extends:
+    - .libretro-android-cmake-x86_64
+    - .core-defs
+
+# Linux ARM hard-float is also built by tools/build_libretro_cores.sh, but the
+# current upstream linux-cmake.yml does not provide an ARMv7 template.
