@@ -18,6 +18,8 @@ steps below before publication.
 | Buildbot configuration | [root GitLab CI](../.gitlab-ci.yml) | core repository root; integration with libretro infrastructure requires maintainers |
 | Library page draft | [nano_j2me library page](libretro/nano_j2me.md) | `libretro/docs`, `docs/library/nano_j2me.md` plus navigation/index updates |
 | Copy-ready upstream bundle | [docs/libretro/upstream/](libretro/upstream/README.md) | exact `.info` and documentation-page copies plus index-update checklist for the two PRs |
+| `libretro-super` patch | [libretro-super-nano_j2me-info.patch](libretro/upstream/libretro-super-nano_j2me-info.patch) | one-file diff adding `dist/info/nano_j2me_libretro.info`; verified against `libretro-super` master `fb15e63` |
+| `libretro/docs` patch | [libretro-docs-nano_j2me.patch](libretro/upstream/libretro-docs-nano_j2me.patch) | 5-file diff: library page with upstream front matter, `mkdocs.yml` nav, `core-list.md`, `licenses.md`, `see-also.md`; verified against `libretro/docs` master `d83b34b`, `mkdocs build` passes |
 | CI template simulation | [tools/simulate_ci_builds.sh](../tools/simulate_ci_builds.sh) | local pre-submission check that the Linux/Windows/Android template command shapes build and place artifacts where the templates collect them |
 | Local build/user guide | [LIBRETRO.md](LIBRETRO.md) | project documentation |
 | Liberation font notice | [Liberation-Fonts-OFL.txt](licenses/Liberation-Fonts-OFL.txt) | accompany source and binary packages using the Latin font tables |
@@ -272,8 +274,13 @@ requires its fixture/tool dependencies.
   buildbot collects; see the 2026-11-15 readiness section.
 - [x] Metadata `database` value verified against libretro-database, and the same
   `.info` ships byte-identically in every local package.
-- [ ] Upstream CI runs and collects the correct output library in `libretro/`.
-- [ ] Info parsed/displayed by RetroArch; upstream docs `mkdocs build` passes.
+- [x] `.info` parsed by RetroArch 1.22.2 locally (core-info cache written, no
+      parse errors); rebuilt metadata same-file bytes in every package.
+- [x] Prepared upstream patches apply cleanly to current upstream masters and
+      the patched `libretro/docs` checkout passes `mkdocs build`
+      (mkdocs 1.6.1, 8.68 s, page rendered; evidence log listed above).
+- [ ] Upstream CI runs and collects the correct output library in `libretro/`
+      (maintainer registration/execution).
 
 The final combined candidate passed on **2026-11-13**: the serial full CMake
 suite passed **182/182**, with no skips, in **317.48 seconds**; focused

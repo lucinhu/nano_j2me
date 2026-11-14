@@ -81,6 +81,21 @@ HEAD `6b1e9e2` (tree containing `dda4fc2` graphics work), see item 5.
    artifact refresh at `6b1e9e2`, including `test_libretro_frontend` and
    `no_statics`. A separate build directory under `/var/tmp` is used so the
    user's in-progress `build/` trees are not touched.
+8. **Upstream patches, exact and build-validated**: `libretro-docs-nano_j2me.patch`
+   (5 files, +211 lines) and `libretro-super-nano_j2me-info.patch` (one added
+   file) were generated inside clean shallow clones of `libretro/docs` master
+   `d83b34b21b8a2c14db573aea66d876e343d316ca` and `libretro-super` master
+   `fb15e630655375a50317be2a7953477ef9a5d12a`, and each was re-checked with
+   `git apply --check` on a reset checkout. The docs patch adds the library
+   page with upstream front matter plus every index update: `mkdocs.yml` nav
+   entry under `Mobile Emulation`, a `core-list.md` row, a `licenses.md` row
+   (MIT code + OFL font data + Apache AMR data) and a `see-also.md` `## J2ME`
+   section listing FreeJ2ME, FreeJ2ME-Plus, nano_j2me and SquirrelJME. With the
+   patch applied, `mkdocs build` (mkdocs 1.6.1 with the repository's
+   `docs/requirements.txt`) succeeds in 8.68 s and renders
+   `site/library/nano_j2me/index.html`; the only warning is the plugin's
+   missing-git-log note for the freshly added file. Evidence:
+   `.local-tools/debug-runs/submission-20261115/libretro-docs-mkdocs-build.log`.
 
 ## Remaining external steps (not performed)
 

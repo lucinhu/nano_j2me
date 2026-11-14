@@ -6,13 +6,18 @@ opened as a PR; the core repository itself is pushed to
 `git@github.com:lucinhu/nano_j2me.git`, but libretro upstream interaction
 remains an explicit, manual decision.
 
-Prepared 2026-11-15 from `bc49c46` (`v0.5.7-9-gbc49c46`).
+Prepared 2026-11-15. The exact-index patches below were generated against and
+verified to apply cleanly to `libretro/docs` master
+`d83b34b21b8a2c14db573aea66d876e343d316ca` and `libretro-super` master
+`fb15e630655375a50317be2a7953477ef9a5d12a`.
 
 ## 1. `libretro/libretro-super`
 
-Copy:
+Apply the prepared patch (adds exactly one file), or copy it by hand:
 
 ```
+git apply libretro-super-nano_j2me-info.patch
+# equivalent to:
 nano_j2me_libretro.info  ->  dist/info/nano_j2me_libretro.info
 ```
 
@@ -24,8 +29,15 @@ A draft body is in `docs/LIBRETRO_SUBMISSION.md` ("Draft PR descriptions").
 
 ## 2. `libretro/libretro/docs`
 
-Copy the page and update the four indexes (all paths relative to the docs
-repository root):
+Apply the prepared patch, which adds the page and every index update in one
+diff (5 files, +211 lines):
+
+```
+git apply libretro-docs-nano_j2me.patch
+```
+
+By hand, copy the page and update the four indexes (all paths relative to the
+docs repository root):
 
 ```
 nano_j2me.md  ->  docs/library/nano_j2me.md
@@ -39,8 +51,8 @@ nano_j2me.md  ->  docs/library/nano_j2me.md
 - `docs/development/licenses.md`: add a `nano_j2me` entry describing
   `MIT` runtime code, `Apache-2.0` built-in AMR numeric data and
   `OFL-1.1` bundled font data (see the `.info` `license` field).
-- `docs/meta/see-also.md`: optional; there is no closely related libretro core,
-  so this can be skipped unless reviewers ask.
+- `docs/meta/see-also.md`: the patch adds a `## J2ME` section listing
+  FreeJ2ME, FreeJ2ME-Plus, nano_j2me and SquirrelJME as related cores.
 - BIOS, softpatching, RetroAchievements pages: not applicable (core declares
   none of these).
 
