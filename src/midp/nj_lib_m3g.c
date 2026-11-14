@@ -47,6 +47,9 @@
 
 #include <math.h>
 #include <string.h>
+#if NJ_ENABLE_GFX_ACCEL && NJ_USE_LIBC
+#include <time.h>
+#endif
 
 
 /*
@@ -15523,6 +15526,226 @@ static int m3g_journal_append(m3g_jr *r, const nj_gfx_triangles *p)
 
 #endif /* NJ_ENABLE_GFX_ACCEL */
 
+/*
+ * Auto-selection for ports that opt into `gfx_triangles_auto`.
+ *
+ * A native triangle transaction pays a fixed cost per commit (colour and depth
+ * import, FBO seeding, two synchronous readbacks and the CPU write-back); the
+ * software rasterizer pays only for covered pixels.  Which side wins depends on
+ * the device: a fast desktop CPU beats the round trip, an emulated or weak CPU
+ * does not.  Measure both on one representative batch once, keep the faster
+ * one, and log the decision.  This runs only when the port asks for it, so the
+ * pure software path is untouched.
+ */
+#define M3G_CALIB_CELLS 512u          /* two triangles per cell => 1024 */
+#define M3G_CALIB_SIZE  128
+#define M3G_CALIB_REPS  3u
+#define M3G_CALIB_TEX   16
+
+static nj_u4 m3g_calib_us(void)
+{
+#if NJ_USE_LIBC
+    return (nj_u4)(((nj_u8)clock() * 1000000u) / (nj_u8)CLOCKS_PER_SEC);
+#else
+    return 0u;
+#endif
+}
+
+static void m3g_calib_reset(const nj_gfx_triangles *p)
+{
+    memset(p->surface->pixels, 0,
+           (nj_size)p->surface->stride * p->surface->height);
+    memset(p->depth, 0,
+           (nj_size)M3G_CALIB_SIZE * M3G_CALIB_SIZE * sizeof(nj_s4));
+}
+
+static nj_u4 m3g_calib_software(nj_vm *vm, const nj_gfx_triangles *p,
+                                const nj_u1 *tex)
+{
+    nj_u4 best = 0xFFFFFFFFu, rep;
+    for (rep = 0; rep <= M3G_CALIB_REPS; ++rep) {
+        nj_u4 start, stop, i, k;
+        m3g_calib_reset(p);
+        start = m3g_calib_us();
+        for (i = 0; i < p->count; ++i) {
+            const nj_gfx_triangle_cmd *t = &p->triangles[i];
+            m3g_sw sw;
+            float xy[6], inv[3], st[6];
+            double depth[3];
+            nj_u4 rgb[3];
+            memset(&sw, 0, sizeof(sw));
+            sw.surf = p->surface;
+            sw.z = p->depth;
+            sw.vx = 0; sw.vy = 0;
+            sw.vw = M3G_CALIB_SIZE; sw.vh = M3G_CALIB_SIZE;
+            sw.cull = 162;
+            sw.winding = M3G_SW_CCW;
+            sw.tex = tex;
+            sw.tex_w = M3G_CALIB_TEX; sw.tex_h = M3G_CALIB_TEX;
+            sw.tex_bpp = 4;
+            sw.tex_no_alpha = 0;
+            sw.wrap_s = 240; sw.wrap_t = 240;
+            sw.texfunc = 227;
+            sw.filt_image = 208;
+            sw.filt_level = 208;
+            sw.tex_base = tex;
+            sw.blend = 68;
+            sw.athresh = 0;
+            sw.awrite = 1;
+            sw.dtest = 1; sw.dwrite = 1;
+            sw.depth_near = 0.0f; sw.depth_far = 1.0f;
+            for (k = 0; k < 3; ++k) {
+                xy[k * 2] = t->vertices[k].x;
+                xy[k * 2 + 1] = t->vertices[k].y;
+                inv[k] = t->vertices[k].inv_w;
+                depth[k] = t->vertices[k].depth;
+                st[k * 2] = t->vertices[k].u;
+                st[k * 2 + 1] = t->vertices[k].v;
+                rgb[k] = t->vertices[k].color;
+            }
+            sw_tri(vm, &sw, xy, inv, depth, st, 1, rgb, rgb, 0);
+        }
+        stop = m3g_calib_us();
+        if (rep && stop - start < best) best = stop - start;
+    }
+    return best;
+}
+
+static nj_u4 m3g_calib_native(nj_vm *vm, const nj_gfx_triangles *p)
+{
+    nj_u4 best = 0xFFFFFFFFu, rep;
+    for (rep = 0; rep <= M3G_CALIB_REPS; ++rep) {
+        nj_u4 start, stop, submitted = 0u;
+        int rc;
+        m3g_calib_reset(p);
+        start = m3g_calib_us();
+        rc = vm->port->gfx_triangles(vm->port->gfx_triangles_ud, p, &submitted);
+        stop = m3g_calib_us();
+        if (rc != NJ_GFX_ACCEL_DONE) return 0xFFFFFFFFu;
+        if (rep && stop - start < best) best = stop - start;
+    }
+    return best;
+}
+
+static void m3g_calib_vertex(nj_gfx_triangle_vertex *v, float x, float y)
+{
+    v->x = x; v->y = y;
+    v->depth = 0.5;
+    v->inv_w = 1.0f;
+    v->u = x / (float)M3G_CALIB_SIZE;
+    v->v = y / (float)M3G_CALIB_SIZE;
+    v->color = 0xFFFFFFFFu;
+}
+
+static void m3g_calib_triangle(nj_gfx_triangle_cmd *t, float x0, float y0,
+                               float x1, float y1, float x2, float y2,
+                               const nj_u1 *tex)
+{
+    memset(t, 0, sizeof(*t));
+    m3g_calib_vertex(&t->vertices[0], x0, y0);
+    m3g_calib_vertex(&t->vertices[1], x1, y1);
+    m3g_calib_vertex(&t->vertices[2], x2, y2);
+    t->texture = tex;
+    t->texture_width = M3G_CALIB_TEX;
+    t->texture_height = M3G_CALIB_TEX;
+    t->texture_bpp = 4;
+    t->texture_no_alpha = 0;
+    t->wrap_s = 240; t->wrap_t = 240;
+    t->filter = 208;
+    t->texture_function = 227;
+    t->blend = 68;
+    t->alpha_threshold = 0;
+    t->alpha_write = 1;
+    t->depth_test = 1;
+    t->depth_write = 1;
+    t->fog = 0;
+}
+
+static int m3g_calibrate(nj_vm *vm, const nj_surface *like)
+{
+    nj_surface surf;
+    nj_s4 *depth = NULL;
+    nj_gfx_triangle_cmd *tris = NULL;
+    nj_u1 *tex = NULL;
+    nj_gfx_triangles packet;
+    nj_u4 i, count = M3G_CALIB_CELLS * 2u;
+    nj_u4 sw_us = 0u, gpu_us = 0u, submitted = 0u;
+    nj_size pixels;
+    int enabled = 0;
+    if (!vm || !vm->port || !vm->port->gfx_triangles || !like) return 0;
+    memset(&surf, 0, sizeof(surf));
+    surf.width = M3G_CALIB_SIZE;
+    surf.height = M3G_CALIB_SIZE;
+    surf.format = like->format;
+    surf.bpp = like->bpp > 0 ? like->bpp : 4;
+    surf.stride = surf.width * surf.bpp;
+    pixels = (nj_size)surf.stride * surf.height;
+    surf.pixels = nj_host_alloc(vm, pixels);
+    depth = (nj_s4 *)nj_host_alloc(
+        vm, (nj_size)M3G_CALIB_SIZE * M3G_CALIB_SIZE * sizeof(nj_s4));
+    tris = (nj_gfx_triangle_cmd *)nj_host_alloc(
+        vm, (nj_size)count * sizeof(*tris));
+    tex = (nj_u1 *)nj_host_alloc(
+        vm, (nj_size)M3G_CALIB_TEX * M3G_CALIB_TEX * 4u);
+    if (!surf.pixels || !depth || !tris || !tex) goto done;
+    memset(surf.pixels, 0, pixels);
+    memset(depth, 0,
+           (nj_size)M3G_CALIB_SIZE * M3G_CALIB_SIZE * sizeof(nj_s4));
+    for (i = 0; i < (nj_u4)M3G_CALIB_TEX * M3G_CALIB_TEX; ++i) {
+        tex[i * 4u + 0u] = (nj_u1)(0x40u + (i & 0x3Fu));
+        tex[i * 4u + 1u] = (nj_u1)(0x80u + ((i >> 2) & 0x3Fu));
+        tex[i * 4u + 2u] = (nj_u1)(0xC0u + ((i >> 4) & 0x3Fu));
+        tex[i * 4u + 3u] = 0xFFu;
+    }
+    memset(tris, 0, (nj_size)count * sizeof(*tris));
+    for (i = 0; i < M3G_CALIB_CELLS; ++i) {
+        int cx = (int)(i % 32u);
+        int cy = (int)(i / 32u);
+        float x0 = (float)(cx * 4);
+        float y0 = (float)(cy * 8);
+        float x1 = x0 + 4.0f;
+        float y1 = y0 + 8.0f;
+        m3g_calib_triangle(&tris[i * 2u], x0, y0, x1, y0, x0, y1, tex);
+        m3g_calib_triangle(&tris[i * 2u + 1u], x1, y0, x1, y1, x0, y1, tex);
+    }
+    memset(&packet, 0, sizeof(packet));
+    packet.version = NJ_GFX_TRIANGLES_VERSION;
+    packet.surface = &surf;
+    packet.depth = depth;
+    packet.depth_stride = surf.width;
+    packet.x = 0;
+    packet.y = 0;
+    packet.width = M3G_CALIB_SIZE;
+    packet.height = M3G_CALIB_SIZE;
+    packet.triangles = tris;
+    packet.count = count;
+    if (nj_gfx_triangles_validate(&packet, &submitted)) {
+        sw_us = m3g_calib_software(vm, &packet, tex);
+        gpu_us = m3g_calib_native(vm, &packet);
+        if (sw_us != 0u && gpu_us != 0xFFFFFFFFu) {
+            /* Require a real margin: a near tie keeps the simpler software
+             * path, because the transaction also costs thread handoffs and
+             * cache traffic that this batch cannot see. */
+            enabled = ((nj_u8)gpu_us * 100u < (nj_u8)sw_us * 85u);
+        }
+    }
+done:
+    if (surf.pixels) nj_host_free(vm, surf.pixels);
+    if (depth) nj_host_free(vm, depth);
+    if (tris) nj_host_free(vm, tris);
+    if (tex) nj_host_free(vm, tex);
+    if (gpu_us == 0xFFFFFFFFu) {
+        nj_logf(vm, 2, "m3g: accel calibration: native backend declined "
+                       "(software=%luus) -> software kept",
+                (unsigned long)sw_us);
+    } else {
+        nj_logf(vm, 2, "m3g: accel calibration gpu=%luus software=%luus -> %s",
+                (unsigned long)gpu_us, (unsigned long)sw_us,
+                enabled ? "enabled" : "disabled (software is faster)");
+    }
+    return enabled;
+}
+
 static int jr_draw_accel(m3g_jr *r)
 {
     m3g_triangle_collect c;
@@ -15534,6 +15757,15 @@ static int jr_draw_accel(m3g_jr *r)
     int journaled;
     if (!r->vm->port || !r->vm->port->gfx_triangles || !r->sw.surf ||
         !r->sw.surf->pixels || !r->sw.z || r->sw.sprite || r->triangles) return 0;
+    /* Ports that ask for auto-selection calibrate once, then keep whichever
+     * path measured faster on this device. */
+    if (r->vm->port->gfx_triangles_auto) {
+        if (r->vm->m3g_accel_auto == 0u) {
+            r->vm->m3g_accel_auto =
+                (nj_u1)(m3g_calibrate(r->vm, r->sw.surf) ? 1u : 2u);
+        }
+        if (r->vm->m3g_accel_auto == 2u) return 0;
+    }
     /* Queue into the journal only when the port can commit a whole list in
      * one transaction; otherwise keep the original synchronous callback. */
     journaled = r->vm->port->gfx_triangles_list != NULL;

@@ -227,3 +227,33 @@ profiler 代码默认关闭（`NJ_GLES2_PROFILE=0`），只用于后续性能分
   预计最好情况 5–8%，代价是完整重写 2D 合成路径。
 - 决策：GPU 路径保持可选（默认软件），不再为 MC 桌面场景投入高风险重写；其价值在其它平台
   （移动端软件光栅更慢）与重 3D 负载。测量与结论同步到 `docs/PLATFORM_SUPPORT.md`。
+
+### 2026-11-15 自动选择（auto）：只在 GPU 真的更快时启用
+
+上一节的上限分析说明"GPU 是否更快"完全取决于设备：桌面 CPU 快，同步回读让它更慢；
+弱 CPU/模拟器上软件光栅更贵，GPU 反而省 CPU。因此新增一次性校准，而不是固定开关：
+
+- 端口显式选择：`nj_port.gfx_triangles_auto = 1`（SDL2 与 Android 端口设置；测试 fake port
+  与 libretro 保持 0，行为完全不变）。
+- 首次 `Graphics3D.render()` 时在 VM 侧用同一份合成批次计时（1024 个三角形、128×128 ROI、
+  16×16 ARGB 纹理、深度写/测试开启）：
+  - 软件：复用生产 `sw_tri` 路径（`src/midp/nj_lib_m3g.c` 的 `m3g_calib_software`）；
+  - GPU：调用端口 `gfx_triangles` 单次事务（`m3g_calib_native`）；
+  - 各预热 1 次、取 3 次最小值；只有 GPU 比软件快 ≥15%（`gpu*100 < sw*85`）才启用。
+- 决定缓存在 `nj_vm.m3g_accel_auto`（0 未知 / 1 启用 / 2 禁用），并打印一行 INFO：
+  `m3g: accel calibration gpu=...us software=...us -> enabled|disabled`；
+  后端拒绝（例如模拟器缺 `EXT_frag_depth`）打印
+  `native backend declined (software=...us) -> software kept`。
+- 校准使用独立的 128×128 临时 surface/depth/纹理，不触碰可见目标；只在 GLES2 模式且端口
+  要求时执行一次。纯软件构建和纯软件模式完全不走这段代码，软件路径不受影响。
+- 校准本身会在端口统计里留下 4 次三角形事务（1 次预热 + 3 次测量），这是有意的可见证据。
+
+实测（2026-11-15）：
+
+| 环境 | 校准结果 | 结果 |
+| --- | --- | --- |
+| Linux + RTX 5080（SDL2，`--graphics gles2`） | `gpu=266us software=191us -> disabled` | MC 600 帧 5.65 s，纯软件 5.71 s（差约 0.06 ms/帧，仅 GLES2 present 固定开销） |
+| Android API36 模拟器（OpenHV，翻译层 GL） | `native backend declined -> software kept` | 翻译层无 `EXT_frag_depth`，三角形后端门控拒绝；MC 世界渲染正常 |
+| Android 真机 425610ca | 待用户插线复测 | 预期选择软件（CPU 快、同步开销大），GLES2 开关不再拖慢 |
+
+手工 A/B 时把端口的 `gfx_triangles_auto` 置 0 即恢复旧行为（有回调就启用）。

@@ -277,6 +277,9 @@ int nj_android_gles2_bind(nj_android_gles2 *s, nj_port *port)
     port->gfx_triangles_end = triangles_end;
     port->gfx_triangles_abort = triangles_abort;
     port->gfx_triangles_session_ud = s;
+    /* Phone/emulator CPUs vary by an order of magnitude; calibrate once and
+     * keep whichever path is faster on this device. */
+    port->gfx_triangles_auto = 1;
     return 1;
 }
 

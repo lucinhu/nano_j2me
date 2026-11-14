@@ -914,6 +914,12 @@ struct nj_vm {
      * target.  NULL when nothing is queued; owned by the M3G module.
      */
     void   *m3g_journal;
+    /*
+     * Auto-selected acceleration decision for ports that set
+     * `gfx_triangles_auto`: 0 unknown, 1 enabled, 2 disabled because the
+     * one-time calibration measured the software rasterizer as faster.
+     */
+    nj_u1   m3g_accel_auto;
     nj_u8   gfx_calls;      /* Graphics method calls that loaded the
                              * surface.  paints=N with gfx_calls=0 says the
                              * game painted and drew nothing; gfx_calls high

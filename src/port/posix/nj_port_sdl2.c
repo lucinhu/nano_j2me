@@ -3586,6 +3586,9 @@ nj_status nj_port_sdl2_ex(nj_port *out, const char *title, int graphics_mode)
             out->gfx_triangles_end = sdl2_gles2_triangles_end;
             out->gfx_triangles_abort = sdl2_gles2_triangles_abort;
             out->gfx_triangles_session_ud = &s->gfx;
+            /* Desktop GPUs usually lose this trade against a fast CPU; let the
+             * one-time calibration decide instead of guessing. */
+            out->gfx_triangles_auto = 1;
         }
     }
 #endif

@@ -827,6 +827,12 @@ typedef struct nj_port {
     nj_gfx_triangles_end_fn gfx_triangles_end;
     nj_gfx_triangles_abort_fn gfx_triangles_abort;
     void *gfx_triangles_session_ud;
+    /* Optional auto-selection for the triangle hooks above. When nonzero, the
+     * runtime calibrates this backend against its own software rasterizer on
+     * the first M3G draw and keeps whichever is faster; the decision is logged
+     * once. Zero (the default for tests and embedders) keeps the callbacks
+     * exactly as configured. Pure software ports never calibrate. */
+    int gfx_triangles_auto;
 #endif
 } nj_port;
 

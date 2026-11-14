@@ -9,9 +9,9 @@
 
 | 平台 | 纯软件 | GLES2 二维（fill/blit） | GLES2 raster（M3G/Mascot） | GLES2 三角形批量 | 备注 |
 | --- | --- | --- | --- | --- | --- |
-| Linux / SDL2 | 是 | 可选（默认不安装；`NJ_SDL2_GLES2_2D=1` 才启用，实测比软件慢） | 是 | 是（NVIDIA ES3.2、Mesa ES2/GL2.1） | 三角形路径在 RTX 5080 上对 MC 的真实 packet 仍慢于软件，默认软件 |
+| Linux / SDL2 | 是 | 可选（默认不安装；`NJ_SDL2_GLES2_2D=1` 才启用，实测比软件慢） | 是 | 是（NVIDIA ES3.2、Mesa ES2/GL2.1） | 三角形路径在 RTX 5080 上对 MC 的真实 packet 仍慢于软件；新增 auto 校准后该机自动选择软件 |
 | Windows / SDL2（MinGW，Wine 11.21） | 是（MC 真实世界） | 可选（同上，默认不安装 2D 回调） | 未在本轮复验 | 构建包含后端；WGL 动态加载器有真实 GL 上下文证据，未在 Windows 上复验三角形路径 | 只在 Wine 下验证，无原生 Windows 机器 |
-| Android 5+（API 21，模拟器） | 是（MC 真实世界） | 可选（默认不安装 2D 回调；旧版可 `NJ_ANDROID_GLES2_2D_ACCEL=1` 构建） | 是（m3gdemo `rasters=16`） | **否**：模拟器缺 `GL_EXT_frag_depth`，门控 SKIP，软件回退已验证 | 真机三角形路径尚未在 APK 内验证 |
+| Android 5+（API 21，模拟器） | 是（MC 真实世界） | 可选（默认不安装 2D 回调；旧版可 `NJ_ANDROID_GLES2_2D_ACCEL=1` 构建） | 是（m3gdemo `rasters=16`） | **否**：模拟器缺 `GL_EXT_frag_depth`，门控 SKIP，软件回退已验证 | auto 校准在模拟器上得到 `native backend declined -> software kept`；真机三角形路径尚未在 APK 内验证 |
 | Android 2.0/2.1+（API 5，ARMv5） | 是（v0.5.7 legacy APK） | 否 | 否 | 否 | 仅软件；真实老手机未验证 |
 | libretro（硬件 GL） | 是 | 是 | 是 | 是（MC 真实 1189 个 batch） | 真实 EGL、上下文替换、存档/读档已验证 |
 | ESP32 | 构建通过（见 `tests/embedded`） | 否 | 否 | 否 | 本轮未在设备上运行 |
@@ -126,7 +126,10 @@ RGB565 展开成 RGBA8888 交给 `<canvas>`。虚拟时钟由宿主驱动：加�
 ## 已知限制（全部为实测结论）
 
 1. GPU 三角形路径在 RTX 5080 笔记本上对真实 MC packet 比软件慢（见上表），
-   默认关闭，不构成加速承诺。
+   默认关闭，不构成加速承诺。2026-11-15 新增 auto 校准：SDL2/Android 端口在首次
+   `Graphics3D.render()` 时用 1024 三角/128×128 ROI 的合成批次分别计时软件与 GPU，
+   只有 GPU 快 ≥15% 才启用（决定缓存在 VM 内并打印一行 INFO）。桌面实测选软件；
+   模拟器后端直接 DECLINE 保持软件。纯软件路径不执行校准。
 2. Android 模拟器缺 `EXT_frag_depth`，APK 内三角形批量不可用；需要真机
    （Adreno 725 已用离屏原生程序验证后端本身，但未在 APK/游戏内验证）。
 3. Android 旧版（API 5）只有软件渲染；没有真机验证。
@@ -171,10 +174,10 @@ tools/check_web.sh --node --corpus             # 另有 --browser（Playwright F
 
 | 产物 | 大小 | SHA256 |
 | --- | --- | --- |
-| `.local-tools/debug-runs/gfx-full-20261113/android/final-build/nj2me.apk` | 1792226 | `7291fceb84fb372e3dd297dbe6b1661dcce8a94e2fb75d213d511fab68643152` |
-| `.local-tools/debug-runs/gfx-full-20261113/windows/nj2me.exe` | 4039535 | `e5b9f30cb383ad88f8c15a93d6502b37d83708c88897c73bd1e9bdac8b2d8ce2` |
-| `.local-tools/debug-runs/gfx-full-20261113/linux/libretro/nano_j2me_libretro.so` | 4074864 | `b3c10489601b274ba8da40408546f72dda0ee7c7c335278bc8df4879abfc6449` |
-| `.local-tools/debug-runs/gfx-full-20261113/linux/nj2me` | 4010888 | `f375c84a2201b7714a455354423e1935acbe0ce6bbaffa53b7ab0b41fa1ca6a6` |
+| `.local-tools/debug-runs/gfx-full-20261113/android/final-build/nj2me.apk` | 1796322 | `b4b8ba40776123634d6b759c0081188d86446bd288b26eff94a6f232900770a6` |
+| `.local-tools/debug-runs/gfx-full-20261113/windows/nj2me.exe` | 4044256 | `3c89894bf893966d919ab35e137cab07fbf658dee6e2f937bca65266c477868a` |
+| `.local-tools/debug-runs/gfx-full-20261113/linux/libretro/nano_j2me_libretro.so` | 4083224 | `49d7c61da6e21f2943a6a7984bee365a4387fae604779658637033cf80b1f24e` |
+| `.local-tools/debug-runs/gfx-full-20261113/linux/nj2me` | 4015104 | `cf047c9bddbe97f22afd414d7d7976021f8322a0c1048c1f0fabb8332601e5f0` |
 | `.local-tools/debug-runs/gfx-full-20261113/android-legacy/nj2me-legacy.apk` | 694454 | `4fcae0408bb83b34a9a4e097e8c61124881973900d48c559520ca48ad396446d` |
 | `build/web/js/nj2me.js` | 93889 | `77652b2e6c8ef1a2e22e95eeec54e66530a1fe069728cf9a7bf6944ef424885f` |
 | `build/web/js/nj2me.wasm` | 2144424 | `fd431b04b0fd895f367bdc928725830bf7ca60f4b09b4af112225fcfdcda06d4` |
