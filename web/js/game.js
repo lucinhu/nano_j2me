@@ -269,14 +269,26 @@ export class GameView {
         className: 'btn btn--small slot__load',
         attrs: { type: 'button' }
       });
+      const exportBtn = el('button', {
+        className: 'btn btn--small slot__export',
+        attrs: { type: 'button' }
+      });
+      const importBtn = el('button', {
+        className: 'btn btn--small slot__import',
+        attrs: { type: 'button' }
+      });
       const row = el('div', { className: 'slot', attrs: { 'data-slot': String(slot) } }, [
         el('div', { className: 'slot__info' }, [name, time]),
-        el('div', { className: 'slot__actions' }, [save, load])
+        el('div', { className: 'slot__actions' }, [save, load, exportBtn, importBtn])
       ]);
       save.addEventListener('click', () => this.saveSlot(slot));
       load.addEventListener('click', () => this.loadSlot(slot));
+      exportBtn.addEventListener('click', () => this.exportSlot(slot));
+      importBtn.addEventListener('click', () => this.importSlot(slot));
       container.append(row);
-      this._slotRows.push({ slot, row, name, time, save, load });
+      this._slotRows.push({
+        slot, row, name, time, save, load, export: exportBtn, import: importBtn
+      });
     }
   }
 
@@ -689,9 +701,13 @@ export class GameView {
     for (const row of this._slotRows) {
       row.save.textContent = t('game.save');
       row.load.textContent = t('game.load');
+      row.export.textContent = t('game.export');
+      row.import.textContent = t('game.import');
       row.name.textContent = t('game.slot', { n: row.slot });
       row.save.disabled = !canSave;
       row.load.disabled = !row.row.dataset.filled;
+      row.export.disabled = !row.row.dataset.filled;
+      row.import.disabled = !canSave;
     }
     const fit = $('#btn-fit');
     if (fit) {
@@ -732,8 +748,12 @@ export class GameView {
       row.name.textContent = t('game.slot', { n: row.slot });
       row.save.textContent = t('game.save');
       row.load.textContent = t('game.load');
+      row.export.textContent = t('game.export');
+      row.import.textContent = t('game.import');
       row.save.disabled = !canSave;
       row.load.disabled = !record;
+      row.export.disabled = !record;
+      row.import.disabled = !canSave;
     }
   }
 
@@ -795,6 +815,80 @@ export class GameView {
         toast(t('game.loadRestarted'), { kind: 'warn' });
       }
     }
+  }
+
+  /**
+   * Download a stored slot as a standalone `.njst` file.  The bytes are the
+   * engine's own save blob (self-describing: it records the JAR identity and
+   * ABI), so the file can be imported into any browser or desktop build that
+   * can run the same title.
+   */
+  async exportSlot(slot) {
+    if (!this.game) { return; }
+    let record = null;
+    try { record = await getState(this.game.id, slot); } catch (error) { record = null; }
+    if (!record || !record.bytes || !record.bytes.length) {
+      toast(t('game.exportEmpty'), { kind: 'warn' });
+      return;
+    }
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const base = slugify(this.game.title || this.game.id || 'game');
+    const name = base + '-slot' + slot + '-' + stamp + '.njst';
+    downloadBlob(new Blob([record.bytes], { type: 'application/octet-stream' }), name);
+    toast(t('game.exportOk', { name: name }), { kind: 'success' });
+  }
+
+  /**
+   * Import a `.njst` save-state file into a slot and apply it immediately.
+   * The file is validated by the engine's loader before it replaces the slot,
+   * so a corrupt or different-title blob cannot silently overwrite good state.
+   */
+  importSlot(slot) {
+    if (!this.game) { return; }
+    if (this._importInput) { this._importInput.remove(); }
+    const input = el('input', {
+      attrs: {
+        type: 'file',
+        accept: '.njst,application/octet-stream',
+        hidden: true
+      }
+    });
+    this._importInput = input;
+    input.addEventListener('change', async () => {
+      const file = input.files && input.files[0];
+      try {
+        if (!file) { return; }
+        if (file.size <= 0 || file.size > 256 * 1024 * 1024) {
+          throw new Error('unexpected file size ' + file.size);
+        }
+        const bytes = new Uint8Array(await file.arrayBuffer());
+        let result = null;
+        try { result = this.runtime.loadState(bytes); } catch (error) {
+          result = { ok: false, error: error && error.message ? error.message : String(error) };
+        }
+        if (!result || !result.ok) {
+          toast(t('game.importFailed') + (result && result.error ? ': ' + result.error : ''),
+            { kind: 'error' });
+          return;
+        }
+        await putState(this.game.id, slot, {
+          bytes: bytes,
+          frames: this.runtime.frames(),
+          title: this.game.title || '',
+          engineApi: this._engineApi
+        });
+        toast(t('game.importOk', { n: slot }), { kind: 'success' });
+        await this._renderSlots();
+      } catch (error) {
+        toast(t('game.importFailed') + ': ' + (error && error.message ? error.message : error),
+          { kind: 'error' });
+      } finally {
+        input.remove();
+        if (this._importInput === input) { this._importInput = null; }
+      }
+    }, { once: true });
+    document.body.append(input);
+    input.click();
   }
 
   /* ---------------------------------------------------------- panel actions */

@@ -735,6 +735,51 @@ async function runRealShellChecks() {
     return `loaded slot saved at frame ${slotFrames}`;
   });
 
+  await check('save states export to .njst and import back into another slot', async () => {
+    const before = await readStates(realPage, gameId);
+    const slot1 = before.find((entry) => entry.slot === 1);
+    assert(slot1 && slot1.size > 1000, `slot 1 missing before export: ${JSON.stringify(before)}`);
+    const downloads = path.join(evidenceDir, 'downloads');
+    fs.mkdirSync(downloads, { recursive: true });
+    const [download] = await Promise.all([
+      realPage.waitForEvent('download', { timeout: 10000 }),
+      realPage.click('.slot[data-slot="1"] .slot__export')
+    ]);
+    const suggested = download.suggestedFilename();
+    assert(/\.njst$/.test(suggested), `unexpected export filename: ${suggested}`);
+    const savedPath = path.join(downloads, suggested);
+    await download.saveAs(savedPath);
+    const bytes = fs.readFileSync(savedPath);
+    assert(bytes.length === slot1.size,
+      `exported ${bytes.length} B but the slot holds ${slot1.size} B`);
+    assert(bytes.subarray(0, 4).toString('latin1') === 'NJSS', 'export does not start with the save-state magic');
+    if (!(await realPage.evaluate(() => document.querySelector('#game-panel').classList.contains('is-open')))) {
+      await realPage.click('#panel-handle');
+      await realPage.waitForSelector('#game-panel.is-open', { timeout: 5000 });
+    }
+    const [chooser] = await Promise.all([
+      realPage.waitForEvent('filechooser', { timeout: 10000 }),
+      realPage.click('.slot[data-slot="2"] .slot__import')
+    ]);
+    await chooser.setFiles(savedPath);
+    const importToast = await t(realPage, 'game.importOk', { n: 2 });
+    await waitToast(realPage, importToast);
+    await realPage.waitForFunction(
+      () => {
+        const row = document.querySelector('.slot[data-slot="2"]');
+        return !!row && row.dataset.filled === '1';
+      },
+      undefined,
+      { timeout: 8000, polling: 100 }
+    );
+    const after = await readStates(realPage, gameId);
+    const slot2 = after.find((entry) => entry.slot === 2);
+    assert(slot2, 'slot 2 did not receive the imported state');
+    assert(slot2.size === slot1.size,
+      `imported ${slot2.size} B, expected ${slot1.size} B`);
+    return `exported ${suggested} (${bytes.length} B), imported into slot 2`;
+  });
+
   await screenshot(realPage, 'browser-05-panel-loaded.png');
 
   await check('exit returns to the library', async () => {

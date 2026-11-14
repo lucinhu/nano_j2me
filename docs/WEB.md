@@ -89,7 +89,8 @@ be served with or without a build:
   with `image-rendering: pixelated`, an `requestAnimationFrame` loop that calls
   `njw_frame(dt_ms)` exactly once per frame, a loading overlay until the first
   `Displayable` exists, then pause/resume, speed (100/150/200 %), mute,
-  three save states per game, a **Game memory** selector (16/32/64/128 MiB) that
+  three save states per game (each exportable as a `.njst` file and importable
+  back into any slot), a **Game memory** selector (16/32/64/128 MiB) that
   reaches `NJW_OPT_HEAP_BYTES` at the next launch for heavy titles, PNG
   screenshot download, fullscreen, restart and exit-to-library.
 - **Input** — keyboard (arrows = D-pad, Enter/Space = Fire, F1/F2 = soft keys,
@@ -310,7 +311,10 @@ import. Save states use the same whole-VM snapshot format as the desktop ports:
 `njw_save_state(void **blob, int *len)` returns a malloc'd blob (release with
 `njw_free`), `njw_load_state(blob, len)` must be called at a frame boundary, and
 a blob from a different JAR, ABI, pointer size, endianness or screen geometry is
-refused. **A failed `njw_load_state()` leaves the VM unusable** — the same rule as
+refused. Because the blob is self-describing, the shell can also hand it to the
+user: each slot has **Export** (download `<title>-slot<N>-<time>.njst`) and
+**Import** (pick a `.njst`, validate it through the loader, then store + apply
+it). Exported files work in any port build that runs the same title. **A failed `njw_load_state()` leaves the VM unusable** — the same rule as
 the native API — so the shell reports "save incompatible, restart required" and
 requires a fresh `njw_start()`.
 
@@ -383,7 +387,7 @@ flags: `--evidence DIR` (default
 frames per title, default 120, range 30–2000 — the first frames are needed for
 the render assertions to settle). `--sweep` is deliberately **not** part of
 `--all`: it starts all 403 corpus titles in fresh child processes (~2 min) and is
-for release/CI runs, while `--all` stays a ~16 s edit loop.
+for release/CI runs, while `--all` stays a ~18 s edit loop.
 
 - **API test** (`tools/web_test/web_api_test.mjs`) — module load, version,
   manifest probe, error paths, `hello.jar` render, screen-size and speed options,
@@ -398,13 +402,15 @@ for release/CI runs, while `--all` stays a ~16 s edit loop.
   `午夜台球圣诞中文版_8677.jar` installs its `Canvas` in the MIDlet constructor
   and starts its game thread there, which is what caught the runner skipping
   `startApp()`.
-- **Browser test** (`tools/web_test/web_browser_test.mjs`, 25 checks) — serves
+- **Browser test** (`tools/web_test/web_browser_test.mjs`, 26 checks) — serves
   `build/web/` on an ephemeral port and drives the real shell in headless Firefox
   through Playwright: the real engine (`kind=wasm`, API 1, runtime 0.5.7),
   zh-CN UI, import `hello.jar` → metadata and icon in IndexedDB, 240×320
   non-blank canvas, keyboard input (nj_key 15/16/17/6) with advancing frame
   numbers, auto-pause on panel open (frames frozen) and resume, a 329,724-byte
-  save-state slot written and loaded without a restart, exit → library, reload
+  save-state slot written and loaded without a restart, exported to a `.njst`
+  download and imported back into another slot (blob size verified), exit →
+  library, reload
   keeps the game and the slot, and a wasm-less copy of the site falls back to the
   mock with the "run tools/build_web.sh" banner — with zero page/console errors
   and zero external requests. Five more checks cover the PWA layer: the manifest
@@ -433,8 +439,8 @@ for release/CI runs, while `--all` stays a ~16 s edit loop.
 
 Measured on the reference build (Emscripten 7.0.0, `include/nj2me/nj_web.h`
 0.5.7): the API suite passes **34/34 checks in 0.4 s**, the corpus suite
-**47/47 checks (42 titles) in 8.7 s**, and the browser suite **25/25 checks in
-about 6.5 s** — `tools/check_web.sh --all` is **16 s** end to end. The sweep
+**47/47 checks (42 titles) in 8.9 s**, and the browser suite **26/26 checks in
+about 7.9 s** — `tools/check_web.sh --all` is **18 s** end to end. The sweep
 suite needs about 2 min for all 403 titles. All 40
 playable titles draw 120/120 frames (the audiodemo and bench fixtures exit on
 their own, as expected), there are no engine `[nj2me] error:` lines,
