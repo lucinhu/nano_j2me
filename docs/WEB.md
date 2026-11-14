@@ -375,7 +375,7 @@ the render assertions to settle).
 Measured on the reference build (Emscripten 7.0.0, `include/nj2me/nj_web.h`
 0.5.7): the API suite passes **33/33 checks in 0.2 s**, the corpus suite
 **46/46 checks (41 titles) in 26 s**, and the browser suite **21/21 checks in
-about 5.5 s** — `tools/check_web.sh --all` is **33 s** end to end. All 39 playable
+about 5.5 s** — `tools/check_web.sh --all` is **32 s** end to end. All 39 playable
 titles draw 120/120 frames, there are no engine `[nj2me] error:` lines, and the
 wasm heap stays at 64 MiB.
 The known-bad `1945空战英雄_6105.jar` is excluded because it fails natively too.
