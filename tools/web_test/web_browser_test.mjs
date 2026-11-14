@@ -691,6 +691,51 @@ async function runRealShellChecks() {
     return `heapMb ${before} -> 64 with a toast, then back to ${before}`;
   });
 
+  await check('volume slider drives the WebAudio gain and persists it', async () => {
+    const panelOpen = await realPage.evaluate(() => document.querySelector('#game-panel').classList.contains('is-open'));
+    if (!panelOpen) {
+      await realPage.click('#panel-handle');
+      await realPage.waitForSelector('#game-panel.is-open', { timeout: 5000 });
+    }
+    const reader = () => realPage.evaluate(() => ({
+      stored: Number(JSON.parse(localStorage.getItem('nj2me.settings') || '{}').volume),
+      output: (document.querySelector('#volume-value') || {}).textContent || '',
+      gain: (window.__nj2me.game && window.__nj2me.game.audio) ? window.__nj2me.game.audio.volume : -1,
+      muted: !!(window.__nj2me.game && window.__nj2me.game.settings.muted),
+      slider: document.querySelector('#volume-slider') ? document.querySelector('#volume-slider').value : '',
+    }));
+    const before = await reader();
+    const setSlider = (value) => realPage.evaluate((percent) => {
+      const slider = document.querySelector('#volume-slider');
+      slider.value = String(percent);
+      slider.dispatchEvent(new Event('input', { bubbles: true }));
+    }, value);
+
+    await setSlider(40);
+    await realPage.waitForFunction(
+      () => Math.abs(Number(JSON.parse(localStorage.getItem('nj2me.settings') || '{}').volume) - 0.4) < 0.001,
+      undefined, { timeout: 5000, polling: 100 });
+    const at40 = await reader();
+    assert(at40.output.trim() === '40%', `volume label is ${JSON.stringify(at40.output)}`);
+    assert(Math.abs(at40.gain - 0.4) < 0.001, `WebAudio gain is ${at40.gain}`);
+    assert(at40.slider === '40', `slider value is ${at40.slider}`);
+
+    /* Muting then touching the slider unmutes, like a phone volume key. */
+    await realPage.click('#btn-mute');
+    await realPage.waitForFunction(
+      () => !!(window.__nj2me.game && window.__nj2me.game.settings.muted),
+      undefined, { timeout: 5000, polling: 100 });
+    await setSlider(55);
+    const at55 = await reader();
+    assert(at55.muted === false, 'dragging the volume slider should unmute');
+    assert(at55.output.trim() === '55%', `volume label after unmute is ${JSON.stringify(at55.output)}`);
+    assert(Math.abs(at55.gain - 0.55) < 0.001, `gain after unmute is ${at55.gain}`);
+
+    /* Put the test default back so later checks start identically. */
+    await setSlider(Math.round((before.stored || 0.8) * 100));
+    return `volume ${before.slider}% -> 40% (gain 0.4) -> 55% after mute-touch, restored`;
+  });
+
   await check('save slot 1 writes a real njw_save_state blob', async () => {
     /* Pause again so the save is taken at a stable frame. */
     if (!(await realPage.evaluate(() => window.__nj2me.game._paused === true))) {

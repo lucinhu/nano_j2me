@@ -190,6 +190,24 @@ export class GameView {
     $('#btn-pad')?.addEventListener('click', () => this.togglePad());
     $('#btn-mute')?.addEventListener('click', () => this.toggleMute());
 
+    // Volume is the host-side WebAudio gain.  Dragging the slider also unmutes,
+    // like the volume keys on a phone; the value is persisted with the rest of
+    // the shell settings.
+    const volume = $('#volume-slider');
+    if (volume) {
+      volume.addEventListener('input', () => {
+        const percent = clamp(Number(volume.value) || 0, 0, 100);
+        this.settings.volume = percent / 100;
+        if (this.settings.muted && percent > 0) {
+          this.settings.muted = false;
+          this.audio.setMuted(false);
+        }
+        this.audio.setVolume(this.settings.volume);
+        saveSettings(this.settings);
+        this._updateVolumeUi();
+      });
+    }
+
     const speed = $('#speed-select');
     if (speed) {
       speed.value = String(this.settings.speedPercent);
@@ -714,6 +732,18 @@ export class GameView {
     void opts;
   }
 
+  /** Keep the range input and its percentage label in sync with settings. */
+  _updateVolumeUi() {
+    const volume = $('#volume-slider');
+    const value = $('#volume-value');
+    if (!volume || !value) { return; }
+    const percent = Math.round(this.settings.volume * 100);
+    if (volume.value !== String(percent)) { volume.value = String(percent); }
+    volume.setAttribute('aria-valuetext', percent + '%');
+    volume.classList.toggle('is-muted', !!this.settings.muted);
+    value.textContent = percent + '%';
+  }
+
   /** Selected MIDlet index, clamped to the probed list. */
   _midletIndex() {
     const classes = Array.isArray(this.game?.midletClasses) ? this.game.midletClasses : [];
@@ -960,6 +990,7 @@ export class GameView {
     this.settings.muted = !this.settings.muted;
     this.audio.setMuted(this.settings.muted);
     saveSettings(this.settings);
+    this._updateVolumeUi();
     this._updatePanelUi();
   }
 
@@ -1168,6 +1199,7 @@ export class GameView {
     if (speed) { speed.value = String(this.settings.speedPercent); }
     const heap = $('#heap-select');
     if (heap) { heap.value = String(this.settings.heapMb); }
+    this._updateVolumeUi();
     this.view.classList.toggle('controls-hidden', !this.settings.showPad);
     this._updateSpeedChip();
     this._updatePanelUi();
