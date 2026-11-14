@@ -11,9 +11,9 @@
  *      127.0.0.1 port.
  *   2. Drives it with headless Firefox through Playwright.  The public shell is
  *      used exactly like a player would: file input -> library tile -> game
- *      canvas, keyboard, library favourites, tools panel, save slot (with its
- *      thumbnail preview), one-click recovery from an out-of-memory failure,
- *      exit, reload.
+ *      canvas, keyboard, library favourites, URL import (via a second CORS
+ *      server), tools panel, save slot (with its thumbnail preview),
+ *      one-click recovery from an out-of-memory failure, exit, reload.
  *   3. Serves a copy of the same site *without* nj2me.js/nj2me.wasm and checks
  *      that the shell degrades to the friendly MOCK fallback instead of
  *      throwing (no uncaught errors, banner tells the user how to build it).
@@ -51,6 +51,7 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '..', '..');
 const BUILD_WEB = path.join(REPO_ROOT, 'build', 'web');
 const HELLO_JAR = path.join(REPO_ROOT, 'tests', 'games', 'hello.jar');
+const URL_IMPORT_JAR = HELLO_JAR;
 // Needs more Java heap than the shell default; used by the OOM recovery check.
 const HEAVY_JAR = path.join(REPO_ROOT, 'tests', 'games', '愤怒的小鸟_383.jar');
 const GAME15_JAR = path.join(REPO_ROOT, 'tests', 'games', 'game15.jar');
@@ -206,6 +207,36 @@ async function startStaticServer(root) {
  *  2. the playwright-core bundle inside the Python playwright driver
  *     (playwright-python ships its own node driver and Firefox browser).
  */
+/* Minimal second server: one jar plus permissive CORS, so the shell's URL
+ * import can be exercised the way a user with a CORS-enabled host sees it. */
+async function startJarServer(jarPath) {
+  const data = fs.readFileSync(jarPath);
+  const server = http.createServer((req, res) => {
+    const urlPath = (req.url || '/').split('?')[0];
+    const headers = {
+      'Content-Type': 'application/java-archive',
+      'Content-Length': data.length,
+      'Access-Control-Allow-Origin': '*',
+      'Cache-Control': 'no-store'
+    };
+    if (urlPath !== '/hello.jar') {
+      res.writeHead(404, { 'Content-Type': 'text/plain', 'Access-Control-Allow-Origin': '*' });
+      res.end('not found');
+      return;
+    }
+    if (req.method === 'HEAD') { res.writeHead(200, headers); res.end(); return; }
+    if (req.method !== 'GET') { res.writeHead(405, headers); res.end(); return; }
+    res.writeHead(200, headers);
+    res.end(data);
+  });
+  await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  server.origin = `http://127.0.0.1:${server.address().port}`;
+  return server;
+}
+
 async function loadPlaywright() {
   const attempts = [];
   for (const id of ['playwright', 'playwright-core']) {
@@ -1522,6 +1553,62 @@ async function writeEvidence() {
 
 /* ------------------------------------------------------------------- main */
 
+async function runUrlImportChecks() {
+  const jarServer = await startJarServer(URL_IMPORT_JAR);
+  results.servers.urlJar = jarServer.origin;
+  const jarUrl = `${jarServer.origin}/hello.jar`;
+  const ctx = await browser.newContext({
+    viewport: { width: 960, height: 840 },
+    locale: 'zh-CN',
+    serviceWorkers: 'block'
+  });
+  const page = await ctx.newPage();
+  attachDiagnostics(page, 'url');
+  try {
+    await page.goto(realServer.origin + '/', { waitUntil: 'domcontentloaded' });
+    await waitReady(page);
+
+    await check('URL import downloads a JAR from an http link', async () => {
+      await page.click('#url-import-btn');
+      await page.waitForSelector('#url-dialog:not([hidden])');
+      await page.fill('#url-input', jarUrl);
+      await page.click('#url-submit');
+      await page.waitForSelector('#url-dialog', { state: 'hidden', timeout: timeoutMs });
+      await page.waitForSelector('.game-tile', { timeout: timeoutMs });
+      const title = ((await page.textContent('.game-tile__title')) || '').trim();
+      assert(/Hello World/.test(title), `imported tile title: ${title}`);
+      await page.click('.game-tile');
+      await page.waitForFunction(
+        () => Boolean(window.__nj2me && window.__nj2me.game && window.__nj2me.game.game),
+        null, { timeout: timeoutMs });
+      await waitFrames(page, 12);
+      await page.click('#game-back');
+      await page.waitForFunction(
+        () => window.getComputedStyle(document.querySelector('#library-view')).display !== 'none',
+        null, { timeout: timeoutMs });
+      return `tile “${title}” from ${jarUrl}`;
+    });
+
+    await check('URL import reports a failing link inside the dialog', async () => {
+      await page.click('#url-import-btn');
+      await page.fill('#url-input', `${jarServer.origin}/missing.jar`);
+      await page.click('#url-submit');
+      await page.waitForSelector('#url-error:not([hidden])', { timeout: timeoutMs });
+      const message = ((await page.textContent('#url-error')) || '').trim();
+      assert(/HTTP 404/.test(message), `dialog error: ${message}`);
+      await page.click('#url-cancel');
+      await page.waitForSelector('#url-dialog', { state: 'hidden', timeout: timeoutMs });
+      return `dialog error “${message.slice(0, 60)}”`;
+    });
+
+    const errors = results.diagnostics.url.consoleErrors;
+    assert(errors.length === 0, `url-import console errors: ${JSON.stringify(errors)}`);
+  } finally {
+    await ctx.close().catch(() => {});
+    await new Promise((resolve) => jarServer.close(resolve));
+  }
+}
+
 async function main() {
   let opts;
   try {
@@ -1588,6 +1675,7 @@ async function main() {
     await runRealShellChecks();
     await runMissingWasmChecks();
     await checkNetworkHygiene();
+    await runUrlImportChecks();
     await runPwaChecks();
   } catch (error) {
     results.fatalError = error && error.message ? error.message : String(error);

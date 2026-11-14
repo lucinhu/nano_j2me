@@ -88,6 +88,14 @@
           </svg>
           <span data-i18n="library.import"></span>
         </button>
+        <button id="url-import-btn" type="button" class="btn"
+                data-i18n-title="library.importUrlTitle" data-i18n-aria="library.importUrlTitle">
+          <svg class="btn__icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M10 14a5 5 0 0 0 7.07 0l2.12-2.12a5 5 0 0 0-7.07-7.07L11 5.9" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+            <path d="M14 10a5 5 0 0 0-7.07 0L4.81 12.12a5 5 0 0 0 7.07 7.07L13 18.1" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          </svg>
+          <span data-i18n="library.importUrl"></span>
+        </button>
         <input id="file-input" class="visually-hidden" type="file" accept=".jar,application/java-archive" multiple>
       </div>
 
@@ -109,6 +117,22 @@
         <p id="library-empty-body" class="empty-state__body"></p>
         <p id="library-empty-hint" class="empty-state__hint"></p>
         <button id="library-empty-import" type="button" class="btn btn--primary" data-i18n="library.import"></button>
+      </div>
+
+      <div id="url-dialog" class="overlay overlay--fixed" hidden>
+        <form id="url-form" class="url-dialog" novalidate>
+          <h2 class="overlay__title" data-i18n="library.importUrlTitle"></h2>
+          <p class="overlay__message" data-i18n="library.importUrlBody"></p>
+          <input id="url-input" class="url-dialog__input" type="url" autocomplete="off"
+                 spellcheck="false" inputmode="url"
+                 data-i18n-placeholder="library.importUrlPlaceholder">
+          <p id="url-error" class="url-dialog__error" hidden></p>
+          <div class="overlay__actions">
+            <button id="url-cancel" type="button" class="btn" data-i18n="game.back"></button>
+            <button id="url-submit" type="submit" class="btn btn--primary"
+                    data-i18n="library.importUrlAction"></button>
+          </div>
+        </form>
       </div>
 
       <footer class="library-footer">

@@ -161,7 +161,8 @@ tools/build_web.sh                      # -> build/web/ (shell + nj2me.js + nj2m
 python3 -m http.server -d build/web 8000
 ```
 
-Open `http://localhost:8000/`, drop a `.jar` in, play. Input is the keyboard, the
+Open `http://localhost:8000/`, drop a `.jar` in (or import it from an
+http(s) link — the host must allow CORS), play. Input is the keyboard, the
 on-screen keypad or a standard gamepad (Gamepad API); JARs that ship several
 MIDlets get a startup chooser in the tools panel. The shell keeps the game
 library (search, sort and a favourites filter), save files and up to three save states per game in IndexedDB (each

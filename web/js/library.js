@@ -44,6 +44,7 @@ const LS_SORT = 'nj2me.library.sort';
 const SORTS = ['recent', 'imported', 'name', 'size'];
 
 const FILE_ACCEPT = /\.jar$/i;
+const MAX_URL_BYTES = 64 * 1024 * 1024;
 
 function hashString(text) {
   let hash = 0x811c9dc5;
@@ -64,6 +65,25 @@ function stemOf(fileName) {
     .replace(/\.[^./\\]+$/, '')
     .replace(/[._]+/g, ' ')
     .trim() || 'Game';
+}
+
+/* The last path segment of a link is a good enough file name: it keeps the
+ * probe/stem wording meaningful, and the .jar suffix is restored when the
+ * link does not carry one (e.g. a download endpoint such as /file?id=7). */
+function fileNameFromUrl(url) {
+  const segments = String(url.pathname || '').split('/').filter(Boolean);
+  const last = segments.length ? segments[segments.length - 1] : '';
+  let name = '';
+  try {
+    name = decodeURIComponent(last);
+  } catch (error) {
+    name = last;
+  }
+  name = name.replace(/[\\/:*?"<>|\s]+/g, '_').slice(0, 120);
+  if (!FILE_ACCEPT.test(name)) {
+    name = (name || 'download') + '.jar';
+  }
+  return name;
 }
 
 export class LibraryView {
@@ -89,6 +109,13 @@ export class LibraryView {
     this.favouritesToggle = $('#favourites-toggle');
     this.fileInput = $('#file-input');
     this.importBtn = $('#import-btn');
+    this.urlImportBtn = $('#url-import-btn');
+    this.urlDialog = $('#url-dialog');
+    this.urlForm = $('#url-form');
+    this.urlInput = $('#url-input');
+    this.urlError = $('#url-error');
+    this.urlCancel = $('#url-cancel');
+    this.urlSubmit = $('#url-submit');
     this.dropZone = $('#drop-zone');
     this.storageEl = $('#library-storage');
     this.engineEl = $('#library-engine');
@@ -118,6 +145,7 @@ export class LibraryView {
     if (this.emptyImport && this.fileInput) {
       this.emptyImport.addEventListener('click', () => this.fileInput.click());
     }
+    this._bindUrlImport();
     if (this.searchInput) {
       this.searchInput.addEventListener('input', () => {
         window.clearTimeout(this._searchTimer);
@@ -420,6 +448,130 @@ export class LibraryView {
         ? t('library.imported', { title: lastTitle })
         : t('library.importedMany', { n: imported }), { kind: 'success' });
       await this.load();
+    }
+  }
+
+  _bindUrlImport() {
+    if (!this.urlImportBtn || !this.urlDialog || !this.urlForm) { return; }
+    this.urlImportBtn.addEventListener('click', () => this._openUrlDialog());
+    if (this.urlCancel) {
+      this.urlCancel.addEventListener('click', () => this._closeUrlDialog());
+    }
+    this.urlForm.addEventListener('submit', (event) => {
+      event.preventDefault();
+      this.importFromUrl(this.urlInput ? this.urlInput.value.trim() : '');
+    });
+    this.urlDialog.addEventListener('click', (event) => {
+      if (event.target === this.urlDialog) { this._closeUrlDialog(); }
+    });
+  }
+
+  _openUrlDialog() {
+    if (!this.urlDialog || this._importing) { return; }
+    this._showUrlError('');
+    if (this.urlInput) { this.urlInput.value = ''; }
+    this.urlDialog.hidden = false;
+    if (this.urlInput) {
+      window.setTimeout(() => this.urlInput.focus(), 30);
+    }
+  }
+
+  _closeUrlDialog() {
+    if (this.urlDialog) { this.urlDialog.hidden = true; }
+    this._showUrlError('');
+  }
+
+  _showUrlError(message) {
+    if (!this.urlError) { return; }
+    if (message) {
+      this.urlError.textContent = message;
+      this.urlError.hidden = false;
+    } else {
+      this.urlError.textContent = '';
+      this.urlError.hidden = true;
+    }
+  }
+
+  /* Download a JAR the way a user expects: type the link, watch bytes arrive,
+   * then the normal import pipeline (probe + IndexedDB + engine FS) takes over.
+   * Cross-origin links only work when the server sends CORS headers; the
+   * dialog explains that when the browser refuses the read. */
+  async importFromUrl(urlText) {
+    if (this._importing) { return; }
+    let url = null;
+    try {
+      url = new URL(String(urlText || '').trim());
+    } catch (error) {
+      this._showUrlError(t('library.urlBadUrl'));
+      return;
+    }
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+      this._showUrlError(t('library.urlBadUrl'));
+      return;
+    }
+    const name = fileNameFromUrl(url);
+    this._importing = true;
+    if (this.urlSubmit) { this.urlSubmit.disabled = true; }
+    this._showUrlError('');
+    try {
+      showProgress(t('library.urlImporting', { name }), null);
+      const response = await fetch(url.href, {
+        mode: 'cors',
+        credentials: 'omit',
+        cache: 'no-store'
+      });
+      if (!response.ok) {
+        throw new Error('HTTP ' + response.status);
+      }
+      const total = Number(response.headers.get('content-length')) || 0;
+      let bytes = null;
+      if (response.body && typeof response.body.getReader === 'function') {
+        const reader = response.body.getReader();
+        const chunks = [];
+        let received = 0;
+        for (;;) {
+          const step = await reader.read();
+          if (step.done) { break; }
+          const chunk = step.value;
+          received += chunk.length;
+          if (received > MAX_URL_BYTES) { throw new Error(t('library.urlTooBig')); }
+          chunks.push(chunk);
+          if (total) { setProgressFraction(Math.min(0.95, received / total)); }
+        }
+        bytes = new Uint8Array(received);
+        let offset = 0;
+        for (const chunk of chunks) {
+          bytes.set(chunk, offset);
+          offset += chunk.length;
+        }
+      } else {
+        const buffer = await response.arrayBuffer();
+        if (buffer.byteLength > MAX_URL_BYTES) {
+          throw new Error(t('library.urlTooBig'));
+        }
+        bytes = new Uint8Array(buffer);
+      }
+      if (!bytes.length) { throw new Error(t('library.notJar')); }
+      if (!this.runtime.mock && !FILE_ACCEPT.test(name)) {
+        throw new Error(t('library.notJarFile'));
+      }
+      setProgressFraction(0.95);
+      const file = new File([bytes], name, { type: 'application/java-archive' });
+      const title = await this._importOne(file);
+      hideProgress(250);
+      this._closeUrlDialog();
+      toast(t('library.imported', { title: title || name }), { kind: 'success' });
+      await this.load();
+    } catch (error) {
+      hideProgress(0);
+      const message = error && error.message ? error.message : String(error);
+      const cors = /failed to fetch|networkerror|load failed|cors/i.test(message);
+      this._showUrlError(cors
+        ? t('library.urlFailed', { message }) + ' ' + t('library.urlCorsHint')
+        : t('library.urlFailed', { message }));
+    } finally {
+      this._importing = false;
+      if (this.urlSubmit) { this.urlSubmit.disabled = false; }
     }
   }
 

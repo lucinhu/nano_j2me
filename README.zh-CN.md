@@ -155,7 +155,7 @@ tools/build_web.sh                      # -> build/web/（外壳 + nj2me.js + nj
 python3 -m http.server -d build/web 8000
 ```
 
-打开 `http://localhost:8000/`，拖入 `.jar` 即可游玩；支持键盘、屏幕虚拟键盘和
+打开 `http://localhost:8000/`，拖入 `.jar`（或从 http(s) 链接导入，远端需允许 CORS）即可游玩；支持键盘、屏幕虚拟键盘和
 标准手柄（Gamepad API）；一个 JAR 里含多个 MIDlet 时，工具面板里可以选择启动哪个。外壳把游戏库（可搜索、排序、收藏筛选）、存档文件和
 每游戏最多三个存档点保存在 IndexedDB 里（存档点会记住保存时的画面缩略图，可导出为 `.njst` 文件、也能再导入）；页面带有 manifest 和 service worker，
 首次访问后可安装为应用，断网也能打开（引擎一并缓存）。JavaScript⇄C 的接口、持久化目录布局和
