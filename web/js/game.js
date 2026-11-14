@@ -417,6 +417,38 @@ export class GameView {
         slot, row, name, time, thumb, save, load, export: exportBtn, import: importBtn
       });
     }
+
+    /* One extra row for the exit auto-save kept on the game record.  It is not
+       written by hand (leaving the game does that when the toggle is on), but
+       the player can inspect when it was taken, load it, or drop it. */
+    const autoThumb = el('img', {
+      className: 'slot__thumb',
+      attrs: { alt: '', width: '48', height: '64', loading: 'lazy' }
+    });
+    autoThumb.hidden = true;
+    const autoName = el('span', { className: 'slot__name' });
+    const autoTime = el('span', { className: 'slot__time' });
+    const autoLoad = el('button', {
+      className: 'btn btn--small slot__load',
+      attrs: { type: 'button' }
+    });
+    const autoClear = el('button', {
+      className: 'btn btn--small slot__clear',
+      attrs: { type: 'button' }
+    });
+    const autoRow = el('div', { className: 'slot slot--auto', attrs: { 'data-slot': 'auto' } }, [
+      autoThumb,
+      el('div', { className: 'slot__info' }, [autoName, autoTime]),
+      el('div', { className: 'slot__actions' }, [autoLoad, autoClear])
+    ]);
+    autoLoad.addEventListener('click', () => this.loadAutoSlot());
+    autoClear.addEventListener('click', () => this.clearAutoSlot());
+    autoRow.hidden = true;
+    container.append(autoRow);
+    this._autoRow = {
+      row: autoRow, name: autoName, time: autoTime, thumb: autoThumb,
+      load: autoLoad, clear: autoClear
+    };
   }
 
   /* ------------------------------------------------------- open / close */
@@ -951,6 +983,70 @@ export class GameView {
       row.export.disabled = !record;
       row.import.disabled = !canSave;
     }
+
+    const auto = this._autoRow;
+    if (auto) {
+      const autoState = this.game.autoState;
+      const has = !!(autoState && autoState.bytes);
+      auto.row.hidden = !has;
+      if (has) {
+        const frames = Number(autoState.frames) || 0;
+        auto.name.textContent = t('game.autoSaveSlot');
+        const when = autoState.savedAt ? formatDateTime(autoState.savedAt) + ' · ' : '';
+        auto.time.textContent = when + t('game.autoSaveFrames', { n: frames });
+        if (autoState.thumb) {
+          auto.thumb.src = autoState.thumb;
+          auto.thumb.hidden = false;
+        } else {
+          auto.thumb.removeAttribute('src');
+          auto.thumb.hidden = true;
+        }
+        auto.load.textContent = t('game.load');
+        auto.load.disabled = false;
+        auto.clear.textContent = t('game.clear');
+        auto.clear.disabled = false;
+      }
+    }
+  }
+
+  async loadAutoSlot() {
+    if (!this.game || !this.game.autoState) { return; }
+    const record = this.game.autoState;
+    let result = null;
+    try { result = this.runtime.loadState(record.bytes); } catch (error) {
+      result = { ok: false, error: error && error.message ? error.message : String(error) };
+    }
+    if (result && result.ok) {
+      toast(t('game.loadOkAuto'), { kind: 'success' });
+      await this._renderSlots();
+      return;
+    }
+    const restart = await confirmDialogSafe({
+      title: t('game.load'),
+      message: t('game.loadFailed'),
+      confirmLabel: t('game.restart'),
+      danger: true
+    });
+    if (restart) {
+      this._resetOverlays();
+      await this.restart();
+      if (!this._stopShown) {
+        toast(t('game.loadRestarted'), { kind: 'warn' });
+      }
+    }
+  }
+
+  async clearAutoSlot() {
+    if (!this.game || !this.game.autoState) { return; }
+    try {
+      await putGame(Object.assign({}, this.game, { autoState: undefined }));
+    } catch (error) {
+      toast(t('game.autoSaveClearFailed'), { kind: 'error' });
+      return;
+    }
+    this.game.autoState = undefined;
+    toast(t('game.autoSaveCleared'), { kind: 'info' });
+    await this._renderSlots();
   }
 
   /* Down-scale the live canvas into a data URL for the slot list.  The screen

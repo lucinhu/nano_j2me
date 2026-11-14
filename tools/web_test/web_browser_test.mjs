@@ -997,6 +997,75 @@ async function runRealShellChecks() {
     }
   });
 
+  await check('the exit auto-save is visible in the panel and can be loaded or cleared', async () => {
+    /* Save on exit writes a snapshot on the game record; the panel resurfaces
+       it as a read-only row next to the manual slots so the player can see when
+       it was taken, load it on purpose, or drop it. */
+    const ctx = await browser.newContext({ viewport: { width: 960, height: 840 }, locale: 'zh-CN' });
+    try {
+      const page = await ctx.newPage();
+      attachDiagnostics(page, 'autoslot');
+      await page.goto(realServer.origin + '/', { waitUntil: 'load', timeout: timeoutMs });
+      await waitReady(page);
+      await page.setInputFiles('#file-input', HELLO_JAR);
+      await page.waitForFunction(
+        () => document.querySelectorAll('.game-tile').length >= 1,
+        undefined,
+        { timeout: timeoutMs, polling: 100 });
+      await page.locator('.game-tile').first().click();
+      await page.waitForFunction(
+        () => !!(window.__nj2me.game && window.__nj2me.game.game),
+        undefined,
+        { timeout: timeoutMs, polling: 100 });
+      await waitFrames(page, 30, timeoutMs);
+      await page.click('#panel-handle');
+      await page.check('#auto-save');
+      await page.click('#panel-close');
+      await page.waitForFunction(
+        () => document.querySelector('#game-panel').getAttribute('aria-hidden') === 'true',
+        undefined,
+        { timeout: timeoutMs, polling: 50 });
+      await page.click('#game-back');
+      await page.waitForFunction(
+        () => window.getComputedStyle(document.querySelector('#library-view')).display !== 'none',
+        undefined,
+        { timeout: timeoutMs });
+      /* Start the title again: the panel now shows the snapshot the exit wrote. */
+      await page.locator('.game-tile').first().click();
+      await page.waitForFunction(
+        () => !!(window.__nj2me.game && window.__nj2me.game.game),
+        undefined,
+        { timeout: timeoutMs, polling: 100 });
+      await waitFrames(page, 12, timeoutMs);
+      await page.click('#panel-handle');
+      await page.waitForFunction(
+        () => !document.querySelector('.slot--auto').hidden,
+        undefined,
+        { timeout: timeoutMs, polling: 100 });
+      const meta = await page.textContent('.slot--auto .slot__time');
+      assert(/帧|frame/.test(meta || ''),
+        `auto-save row should show its frame count, got ${JSON.stringify(meta)}`);
+      await page.click('.slot--auto .slot__load');
+      await waitToast(page, await t(page, 'game.loadOkAuto'));
+      await page.click('.slot--auto .slot__clear');
+      await waitToast(page, await t(page, 'game.autoSaveCleared'));
+      await page.waitForFunction(
+        () => document.querySelector('.slot--auto').hidden,
+        undefined,
+        { timeout: timeoutMs, polling: 100 });
+      const after = await page.evaluate(async () => {
+        const saves = await import('/js/saves.js');
+        const games = await saves.listGames();
+        return games[0] && games[0].autoState ? 'still-there' : 'gone';
+      });
+      assert(after === 'gone',
+        `clearing should drop the auto-save from the game record, got ${after}`);
+      return `auto-save row showed ${JSON.stringify(meta)}; load and clear both worked, record entry removed`;
+    } finally {
+      await ctx.close();
+    }
+  });
+
   await check('library offers a continue card for the last played game', async () => {
     /* The card is the quick way back into the newest game; it appears only on
        the unfiltered library and its meta line reflects the exit auto-save. */

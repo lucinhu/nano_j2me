@@ -1381,3 +1381,6 @@ body.in-game .app-header { display: none; }
   white-space: nowrap;
 }
 .continue__meta { color: var(--text-faint); font-size: 12px; }
+
+/* The exit auto-save row is read-only until the shell writes it on exit. */
+.slot--auto { border-style: dashed; }
