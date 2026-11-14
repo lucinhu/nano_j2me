@@ -242,6 +242,7 @@ Web 产物也在提交前重新构建并重新跑过 `tools/check_web.sh --all` 
 - Windows/Wine：`.local-tools/debug-runs/gfx-full-20261113/windows-audit/`（`frames/`、`sdl2-mc-window.png`、`sdl2-mc.log`、`win-gles2-maze.log`、`wine-wgl.log`）
 - AMR/编解码报告：`.local-tools/debug-runs/gfx-full-20261113/amr/`、`.local-tools/debug-runs/gfx-full-20261113/codec-audit/`
 - 网页版：`.local-tools/debug-runs/web-final-all/`（20 轮收尾最终 `--all`：node 36/36、语料 47/47、浏览器 42/42、48 s）、
+  `.local-tools/debug-runs/web-final-perf-smoke/`（最终 `--perf` 9/9 与 `--smoke` 7/7：game15 4689 fps、bubblet 2861、slimevolley 5581、1942空战 5520）、
   `.local-tools/debug-runs/web-final-sweep/`（最终 403 标题全语料审计：392 ok / 8 black / 1 fatal / 1 start / 1 probe、0 timeout、117 s，`sweep-403.jsonl` + `sweep-summary.txt`）、
   `.local-tools/debug-runs/web-round11-all/`（存档导出/导入后的 `--all`：
   node 36/36、语料 47/47、浏览器 32/32、check-web.log、页面截图与 downloads/）、
