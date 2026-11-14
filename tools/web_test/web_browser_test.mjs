@@ -471,7 +471,8 @@ async function readLibrary(page) {
       fileName: game.fileName,
       jarBytes: game.jar
         ? (game.jar.byteLength !== undefined ? game.jar.byteLength : game.jar.length)
-        : 0
+        : 0,
+      screenPreset: game.screenPreset || null
     }));
   });
 }
@@ -792,11 +793,10 @@ async function runRealShellChecks() {
       await page.click('#panel-handle');
       await page.waitForSelector('#game-panel.is-open', { timeout: 5000 });
       await page.selectOption('#screen-select', '176x220');
-      const saved = await page.evaluate(() => {
-        const raw = JSON.parse(localStorage.getItem('nj2me.settings') || '{}');
-        return raw.screenPreset;
-      });
-      assert(saved === '176x220', `screenPreset should persist as 176x220, got ${JSON.stringify(saved)}`);
+      const library = await readLibrary(page);
+      const saved = library.length === 1 ? library[0].screenPreset : null;
+      assert(saved === '176x220',
+        `screenPreset should be stored on the game record as 176x220, got ${JSON.stringify(saved)}`);
 
       /* Restarting also closes the panel, which is fine here: the assertion is
          about the canvas the engine hands back with the stored preset. */
@@ -808,7 +808,47 @@ async function runRealShellChecks() {
         },
         undefined, { timeout: timeoutMs, polling: 100 });
       await waitFrames(page, 6, timeoutMs);
-      return `240x320 default, then 176x220 after restart (persisted ${JSON.stringify(saved)})`;
+
+      /* Another title must keep the engine default: the preset lives on the
+         game record, not in the shell-wide settings. */
+      await page.click('#game-back');
+      await page.waitForFunction(
+        () => window.getComputedStyle(document.querySelector('#library-view')).display !== 'none',
+        undefined, { timeout: timeoutMs });
+      await page.setInputFiles('#file-input', GAME15_JAR);
+      await page.waitForFunction(
+        () => document.querySelectorAll('.game-tile').length === 2,
+        undefined, { timeout: timeoutMs, polling: 100 });
+      await page.locator('.game-tile').filter({ hasNotText: 'Hello World' }).first().click();
+      await page.waitForFunction(
+        () => !!(window.__nj2me.game && window.__nj2me.game.game),
+        undefined, { timeout: timeoutMs, polling: 100 });
+      await waitFrames(page, 4, timeoutMs);
+      const other = await page.evaluate(() => {
+        const canvas = document.querySelector('#game-canvas');
+        return canvas ? [canvas.width, canvas.height] : [0, 0];
+      });
+      assert(other[0] === 240 && other[1] === 320,
+        `the other title should stay 240x320, got ${other[0]}x${other[1]}`);
+
+      /* Reopening the first title must restore its own preset. */
+      await page.click('#game-back');
+      await page.waitForFunction(
+        () => window.getComputedStyle(document.querySelector('#library-view')).display !== 'none',
+        undefined, { timeout: timeoutMs });
+      await page.locator('.game-tile').filter({ hasText: 'Hello World' }).first().click();
+      await page.waitForFunction(
+        () => !!(window.__nj2me.game && window.__nj2me.game.game),
+        undefined, { timeout: timeoutMs, polling: 100 });
+      await waitFrames(page, 4, timeoutMs);
+      const again = await page.evaluate(() => {
+        const canvas = document.querySelector('#game-canvas');
+        return canvas ? [canvas.width, canvas.height] : [0, 0];
+      });
+      assert(again[0] === 176 && again[1] === 220,
+        `the first title should start again at 176x220, got ${again[0]}x${again[1]}`);
+
+      return `240x320 default, 176x220 for this title (record ${JSON.stringify(saved)}), other title 240x320, reopened 176x220`;
     } finally {
       await ctx.close().catch(() => {});
     }

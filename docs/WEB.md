@@ -99,7 +99,8 @@ be served with or without a build:
   **Game memory** selector (16/32/64/128 MiB) that
   reaches `NJW_OPT_HEAP_BYTES` at the next launch for heavy titles, a
   **Screen size** selector (auto/176×208/176×220/128×160/320×240) that sets
-  `NJW_OPT_SCREEN_WIDTH`/`NJW_OPT_SCREEN_HEIGHT` at the next launch, a
+  `NJW_OPT_SCREEN_WIDTH`/`NJW_OPT_SCREEN_HEIGHT` at the next launch and is
+  remembered per game, because a title was drawn for one resolution, a
   **Startup MIDlet** selector for JARs that ship several MIDlets (stored with
   the game record, applies on the next launch), a one-click **larger-heap restart** on
   out-of-memory errors, PNG
@@ -502,9 +503,9 @@ opt-in: it measures four titles and writes `perf-summary.json` next to the log.
 Measured on the reference build (Emscripten 7.0.0, `include/nj2me/nj_web.h`
 0.5.7): the API suite passes **36/36 checks in 0.4 s**, the corpus suite
 **47/47 checks (42 titles) in 8.7 s**, the browser suite **36/36 checks in about
-16–21 s** (a loaded host slows the page test down; every check is bounded), and
+17–22 s** (a loaded host slows the page test down; every check is bounded), and
 the perf suite **9/9 checks in about 0.5 s** — `tools/check_web.sh --all` is
-**26–31 s** end to end. The sweep suite needs about 2 min for all 403
+**27–32 s** end to end. The sweep suite needs about 2 min for all 403
 titles, the perf suite about 1 s. All 40
 playable titles draw 120/120 frames (the audiodemo and bench fixtures exit on
 their own, as expected), there are no engine `[nj2me] error:` lines,

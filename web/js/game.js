@@ -67,7 +67,6 @@ const SCREEN_PRESETS = Object.freeze({
 });
 const DEFAULT_SETTINGS = Object.freeze({
   speedPercent: 100,
-  screenPreset: 'auto', // device screen for the next start; read by _prepare()
   heapMb: 16,           // Java heap for the next start; heavy titles need 64+
   muted: false,
   volume: 0.8,
@@ -94,9 +93,6 @@ function loadSettings() {
   settings.heapMb = HEAP_CHOICES_MB.includes(Number(settings.heapMb))
     ? Number(settings.heapMb)
     : 16;
-  if (!Object.prototype.hasOwnProperty.call(SCREEN_PRESETS, settings.screenPreset)) {
-    settings.screenPreset = 'auto';
-  }
   settings.showPad = !!settings.showPad;
   settings.muted = !!settings.muted;
   settings.volume = Math.max(0, Math.min(1, Number(settings.volume) || 0));
@@ -242,17 +238,26 @@ export class GameView {
 
     // The Java heap is fixed when the VM is created, so this only takes effect
     // on the next start; the hint tells the user instead of silently ignoring it.
-    // The screen preset is a device-profile choice: it must be applied before
-    // the engine starts, so it only reaches the runtime on the next launch.
+    // The screen preset is a device-profile choice and titles were drawn for
+    // different resolutions, so it is remembered per game (unlike the heap,
+    // which stays a shell-wide default).  It reaches the runtime on the next
+    // launch of this game.
     const screenSize = $('#screen-select');
     if (screenSize) {
       screenSize.addEventListener('change', () => {
+        if (!this.game) { return; }
         const value = Object.prototype.hasOwnProperty.call(SCREEN_PRESETS, screenSize.value)
           ? screenSize.value
           : 'auto';
-        if (this.settings.screenPreset === value) { return; }
-        this.settings.screenPreset = value;
-        saveSettings(this.settings);
+        if (this._screenPreset() === value) { return; }
+        if (value === 'auto') {
+          delete this.game.screenPreset;
+        } else {
+          this.game.screenPreset = value;
+        }
+        void putGame(this.game).catch((error) => {
+          console.warn('[game] could not remember the screen preset', error);
+        });
         toast(t('game.screenNextLaunch'), { kind: 'info' });
       });
     }
@@ -512,8 +517,9 @@ export class GameView {
       runtime.optionInt(NJW.OPT_SPEED_PERCENT, this.settings.speedPercent);
       runtime.optionInt(NJW.OPT_HEAP_BYTES, this.settings.heapMb * 1024 * 1024);
       /* 'auto' leaves the engine's 240x320 default in place; an explicit
-         option value is clamped by the port, so 0 would mean 32x32. */
-      const screenPreset = SCREEN_PRESETS[this.settings.screenPreset] || null;
+         option value is clamped by the port, so 0 would mean 32x32.  The
+         preset lives on the game record, so a 176x220 title keeps its size. */
+      const screenPreset = SCREEN_PRESETS[this._screenPreset()] || null;
       if (screenPreset) {
         runtime.optionInt(NJW.OPT_SCREEN_WIDTH, screenPreset[0]);
         runtime.optionInt(NJW.OPT_SCREEN_HEIGHT, screenPreset[1]);
@@ -1358,6 +1364,16 @@ export class GameView {
     button.hidden = false;
   }
 
+  /* The screen preset is a per-game device profile: titles were drawn for a
+   * fixed resolution, so the choice travels with the game record (and is
+   * absent on records imported before this existed → 'auto'). */
+  _screenPreset() {
+    const preset = this.game && typeof this.game.screenPreset === 'string'
+      ? this.game.screenPreset
+      : 'auto';
+    return Object.prototype.hasOwnProperty.call(SCREEN_PRESETS, preset) ? preset : 'auto';
+  }
+
   _suggestHeapMb() {
     const current = Number(this.settings.heapMb) || HEAP_CHOICES_MB[0];
     if (current < 64) { return 64; }
@@ -1384,7 +1400,7 @@ export class GameView {
     const heap = $('#heap-select');
     if (heap) { heap.value = String(this.settings.heapMb); }
     const screenSize = $('#screen-select');
-    if (screenSize) { screenSize.value = this.settings.screenPreset; }
+    if (screenSize) { screenSize.value = this._screenPreset(); }
     this._updateVolumeUi();
     this.view.classList.toggle('controls-hidden', !this.settings.showPad);
     this._updateSpeedChip();
