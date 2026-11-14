@@ -14876,6 +14876,10 @@ static int jr_triangle_roi(nj_gfx_triangles *p)
  * the ones the running MIDlet keeps alive for that section.
  */
 #define M3G_JOURNAL_TEXTURE_MAX ((nj_size)16u * 1024u * 1024u)
+/* Keep one native transaction small: the backend allocates per-transaction
+ * scratch proportional to the triangle count, and a huge batch is also a
+ * latency spike. Larger frames are split into several ordered transactions. */
+#define M3G_JOURNAL_BATCH_MAX 8192u
 
 /* Dev-only profiling for the optional GPU journal (never in release builds). */
 #ifndef NJ_M3G_PROFILE
@@ -15444,7 +15448,8 @@ static int m3g_journal_append(m3g_jr *r, const nj_gfx_triangles *p)
         return m3g_journal_append(r, p);
     }
     if (j->count >= NJ_GFX_TRIANGLES_LIST_MAX_PACKETS ||
-        p->count > NJ_GFX_TRIANGLES_LIST_MAX_TOTAL - j->total) {
+        p->count > NJ_GFX_TRIANGLES_LIST_MAX_TOTAL - j->total ||
+        (j->total && j->total + p->count > M3G_JOURNAL_BATCH_MAX)) {
         m3g_journal_flush(vm);
         return m3g_journal_append(r, p);
     }
@@ -15758,9 +15763,18 @@ static int jr_draw_accel(m3g_jr *r)
     if (!r->vm->port || !r->vm->port->gfx_triangles || !r->sw.surf ||
         !r->sw.surf->pixels || !r->sw.z || r->sw.sprite || r->triangles) return 0;
     /* Ports that ask for auto-selection calibrate once, then keep whichever
-     * path measured faster on this device. */
+     * path measured faster on this device. NJ_M3G_FORCE_ACCEL=1 is a debug
+     * switch that skips the calibration and always takes the native path, so
+     * the same binary can A/B the two renderers. */
     if (r->vm->port->gfx_triangles_auto) {
         if (r->vm->m3g_accel_auto == 0u) {
+#if NJ_USE_LIBC
+            const char *force = getenv("NJ_M3G_FORCE_ACCEL");
+            if (force && force[0] && !(force[0] == '0' && !force[1])) {
+                r->vm->m3g_accel_auto = 1u;
+                nj_logf(r->vm, 2, "m3g: accel forced by NJ_M3G_FORCE_ACCEL");
+            } else
+#endif
             r->vm->m3g_accel_auto =
                 (nj_u1)(m3g_calibrate(r->vm, r->sw.surf) ? 1u : 2u);
         }
@@ -15803,7 +15817,10 @@ static int jr_draw_accel(m3g_jr *r)
                 double ta = m3g_now();
 #endif
                 if (journaled && m3g_journal_append(r, &packet)) {
-                    c.triangles = NULL;   /* the journal owns the copy */
+                    /* The journal copied the commands; release the collector's
+                     * array or every queued batch leaks one command block. */
+                    nj_host_free(r->vm, c.triangles);
+                    c.triangles = NULL;
                     deferred = 1;
                     result = NJ_GFX_ACCEL_DONE;
                 } else {

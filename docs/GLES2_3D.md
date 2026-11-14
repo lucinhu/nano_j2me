@@ -294,3 +294,47 @@ profiler 代码默认关闭（`NJ_GLES2_PROFILE=0`），只用于后续性能分
   自动选择保留软件 —— 与桌面结论一致：CPU 权威契约下同步事务比软件光栅贵。
 
 桌面回归：全量 `ctest` 197/197 通过；ES2/桌面变体行为未变。
+
+## 2026-11-15 内存稳健性与强制 GPU 验证
+
+强制 GPU 路径（`gfx_triangles_auto=0` 的调试构建）在 API 36 模拟器上跑 Minecraft
+时曾以 `SIGABRT` 退出：`scudo::reportMapError` + `Scudo ERROR: internal map failure
+(error desc=Out of memory)`，崩溃前 native heap 从 ~200 MB 涨到 500 MB+，进程
+`VmRSS` 每秒增长约 100 MB。定位到两个问题并修复：
+
+1. **journal 命令数组泄漏**（`src/midp/nj_lib_m3g.c` `jr_draw_accel`）：队列成功时
+   代码把 `c.triangles` 置 NULL 并注释“journal 接管了副本”，但 `m3g_journal_append`
+   实际是**复制**命令到自己的数组，收集器的命令块因此每次排队都泄漏
+   （MC 约 1700 三角/帧 → 每帧数百 KB）。修复为 append 成功后显式
+   `nj_host_free(vm, c.triangles)` 再置 NULL。修复后桌面强制 GPU 的 MC 600 帧
+   `VmRSS` 稳定在约 200 MB，模拟器同样稳定在约 205 MB。
+2. **每事务临时数组的分配抖动**：`triangles_run` / `triangle_session_submit` 原来
+   每次事务 `calloc/malloc` 出 `views/indices/table/offsets` 并在结束时 free；现在
+   改为 `triangle_state` 内**复用并只增不减**的 scratch（`triangle_scratch()`），
+   每次事务只对 `table` 做一次清零（它是开放寻址表，必须为空槽）。同时把 journal
+   单次提交上限设为 `M3G_JOURNAL_BATCH_MAX 8192` 三角：更大的帧会拆成多次有序
+   事务，避免一次分配几 MB 的顶点数组造成延迟尖峰。
+
+强制 GPU 验证（`NJ_M3G_FORCE_ACCEL=1` 环境变量，仅调试用；正常构建走 auto 校准）：
+
+- 桌面 Linux + RTX 5080：MC 600 帧 `triangles=1104304 batches=755`，`VmRSS` 平稳，
+  `exit status 0`。
+- Android API 36 模拟器（OpenHV，GLES 3.1 ES3 变体）：真实 Minecraft 世界，
+  `gles2: final fills=0 blits=0 rasters=0 declines=0 triangles=18460148
+  batches=5962`（约 46 秒 60 fps 的游戏过程），画面正确（截图
+  `.local-tools/debug-runs/gfx-full-20261113/android/final-build/shot-mc-gpu-es3.png`），
+  期间 `VmRSS` 稳定在约 205 MB、无 scudo 报错、退出无崩溃。
+- 生产构建（auto 校准）在这两台机器上仍然选择软件渲染：校准 `gpu` 事务耗时仍高于
+  软件光栅（桌面 `gpu=266us` vs `software=191us`，模拟器 m3gdemo `414 vs 183`、
+  MC `859 vs 247`），所以默认路径和纯软件性能不受影响；强制 GPU 只是调试/实验入口。
+
+本轮产物（Release，含上述修复）：
+
+| 产物 | 字节 | SHA256 |
+| --- | --- | --- |
+| Android APK（armv7+x86_64，含 ES3 变体） | 1796322 | `02fbdb9ccefe2ac31a77b555056d6b951b08fb77598984e15c59b4074a9cc88d` |
+| Windows `nj2me.exe`（MinGW） | 4046455 | `64dacee43beb46e5dc67ce4d11648634e435ed735e0acc2222dcd9b554541358` |
+| Linux libretro `nano_j2me_libretro.so` | 4087472 | `42e739f9349a9740d98a7d6fdf86d3df6cd5b2661641462fc53877403538954d` |
+| Linux `nj2me` | 4019352 | `ab390ceeeafc6224a3fce314541bac29c4940f3719a1761e6ac989719cbdfae8` |
+
+回归：全量 `ctest` 197/197 通过（91.81 s）。

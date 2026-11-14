@@ -4,6 +4,10 @@
 #define GL_DEPTH_COMPONENT24 0x81A6
 #endif
 
+typedef struct triangle_view {
+    const nj_u1 *pixels;
+    int width, height, bpp;
+} triangle_view;
 typedef struct triangle_vertex_gpu {
     GLfloat position[2], depth, uvq[3], color[4];
 } triangle_vertex_gpu;
@@ -16,15 +20,18 @@ typedef struct triangle_state {
     size_t texture_capacity, texture_count;
     triangle_vertex_gpu *vertices;
     size_t vertices_size;
+    /* Reused transaction scratch: grows once, never freed per call. Keeps a
+     * heavy MC frame from doing multi-MB malloc/free churn every flush. */
+    triangle_view *views;
+    nj_u4 *indices;
+    nj_u4 *table;
+    nj_u4 *offsets;
+    size_t views_cap, indices_cap, table_cap, offsets_cap;
     GLint seed_image, seed_shift;
     GLint image, textured, wrapping, function, threshold, fog, fog_color, pass, blend;
     int es3;
     int ready;
 } triangle_state;
-typedef struct triangle_view {
-    const nj_u1 *pixels;
-    int width, height, bpp;
-} triangle_view;
 
 static const char triangle_es2_prefix[] =
     "#ifdef GL_ES\n#extension GL_EXT_frag_depth : require\n"
@@ -104,6 +111,9 @@ static void triangles_delete(nj_gles2 *s)
     if (t->texture_count) s->gl.DeleteTextures((GLsizei)t->texture_count,t->textures);
     t->seed_program=t->draw_program=t->depth=t->keys=0;
     memset(t->shaders,0,sizeof t->shaders);
+    free(t->views);free(t->indices);free(t->table);free(t->offsets);
+    t->views=NULL;t->indices=NULL;t->table=NULL;t->offsets=NULL;
+    t->views_cap=t->indices_cap=t->table_cap=t->offsets_cap=0;
     t->texture_count=0;t->ready=0;
     memset(&t->keys_storage,0,sizeof t->keys_storage);
     t->depth_width=t->depth_height=0;
@@ -492,6 +502,43 @@ static double tri_sess_tp;
 #define SESS_MARK(f) do{}while(0)
 #endif
 
+/* Grow the reusable transaction scratch to hold `total` triangles and
+ * `npackets` packets. Returns 0 when the memory cannot be grown (the caller
+ * then declines the transaction and the CPU path is retried). */
+static int triangle_scratch(nj_gles2 *s,nj_u4 total,nj_u4 npackets,
+                            nj_u4 *table_size)
+{
+    triangle_state *t=s->geometry;
+    if(t->views_cap<total) {
+        triangle_view *views=(triangle_view *)realloc(
+            t->views,(size_t)total*sizeof *views);
+        if(!views)return 0;
+        t->views=views;t->views_cap=total;
+    }
+    if(t->indices_cap<total) {
+        nj_u4 *indices=(nj_u4 *)realloc(t->indices,(size_t)total*sizeof *indices);
+        if(!indices)return 0;
+        t->indices=indices;t->indices_cap=total;
+    }
+    if(t->offsets_cap<npackets) {
+        nj_u4 *offsets=(nj_u4 *)realloc(t->offsets,
+                                        (size_t)npackets*sizeof *offsets);
+        if(!offsets)return 0;
+        t->offsets=offsets;t->offsets_cap=npackets;
+    }
+    while(*table_size<total*2u)*table_size*=2u;
+    if(t->table_cap<*table_size) {
+        nj_u4 *table=(nj_u4 *)realloc(t->table,
+                                      (size_t)*table_size*sizeof *table);
+        if(!table)return 0;
+        t->table=table;t->table_cap=*table_size;
+    }
+    /* triangle_views uses this as an open-addressed texture table and expects
+     * empty slots to be zero; the reused buffer must be cleared per call. */
+    memset(t->table,0,(size_t)*table_size*sizeof *t->table);
+    return 1;
+}
+
 /* One transaction over an ordered list of packets. The union of the packet
  * ROIs is imported once, seeded once, drawn in packet order, read back once and
  * committed once. No CPU write happens before the commit point. */
@@ -546,19 +593,15 @@ static int triangles_run(nj_gles2 *s,const nj_gfx_triangles *const *packets,
     TRI_MARK(init);
 #endif
     t=s->geometry;bytes=(size_t)(x1-x0)*(size_t)(y1-y0)*4u;
-    while(table_size<total*2u)table_size*=2u;
-    views=(triangle_view *)calloc(total,sizeof *views);
-    indices=(nj_u4 *)malloc((size_t)total*sizeof *indices);
-    table=(nj_u4 *)calloc(table_size,sizeof *table);
-    offsets=(nj_u4 *)malloc((size_t)npackets*sizeof *offsets);
+    if(!triangle_scratch(s,total,npackets,&table_size))return decline(s);
+    views=t->views;indices=t->indices;table=t->table;offsets=t->offsets;
     if(t->vertices_size<(size_t)total*3u*sizeof *t->vertices) {
         size_t size=(size_t)total*3u*sizeof *t->vertices;
         triangle_vertex_gpu *vertices=(triangle_vertex_gpu *)realloc(t->vertices,size);
         if(!vertices)goto finish;
         t->vertices=vertices;t->vertices_size=size;
     }
-    if(!views||!indices||!table||!offsets||
-       !reserve(&s->upload,&s->upload_size,bytes)||
+    if(!reserve(&s->upload,&s->upload_size,bytes)||
        (any_write&&!reserve(&s->depth_readback,&s->depth_readback_size,bytes)))goto finish;
 #if NJ_GLES2_PROFILE
     TRI_MARK(alloc);
@@ -696,7 +739,6 @@ static int triangles_run(nj_gles2 *s,const nj_gfx_triangles *const *packets,
 #endif
 finish:
     if(arrays&&current(s))triangle_arrays(s,0);
-    free(views);free(indices);free(table);free(offsets);
     return ok?NJ_GFX_ACCEL_DONE:decline(s);
 }
 
@@ -792,12 +834,8 @@ static int triangle_session_submit(nj_gles2 *s,
     }
     SESS_START();
     if(base>NJ_GFX_TRIANGLES_LIST_MAX_TOTAL-total)return decline(s);
-    while(table_size<total*2u)table_size*=2u;
-    views=(triangle_view *)calloc(total,sizeof *views);
-    indices=(nj_u4 *)malloc((size_t)total*sizeof *indices);
-    table=(nj_u4 *)calloc(table_size,sizeof *table);
-    offsets=(nj_u4 *)malloc((size_t)npackets*sizeof *offsets);
-    if(!views||!indices||!table||!offsets)goto finish;
+    if(!triangle_scratch(s,base+total,npackets,&table_size))return decline(s);
+    views=t->views;indices=t->indices;table=t->table;offsets=t->offsets;
     if(t->vertices_size<(size_t)(base+total)*3u*sizeof *t->vertices) {
         size_t size=(size_t)(base+total)*3u*sizeof *t->vertices;
         triangle_vertex_gpu *vertices=(triangle_vertex_gpu *)realloc(t->vertices,size);
@@ -861,7 +899,6 @@ static int triangle_session_submit(nj_gles2 *s,
     ok=1;
 finish:
     if(arrays&&current(s))triangle_arrays(s,0);
-    free(views);free(indices);free(table);free(offsets);
     return ok?NJ_GFX_ACCEL_DONE:decline(s);
 }
 
