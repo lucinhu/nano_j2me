@@ -52,7 +52,9 @@ search, recents, favourites, key rebinding and a settings page included.
 **Browser (WebAssembly)** — the same runtime as an Emscripten module with a
 dependency-free shell: drag in `.jar` files, play with keyboard or on-screen
 keypad, sound, three save states per game, all stored locally in IndexedDB. The
-page is a PWA: install it from the address bar and it reopens offline.
+page is a PWA: install it from the address bar and it reopens offline, and
+games imported before stay playable with no network at all (the library footer
+says 离线可用 / "offline ready" once the engine is in the service-worker cache).
 
 <p>
 <img src="docs/images/readme-web-library.png" width="330" alt="The web shell's game library after importing a JAR">

@@ -34,7 +34,7 @@ window.__nj2me = state;
 /* The shell is a static bundle, so a service worker makes the page
  * installable and lets it open offline.  Registration is best effort: private
  * modes, file:// and non-secure origins simply keep running without one. */
-function registerServiceWorker() {
+async function registerServiceWorker() {
   if (!('serviceWorker' in navigator)) { return; }
   const params = new URLSearchParams(window.location.search);
   if (params.has('nosw')) {
@@ -50,12 +50,35 @@ function registerServiceWorker() {
     window.location.hostname === 'localhost' ||
     window.location.hostname === '127.0.0.1';
   if (!secure) { return; }
-  navigator.serviceWorker.register('./sw.js').then((registration) => {
+  try {
+    const registration = await navigator.serviceWorker.register('./sw.js');
     state.sw = registration;
     console.info('[nj2me] service worker ready (offline shell)');
-  }).catch((error) => {
+    await navigator.serviceWorker.ready;
+    await updateOfflineUi();
+  } catch (error) {
     console.warn('[nj2me] service worker registration failed', error);
-  });
+  }
+}
+
+/* Tell the library that this visit can also run offline: the service worker
+ * holds the shell and the engine, and imported games live in IndexedDB, so a
+ * later offline reload can open them without any server. */
+async function updateOfflineUi() {
+  if (!('caches' in window)) { return; }
+  try {
+    const keys = await caches.keys();
+    const cacheName = keys.find((key) => key.startsWith('nj2me-shell-'));
+    if (!cacheName) { return; }
+    const cache = await caches.open(cacheName);
+    const urls = (await cache.keys()).map((request) => request.url);
+    const ready = urls.some((url) => /\/js\/nj2me\.(js|wasm)$/.test(url));
+    state.offlineReady = ready;
+    document.body.dataset.offline = ready ? 'ready' : 'partial';
+    state.library?.setOfflineReady(ready);
+  } catch (error) {
+    console.warn('[nj2me] offline cache probe failed', error);
+  }
 }
 
 /* ------------------------------------------------------------- language */

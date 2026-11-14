@@ -92,6 +92,7 @@ export class LibraryView {
     this.storageEl = $('#library-storage');
     this.engineEl = $('#library-engine');
     this.footerHint = $('#library-footer-hint');
+    this.offlineReady = false;
 
     this.games = [];
     this.query = '';
@@ -520,10 +521,20 @@ export class LibraryView {
     if (this.runtime.mock) {
       this.engineEl.textContent = t('library.engineMock');
       this.engineEl.dataset.kind = 'mock';
+      this.engineEl.dataset.offline = '0';
     } else {
-      this.engineEl.textContent = t('library.engineWasm');
+      this.engineEl.textContent = this.offlineReady
+        ? t('library.engineWasm') + ' · ' + t('library.offlineReady')
+        : t('library.engineWasm');
       this.engineEl.dataset.kind = 'wasm';
+      this.engineEl.dataset.offline = this.offlineReady ? '1' : '0';
     }
+  }
+
+  /* Called once the service worker has cached the engine (main.js). */
+  setOfflineReady(ready) {
+    this.offlineReady = !!ready;
+    this._updateEngineLabel();
   }
 
   refreshI18n() {

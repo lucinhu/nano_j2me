@@ -18,7 +18,9 @@
  *   4. Asserts zero browser console errors / page errors / failed requests on
  *      the real shell, and that no request leaves 127.0.0.1 (no CDN/network).
  *   5. Checks the PWA layer: manifest, service worker control, cached engine,
- *      and a real offline reload after the static server is stopped.
+ *      a real offline reload after the static server is stopped, the shell's
+ *      offline-ready label, and an imported game that starts and keeps
+ *      drawing while there is no server at all.
  *
  * Playwright resolution order (first hit wins, no npm install needed):
  *   - node package "playwright" or "playwright-core" if installed;
@@ -843,6 +845,30 @@ async function runPwaChecks() {
     return `${info.cacheName}, ${info.cachedCount} entries, js+wasm cached`;
   });
 
+  await check('library footer reports the shell as offline-ready', async () => {
+    /* main.js probes the service-worker cache after registration and sets
+     * document.body[data-offline]; the library footer repeats it so a player
+     * can tell the page will still open without a network. */
+    await page.waitForFunction(
+      () => document.body.dataset.offline === 'ready',
+      undefined,
+      { timeout: timeoutMs, polling: 100 }
+    );
+    const info = await page.evaluate(() => {
+      const el = document.querySelector('#library-engine');
+      return {
+        text: el ? el.textContent.trim() : '',
+        offline: el ? el.dataset.offline || '' : '',
+        body: document.body.dataset.offline || ''
+      };
+    });
+    assert(info.body === 'ready', `body[data-offline] expected ready, got ${JSON.stringify(info.body)}`);
+    assert(info.offline === '1', `#library-engine[data-offline] expected 1, got ${JSON.stringify(info.offline)}`);
+    assert(/离线可用|offline ready/i.test(info.text),
+      `library footer does not mention offline readiness: ${JSON.stringify(info.text)}`);
+    return info.text;
+  });
+
   await check('offline reload boots the shell with the WASM engine', async () => {
     /* Playwright's Firefox offline emulation is not service-worker aware, so
      * true offline is simulated by stopping the static server instead. */
@@ -860,6 +886,32 @@ async function runPwaChecks() {
     await screenshot(page, 'browser-09-offline.png');
     return 'server stopped, shell + engine served from the service-worker cache';
   }, { fatal: true });
+
+  await check('offline: an imported game starts and keeps drawing', async () => {
+    /* The library, the engine and the service worker cache are all local, so
+     * after the server is stopped a tile from the earlier import must still
+     * open and produce frames. */
+    const tiles = await page.$$('.game-tile');
+    assert(tiles.length >= 1, 'library is empty after the offline reload');
+    await page.click('.game-tile');
+    await page.waitForFunction(
+      () => !!(window.__nj2me.game && window.__nj2me.game.game),
+      undefined,
+      { timeout: timeoutMs, polling: 100 }
+    );
+    await waitFrames(page, 12);
+    const stats = await canvasStats(page);
+    assert(stats.width === 240 && stats.height === 320,
+      `unexpected canvas size: ${stats.width}x${stats.height}`);
+    assert(stats.nonBlack > 1000,
+      `canvas looks blank offline: ${stats.nonBlack} non-black pixels`);
+    const before = await frames(page);
+    await page.waitForTimeout(400);
+    const after = await frames(page);
+    assert(after > before, `frames did not advance offline: ${before} -> ${after}`);
+    await screenshot(page, 'browser-10-offline-game.png');
+    return `${stats.nonBlack} non-black pixels, ${before} -> ${after} frames offline`;
+  });
 
   await page.close();
 }

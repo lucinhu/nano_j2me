@@ -86,13 +86,17 @@ python3 -m http.server -d build/web 8000 # 打开 http://127.0.0.1:8000/
   桌面版 Chrome/Edge 可用地址栏的安装按钮，Firefox/移动端可“添加到主屏幕”。
 - `sw.js` 在安装时预缓存整个外壳和引擎（`js/nj2me.js` + `js/nj2me.wasm`），
   之后离线重载也能打开并直接运行游戏；页面探测引擎用的 HEAD 请求由缓存合成响应。
+- 引擎进缓存后，游戏库页脚会显示“离线可用”（`#library-engine[data-offline=1]`，
+  同时 `document.body[data-offline=ready]`）：此时游戏库（IndexedDB）和引擎都在本地，
+  断网启动已导入的游戏也能正常跑帧。
 - service worker 需要安全上下文（`https://` 或 `localhost`/`127.0.0.1`）。
   本地开发时用 `?nosw=1` 跳过注册并注销已有 worker，避免缓存旧页面。
 - **改动 `web/` 下的外壳文件后，记得同时改 `sw.js` 里的 `CACHE` 版本号**，
   否则旧缓存会继续返回上一版页面（缓存优先策略）。
 - `tools/check_web.sh --browser` 的浏览器套件包含 PWA 检查：manifest、service worker
-  接管、引擎已缓存，以及停掉静态服务器后的真实离线重载（Firefox 的 Playwright
-  离线模拟对 service worker 不生效，所以测试用停服务器来模拟断网）。
+  接管、引擎已缓存、库页脚“离线可用”，以及停掉静态服务器后的真实离线重载 +
+  从库启动已导入游戏（画面非黑、帧号继续推进；Firefox 的 Playwright 离线模拟对
+  service worker 不生效，所以测试用停服务器来模拟断网）。
 
 ## 浏览器支持
 
@@ -122,9 +126,10 @@ mock 脚本会：先验证“没有 wasm 时静默回退到 mock” → 加载�
 键盘、触屏、指针、文本桥 → 打开面板暂停、截图下载、保存/读档、速度/静音/适应/按键
 开关 → 退出 → 刷新验证 IndexedDB 持久化 → 删除并确认 → 390×844 移动端截图。
 
-官方浏览器套件（`node tools/web_test/web_browser_test.mjs`，21 项）在真实 Firefox
+官方浏览器套件（`node tools/web_test/web_browser_test.mjs`，23 项）在真实 Firefox
 里跑完整流程，并额外验证 PWA：manifest 可解析（4 个图标、standalone）、
-service worker 接管页面、引擎已进缓存、停止静态服务器后离线重载仍是 wasm 引擎。
+service worker 接管页面、引擎已进缓存、库页脚显示“离线可用”、停止静态服务器后
+离线重载仍是 wasm 引擎，以及断网状态从库启动已导入的游戏（12 帧内出画面且帧号继续推进）。
 
 wasm 脚本会：断言 `WasmRuntime` 已加载（apiVersion=1、runtimeVersion）、真实
 `njw_probe` 读到 `Hello World`/`frog-parrot.net`、启动后 240×320 画面持续提交帧、

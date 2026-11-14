@@ -49,7 +49,8 @@
 
 **网页版（WebAssembly）**——同一个运行时的 Emscripten 模块，外加一个零依赖的
 网页外壳：拖入 `.jar` 即玩，键盘或屏幕键盘操作，有声音，每游戏三个存档点，数据
-全部保存在本地 IndexedDB。页面是 PWA：可从地址栏安装，之后离线也能打开。
+全部保存在本地 IndexedDB。页面是 PWA：可从地址栏安装，之后离线也能打开；
+引擎进缓存后，已导入的游戏在断网时照样能启动（游戏库页脚会显示“离线可用”）。
 
 <p>
 <img src="docs/images/readme-web-library.png" width="330" alt="网页外壳导入 JAR 后的游戏库">

@@ -132,12 +132,18 @@ it and the browser can install it as an app.
 - The cache name is versioned (`nj2me-shell-<date>` in `web/sw.js`): bump it
   whenever shell files change, otherwise the cache-first worker keeps serving
   the previous version. Old caches are deleted on the next activation.
+- Once the engine is cached, the library footer reports the visit as offline
+  ready (`wasm 引擎已就绪 · 离线可用`, mirrored in
+  `document.body[data-offline=ready]`). The library itself lives in IndexedDB,
+  so from that point on games imported earlier start and keep drawing with the
+  network switched off.
 
 The browser suite (`tools/web_test/web_browser_test.mjs`, run by
 `tools/check_web.sh --browser`) checks this path: manifest parse, service-worker
-control, engine entries in the cache, and a real offline reload after stopping
-the static server. Playwright's Firefox offline emulation is not
-service-worker-aware, so the test stops the server instead of using
+control, engine entries in the cache, the offline-ready footer, a real offline
+reload after stopping the static server, and an imported game that starts and
+keeps drawing while the server is down. Playwright's Firefox offline emulation
+is not service-worker-aware, so the test stops the server instead of using
 `context.set_offline()`.
 
 ## How the browser build runs without blocking
@@ -357,7 +363,7 @@ the render assertions to settle).
 - **Corpus test** (`tools/web_test/web_corpus_test.mjs`) — a deterministic slice
   of the 400-title [compatibility corpus](CORPUS.md) (plus fixtures) run for 120
   frames each with JAR start, drawn-frame and non-blank-frame checks.
-- **Browser test** (`tools/web_test/web_browser_test.mjs`, 21 checks) — serves
+- **Browser test** (`tools/web_test/web_browser_test.mjs`, 23 checks) — serves
   `build/web/` on an ephemeral port and drives the real shell in headless Firefox
   through Playwright: the real engine (`kind=wasm`, API 1, runtime 0.5.7),
   zh-CN UI, import `hello.jar` → metadata and icon in IndexedDB, 240×320
@@ -366,16 +372,18 @@ the render assertions to settle).
   save-state slot written and loaded without a restart, exit → library, reload
   keeps the game and the slot, and a wasm-less copy of the site falls back to the
   mock with the "run tools/build_web.sh" banner — with zero page/console errors
-  and zero external requests. Three more checks cover the PWA layer: the manifest
+  and zero external requests. Five more checks cover the PWA layer: the manifest
   parses (`display=standalone`, four icons including a maskable one), the service
-  worker controls the page and has `nj2me.js`/`nj2me.wasm` in its cache, and
-  reloading with the static server stopped still boots the shell with
-  `kind=wasm`.
+  worker controls the page and has `nj2me.js`/`nj2me.wasm` in its cache, the
+  library footer reports offline ready, reloading with the static server stopped
+  still boots the shell with `kind=wasm`, and an imported game then starts and
+  keeps drawing with no server at all (76,800 non-black pixels, frame counter
+  advancing).
 
 Measured on the reference build (Emscripten 7.0.0, `include/nj2me/nj_web.h`
 0.5.7): the API suite passes **33/33 checks in 0.2 s**, the corpus suite
-**46/46 checks (41 titles) in 26 s**, and the browser suite **21/21 checks in
-about 5.5 s** — `tools/check_web.sh --all` is **32 s** end to end. All 39 playable
+**46/46 checks (41 titles) in 26 s**, and the browser suite **23/23 checks in
+about 6.3 s** — `tools/check_web.sh --all` is **33 s** end to end. All 39 playable
 titles draw 120/120 frames, there are no engine `[nj2me] error:` lines, and the
 wasm heap stays at 64 MiB.
 The known-bad `1945空战英雄_6105.jar` is excluded because it fails natively too.
