@@ -381,6 +381,14 @@ RETROARCH=/path/to/retroarch tools/check_libretro_retroarch.sh \
   build/libretro-check/libretro/nano_j2me_libretro.so \
   tests/fixtures/alphademo.jar 600
 tools/check_no_statics.sh
+# Wider sampling probes; both take the output directory of a sweep run.
+NJ_BIN="$PWD/build/libretro-check/nj2me" \
+  python3 tools/check_corpus_deep.py .local-tools/debug-runs/<sweep> \
+  --count 24 --frames 1800 --jobs 8
+NJ_LIBRETRO_HARNESS="$PWD/build/libretro-check/test_libretro_frontend" \
+NJ_LIBRETRO_CORE="$PWD/build/libretro-check/libretro/nano_j2me_libretro.so" \
+  python3 tools/check_libretro_option_matrix.py .local-tools/debug-runs/<sweep> \
+  --count 8
 ```
 
 Use an existing redistributable fixture path for the final RetroArch command
@@ -391,3 +399,13 @@ vibration, repeated load/unload and save/load cases. A real RetroArch smoke
 check also tests frontend integration. A watchdog-bounded boot is weaker evidence
 than a clean `run ended` and exit 0; record which occurred. Cross-build/export
 checks alone do not establish device runtime compatibility.
+
+The long-run probe (`check_corpus_deep.py`) samples sweep-ok titles at a
+real-time cadence for much longer than the sweep window (1800 frames at 30 fps
+is a minute of emulated time each) and reports late crashes, hangs, early
+key-script exits and new uncaught exceptions. The option matrix
+(`check_libretro_option_matrix.py`) runs real titles through the mock frontend
+with every non-default core option (screen sizes, rotation, heap, builtin font,
+sound and pointer off, device, locale); profiles that change the reported
+geometry pass the matching frontend expectation. Both are sampling tools, not
+CI gates.
