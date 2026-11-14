@@ -128,7 +128,7 @@ mock 脚本会：先验证“没有 wasm 时静默回退到 mock” → 加载�
 键盘、触屏、指针、文本桥 → 打开面板暂停、截图下载、保存/读档、速度/静音/适应/按键
 开关 → 退出 → 刷新验证 IndexedDB 持久化 → 删除并确认 → 390×844 移动端截图。
 
-官方浏览器套件（`node tools/web_test/web_browser_test.mjs`，28 项）在真实 Firefox
+官方浏览器套件（`node tools/web_test/web_browser_test.mjs`，29 项）在真实 Firefox
 里跑完整流程，并额外验证 PWA：manifest 可解析（4 个图标、standalone）、
 service worker 接管页面、引擎已进缓存、库页脚显示“离线可用”、停止静态服务器后
 离线重载仍是 wasm 引擎，以及断网状态从库启动已导入的游戏（12 帧内出画面且帧号继续推进）；
@@ -138,6 +138,9 @@ RB=Clear、LT/Start=左软键、RT/Back=右软键、十字键/左摇杆（0.45 �
 多 MIDlet 的 JAR（例如 frog-parrot 的 book5/6/7）会在工具面板出现「启动 MIDlet」选择框，
 选择写入游戏记录并在下次启动生效；套件用 book6.jar 验证切换后画面变化且选择已持久化。
 工具面板的音量滑块直接写 WebAudio gain（0–100%），拖动时自动取消静音并持久化到设置。
+同一浏览器 profile 一次只允许一个标签页运行引擎：标签页之间用 `BroadcastChannel`
+租约协调（`web/js/engine-owner.js`），后开的标签页会提示「另一个标签页正在运行游戏」，
+对方退出后即可启动；无 `BroadcastChannel` 的浏览器保持旧行为。
 
 全语料审计（403 个 JAR，每款 90 帧）现已自动化：
 

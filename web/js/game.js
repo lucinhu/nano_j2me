@@ -112,10 +112,13 @@ export class GameView {
    * @param {object} opts
    * @param {object} opts.runtime Runtime facade
    * @param {() => void} opts.onExit called after the game view is closed
+   * @param {() => void} [opts.onStopped] called when the engine stops running
+   *   (MIDlet exit or a fatal error), releasing host-side engine ownership
    */
   constructor(opts) {
     this.runtime = opts.runtime;
     this.onExit = opts.onExit;
+    this.onStopped = opts.onStopped || null;
     this.settings = loadSettings();
 
     this.view = $('#game-view');
@@ -1068,6 +1071,7 @@ export class GameView {
   }
 
   _onExited() {
+    if (this.onStopped) { this.onStopped(); }
     this._stopLoop();
     this._running = false;
     this.input.setEnabled(false);
@@ -1102,6 +1106,7 @@ export class GameView {
     this.input.releaseAll();
     this.audio.suspend();
     try { this.runtime.stop(); } catch (error) { /* ignore */ }
+    if (this.onStopped) { this.onStopped(); }
     this._showError(message || t('game.errorDefault'));
   }
 

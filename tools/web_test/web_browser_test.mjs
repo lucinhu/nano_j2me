@@ -691,6 +691,62 @@ async function runRealShellChecks() {
     return `heapMb ${before} -> 64 with a toast, then back to ${before}`;
   });
 
+  await check('a second tab cannot run the engine while another tab owns it', async () => {
+    /* Two pages in one context share IndexedDB and the BroadcastChannel, so
+       this is exactly the user situation: a second tab opened while a game is
+       already running somewhere else in the same profile. */
+    const ctx = await browser.newContext();
+    const first = await ctx.newPage();
+    const second = await ctx.newPage();
+    try {
+      attachDiagnostics(first, 'tabs-first');
+      attachDiagnostics(second, 'tabs-second');
+
+      await first.goto(realServer.origin + '/', { waitUntil: 'load', timeout: timeoutMs });
+      await waitReady(first);
+      await first.setInputFiles('#file-input', HELLO_JAR);
+      await first.waitForFunction(
+        () => document.querySelectorAll('.game-tile').length === 1,
+        undefined, { timeout: timeoutMs, polling: 100 });
+      await first.click('.game-tile');
+      await first.waitForFunction(
+        () => !!(window.__nj2me.game && window.__nj2me.game.game),
+        undefined, { timeout: timeoutMs, polling: 100 });
+      await waitFrames(first, 6, timeoutMs);
+
+      await second.goto(realServer.origin + '/', { waitUntil: 'load', timeout: timeoutMs });
+      await waitReady(second);
+      await second.waitForFunction(
+        () => document.querySelectorAll('.game-tile').length === 1,
+        undefined, { timeout: timeoutMs, polling: 100 });
+      await second.click('.game-tile');
+      await second.waitForFunction(
+        () => Array.from(document.querySelectorAll('#toast-container .toast'))
+          .some((node) => /另一个标签页|Another tab/.test(node.textContent || '')),
+        undefined, { timeout: 8000, polling: 100 });
+      const blocked = await second.evaluate(() => ({
+        library: !document.querySelector('#library-view').hidden,
+        game: !!(window.__nj2me.game && window.__nj2me.game.game),
+      }));
+      assert(blocked.library && !blocked.game,
+        `second tab started a game anyway: ${JSON.stringify(blocked)}`);
+
+      /* Exiting the first tab frees the lease and the second tab may start. */
+      await first.click('#game-back');
+      await first.waitForFunction(
+        () => window.getComputedStyle(document.querySelector('#library-view')).display !== 'none',
+        undefined, { timeout: timeoutMs, polling: 100 });
+      await second.click('.game-tile');
+      await second.waitForFunction(
+        () => !!(window.__nj2me.game && window.__nj2me.game.game),
+        undefined, { timeout: timeoutMs, polling: 100 });
+      await waitFrames(second, 6, timeoutMs);
+      return 'tab 2 blocked while tab 1 played; allowed after tab 1 exited';
+    } finally {
+      await ctx.close();
+    }
+  });
+
   await check('volume slider drives the WebAudio gain and persists it', async () => {
     const panelOpen = await realPage.evaluate(() => document.querySelector('#game-panel').classList.contains('is-open'));
     if (!panelOpen) {

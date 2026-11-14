@@ -110,7 +110,11 @@ be served with or without a build:
 - **Persistence** — game JARs and save-state slots live in IndexedDB; emulated
   file system (RecordStore and `FileConnection`) lives on an IDBFS mount at
   `/nano_j2me`, written by the shell before `njw_start()` and synced to
-  IndexedDB automatically.
+  IndexedDB automatically. Only one tab may own the engine at a time:
+  `web/js/engine-owner.js` holds a `BroadcastChannel` lease, so a second tab
+  that tries to play shows "another tab is running a game" instead of racing
+  on the same IndexedDB records; the lease expires after 6 s of silence so a
+  crashed or suspended tab cannot block the profile forever.
 - **Mock mode** — served straight from `web/` (no wasm), or with `?mock=1`, the
   shell loads `web/js/mock-module.js`, an animated 240×320 test pattern behind the
   same facade, so the entire UI is testable before the engine exists. The page
@@ -411,7 +415,7 @@ opt-in: it measures four titles and writes `perf-summary.json` next to the log.
   `午夜台球圣诞中文版_8677.jar` installs its `Canvas` in the MIDlet constructor
   and starts its game thread there, which is what caught the runner skipping
   `startApp()`.
-- **Browser test** (`tools/web_test/web_browser_test.mjs`, 28 checks) — serves
+- **Browser test** (`tools/web_test/web_browser_test.mjs`, 29 checks) — serves
   `build/web/` on an ephemeral port and drives the real shell in headless Firefox
   through Playwright: the real engine (`kind=wasm`, API 1, runtime 0.5.7),
   zh-CN UI, import `hello.jar` → metadata and icon in IndexedDB, 240×320
@@ -438,7 +442,10 @@ opt-in: it measures four titles and writes `perf-summary.json` next to the log.
   picks Checkers, restarts, and asserts the canvas picture changed and the
   choice was written back to the library record. One more moves the volume
   slider to 40 %, checks the WebAudio gain and the persisted setting, then
-  mutes and drags it again to prove that unmutes.
+  mutes and drags it again to prove that unmutes. Another opens two pages in
+  one browser context: while the first tab plays, the second tab is refused
+  with the "another tab is running" warning toast and stays on the library;
+  after the first tab exits, the second tab can start the same title.
 - **Sweep suite** (`tools/web_test/web_sweep_test.mjs`, 403 titles) — the
   full-corpus audit: every JAR under `tests/games/` except the known-bad
   `1945空战英雄_6105.jar` is started in its own Node child process for 90 frames
@@ -460,10 +467,10 @@ opt-in: it measures four titles and writes `perf-summary.json` next to the log.
 
 Measured on the reference build (Emscripten 7.0.0, `include/nj2me/nj_web.h`
 0.5.7): the API suite passes **35/35 checks in 0.4 s**, the corpus suite
-**47/47 checks (42 titles) in 8.7 s**, the browser suite **28/28 checks in about
-8–11 s** (a loaded host slows the page test down; every check is bounded), and
+**47/47 checks (42 titles) in 8.7 s**, the browser suite **29/29 checks in about
+8–14 s** (a loaded host slows the page test down; every check is bounded), and
 the perf suite **9/9 checks in about 0.5 s** — `tools/check_web.sh --all` is
-**17–20 s** end to end. The sweep suite needs about 2 min for all 403
+**18–22 s** end to end. The sweep suite needs about 2 min for all 403
 titles, the perf suite about 1 s. All 40
 playable titles draw 120/120 frames (the audiodemo and bench fixtures exit on
 their own, as expected), there are no engine `[nj2me] error:` lines,
@@ -575,8 +582,14 @@ node tools/web_test/web_smoke_test.mjs --evidence .local-tools/debug-runs/web-de
   for both. The shell's game panel exposes this as a "Game memory" selector
   (16/32/64/128 MiB) applies to the next launch; it is one shell-wide setting,
   not a per-game one, just like the speed and volume controls.
-- **Not yet verified**: iOS Safari, very large heap games (>512 MiB), true
-  multi-tab use of the same IDBFS prefix (last writer wins), and WebKitGTK.
+- **One engine per browser profile.** Tabs coordinate through a
+  `BroadcastChannel` lease, so a second tab cannot start a game while another
+  one owns the engine (two engines would fight over the same IDBFS records).
+  The lock is advisory: browsers without `BroadcastChannel` keep the old
+  uncoordinated behaviour, and an owner that stops heartbeating loses the
+  lease after 6 s so a crashed tab cannot wedge the profile.
+- **Not yet verified**: iOS Safari, very large heap games (>512 MiB) and
+  WebKitGTK.
 - The wasm target cannot be built with `NJ_ENABLE_JIT`/threaded dispatch enabled
   hooks; the build forces the portable configuration.
 

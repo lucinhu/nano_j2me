@@ -18,11 +18,13 @@ import { $, toast, showBanner, hideBanner } from './ui.js';
 import { loadRuntime, runtimeStorageWarning } from './module.js';
 import { LibraryView } from './library.js';
 import { GameView } from './game.js';
+import { EngineOwner } from './engine-owner.js';
 
 const state = {
   runtime: null,
   library: null,
   game: null,
+  engineOwner: null,
   ready: false,
   error: null
 };
@@ -172,10 +174,24 @@ async function openGame(record) {
   if (!state.game || state.game.game || state.game._opening) { return; }
   if (!record) { return; }
   if (!state.library) { return; }
+
+  /* One engine at a time per browser profile: two tabs would both mount the
+     IDBFS tree and could clobber each other's save states.  The lock is a
+     BroadcastChannel lease, so it degrades to "no coordination" on browsers
+     that do not have the API. */
+  if (state.engineOwner) {
+    const claim = await state.engineOwner.claim();
+    if (!claim.ok) {
+      toast(t('library.tabBusy'), { kind: 'warn', timeout: 8000 });
+      return;
+    }
+  }
+
   state.library.view.hidden = true;
   try {
     await state.game.open(record);
   } catch (error) {
+    if (state.engineOwner) { state.engineOwner.release(); }
     /* GameView.open normally handles its own errors; this is the last net. */
     console.warn('[main] openGame failed', error);
     state.library.view.hidden = false;
@@ -188,6 +204,7 @@ async function openGame(record) {
 }
 
 function onGameExit() {
+  if (state.engineOwner) { state.engineOwner.release(); }
   if (state.library) {
     state.library.view.hidden = false;
     state.library.load();
@@ -234,8 +251,17 @@ async function start() {
   state.runtime = runtime;
   updateEngineUi(runtime);
 
+  state.engineOwner = new EngineOwner();
   const library = new LibraryView({ runtime, onPlay: openGame });
-  const game = new GameView({ runtime, onExit: onGameExit });
+  const game = new GameView({
+    runtime,
+    onExit: onGameExit,
+    /* The MIDlet can exit (or fail) while the game view is still up; the tab
+       is then no longer running an engine and another tab may take over. */
+    onStopped: () => {
+      if (state.engineOwner) { state.engineOwner.release(); }
+    }
+  });
   state.library = library;
   state.game = game;
 
