@@ -3703,25 +3703,65 @@ NJFN(d_getCommandListener)
     return NJ_OK;
 }
 
+/*
+ * Displayable.getWidth()/getHeight() report the display area.  Before the
+ * displayable has been shown the per-canvas fields are still zero; report the
+ * screen size instead (what FreeJ2ME and most phones do) so constructors that
+ * read the size work.  One corpus title (生化危机之恶化_8448) creates
+ * Image(width, height) from this value in its Canvas constructor and stayed
+ * black for ever when it got 0.
+ */
+static int displayable_width(nj_vm *vm, nj_ref self)
+{
+    if (isa(vm, self, NJ_C_CANVAS)) {
+        int w = fget(vm, self, NJ_C_CANVAS, F_C_WIDTH, D_INT);
+        if (w > 0) {
+            return w;
+        }
+    }
+    {
+        nj_surface *scr = nj_midp_screen(vm);
+        if (scr) {
+            if (isa(vm, self, NJ_C_CANVAS)) {
+                fput(vm, self, NJ_C_CANVAS, F_C_WIDTH, D_INT, scr->width);
+                fput(vm, self, NJ_C_CANVAS, F_C_HEIGHT, D_INT, scr->height);
+            }
+            return scr->width;
+        }
+    }
+    return 0;
+}
+
+static int displayable_height(nj_vm *vm, nj_ref self)
+{
+    if (isa(vm, self, NJ_C_CANVAS)) {
+        int h = fget(vm, self, NJ_C_CANVAS, F_C_HEIGHT, D_INT);
+        if (h > 0) {
+            return h;
+        }
+    }
+    {
+        nj_surface *scr = nj_midp_screen(vm);
+        if (scr) {
+            if (isa(vm, self, NJ_C_CANVAS)) {
+                fput(vm, self, NJ_C_CANVAS, F_C_WIDTH, D_INT, scr->width);
+                fput(vm, self, NJ_C_CANVAS, F_C_HEIGHT, D_INT, scr->height);
+            }
+            return scr->height;
+        }
+    }
+    return 0;
+}
+
 NJFN(d_getWidth)
 {
-    nj_ref self = NJ_THIS(args);
-    if (isa(vm, self, NJ_C_CANVAS)) {
-        ret->i = fget(vm, self, NJ_C_CANVAS, F_C_WIDTH, D_INT);
-    } else {
-        ret->i = 0;
-    }
+    ret->i = displayable_width(vm, NJ_THIS(args));
     return NJ_OK;
 }
 
 NJFN(d_getHeight)
 {
-    nj_ref self = NJ_THIS(args);
-    if (isa(vm, self, NJ_C_CANVAS)) {
-        ret->i = fget(vm, self, NJ_C_CANVAS, F_C_HEIGHT, D_INT);
-    } else {
-        ret->i = 0;
-    }
+    ret->i = displayable_height(vm, NJ_THIS(args));
     return NJ_OK;
 }
 
@@ -5768,9 +5808,11 @@ nj_status nj_midp_paint(nj_vm *vm)
     st = nj_midp_paint_body(vm);
     vm->paint_active = prev;
     vm->paint_owner = prev_owner;
-    if (prev == 0u && st == NJ_OK) {
+    if (prev == 0u) {
         /* A serviceRepaints() caller on another thread was waiting for this
-         * paint; it may continue after the call now. */
+         * paint; it may continue after the attempt - including a failed one,
+         * or the waiter would park for ever (都市赛车6火线追击_2230 exhausted
+         * the scheduler this way and showed a black screen). */
         nj_vm_paint_done(vm);
     }
     return st;
@@ -6344,6 +6386,7 @@ void nj_midp_dispatch_serially(nj_vm *vm, int pending)
     nj_ref q;
     nj_u4 roots;
     nj_u1 prev;
+    nj_thread *prev_owner;
     int done;
 
     if (!vm || pending <= 0 || vm->paint_active || vm->in_paint ||
@@ -6360,6 +6403,8 @@ void nj_midp_dispatch_serially(nj_vm *vm, int pending)
         return; /* Keep every queued entry for a later frame. */
     }
     prev = vm->paint_active;
+    prev_owner = vm->paint_owner;
+    vm->paint_owner = vm->cur;
     vm->paint_active = 1u;
     /* Nested frames may pump workers and present pixels, but must not deliver
      * another UI event while this callback is still executing. Only the prefix
@@ -6392,6 +6437,14 @@ void nj_midp_dispatch_serially(nj_vm *vm, int pending)
         nj_clear_exception(vm);
     }
     vm->paint_active = prev;
+    vm->paint_owner = prev_owner;
+    if (prev == 0u) {
+        /* This dispatch is the only thing that held paint_active: any
+         * serviceRepaints() caller parked on another thread may continue now.
+         * Without this wake one such caller (都市赛车6火线追击_2230) waited for
+         * ever and the scheduler declared a deadlock. */
+        nj_vm_paint_done(vm);
+    }
     vm->nroots = roots;
 }
 
