@@ -115,18 +115,21 @@ RGB565 展开成 RGBA8888 交给 `<canvas>`。虚拟时钟由宿主驱动：加�
 | 浏览器页面（Playwright Firefox + `tools/check_web.sh --browser`） | 26/26 检查通过（约 7.9 s）：静态服务 `build/web` → 真实引擎 `kind=wasm`、API 1、版本 0.5.7 → zh-CN 界面 → 导入 hello.jar（元数据/图标进 IndexedDB）→ 画布 240x320 非黑（4 色）→ 方向键/Enter（nj_key 15/16/17/6）帧号推进 → 面板自动暂停（帧冻结）+ 继续 → 存档槽 1 blob 329,724 字节、读档往返不重启 → 存档槽 1 导出为 `.njst` 下载（字节数与槽内一致、magic `NJSS`）、再经文件选择器导入槽 2 并生效 → 游戏面板内存选择 64 MiB 持久化并弹提示 → 模拟标准手柄（`navigator.getGamepads` + `gamepadconnected`）：A→nj_key 17、左摇杆→16、B→21，断开后全部释放 → 退出回库 → 刷新后游戏与存档仍在 → 缺 wasm 时降级 mock 并显示指向 `tools/build_web.sh` 的横幅；0 page/console error、0 外部请求；证据 `.local-tools/debug-runs/web-round8-clean/browser-0*-*.png` |
 | 手柄（Gamepad API） | 游戏循环每帧轮询 `navigator.getGamepads()`（浏览器只给状态、不给事件），按边沿差分发 `njw_key`；标准映射 A=Fire(17)、B/X/Y/LB=GAME_A..D(21..24)、RB=Clear(20)、LT/Start=SOFT_LEFT(18)、RT/Back=SOFT_RIGHT(19)、十字键 12..15 与左摇杆（0.45 死区）→13..16；`gamepadconnected`/`gamepaddisconnected` 显示 toast 并在断开时 `releaseAll`；浏览器套件用假手柄验证按下/释放 |
 | 存档导出/导入（`.njst`） | 存档槽按钮组含 导出/导入：导出把引擎快照原样下载为 `<标题>-slot<N>-<时间>.njst`；导入先 `njw_load_state` 校验（JSON 头记录 JAR 身份/ABI/屏幕尺寸，跨标题或损坏会被拒绝），成功后才写入 IndexedDB 槽位并立即应用；浏览器套件完整验证 导出字节数 == 槽内 size、magic `NJSS`、导入槽 2 生效 |
+| 性能快速回归（`--perf`） | 4 个轻/中量标题各预热 60 帧 + 实测 600 帧（固定 1000/60 ms 步长）：game15 **6533 fps**/91.8 ms、bubblet **3880 fps**/154.6 ms、slimevolley **7909 fps**/75.9 ms、1942空战_10403 **7892 fps**/76.0 ms，均 drew 600/600；堆 64→64 MiB、无引擎错误；`tools/check_web.sh --perf` 9/9 检查通过（0.5 s），下限取参考机约 1/10（抓数量级回退、不惩罚慢 CI），实测写入 `perf-summary.{txt,json}` |
 | PWA / 离线（service worker） | `manifest.json` 可解析（`display=standalone`，4 个图标含 maskable）→ `sw.js` 接管页面 → 缓存含 `js/nj2me.js` 与 `js/nj2me.wasm`（20 项）→ 库页脚显示“离线可用”（`#library-engine[data-offline=1]`、`body[data-offline=ready]`）→ **停掉静态服务器后重载**仍 boot shell 且 `kind=wasm` → 断网从库启动已导入的 `hello.jar`，240×320 画面非黑且帧号 13→38 继续推进；证据 `.local-tools/debug-runs/web-offline-badge/browser-09-offline.png`、`browser-10-offline-game.png` 与 `browser-shell-test.json`；注意 Playwright Firefox 的 `context.set_offline()` 对 service worker 不生效，离线用停服务器模拟 |
 
 性能（600 帧空跑，两边都是 Release；原生用 `--fps 0` 即 uncapped）：
 
 | 游戏 | wasm | 原生 x86_64 | 比值 |
 | --- | --- | --- | --- |
-| game15.jar | ≈6,117 fps | ≈16,216 fps | 2.7× |
-| bubblet.jar | ≈3,826 fps | ≈7,692 fps | 2.0× |
-| slimevolley.jar | ≈7,908 fps | ≈20,690 fps | 2.6× |
-| 1942空战_10403.jar | ≈7,925 fps | ≈12,500 fps | 1.6× |
+| game15.jar | ≈6,533 fps | ≈16,216 fps | 2.5× |
+| bubblet.jar | ≈3,880 fps | ≈7,692 fps | 2.0× |
+| slimevolley.jar | ≈7,909 fps | ≈20,690 fps | 2.6× |
+| 1942空战_10403.jar | ≈7,892 fps | ≈12,500 fps | 1.6× |
 
-这是余量不是帧率：游戏按虚拟时钟计时，60 Hz 只需要每秒 60 次 pump。首次加载
+上表由 `tools/web_test/web_perf_test.mjs` 可复跑（`tools/check_web.sh --perf`，
+写入证据目录的 `perf-summary.{txt,json}`）。这是余量不是帧率：游戏按虚拟时钟计时，
+60 Hz 只需要每秒 60 次 pump。首次加载
 成本是约 2.1 MiB 的 wasm 下载与实例化，堆可增长，超过初始 64 MiB 不会直接失败。
 
 ## 已知限制（全部为实测结论）

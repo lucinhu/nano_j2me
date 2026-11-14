@@ -7,6 +7,7 @@
 #   tools/check_web.sh --corpus             deterministic 42-title JAR smoke test only
 #   tools/check_web.sh --browser            browser page test (Playwright Firefox)
 #   tools/check_web.sh --sweep              slow full-corpus audit over tests/games/
+#   tools/check_web.sh --perf               wasm throughput smoke test (4 light titles)
 #   tools/check_web.sh --build --node --corpus   rebuild first, then test
 #
 # Suites (default when no suite flag is given: --node --corpus; --all means
@@ -39,6 +40,14 @@
 #               constructor-loop titles) only warn.  Several minutes long and
 #               deliberately not part of --all; treat it as a pre-release gate.
 #               Evidence: sweep-<titles>.jsonl + sweep-summary.txt.
+#   --perf      node tools/web_test/web_perf_test.mjs
+#               Wasm throughput smoke test: four light/medium titles are warmed
+#               up and then pump 600 frames each with a fixed 1000/60 ms
+#               timestep.  Floors are deliberately conservative (a fraction of
+#               the reference machine) so the suite catches order-of-magnitude
+#               regressions without failing slow CI hosts; the measured numbers
+#               are written to perf-summary.{txt,json}.  Well under a second,
+#               and not part of --all.
 #
 # Options:
 #   --build         run tools/build_web.sh (rebuild build/web/ + site) first;
@@ -72,6 +81,7 @@ run_node=0
 run_corpus=0
 run_browser=0
 run_sweep=0
+run_perf=0
 do_build=0
 corpus_frames=120
 started_at=$(date +%s)
@@ -95,6 +105,7 @@ while [ $# -gt 0 ]; do
     --corpus)  run_corpus=1 ;;
     --browser) run_browser=1 ;;
     --sweep)   run_sweep=1 ;;
+    --perf)    run_perf=1 ;;
     --all)     run_node=1; run_corpus=1; run_browser=1 ;;
     --build)   do_build=1 ;;
     --evidence)
@@ -111,7 +122,8 @@ while [ $# -gt 0 ]; do
     shift
 done
 
-if [ "$run_node" = 0 ] && [ "$run_corpus" = 0 ] && [ "$run_browser" = 0 ] && [ "$run_sweep" = 0 ]; then
+if [ "$run_node" = 0 ] && [ "$run_corpus" = 0 ] && [ "$run_browser" = 0 ] && [ "$run_sweep" = 0 ] &&
+    [ "$run_perf" = 0 ]; then
     run_node=1
     run_corpus=1
 fi
@@ -140,7 +152,7 @@ say_err() { echo "$*" >&2; echo "$*" >> "$log"; }
 say "== nano_j2me web verification"
 say "   repository: $here"
 say "   evidence:   $evidence"
-say "   suites:     node=$run_node corpus=$run_corpus browser=$run_browser sweep=$run_sweep build=$do_build"
+say "   suites:     node=$run_node corpus=$run_corpus browser=$run_browser sweep=$run_sweep perf=$run_perf build=$do_build"
 
 # ---- prerequisites ----------------------------------------------------------
 
@@ -178,10 +190,12 @@ rc_node=0
 rc_corpus=0
 rc_browser=0
 rc_sweep=0
+rc_perf=0
 status_node="SKIP"
 status_corpus="SKIP"
 status_browser="SKIP"
 status_sweep="SKIP"
+status_perf="SKIP"
 
 if [ "$run_node" = 1 ]; then
     say ""
@@ -232,6 +246,14 @@ if [ "$run_sweep" = 1 ]; then
     if [ "$rc_sweep" -eq 0 ]; then status_sweep="PASS"; else status_sweep="FAIL"; fi
 fi
 
+if [ "$run_perf" = 1 ]; then
+    say ""
+    say "== suite: wasm throughput smoke test"
+    node "$here/tools/web_test/web_perf_test.mjs" --evidence "$evidence" 2>&1 | tee -a "$log"
+    rc_perf=${PIPESTATUS[0]}
+    if [ "$rc_perf" -eq 0 ]; then status_perf="PASS"; else status_perf="FAIL"; fi
+fi
+
 # ---- summary ----------------------------------------------------------------
 
 finished_at=$(date +%s)
@@ -250,10 +272,14 @@ fi
 if [ "$run_sweep" = 1 ]; then
     say "   sweep:   $status_sweep"
 fi
+if [ "$run_perf" = 1 ]; then
+    say "   perf:    $status_perf"
+fi
 say "   evidence: $evidence"
 say "   elapsed:  ${elapsed}s"
 
-if [ "$rc_node" -ne 0 ] || [ "$rc_corpus" -ne 0 ] || [ "$rc_browser" -ne 0 ] || [ "$rc_sweep" -ne 0 ]; then
+if [ "$rc_node" -ne 0 ] || [ "$rc_corpus" -ne 0 ] || [ "$rc_browser" -ne 0 ] || [ "$rc_sweep" -ne 0 ] ||
+    [ "$rc_perf" -ne 0 ]; then
     say "== RESULT: FAIL"
     exit 1
 fi

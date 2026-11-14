@@ -349,8 +349,8 @@ build depending on the workload (uncapped 600-frame runs in Node, release build,
 
 | Game | wasm | native x86_64 | ratio |
 |---|---|---|---|
-| `game15.jar` | ≈6,100 fps | ≈16,200 fps | 2.7× |
-| `bubblet.jar` | ≈3,800 fps | ≈7,700 fps | 2.0× |
+| `game15.jar` | ≈6,500 fps | ≈16,200 fps | 2.5× |
+| `bubblet.jar` | ≈3,900 fps | ≈7,700 fps | 2.0× |
 | `slimevolley.jar` | ≈7,900 fps | ≈20,700 fps | 2.6× |
 | `1942空战_10403.jar` | ≈7,900 fps | ≈12,500 fps | 1.6× |
 
@@ -370,6 +370,7 @@ default and is what CI and these docs run):
 tools/check_web.sh --node --corpus   # API contract + pinned corpus, about 10 s
 tools/check_web.sh --all             # those two plus the Playwright page test
 tools/check_web.sh --sweep           # full-corpus audit, 403 titles, about 2 min
+tools/check_web.sh --perf            # wasm throughput smoke test, about 1 s
 tools/check_web.sh --build --node    # rebuild build/web/ first
 ```
 
@@ -387,7 +388,8 @@ flags: `--evidence DIR` (default
 frames per title, default 120, range 30–2000 — the first frames are needed for
 the render assertions to settle). `--sweep` is deliberately **not** part of
 `--all`: it starts all 403 corpus titles in fresh child processes (~2 min) and is
-for release/CI runs, while `--all` stays a ~18 s edit loop.
+for release/CI runs, while `--all` stays a ~18 s edit loop. `--perf` is likewise
+opt-in: it measures four titles and writes `perf-summary.json` next to the log.
 
 - **API test** (`tools/web_test/web_api_test.mjs`) — module load, version,
   manifest probe, error paths, `hello.jar` render, screen-size and speed options,
@@ -436,12 +438,20 @@ for release/CI runs, while `--all` stays a ~18 s edit loop.
   titles render. `black` is a warning, not a failure: whether a title happens to
   show content on a sampled frame depends on host speed and wall-clock phase.
   Results land in `<evidence>/sweep-403.jsonl` and `sweep-summary.txt`.
+- **Perf suite** (`tools/web_test/web_perf_test.mjs`, 9 checks) — the wasm
+  throughput smoke test: four light/medium titles (`game15`, `bubblet`,
+  `slimevolley`, `1942空战_10403`) are warmed up for 60 frames and then pump 600
+  frames each with the fixed `1000/60 ms` timestep. Every title must stay above a
+  deliberately conservative floor (≈10 % of the reference machine) so the suite
+  catches order-of-magnitude regressions on unknown CI hardware without failing
+  slow hosts; the measured fps/ms land in `<evidence>/perf-summary.{txt,json}`.
 
 Measured on the reference build (Emscripten 7.0.0, `include/nj2me/nj_web.h`
 0.5.7): the API suite passes **34/34 checks in 0.4 s**, the corpus suite
 **47/47 checks (42 titles) in 8.9 s**, and the browser suite **26/26 checks in
-about 7.9 s** — `tools/check_web.sh --all` is **18 s** end to end. The sweep
-suite needs about 2 min for all 403 titles. All 40
+about 7.9 s**, the perf suite **9/9 checks in about 0.5 s** — `tools/check_web.sh
+--all` is **18 s** end to end. The sweep suite needs about 2 min for all 403
+titles, the perf suite about 1 s. All 40
 playable titles draw 120/120 frames (the audiodemo and bench fixtures exit on
 their own, as expected), there are no engine `[nj2me] error:` lines,
 and the wasm heap stays at 64 MiB.

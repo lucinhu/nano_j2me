@@ -140,7 +140,12 @@ RB=Clear、LT/Start=左软键、RT/Back=右软键、十字键/左摇杆（0.45 �
 
 ```sh
 tools/check_web.sh --sweep   # 或 node tools/web_test/web_sweep_test.mjs --evidence DIR
+tools/check_web.sh --perf    # 或 node tools/web_test/web_perf_test.mjs --evidence DIR
 ```
+
+`--perf` 对 4 个轻/中量标题各跑 600 帧（固定 1000/60 ms 步长），下限取参考机
+数字的约十分之一，用来抓数量级回退而不在慢机器上误报；实测 fps/耗时写入
+`perf-summary.{txt,json}`。
 
 每标题独立子进程 + 25 s 超时，输出 `sweep-403.jsonl` 与 `sweep-summary.txt`；
 `black`（采样帧全黑）只作警告，已知的构造器拒绝/堆不足/无效 JAR 固定为预期项。
