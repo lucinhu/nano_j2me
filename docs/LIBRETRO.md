@@ -262,7 +262,11 @@ frontend is paused may likewise advance the virtual clock by up to about five
 seconds of game time (300 virtual frames) so that a frame which busy-waits on
 the clock can finish; the snapshot is then taken at the next frame boundary and
 includes that additional progress. If the frame still cannot finish, the save
-is refused as before.
+is refused as before. One measured remaining case is a title whose `paint()`
+itself waits on the virtual clock while the frontend is paused
+(`火影忍者汉化版_10735.jar`): the frame never reaches the boundary where
+requests are served and the save is refused after the four-second deadline.
+Saving during normal play, at a frame boundary, is unaffected.
 
 There is no determinism claim. Rewind, runahead and netplay are not advertised
 or validated; use manual states and the game's own save system. Snapshot sizes

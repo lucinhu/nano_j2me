@@ -4120,6 +4120,15 @@ NJFN(player_start)
     }
     w_i(vm, self, F_P_STATE, 400);
     fire(vm, self, "started");
+    /* Level-3 diagnostics: record which Players the title actually started,
+     * so a silent-audio probe can tell "never started" from "started but
+     * produced no PCM".  kind: 0 tones, 1 MIDI/WAV, 2 movie; stream/platform
+     * say which decoder path owns it. */
+    nj_logf(vm, 3, "media: started Player kind=%d stream=%d platform=%d "
+                   "rate=%d frames=%d",
+            (int)r_i(vm, self, F_P_KIND), (int)r_z(vm, self, F_P_STREAM),
+            (int)r_z(vm, self, F_P_PLAT), (int)r_i(vm, self, F_P_RATE),
+            (int)r_i(vm, self, F_P_FRAMES));
     return NJ_OK;
 }
 

@@ -101,3 +101,29 @@ is exhausted, the save is still refused and the game continues.
 * Saving while paused can include up to about 5 s of extra game time; the
   state's stored clock matches the frame boundary that was actually captured.
 * The 4 s `LR_STATE_TIMEOUT_MS` deadline is unchanged.
+
+## Known remaining case: a paint that waits on the virtual clock
+
+A wider probe (50 titles, `--frames 240 --pace-us 16667`, seed 21) still
+found one refusal: `火影忍者汉化版_10735.jar` fails `serialize_writes_state`
+with the same `-8` log at 240, 300 and 600 frames. A gdb `SIGSTOP` capture
+while the request was pending shows a different shape from 僵尸危机2:
+
+```
+k.paint(Ljavax/microedition/lcdui/Graphics;)V  pc=625   (main thread, state=SLEEPING,
+                                                         in_c_call=1, wake_at_ms set)
+k.run()V / Canvas.serviceRepaints()V                    (the worker thread is already DEAD)
+```
+
+The worker is inside a nested paint dispatched from the game thread's
+`serviceRepaints()`; the paint's Java code sleeps on the virtual clock, and the
+pump cannot reach a frame boundary where the save is legal
+(`nj_vm_can_save()` refuses `in_paint`/`in_c_call` frames). Clock assistance
+cannot help because the frame is a nested C call, not the frame loop that
+`lr_run_frames()` can serve between. Increasing the clock budget and advancing
+several frames per hook was tried and only made the nested pump slower, so the
+production behaviour keeps the simple assist and this title is documented as a
+limitation in `docs/LIBRETRO.md`: saving while paused can be refused for such
+a title, while saving during normal play (frontend at a frame boundary) works.
+The 50-title visual probe therefore reports 49 passed, 1 refused, 0 visual
+failures.

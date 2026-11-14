@@ -11,6 +11,11 @@ but the mixer never receives them".
 Usage:
     tools/check_corpus_audio.py <rows dir> [--count N] [--frames N] [--seed N]
 
+The probe runs the CLI at `--verbose 3`, so the runtime's level-3 media lines
+are reported too: a title that never started a Player ("silent, no started
+Player") is a menu/phase artefact, while one that started a Player but handed
+no PCM to the device ("silent, started") is worth investigating.
+
 `rows dir` is a tools/sweep_compat.py output directory; only titles classified
 `ok` are sampled, so the probe measures audio rather than startup problems.
 The sample is deterministic for a given seed.  Nothing is written anywhere.
@@ -88,7 +93,8 @@ def main():
             cp = subprocess.run(
                 [BIN, "--port", "headless", "--size", "240x320", "--heap", "16",
                  "--fps", "30", "--run-frames", str(args.frames),
-                 "--keys", "@" + keys, "--rms-dir", rms, "--stats", path],
+                 "--keys", "@" + keys, "--rms-dir", rms, "--stats",
+                 "--verbose", "3", path],
                 capture_output=True, text=True, timeout=120)
         out = (cp.stderr or "") + (cp.stdout or "")
         observed = re.search(r"observed:.*", out)
@@ -96,14 +102,20 @@ def main():
         pcm = int((re.search(r"pcm_frames=(\d+)", observed) or [0, "0"])[1])
         tones = int((re.search(r"tones=(\d+)", observed) or [0, "0"])[1])
         frames = int((re.search(r"frames=(\d+)", out) or [0, "0"])[1])
-        kind = "sound" if (pcm or tones) else "silent"
+        started = len(re.findall(r"media: started Player", out))
         if pcm or tones:
+            kind = "sound"
             heard += 1
-        else:
+        elif started:
+            kind = "silent-started"
             silent += 1
-        print("%-50s %-8s assets=%-3d frames=%-4d tones=%-3d pcm=%-7d rc=%d"
-              % (os.path.basename(path)[:50], kind, len(assets), frames,
-                 tones, pcm, cp.returncode))
+        else:
+            kind = "silent-nostart"
+            silent += 1
+        print("%-46s %-15s assets=%-3d frames=%-4d tones=%-2d pcm=%-7d "
+              "started=%-2d rc=%d"
+              % (os.path.basename(path)[:46], kind, len(assets), frames,
+                 tones, pcm, started, cp.returncode))
 
     print("\n%d titles: %d delivered audio, %d silent" % (seen, heard, silent))
     return 0

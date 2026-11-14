@@ -109,3 +109,27 @@ INFO menu waiting for a soft key: an aggressive script with fire/soft1/soft2
 and a pointer tap advanced it to the hamster cage and the MIDlet then exited
 from the pointer hitting Exit. So the frozen row is the documented "menu
 awaits input" case, not a rendering defect.
+
+## MIDI silence follow-up: Player created but not started (2026-11-15)
+
+The 600-frame MIDI sample reported 5 of 8 titles silent. All five carry real
+SMF assets (`sound.mid` 386 B to 43,520 B), so the silence was not missing
+music data. A new level-3 line in `player_start`
+(`src/midp/nj_lib_media.c`: `media: started Player kind=... stream=...
+platform=... rate=... frames=...`) showed the difference:
+
+* `疯狂出租车中文版_721` and `塔塔_2848` create the built-in MIDI renderer
+  (103,579 frames / 1 channel; 88,615 frames / 2 channels and 3,957,051
+  frames / 2 channels) but never call `start()` within the 600-frame window.
+* `大富翁中国之旅_11873`, `杀戮机器-纳粹僵尸_3610` and
+  `生化危机之恶化_8448` never create a Player at all.
+
+`tools/check_corpus_audio.py` now runs with `--verbose 3`, counts
+`media: started Player` lines and classifies rows as `sound`,
+`silent-started` (worth investigating) or `silent-nostart` (menu/phase
+artefact). The re-run reports 3 delivered audio and 5 `silent-nostart` for the
+MIDI sample, and 9 delivered audio plus 3 `silent-nostart` for a broader
+12-title 600-frame sample (e.g. `文明3_10522` delivered 451,212 PCM frames
+from 6 started Players). Logs:
+`.local-tools/debug-runs/submission-20261115/audio-probe-midi-600b.log`,
+`audio-probe-600b.log`.
