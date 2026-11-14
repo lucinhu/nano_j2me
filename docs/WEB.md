@@ -102,9 +102,43 @@ be served with or without a build:
   same facade, so the entire UI is testable before the engine exists. The page
   never throws when the module is missing; it shows a banner pointing at
   `tools/build_web.sh`.
+- **Installable and offline** — `web/manifest.json` declares a standalone PWA
+  with 192/512/maskable icons, and `web/sw.js` caches the shell and the engine
+  (`js/nj2me.js`, `js/nj2me.wasm`) on install, so a second visit works offline
+  from the address bar / home screen. See *Install and offline use* below.
 
 To use the shell with a custom engine build, serve `build/web/`; to develop the
 shell alone, serve `web/` (`python3 -m http.server 8001 -d web`).
+
+## Install and offline use (PWA)
+
+The shell is a static site with a service worker, so any static host can serve
+it and the browser can install it as an app.
+
+- `web/manifest.json` — `display: standalone`, theme/background colours, and
+  four icons (`icon.svg`, 192 px, 512 px, maskable 512 px). Desktop Chrome/Edge
+  show an install button in the address bar; Firefox and mobile browsers offer
+  "add to home screen".
+- `web/sw.js` — on install it precaches the shell (`index.html`, CSS, icons, all
+  `js/*.js` modules) and the engine (`js/nj2me.js` + `js/nj2me.wasm`), then
+  serves cache-first. After the engine cache completes, stopping the web server
+  and reloading still boots the shell **and the WASM engine**.
+- The engine probe in `web/js/module.js` uses a `HEAD` request; the service
+  worker answers it from the cached `GET` entry with a headers-only response,
+  which is what keeps the offline probe from falling back to mock mode.
+- Service workers require a secure context: `https://`, `localhost` or
+  `127.0.0.1`. For shell development, `?nosw=1` skips registration and
+  unregisters an existing worker so stale caches do not hide edits.
+- The cache name is versioned (`nj2me-shell-<date>` in `web/sw.js`): bump it
+  whenever shell files change, otherwise the cache-first worker keeps serving
+  the previous version. Old caches are deleted on the next activation.
+
+The browser suite (`tools/web_test/web_browser_test.mjs`, run by
+`tools/check_web.sh --browser`) checks this path: manifest parse, service-worker
+control, engine entries in the cache, and a real offline reload after stopping
+the static server. Playwright's Firefox offline emulation is not
+service-worker-aware, so the test stops the server instead of using
+`context.set_offline()`.
 
 ## How the browser build runs without blocking
 
@@ -323,7 +357,7 @@ the render assertions to settle).
 - **Corpus test** (`tools/web_test/web_corpus_test.mjs`) — a deterministic slice
   of the 400-title [compatibility corpus](CORPUS.md) (plus fixtures) run for 120
   frames each with JAR start, drawn-frame and non-blank-frame checks.
-- **Browser test** (`tools/web_test/web_browser_test.mjs`, 18 checks) — serves
+- **Browser test** (`tools/web_test/web_browser_test.mjs`, 21 checks) — serves
   `build/web/` on an ephemeral port and drives the real shell in headless Firefox
   through Playwright: the real engine (`kind=wasm`, API 1, runtime 0.5.7),
   zh-CN UI, import `hello.jar` → metadata and icon in IndexedDB, 240×320
@@ -332,12 +366,16 @@ the render assertions to settle).
   save-state slot written and loaded without a restart, exit → library, reload
   keeps the game and the slot, and a wasm-less copy of the site falls back to the
   mock with the "run tools/build_web.sh" banner — with zero page/console errors
-  and zero external requests.
+  and zero external requests. Three more checks cover the PWA layer: the manifest
+  parses (`display=standalone`, four icons including a maskable one), the service
+  worker controls the page and has `nj2me.js`/`nj2me.wasm` in its cache, and
+  reloading with the static server stopped still boots the shell with
+  `kind=wasm`.
 
 Measured on the reference build (Emscripten 7.0.0, `include/nj2me/nj_web.h`
 0.5.7): the API suite passes **33/33 checks in 0.2 s**, the corpus suite
-**46/46 checks (41 titles) in 26 s**, and the browser suite **18/18 checks in
-about 5 s** — `tools/check_web.sh --all` is **32 s** end to end. All 39 playable
+**46/46 checks (41 titles) in 26 s**, and the browser suite **21/21 checks in
+about 5.5 s** — `tools/check_web.sh --all` is **33 s** end to end. All 39 playable
 titles draw 120/120 frames, there are no engine `[nj2me] error:` lines, and the
 wasm heap stays at 64 MiB.
 The known-bad `1945空战英雄_6105.jar` is excluded because it fails natively too.
@@ -391,6 +429,8 @@ repository.
 | `redefinition of typedef 'nj_vm' is a C11 feature` while building | don't use `-DNJ_WERROR=ON` on the wasm target (pre-existing header style) |
 | Out of memory / `RangeError` in wasm | game needs more heap: raise `NJW_OPT_HEAP_BYTES` (max 1 GiB wasm memory) or lower screen size |
 | Build picks up the wrong Emscripten | `source .local-tools/emsdk/emsdk_env.sh` or run `tools/build_web.sh` (it locates the SDK itself) |
+| A redeployed shell still shows the old page | the cache-first service worker kept the previous shell: bump `CACHE` in `web/sw.js` (or open once with `?nosw=1`) |
+| Offline reload does not start / falls back to mock | service worker needs `https://` or `localhost`, and the engine must have been cached on an earlier online visit; check DevTools → Application → Cache Storage for `nj2me-shell-*` |
 
 ## Files
 
@@ -399,6 +439,8 @@ repository.
 | `include/nj2me/nj_web.h` | JavaScript⇄C API and the port's guarantees |
 | `src/port/web/nj_web.c` | the Emscripten port: `nj_port` hooks, runner, `njw_*` exports |
 | `web/` | the bundled shell (HTML/CSS/ES modules) |
+| `web/manifest.json`, `web/sw.js` | PWA manifest and service worker (installable, offline shell + engine) |
+| `web/assets/icon*.png` | 192/512/maskable icons generated from `icon.svg` |
 | `tools/build_web.sh` | SDK discovery, `emcmake` build, `build/web/` assembly |
 | `tools/emsdk_setup.sh` | installs the Emscripten SDK into `.local-tools/emsdk` |
 | `tools/check_web.sh`, `tools/web_test/` | Node API/corpus and Playwright browser verification |

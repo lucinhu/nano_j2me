@@ -51,7 +51,8 @@ search, recents, favourites, key rebinding and a settings page included.
 
 **Browser (WebAssembly)** — the same runtime as an Emscripten module with a
 dependency-free shell: drag in `.jar` files, play with keyboard or on-screen
-keypad, sound, three save states per game, all stored locally in IndexedDB.
+keypad, sound, three save states per game, all stored locally in IndexedDB. The
+page is a PWA: install it from the address bar and it reopens offline.
 
 <p>
 <img src="docs/images/readme-web-library.png" width="330" alt="The web shell's game library after importing a JAR">
@@ -159,7 +160,9 @@ python3 -m http.server -d build/web 8000
 ```
 
 Open `http://localhost:8000/`, drop a `.jar` in, play. The shell keeps the game
-library, save files and up to three save states per game in IndexedDB. The
+library, save files and up to three save states per game in IndexedDB, and ships
+a manifest plus a service worker, so after one visit it works as an installed
+app and reopens offline (engine included). The
 JavaScript⇄C API, persistence layout and limits are in
 [docs/WEB.md](docs/WEB.md); the harness (`tools/check_web.sh --all`) runs the
 Node API tests, a 41-title corpus and a real-Firefox page test.

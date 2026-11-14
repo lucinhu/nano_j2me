@@ -49,7 +49,7 @@
 
 **网页版（WebAssembly）**——同一个运行时的 Emscripten 模块，外加一个零依赖的
 网页外壳：拖入 `.jar` 即玩，键盘或屏幕键盘操作，有声音，每游戏三个存档点，数据
-全部保存在本地 IndexedDB。
+全部保存在本地 IndexedDB。页面是 PWA：可从地址栏安装，之后离线也能打开。
 
 <p>
 <img src="docs/images/readme-web-library.png" width="330" alt="网页外壳导入 JAR 后的游戏库">
@@ -155,7 +155,8 @@ python3 -m http.server -d build/web 8000
 ```
 
 打开 `http://localhost:8000/`，拖入 `.jar` 即可游玩。外壳把游戏库、存档文件和
-每游戏最多三个存档点保存在 IndexedDB 里。JavaScript⇄C 的接口、持久化目录布局和
+每游戏最多三个存档点保存在 IndexedDB 里；页面带有 manifest 和 service worker，
+首次访问后可安装为应用，断网也能打开（引擎一并缓存）。JavaScript⇄C 的接口、持久化目录布局和
 限制见 [docs/WEB.md](docs/WEB.md)；验证脚本
 （`tools/check_web.sh --all`）会运行 Node API 测试、41 个游戏的语料和真实 Firefox
 页面测试。

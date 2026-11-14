@@ -29,6 +29,34 @@ const state = {
 
 /* Exposed early so a test script can wait for readiness even while we boot. */
 window.__nj2me = state;
+/* ------------------------------------------------- service worker / PWA */
+
+/* The shell is a static bundle, so a service worker makes the page
+ * installable and lets it open offline.  Registration is best effort: private
+ * modes, file:// and non-secure origins simply keep running without one. */
+function registerServiceWorker() {
+  if (!('serviceWorker' in navigator)) { return; }
+  const params = new URLSearchParams(window.location.search);
+  if (params.has('nosw')) {
+    navigator.serviceWorker.getRegistrations()
+      .then((registrations) => {
+        registrations.forEach((registration) => { registration.unregister(); });
+      })
+      .catch(() => {});
+    console.info('[nj2me] service worker disabled by ?nosw=1');
+    return;
+  }
+  const secure = window.isSecureContext ||
+    window.location.hostname === 'localhost' ||
+    window.location.hostname === '127.0.0.1';
+  if (!secure) { return; }
+  navigator.serviceWorker.register('./sw.js').then((registration) => {
+    state.sw = registration;
+    console.info('[nj2me] service worker ready (offline shell)');
+  }).catch((error) => {
+    console.warn('[nj2me] service worker registration failed', error);
+  });
+}
 
 /* ------------------------------------------------------------- language */
 
@@ -200,6 +228,8 @@ async function start() {
     '[nj2me] shell ready · engine=' + runtime.kind +
     (runtime.mock ? ' (' + (runtime.mockReason || 'mock') + ')' : '')
   );
+
+  registerServiceWorker();
 }
 
 start().catch((error) => {

@@ -17,6 +17,8 @@
  *      throwing (no uncaught errors, banner tells the user how to build it).
  *   4. Asserts zero browser console errors / page errors / failed requests on
  *      the real shell, and that no request leaves 127.0.0.1 (no CDN/network).
+ *   5. Checks the PWA layer: manifest, service worker control, cached engine,
+ *      and a real offline reload after the static server is stopped.
  *
  * Playwright resolution order (first hit wins, no npm install needed):
  *   - node package "playwright" or "playwright-core" if installed;
@@ -176,11 +178,16 @@ async function startStaticServer(root) {
     server.listen(0, '127.0.0.1', resolve);
   });
   const { port } = server.address();
+  let closed = false;
   return {
     root,
     origin: `http://127.0.0.1:${port}`,
     requests,
-    close: () => new Promise((resolve) => server.close(() => resolve()))
+    close: () => {
+      if (closed) { return Promise.resolve(); }
+      closed = true;
+      return new Promise((resolve) => server.close(() => resolve()));
+    }
   };
 }
 
@@ -773,6 +780,90 @@ async function checkNetworkHygiene() {
   });
 }
 
+/* --------------------------------------------------------------- PWA/offline */
+
+async function runPwaChecks() {
+  const page = await context.newPage();
+  attachDiagnostics(page, 'pwa');
+
+  await check('PWA manifest is linked and parseable', async () => {
+    await page.goto(realServer.origin + '/', { waitUntil: 'load', timeout: timeoutMs });
+    await waitReady(page);
+    const info = await page.evaluate(async () => {
+      const link = document.querySelector('link[rel="manifest"]');
+      const href = link ? link.href : '';
+      const response = href ? await fetch(href, { cache: 'no-store' }) : null;
+      const manifest = response && response.ok ? await response.json() : null;
+      return { href, ok: !!(response && response.ok), manifest };
+    });
+    assert(info.href && /\/manifest\.json$/.test(info.href),
+      `manifest link looks wrong: ${JSON.stringify(info.href)}`);
+    assert(info.ok && info.manifest, 'manifest.json could not be fetched/parsed');
+    const manifest = info.manifest;
+    assert(manifest.display === 'standalone',
+      `manifest display expected "standalone", got ${JSON.stringify(manifest.display)}`);
+    const icons = Array.isArray(manifest.icons) ? manifest.icons : [];
+    assert(icons.length >= 3, `manifest icons expected >= 3, got ${icons.length}`);
+    assert(icons.some((icon) => /maskable/.test(icon.purpose || '')),
+      'manifest has no maskable icon');
+    return `display=${manifest.display}, name=${JSON.stringify(manifest.name)}, icons=${icons.length}`;
+  });
+
+  await check('service worker controls the page and caches the engine', async () => {
+    await page.waitForFunction(
+      () => !!(navigator.serviceWorker && navigator.serviceWorker.controller),
+      undefined,
+      { timeout: timeoutMs, polling: 100 }
+    );
+    const info = await page.evaluate(async () => {
+      const registration = await navigator.serviceWorker.ready;
+      const keys = await caches.keys();
+      const cacheName = keys.find((key) => key.startsWith('nj2me-shell-'));
+      const cached = [];
+      if (cacheName) {
+        const cache = await caches.open(cacheName);
+        cached.push(...(await cache.keys()).map((request) => request.url));
+      }
+      return {
+        controller: navigator.serviceWorker.controller
+          ? navigator.serviceWorker.controller.scriptURL : '',
+        registrationActive: !!(registration && registration.active),
+        cacheName: cacheName || '',
+        cachedCount: cached.length,
+        hasModule: cached.some((url) => /\/js\/nj2me\.js$/.test(url)),
+        hasWasm: cached.some((url) => /\/js\/nj2me\.wasm$/.test(url))
+      };
+    });
+    assert(/\/sw\.js$/.test(info.controller),
+      `page is not controlled by sw.js: ${JSON.stringify(info.controller)}`);
+    assert(info.registrationActive, 'service worker registration is not active');
+    assert(info.cacheName, 'no nj2me-shell-* cache exists');
+    assert(info.hasModule && info.hasWasm,
+      `engine missing from the cache: ${JSON.stringify(info)}`);
+    return `${info.cacheName}, ${info.cachedCount} entries, js+wasm cached`;
+  });
+
+  await check('offline reload boots the shell with the WASM engine', async () => {
+    /* Playwright's Firefox offline emulation is not service-worker aware, so
+     * true offline is simulated by stopping the static server instead. */
+    await realServer.close();
+    await page.reload({ waitUntil: 'load', timeout: timeoutMs });
+    await waitReady(page);
+    const info = await page.evaluate(() => ({
+      kind: window.__nj2me.runtime.kind,
+      mock: window.__nj2me.runtime.mock,
+      engine: document.body.dataset.engine
+    }));
+    assert(info.kind === 'wasm' && info.mock === false,
+      `offline reload fell back: ${JSON.stringify(info)}`);
+    assert(info.engine === 'wasm', `body[data-engine] expected wasm, got ${info.engine}`);
+    await screenshot(page, 'browser-09-offline.png');
+    return 'server stopped, shell + engine served from the service-worker cache';
+  }, { fatal: true });
+
+  await page.close();
+}
+
 /* --------------------------------------------------------------- evidence */
 
 async function writeEvidence() {
@@ -887,6 +978,7 @@ async function main() {
     await runRealShellChecks();
     await runMissingWasmChecks();
     await checkNetworkHygiene();
+    await runPwaChecks();
   } catch (error) {
     results.fatalError = error && error.message ? error.message : String(error);
     log(`[FATAL] ${results.fatalError}`);

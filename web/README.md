@@ -6,8 +6,11 @@
 ```
 web/
 ├── index.html          应用外壳（库 + 游戏两页，面板、对话框、toast 容器）
+├── manifest.json       PWA 清单（standalone、主题色、192/512/maskable 图标）
+├── sw.js               service worker：预缓存外壳 + 引擎，支持离线打开
 ├── css/app.css         全部样式（深色、响应式、安全区、减少动画）
 ├── assets/icon.svg     站点图标（内联 SVG，无外部字体/图片）
+├── assets/icon-*.png   由 icon.svg 生成的 192/512/maskable 图标
 └── js/
     ├── main.js         入口：语言、引擎加载、库/游戏路由、mock 横幅
     ├── module.js       wasm 引擎门面（Runtime facade）+ IDBFS 挂载
@@ -77,9 +80,24 @@ python3 -m http.server -d build/web 8000 # 打开 http://127.0.0.1:8000/
   `FS.syncfs` + `pagehide`/`visibilitychange` 时同步。
 - 存档状态与游戏 ID 绑定；读档失败会提示“存档不兼容，游戏需要重新开始”。
 
+## 安装与离线（PWA）
+
+- `manifest.json` 声明了 `standalone` 显示模式、主题色和 192/512/maskable 图标；
+  桌面版 Chrome/Edge 可用地址栏的安装按钮，Firefox/移动端可“添加到主屏幕”。
+- `sw.js` 在安装时预缓存整个外壳和引擎（`js/nj2me.js` + `js/nj2me.wasm`），
+  之后离线重载也能打开并直接运行游戏；页面探测引擎用的 HEAD 请求由缓存合成响应。
+- service worker 需要安全上下文（`https://` 或 `localhost`/`127.0.0.1`）。
+  本地开发时用 `?nosw=1` 跳过注册并注销已有 worker，避免缓存旧页面。
+- **改动 `web/` 下的外壳文件后，记得同时改 `sw.js` 里的 `CACHE` 版本号**，
+  否则旧缓存会继续返回上一版页面（缓存优先策略）。
+- `tools/check_web.sh --browser` 的浏览器套件包含 PWA 检查：manifest、service worker
+  接管、引擎已缓存，以及停掉静态服务器后的真实离线重载（Firefox 的 Playwright
+  离线模拟对 service worker 不生效，所以测试用停服务器来模拟断网）。
+
 ## 浏览器支持
 
 需要 ES Modules、WebAssembly、IndexedDB、Pointer Events；`autoPersist` 不支持时自动退化。
+离线打开需要 service worker（`https://` 或 `localhost`）。
 面向近两年的 Firefox / Chrome / Edge / Safari（桌面与移动），布局覆盖 360px 宽到桌面。
 
 ## 自测
@@ -103,6 +121,10 @@ mock 脚本会：先验证“没有 wasm 时静默回退到 mock” → 加载�
 中英切换 → 导入 `tests/games/hello.jar` → 搜索/排序 → 启动游戏 → 检查帧动画、
 键盘、触屏、指针、文本桥 → 打开面板暂停、截图下载、保存/读档、速度/静音/适应/按键
 开关 → 退出 → 刷新验证 IndexedDB 持久化 → 删除并确认 → 390×844 移动端截图。
+
+官方浏览器套件（`node tools/web_test/web_browser_test.mjs`，21 项）在真实 Firefox
+里跑完整流程，并额外验证 PWA：manifest 可解析（4 个图标、standalone）、
+service worker 接管页面、引擎已进缓存、停止静态服务器后离线重载仍是 wasm 引擎。
 
 wasm 脚本会：断言 `WasmRuntime` 已加载（apiVersion=1、runtimeVersion）、真实
 `njw_probe` 读到 `Hello World`/`frog-parrot.net`、启动后 240×320 画面持续提交帧、
