@@ -120,7 +120,12 @@ export class LibraryView {
     this.storageEl = $('#library-storage');
     this.engineEl = $('#library-engine');
     this.footerHint = $('#library-footer-hint');
+    this.continueCard = $('#continue-card');
+    this.continueThumb = $('#continue-thumb');
+    this.continueTitleEl = $('#continue-title');
+    this.continueMetaEl = $('#continue-meta');
     this.offlineReady = false;
+    this._continueRecord = null;
 
     this.games = [];
     this.query = '';
@@ -131,6 +136,14 @@ export class LibraryView {
     this._importing = false;
     this._searchTimer = 0;
     this._dbReady = true;
+
+    /* One-tap "continue": the newest game the player touched, with the state
+       the exit auto-save kept (or just its title when that toggle is off). */
+    if (this.continueCard) {
+      this.continueCard.addEventListener('click', () => {
+        if (this._continueRecord) { this.onPlay(this._continueRecord); }
+      });
+    }
   }
 
   init() {
@@ -281,8 +294,48 @@ export class LibraryView {
         }
       }
     }
+    this._renderContinue(games, total);
     if (this.engineEl) { this._updateEngineLabel(); }
     if (this.footerHint) { this.footerHint.textContent = t('library.footerHint'); }
+  }
+
+  /* The continue card only makes sense on the unfiltered library: with a search
+     in progress or the favourites filter on, a tile click is the clearer act. */
+  _renderContinue(games, total) {
+    if (!this.continueCard) { return; }
+    const available = total > 0 && this.query === '' && !this.onlyFavourites;
+    let recent = null;
+    if (available) {
+      for (const game of games) {
+        if (!game.lastPlayedAt) { continue; }
+        if (!recent || game.lastPlayedAt > recent.lastPlayedAt) { recent = game; }
+      }
+    }
+    this._continueRecord = recent;
+    this.continueCard.hidden = !recent;
+    if (!recent) { return; }
+    if (this.continueTitleEl) {
+      this.continueTitleEl.textContent = recent.title || recent.fileName || '';
+    }
+    const autoState = recent.autoState;
+    const autoFrames = autoState && Number.isFinite(Number(autoState.frames))
+      ? Number(autoState.frames)
+      : 0;
+    if (this.continueMetaEl) {
+      this.continueMetaEl.textContent = autoFrames > 0
+        ? t('library.continueMeta', { frames: autoFrames })
+        : t('library.continueNoState');
+    }
+    if (this.continueThumb) {
+      const thumb = autoState && typeof autoState.thumb === 'string' ? autoState.thumb : '';
+      if (thumb) {
+        this.continueThumb.src = thumb;
+        this.continueThumb.hidden = false;
+      } else {
+        this.continueThumb.removeAttribute('src');
+        this.continueThumb.hidden = true;
+      }
+    }
   }
 
   _buildTile(game) {

@@ -997,6 +997,60 @@ async function runRealShellChecks() {
     }
   });
 
+  await check('library offers a continue card for the last played game', async () => {
+    /* The card is the quick way back into the newest game; it appears only on
+       the unfiltered library and its meta line reflects the exit auto-save. */
+    const ctx = await browser.newContext({ viewport: { width: 960, height: 840 }, locale: 'zh-CN' });
+    try {
+      const page = await ctx.newPage();
+      attachDiagnostics(page, 'continue');
+      await page.goto(realServer.origin + '/', { waitUntil: 'load', timeout: timeoutMs });
+      await waitReady(page);
+      await page.setInputFiles('#file-input', HELLO_JAR);
+      await page.waitForFunction(
+        () => document.querySelectorAll('.game-tile').length >= 1,
+        undefined,
+        { timeout: timeoutMs, polling: 100 });
+      await page.locator('.game-tile').first().click();
+      await page.waitForFunction(
+        () => !!(window.__nj2me.game && window.__nj2me.game.game),
+        undefined,
+        { timeout: timeoutMs, polling: 100 });
+      await waitFrames(page, 30, timeoutMs);
+      await page.click('#game-back');
+      await page.waitForFunction(
+        () => window.getComputedStyle(document.querySelector('#library-view')).display !== 'none',
+        undefined,
+        { timeout: timeoutMs });
+      await page.waitForFunction(
+        () => !document.querySelector('#continue-card').hidden,
+        undefined,
+        { timeout: timeoutMs, polling: 100 });
+      const label = await page.textContent('#continue-title');
+      assert(/Hello World/.test(label || ''),
+        `continue card should name the last game, got ${JSON.stringify(label)}`);
+      await page.fill('#search-input', 'zzz');
+      await page.waitForFunction(
+        () => document.querySelector('#continue-card').hidden,
+        undefined,
+        { timeout: timeoutMs, polling: 100 });
+      await page.fill('#search-input', '');
+      await page.waitForFunction(
+        () => !document.querySelector('#continue-card').hidden,
+        undefined,
+        { timeout: timeoutMs, polling: 100 });
+      await page.click('#continue-card');
+      await page.waitForFunction(
+        () => !!(window.__nj2me.game && window.__nj2me.game.game),
+        undefined,
+        { timeout: timeoutMs, polling: 100 });
+      await waitFrames(page, 12, timeoutMs);
+      return `continue card named ${JSON.stringify(label)} after play; hidden by search; clicking it started the title again`;
+    } finally {
+      await ctx.close();
+    }
+  });
+
   await check('a second tab cannot run the engine while another tab owns it', async () => {
     /* Two pages in one context share IndexedDB and the BroadcastChannel, so
        this is exactly the user situation: a second tab opened while a game is
