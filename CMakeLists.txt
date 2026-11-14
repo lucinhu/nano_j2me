@@ -649,6 +649,7 @@ if(NJ_BUILD_WEB)
     _njw_start _njw_frame _njw_running _njw_displayable_ready _njw_stop
     _njw_error _njw_stop_reason _njw_frames
     _njw_framebuffer _njw_width _njw_height _njw_frame_epoch
+    _njw_stats
     _njw_key _njw_pointer _njw_text_input _njw_text_edit _njw_text_replace
     _njw_text_active _njw_text_current _njw_text_state
     _njw_audio_available _njw_audio_rate _njw_audio_channels _njw_audio_read

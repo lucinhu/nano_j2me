@@ -174,7 +174,8 @@ Node API tests, a 42-title corpus and a real-Firefox page test, and
 `tools/check_web.sh --sweep` audits the whole 403-title corpus. Heap-hungry
 titles can raise their Java heap from the in-game tools panel, and
 screen-size presets (176×208, 176×220, 128×160, 320×240) switch the emulated
-device canvas at the next launch.
+device canvas at the next launch, and the tools panel reports live engine
+counters (heap, frames/paints, GC, bytecode rate) for debugging.
 
 ## Other builds
 

@@ -691,6 +691,42 @@ async function runRealShellChecks() {
     return `heapMb ${before} -> 64 with a toast, then back to ${before}`;
   });
 
+  await check('diagnostics panel shows live engine counters', async () => {
+    const panelOpen = await realPage.evaluate(
+      () => document.querySelector('#game-panel').classList.contains('is-open'));
+    if (!panelOpen) {
+      await realPage.click('#panel-handle');
+      await realPage.waitForSelector('#game-panel.is-open', { timeout: 5000 });
+    }
+    const read = () => realPage.evaluate(() => ({
+      heap: (document.querySelector('#diag-heap') || {}).textContent || '',
+      paints: (document.querySelector('#diag-paints') || {}).textContent || '',
+      gc: (document.querySelector('#diag-gc') || {}).textContent || '',
+      insns: (document.querySelector('#diag-insns') || {}).textContent || ''
+    }));
+    await realPage.waitForFunction(() => {
+      const heap = document.querySelector('#diag-heap');
+      return !!heap && /\d+\.\d \/ \d+\.\d MiB/.test(heap.textContent || '');
+    }, undefined, { timeout: 8000, polling: 100 });
+    /* The bytecode rate needs two samples 400 ms apart. */
+    await realPage.waitForTimeout(700);
+    const first = await read();
+    assert(/^\d+\.\d \/ \d+\.\d MiB$/.test(first.heap.trim()),
+      `heap text looks wrong: ${JSON.stringify(first.heap)}`);
+    assert(/^\d+ \/ \d+$/.test(first.paints.trim()),
+      `frames/paints text looks wrong: ${JSON.stringify(first.paints)}`);
+    assert(/^\d+$/.test(first.gc.trim()), `gc text looks wrong: ${JSON.stringify(first.gc)}`);
+    assert(/^\d+(\.\d+)? [MK]?\/s$/.test(first.insns.trim()),
+      `bytecode rate text looks wrong: ${JSON.stringify(first.insns)}`);
+    await realPage.waitForTimeout(700);
+    const second = await read();
+    const frameCount = (text) => Number((text.split('/')[0] || '').trim()) || 0;
+    assert(frameCount(second.paints) > frameCount(first.paints),
+      `panel frame counter did not advance (${first.paints} -> ${second.paints})`);
+    return `heap ${first.heap.trim()}, ${second.paints.trim()} frames/paints, ` +
+      `rate ${second.insns.trim()}`;
+  });
+
   await check('screen size preset restarts the canvas at the chosen device size', async () => {
     /* Own context: the setting persists in localStorage, and a failed restore
        must not leak a smaller canvas into the PWA/offline checks. */

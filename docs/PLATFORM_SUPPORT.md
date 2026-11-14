@@ -112,9 +112,10 @@ RGB565 展开成 RGBA8888 交给 `<canvas>`。虚拟时钟由宿主驱动：加�
 | 真实浏览器冒烟（headless Firefox + `build/web` 静态服务） | 导入 hello.jar → 库条目显示 "Hello World / frog-parrot.net" → 点击出画 240x320（内容为 "Hello World!"）→ 方向键/Enter 无异常 → 返回库；无 page error，截图 `.local-tools/debug-runs/web-manual-smoke/` |
 | 与原生帧对照 | `1942空战_10403.jar` 的标题屏（"¿SONIDO?" 选择音效）在浏览器里与原生 headless `--dump-frames` 的 240x320 帧逐像素一致；该标题在原生与 wasm 上都抛同一个 `ArrayIndexOutOfBoundsException`（商品自身行为，不是端口回归） |
 | 真实游戏浏览器实测（Playwright Firefox，可玩性） | `蹦球传说美化版_2959.jar`（Bounce Tales 修改版，自动演示画面）在真实页面中：rAF pump **60.1 次/秒**、6 秒内 9 个不同画面帧（30 次采样）、方向键/Enter 后画面改变且 pump 不停、打开工具面板后画面冻结（自动暂停）并在关闭后恢复、退出回库后刷新游戏仍在库中；同一页面运行 `audiodemo.jar` 3 秒，引擎日志出现 10 行音频事件（`wav=200000`、`amr=80000`、`adpcm=252500`、state=400，`http=unsupported` 符合无网络预期）；0 console/page error，证据 `.local-tools/debug-runs/web-playtest/` |
-| 浏览器页面（Playwright Firefox + `tools/check_web.sh --browser`） | 30/30 检查通过（约 12–14 s）：静态服务 `build/web` → 真实引擎 `kind=wasm`、API 1、版本 0.5.7 → zh-CN 界面 → 导入 hello.jar（元数据/图标进 IndexedDB）→ 画布 240x320 非黑（4 色）→ 方向键/Enter（nj_key 15/16/17/6）帧号推进 → 面板自动暂停（帧冻结）+ 继续 → 存档槽 1 blob 329,724 字节、读档往返不重启 → 存档槽 1 导出为 `.njst` 下载（字节数与槽内一致、magic `NJSS`）、再经文件选择器导入槽 2 并生效 → 游戏面板内存选择 64 MiB 持久化并弹提示 → 隔离上下文里把屏幕尺寸切到 176×220 后重启，画布实际变为 176×220 且设置已持久化 → 音量滑块设 40%（输出 40%、WebAudio gain 0.4、写入设置），静音后再拖动自动取消静音并对齐 gain → 模拟标准手柄（`navigator.getGamepads` + `gamepadconnected`）：A→nj_key 17、左摇杆→16、B→21，断开后全部释放 → 退出回库 → 刷新后游戏与存档仍在 → 缺 wasm 时降级 mock 并显示指向 `tools/build_web.sh` 的横幅 → 同一 context 两个标签页：第一个运行游戏时第二个启动被拒并弹「另一个标签页正在运行」提示，第一个退出后第二个可正常启动；0 page/console error、0 外部请求；证据 `.local-tools/debug-runs/web-tabs-all/check-web.log` |
+| 浏览器页面（Playwright Firefox + `tools/check_web.sh --browser`） | 31/31 检查通过（约 13–15 s）：静态服务 `build/web` → 真实引擎 `kind=wasm`、API 1、版本 0.5.7 → zh-CN 界面 → 导入 hello.jar（元数据/图标进 IndexedDB）→ 画布 240x320 非黑（4 色）→ 方向键/Enter（nj_key 15/16/17/6）帧号推进 → 面板自动暂停（帧冻结）+ 继续 → 存档槽 1 blob 329,724 字节、读档往返不重启 → 存档槽 1 导出为 `.njst` 下载（字节数与槽内一致、magic `NJSS`）、再经文件选择器导入槽 2 并生效 → 游戏面板内存选择 64 MiB 持久化并弹提示 → 面板「诊断」区数字刷新（堆 0.3/16.0 MiB、帧/绘制递增、GC 次数、字节码速率约 2.6 K/s） → 隔离上下文里把屏幕尺寸切到 176×220 后重启，画布实际变为 176×220 且设置已持久化 → 音量滑块设 40%（输出 40%、WebAudio gain 0.4、写入设置），静音后再拖动自动取消静音并对齐 gain → 模拟标准手柄（`navigator.getGamepads` + `gamepadconnected`）：A→nj_key 17、左摇杆→16、B→21，断开后全部释放 → 退出回库 → 刷新后游戏与存档仍在 → 缺 wasm 时降级 mock 并显示指向 `tools/build_web.sh` 的横幅 → 同一 context 两个标签页：第一个运行游戏时第二个启动被拒并弹「另一个标签页正在运行」提示，第一个退出后第二个可正常启动；0 page/console error、0 外部请求；证据 `.local-tools/debug-runs/web-tabs-all/check-web.log` |
 | 多 MIDlet 选择（启动 MIDlet） | 全语料中仅 book5/book6/book7 为多 MIDlet（book6/7 各 3 个：Dungeon/Checkers/Messenger，book5 2 个）；工具面板出现「启动 MIDlet」下拉，选择写入游戏记录并在下次启动生效；API 套件验证 `NJW_OPT_MIDLET_CLASS` 选择 Checkers 后帧缓冲哈希 `0x4a7f464c`（默认 Dungeon）→ `0x5639fd17` 且 60/60 帧出画；浏览器套件在隔离上下文导入 book6.jar 验证下拉标签顺序、切换后画面哈希变化、IndexedDB 中 `midletIndex=1`；证据 `.local-tools/debug-runs/web-midlet-api/`、`.local-tools/debug-runs/web-midlet-browser2/` |
-| 多标签页单引擎（BroadcastChannel 租约） | 同一浏览器 context 两个页面：第一个运行游戏时第二个点游戏被拒并弹「另一个标签页正在运行游戏」，仍停在库页；第一个退出后第二个可正常启动出画面；浏览器套件覆盖（30/30）；证据 `.local-tools/debug-runs/web-tabs-all/` |
+| 多标签页单引擎（BroadcastChannel 租约） | 同一浏览器 context 两个页面：第一个运行游戏时第二个点游戏被拒并弹「另一个标签页正在运行游戏」，仍停在库页；第一个退出后第二个可正常启动出画面；浏览器套件覆盖（31/31）；证据 `.local-tools/debug-runs/web-tabs-all/` |
+| 诊断面板（`njw_stats`） | 工具面板「诊断」区读取 `njw_stats()`（与原生 `--stats` 同源）：Java 堆用量/上限、帧/绘制计数、GC 次数、字节码速率（低于 1 M/s 时用 K/s 显示），仅在面板打开时以 2.5 Hz 刷新；API 套件验证 13 个计数器的完整性与范围（堆用量 0.3 MB/16 MB、60 帧、绘制 60、字节码 2986、GC 0），浏览器套件验证面板数字在真实运行中递增；证据 `.local-tools/debug-runs/web-diag-api/`、`.local-tools/debug-runs/web-diag-browser2/` |
 | 手柄（Gamepad API） | 游戏循环每帧轮询 `navigator.getGamepads()`（浏览器只给状态、不给事件），按边沿差分发 `njw_key`；标准映射 A=Fire(17)、B/X/Y/LB=GAME_A..D(21..24)、RB=Clear(20)、LT/Start=SOFT_LEFT(18)、RT/Back=SOFT_RIGHT(19)、十字键 12..15 与左摇杆（0.45 死区）→13..16；`gamepadconnected`/`gamepaddisconnected` 显示 toast 并在断开时 `releaseAll`；浏览器套件用假手柄验证按下/释放 |
 | 存档导出/导入（`.njst`） | 存档槽按钮组含 导出/导入：导出把引擎快照原样下载为 `<标题>-slot<N>-<时间>.njst`；导入先 `njw_load_state` 校验（JSON 头记录 JAR 身份/ABI/屏幕尺寸，跨标题或损坏会被拒绝），成功后才写入 IndexedDB 槽位并立即应用；浏览器套件完整验证 导出字节数 == 槽内 size、magic `NJSS`、导入槽 2 生效 |
 | 性能快速回归（`--perf`） | 4 个轻/中量标题各预热 60 帧 + 实测 600 帧（固定 1000/60 ms 步长）：game15 **6533 fps**/91.8 ms、bubblet **3880 fps**/154.6 ms、slimevolley **7909 fps**/75.9 ms、1942空战_10403 **7892 fps**/76.0 ms，均 drew 600/600；堆 64→64 MiB、无引擎错误；`tools/check_web.sh --perf` 9/9 检查通过（0.5 s），下限取参考机约 1/10（抓数量级回退、不惩罚慢 CI），实测写入 `perf-summary.{txt,json}` |
@@ -194,8 +195,8 @@ tools/check_web.sh --node --corpus             # 另有 --browser（Playwright F
 | `.local-tools/debug-runs/gfx-full-20261113/linux/libretro/nano_j2me_libretro.so` | 4083320 | `4a88f993258b01d59de55d78bfce2ed91c6ed55af2640e8b91d3937cf7523032` |
 | `.local-tools/debug-runs/gfx-full-20261113/linux/nj2me` | 4019296 | `c46c21c315e9252b0f99e1844f34a8894813d27d8e1638bc21e3c0a2284712ec` |
 | `.local-tools/debug-runs/gfx-full-20261113/android-legacy/nj2me-legacy.apk` | 694718 | `0352c5fe4764747d910b98bf6cdd430bdf537e113beca1f82d92d784247139d7` |
-| `build/web/js/nj2me.js` | 93889 | `77652b2e6c8ef1a2e22e95eeec54e66530a1fe069728cf9a7bf6944ef424885f` |
-| `build/web/js/nj2me.wasm` | 2144557 | `ddbbe3980c56d40a21c86de4dbf72ba163da0cd842e4588e73e5c71ebd78046b` |
+| `build/web/js/nj2me.js` | 93928 | `c6f2de60e08048d5519e4d98a98ecdb1801fec60e4f4e098ad5011c843aa7bf8` |
+| `build/web/js/nj2me.wasm` | 2145235 | `5b5794eed73e8ab65238e0759b8f94b35a5ce19096cb7983980ba4d2d63b1e6b` |
 
 以上产物均由同一份当前源码构建（含 2026-11-14 的 journal 批处理、持久
 GPU 会话与 2026-11-15 的自动选择改动）。legacy APK 也已用恢复的旧工具链重建：
@@ -231,7 +232,8 @@ Web 产物也在提交前重新构建并重新跑过 `tools/check_web.sh --all` 
 - Windows/Wine：`.local-tools/debug-runs/gfx-full-20261113/windows-audit/`（`frames/`、`sdl2-mc-window.png`、`sdl2-mc.log`、`win-gles2-maze.log`、`wine-wgl.log`）
 - AMR/编解码报告：`.local-tools/debug-runs/gfx-full-20261113/amr/`、`.local-tools/debug-runs/gfx-full-20261113/codec-audit/`
 - 网页版：`.local-tools/debug-runs/web-round11-all/`（存档导出/导入后的最新 `--all`：
-  node 35/35、语料 47/47、浏览器 30/30、check-web.log、页面截图与 downloads/）、
+  node 36/36、语料 47/47、浏览器 31/31、check-web.log、页面截图与 downloads/）、
+  `.local-tools/debug-runs/web-diag-all/`（加入诊断面板检查后的全套件 36/36 + 47/47 + 31/31、23 s）、
   `.local-tools/debug-runs/web-screen-all/`（加入屏幕尺寸预设检查后的全套件 30/30、21 s）、
   `.local-tools/debug-runs/web-round11-browser/`（加入导出/导入检查后的浏览器套件 26/26）、`.local-tools/debug-runs/web-midlet-all/`（加入多 MIDlet 检查后 node 35/35、浏览器 27/27）、`.local-tools/debug-runs/web-volume-all/`（加入音量检查后浏览器 28/28）、`.local-tools/debug-runs/web-tabs-browser/`（加入多标签页检查后浏览器 29/29）与 `.local-tools/debug-runs/web-tabs-all/`（全套件 29/29、22 s）、
   `.local-tools/debug-runs/web-round10-all/`（手柄支持后的 `--all`）、

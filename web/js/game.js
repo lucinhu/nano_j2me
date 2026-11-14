@@ -162,6 +162,9 @@ export class GameView {
     this._fpsMark = 0;
     this._fpsFrames = 0;
     this._statusAt = 0;
+    this._diagAt = 0;
+    this._diagInsns = 0;
+    this._diagInsnsAt = 0;
     this._engineVersion = '';
     this._engineApi = 0;
 
@@ -604,6 +607,7 @@ export class GameView {
       this.input.pollText();
       this._updateFps(timestamp);
       this._updateStatus(false);
+      this._updateDiagnostics();
       return;
     }
 
@@ -742,6 +746,7 @@ export class GameView {
     if (next) {
       this._renderSlots();
       this._updateStatus(true);
+      this._updateDiagnostics();
       this._updatePanelUi();
       if (this._running && !this._paused) {
         this._panelAutoPaused = true;
@@ -1097,6 +1102,62 @@ export class GameView {
       const value = this._paused ? 0 : this._fps;
       fps.textContent = t('game.statusFps', { fps: value ? value.toFixed(1) : '0' });
     }
+  }
+
+  /*
+   * The diagnostics panel reads the engine counters (heap, paints, GC, bytecode
+   * rate) that the native --stats line prints too, so a browser bug report can
+   * be compared against the command line.  Refreshing at 2.5 Hz keeps the panel
+   * cheap; while closed nothing is read at all.
+   */
+  _updateDiagnostics() {
+    if (!this._panelOpen) { return; }
+    const now = performance.now();
+    if (now - this._diagAt < 400) { return; }
+    this._diagAt = now;
+    const stats = (() => {
+      try { return this.runtime.stats(); } catch (error) { return null; }
+    })();
+    const heap = $('#diag-heap');
+    const paints = $('#diag-paints');
+    const gc = $('#diag-gc');
+    const insns = $('#diag-insns');
+    if (!stats) {
+      for (const node of [heap, paints, gc, insns]) { if (node) { node.textContent = '—'; } }
+      return;
+    }
+    if (heap) {
+      heap.textContent = this._formatMiB(stats.heapUsed) + ' / ' +
+        this._formatMiB(stats.heapSize) + ' MiB';
+    }
+    if (paints) {
+      paints.textContent = this._formatCount(stats.frames) + ' / ' + this._formatCount(stats.paints);
+    }
+    if (gc) { gc.textContent = this._formatCount(stats.gcCount); }
+    if (insns) {
+      const seconds = this._diagInsnsAt ? (now - this._diagInsnsAt) / 1000 : 0;
+      const delta = this._diagInsnsAt ? Math.max(0, stats.insns - this._diagInsns) : 0;
+      insns.textContent = seconds > 0 ? this._formatRate(delta / seconds) : '—';
+      this._diagInsns = stats.insns;
+      this._diagInsnsAt = now;
+    }
+  }
+
+  /* Bytecode rate: most MIDlets are far below 1 M bytecodes/s, so scale down
+   * instead of printing a meaningless 0.00 M/s. */
+  _formatRate(rate) {
+    if (!Number.isFinite(rate) || rate <= 0) { return '0 /s'; }
+    if (rate >= 1e6) { return (rate / 1e6).toFixed(2) + ' M/s'; }
+    if (rate >= 1e3) { return (rate / 1e3).toFixed(1) + ' K/s'; }
+    return Math.round(rate) + ' /s';
+  }
+
+  _formatMiB(bytes) {
+    return (Math.max(0, Number(bytes) || 0) / (1024 * 1024)).toFixed(1);
+  }
+
+  _formatCount(value) {
+    return String(Math.round(Math.max(0, Number(value) || 0)));
   }
 
   /* --------------------------------------------------------------- misc */

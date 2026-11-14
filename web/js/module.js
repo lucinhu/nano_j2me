@@ -334,6 +334,45 @@ export class WasmRuntime {
     return this._fn('njw_frames')() >>> 0;
   }
 
+  /**
+   * Engine counters for the diagnostics panel (njw_stats()).  Returns null
+   * when the runtime does not expose them; before start all values are 0.
+   * The numbers are the same nj_vm_stats snapshot the native --stats line
+   * prints, so a bug report from the browser can be compared with native.
+   */
+  stats() {
+    const fn = this._tryFn('njw_stats');
+    if (!fn) { return null; }
+    const COUNT = 13;
+    const bytes = COUNT * 8;
+    const ptr = this._alloc(bytes);
+    if (!ptr) { return null; }
+    try {
+      const got = fn(ptr, COUNT) | 0;
+      const n = Math.min(got > 0 ? got : COUNT, COUNT);
+      const f64 = new Float64Array(this._u8().buffer);
+      const base = ptr >> 3;
+      const value = (index) => (index < n ? f64[base + index] : 0);
+      return {
+        heapSize: value(0),
+        heapUsed: value(1),
+        heapPeak: value(2),
+        gcCount: value(3),
+        liveObjects: value(4),
+        threads: value(5),
+        insns: value(6),
+        nativeCalls: value(7),
+        frames: value(8),
+        paints: value(9),
+        gfxCalls: value(10),
+        m3gRenders: value(11),
+        tris: value(12)
+      };
+    } finally {
+      this._freeAlloc(ptr);
+    }
+  }
+
   /* --------------------------------------------------------- framebuffer */
 
   width() {

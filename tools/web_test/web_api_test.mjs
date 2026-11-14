@@ -15,6 +15,7 @@
  *   - hello.jar baseline render: 240 frames, 240x320, every pixel non-black
  *   - screen-size and speed options, key + pointer input on game15.jar
  *   - save-state round trip + rejection of a truncated state, restart
+ *   - njw_stats() exposes the same counters as the native --stats line
  *   - audio: audiodemo.jar queues 8000 Hz mono frames within 300 frames
  *   - heap stability across two restart cycles
  *
@@ -650,6 +651,50 @@ async function main() {
         assertEqual(run.drew, 60, 'hello should draw every frame after recovery');
         njwStop(m);
         return 'restart after fatal state succeeded';
+    });
+
+    // -- diagnostics -------------------------------------------------------
+    t.section('diagnostics: engine counters');
+
+    await t.check('njw_stats() reports live engine counters', () => {
+        configureRunner(m, { id: 'stats' });
+        assertEqual(startJar(m, fsPaths.hello), 0, 'njw_start(hello)');
+        const run = pumpFrames(m, 60);
+        assert(!run.fatal, `fatal engine error: ${run.error}`);
+        assert(!run.stopped, `stopped: ${run.reason}`);
+
+        const count = m._njw_stats(0, 0) | 0;
+        assertEqual(count, 13, 'njw_stats() should report 13 counters');
+        const ptr = m._njw_alloc(count * 8);
+        assert(ptr > 0, `njw_alloc(${count * 8}) for the counters failed`);
+        try {
+            const got = m._njw_stats(ptr, count) | 0;
+            assertEqual(got, count, 'njw_stats() return value');
+            const f64 = new Float64Array(m.HEAPU8.buffer);
+            const base = ptr >> 3;
+            const value = (index) => (index < got ? f64[base + index] : 0);
+            const heapSize = value(0);
+            const heapUsed = value(1);
+            const heapPeak = value(2);
+            const gcCount = value(3);
+            const insns = value(6);
+            const frames = value(8);
+            const paints = value(9);
+            const gfxCalls = value(10);
+            assert(heapSize > 0, `stats heapSize is ${heapSize}`);
+            assert(heapUsed > 0 && heapUsed <= heapSize,
+                `stats heapUsed ${heapUsed} out of 0..${heapSize}`);
+            assert(heapPeak >= heapUsed, `stats heapPeak ${heapPeak} < heapUsed ${heapUsed}`);
+            assert(frames >= 60, `stats frames ${frames} after 60 pumps`);
+            assert(paints >= 1, `stats paints ${paints}`);
+            assert(insns > 0, `stats insns ${insns}`);
+            assert(gfxCalls > 0, `stats gfxCalls ${gfxCalls}`);
+            assert(gcCount >= 0, `stats gcCount ${gcCount}`);
+            return `heap ${heapUsed}/${heapSize} B, frames ${frames}, paints ${paints}, ` +
+                `insns ${insns}, gc ${gcCount}`;
+        } finally {
+            m._njw_free(ptr);
+        }
     });
 
     // -- audio -------------------------------------------------------------

@@ -210,6 +210,41 @@ const char *njw_stop_reason(void);
 unsigned njw_frames(void);
 
 /* ------------------------------------------------------------------ */
+/* Diagnostics                                                         */
+/* ------------------------------------------------------------------ */
+
+/*
+ * Counters for a debug panel.  They are the same numbers the native
+ * stats line prints (nj_vm_get_stats()), exposed here with a stable
+ * ordering so the shell does not depend on the internal struct layout.
+ * All zero before a successful njw_start().
+ */
+typedef enum njw_stat {
+    NJW_STAT_HEAP_SIZE = 0,   /* Java heap capacity, bytes */
+    NJW_STAT_HEAP_USED,       /* bytes in live objects */
+    NJW_STAT_HEAP_PEAK,       /* high-water mark of heap_used */
+    NJW_STAT_GC_COUNT,        /* collections since start */
+    NJW_STAT_LIVE_OBJECTS,    /* objects live right now */
+    NJW_STAT_THREADS,         /* Java threads created since start */
+    NJW_STAT_INSNS,           /* bytecodes dispatched since start */
+    NJW_STAT_NATIVE_CALLS,    /* natives invoked from Java since start */
+    NJW_STAT_FRAMES,          /* frames presented to the port */
+    NJW_STAT_PAINTS,          /* paint() calls */
+    NJW_STAT_GFX_CALLS,       /* Graphics method calls */
+    NJW_STAT_M3G_RENDERS,     /* Graphics3D.render() calls */
+    NJW_STAT_TRIS,            /* triangles the 3D rasterizer filled */
+    NJW_STAT_COUNT
+} njw_stat;
+
+/*
+ * Fill out[0..min(count, NJW_STAT_COUNT)-1] with the counters above,
+ * in njw_stat order, as doubles (counter values can exceed 32 bits),
+ * and return NJW_STAT_COUNT.  A NULL/empty buffer is allowed and only
+ * returns the count.
+ */
+int njw_stats(double *out, int count);
+
+/* ------------------------------------------------------------------ */
 /* Framebuffer                                                         */
 /* ------------------------------------------------------------------ */
 

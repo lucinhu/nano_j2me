@@ -98,7 +98,10 @@ be served with or without a build:
   `NJW_OPT_SCREEN_WIDTH`/`NJW_OPT_SCREEN_HEIGHT` at the next launch, a
   **Startup MIDlet** selector for JARs that ship several MIDlets (stored with
   the game record, applies on the next launch), PNG
-  screenshot download, fullscreen, restart and exit-to-library.
+  screenshot download, fullscreen, restart and exit-to-library. The same panel
+  has a **Diagnostics** section (heap used/capacity, frames/paints, GC runs and
+  bytecode rate) that reads `njw_stats()` — the counters the native `--stats`
+  line prints.
 - **Input** — keyboard (arrows = D-pad, Enter/Space = Fire, F1/F2 = soft keys,
   Backspace = Clear, digits, `*`/`#`), a standard-mapping gamepad (A = fire,
   B/X/Y/LB = GAME_A..D, RB = clear, LT/Start = soft left, RT/Back = soft right,
@@ -263,6 +266,7 @@ Groups of functions (see the header for exact signatures and semantics):
 | Display | `njw_framebuffer` (RGBA8888), `njw_width`, `njw_height`, `njw_frame_epoch` |
 | Input | `njw_key`, `njw_pointer`, `njw_text_input`, `njw_text_edit`, `njw_text_replace`, `njw_text_active`, `njw_text_current`, `njw_text_state` |
 | Audio | `njw_audio_available`, `njw_audio_rate`, `njw_audio_channels`, `njw_audio_read`, `njw_audio_note_playing` |
+| Diagnostics | `njw_stats` (heap, GC, bytecode, paint and 3D counters — the same numbers the native `--stats` line prints) |
 | JAR metadata | `njw_probe`, `njw_app_title`, `njw_app_vendor`, `njw_app_version`, `njw_midlet_count`, `njw_midlet_class_at`, `njw_app_icon` |
 | Save states | `njw_can_save`, `njw_save_state`, `njw_load_state`, `njw_alloc`, `njw_free` |
 | Tuning | `njw_set_speed`, `njw_speed` |
@@ -310,6 +314,18 @@ delete almost every sound effect, because the virtual clock can finish a blockin
 `Manager.playTone()` within one pump), and the ring is bounded so a silent host
 cannot grow memory without bound. Mute is a host-side gain of 0; do not stop
 reading.
+
+### Diagnostics
+
+`njw_stats(double *out, int count)` copies the engine counters the native
+`--stats` line prints — heap capacity/used/peak, GC runs, live objects, thread
+count, dispatched bytecodes, native calls, presented frames, `paint()` calls,
+`Graphics` calls, 3D renders and triangles — into `out` in `njw_stat` order and
+returns `NJW_STAT_COUNT` (13). The shell turns them into a **Diagnostics**
+section of the tools panel (heap used/capacity, frames/paints, GC runs and a
+live bytecode rate) so a browser bug report can be compared with the command
+line; the rates are sampled at 2.5 Hz only while the panel is open, and every
+counter is zero before a successful `njw_start()`.
 
 ### JAR metadata and save states
 
@@ -405,7 +421,8 @@ opt-in: it measures four titles and writes `perf-summary.json` next to the log.
 - **API test** (`tools/web_test/web_api_test.mjs`) — module load, version,
   manifest probe, error paths, `hello.jar` render, screen-size and speed options,
   keyboard input, pause/resume, save/load round-trip and a rejected load,
-  restart-after-stop, audio on `tests/fixtures/audiodemo.jar`, and the
+  restart-after-stop, the `njw_stats()` counters (heap sanity, frames, paints,
+  bytecodes), audio on `tests/fixtures/audiodemo.jar`, and the
   `NJW_OPT_HEAP_BYTES` option on the heap-hungry `愤怒的小鸟_383.jar` (fails at
   the default 16 MiB, completes 90 frames at 64 MiB), and `NJW_OPT_MIDLET_CLASS`
   on the three-MIDlet `book6.jar` (default Dungeon vs. Checkers render different
@@ -417,7 +434,7 @@ opt-in: it measures four titles and writes `perf-summary.json` next to the log.
   `午夜台球圣诞中文版_8677.jar` installs its `Canvas` in the MIDlet constructor
   and starts its game thread there, which is what caught the runner skipping
   `startApp()`.
-- **Browser test** (`tools/web_test/web_browser_test.mjs`, 30 checks) — serves
+- **Browser test** (`tools/web_test/web_browser_test.mjs`, 31 checks) — serves
   `build/web/` on an ephemeral port and drives the real shell in headless Firefox
   through Playwright: the real engine (`kind=wasm`, API 1, runtime 0.5.7),
   zh-CN UI, import `hello.jar` → metadata and icon in IndexedDB, 240×320
@@ -436,7 +453,10 @@ opt-in: it measures four titles and writes `perf-summary.json` next to the log.
   keeps drawing with no server at all (76,800 non-black pixels, frame counter
   advancing). One check covers the game panel's memory selector: picking 64 MiB
   persists it in `nj2me.settings` (localStorage) for the next launch and shows
-  the "applies on the next launch" toast. Another starts a game in an
+  the "applies on the next launch" toast. Another opens the diagnostics section
+  and checks the heap, frame/paint, GC and bytecode-rate lines look like real
+  numbers and that the frame counter keeps advancing while the game runs.
+  Another starts a game in an
   isolated context, switches the panel to 176×220, restarts, and asserts the
   engine really hands back a 176×220 canvas (and that the preset was
   persisted). Another fakes a standard gamepad
@@ -471,11 +491,11 @@ opt-in: it measures four titles and writes `perf-summary.json` next to the log.
   slow hosts; the measured fps/ms land in `<evidence>/perf-summary.{txt,json}`.
 
 Measured on the reference build (Emscripten 7.0.0, `include/nj2me/nj_web.h`
-0.5.7): the API suite passes **35/35 checks in 0.4 s**, the corpus suite
-**47/47 checks (42 titles) in 8.7 s**, the browser suite **30/30 checks in about
-12–14 s** (a loaded host slows the page test down; every check is bounded), and
+0.5.7): the API suite passes **36/36 checks in 0.4 s**, the corpus suite
+**47/47 checks (42 titles) in 8.7 s**, the browser suite **31/31 checks in about
+13–15 s** (a loaded host slows the page test down; every check is bounded), and
 the perf suite **9/9 checks in about 0.5 s** — `tools/check_web.sh --all` is
-**21–24 s** end to end. The sweep suite needs about 2 min for all 403
+**23–26 s** end to end. The sweep suite needs about 2 min for all 403
 titles, the perf suite about 1 s. All 40
 playable titles draw 120/120 frames (the audiodemo and bench fixtures exit on
 their own, as expected), there are no engine `[nj2me] error:` lines,

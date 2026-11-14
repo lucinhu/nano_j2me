@@ -1657,6 +1657,46 @@ unsigned njw_frames(void)
 }
 
 /* ================================================================== */
+/* Diagnostics                                                         */
+/* ================================================================== */
+
+int njw_stats(double *out, int count)
+{
+    double values[NJW_STAT_COUNT];
+    nj_vm_stats s;
+    int i;
+
+    if (out == NULL || count <= 0) {
+        return NJW_STAT_COUNT;
+    }
+    memset(values, 0, sizeof values);
+    if (g_runner.vm != NULL && g_runner.vm_usable) {
+        memset(&s, 0, sizeof s);
+        nj_vm_get_stats(g_runner.vm, &s);
+        values[NJW_STAT_HEAP_SIZE]   = (double)s.heap_size;
+        values[NJW_STAT_HEAP_USED]   = (double)s.heap_used;
+        values[NJW_STAT_HEAP_PEAK]   = (double)s.heap_peak;
+        values[NJW_STAT_GC_COUNT]    = (double)s.gc_count;
+        values[NJW_STAT_LIVE_OBJECTS]= (double)s.live_objects;
+        values[NJW_STAT_THREADS]     = (double)s.threads;
+        values[NJW_STAT_INSNS]       = (double)s.insns;
+        values[NJW_STAT_NATIVE_CALLS]= (double)s.native_calls;
+        values[NJW_STAT_FRAMES]      = (double)s.frames;
+        values[NJW_STAT_PAINTS]      = (double)s.paints;
+        values[NJW_STAT_GFX_CALLS]   = (double)s.gfx_calls;
+        values[NJW_STAT_M3G_RENDERS] = (double)s.m3g_renders;
+        values[NJW_STAT_TRIS]        = (double)s.tris;
+    }
+    if (count > NJW_STAT_COUNT) {
+        count = NJW_STAT_COUNT;
+    }
+    for (i = 0; i < count; i++) {
+        out[i] = values[i];
+    }
+    return NJW_STAT_COUNT;
+}
+
+/* ================================================================== */
 /* Framebuffer                                                         */
 /* ================================================================== */
 

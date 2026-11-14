@@ -224,6 +224,26 @@ export class MockRuntime {
   stopReason() { return this._stopReason; }
   frames() { return this._frames; }
 
+  /* MOCK: just enough shape for the diagnostics panel to render in dev mode. */
+  stats() {
+    const heapSize = 16 * 1024 * 1024;
+    return {
+      heapSize,
+      heapUsed: 2 * 1024 * 1024 + (this._frames % 512) * 1024,
+      heapPeak: 4 * 1024 * 1024,
+      gcCount: Math.floor(this._frames / 600),
+      liveObjects: 400 + (this._frames % 100),
+      threads: 1,
+      insns: this._frames * 30000,
+      nativeCalls: this._frames * 10,
+      frames: this._frames,
+      paints: Math.max(0, this._frames - 2),
+      gfxCalls: this._frames * 40,
+      m3gRenders: 0,
+      tris: 0
+    };
+  }
+
   /* --------------------------------------------------------- framebuffer */
 
   width() { return this._w; }
