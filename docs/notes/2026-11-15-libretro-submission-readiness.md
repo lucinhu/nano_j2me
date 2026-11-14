@@ -7,7 +7,9 @@ contact was made.
 
 Tree under test: `bc49c46` (`v0.5.7-9-gbc49c46`) for the metadata/CI/docs
 checks below; the release artifacts were later refreshed on the same day at
-HEAD `6b1e9e2` (tree containing `dda4fc2` graphics work), see item 5.
+HEAD `6b1e9e2` (tree containing `dda4fc2` graphics work), see item 5; the
+artifacts were refreshed once more after the state-load fix at HEAD `dd39c1c`
+(see the update section at the end).
 
 ## What was checked against live upstream sources
 
@@ -58,7 +60,12 @@ HEAD `6b1e9e2` (tree containing `dda4fc2` graphics work), see item 5.
    `/var/tmp/nj2me-submission-dist`, then refreshed at tree `6b1e9e2` into
    `/var/tmp/nj2me-submission-dist-r9` and copied to `build/libretro-dist/`
    (previous tree backed up to
-   `/var/tmp/libretro-dist-20261115-bc49c46-backup.tgz`). 16 files per
+   `/var/tmp/libretro-dist-20261115-bc49c46-backup.tgz`); after the state-load
+   fix it was rebuilt once more at HEAD `dd39c1c` into
+   `/var/tmp/nj2me-submission-dist-r12` and copied over
+   `build/libretro-dist/` (r9 tree backed up to
+   `/var/tmp/libretro-dist-20261115-r9-backup.tgz`). Current sizes/hashes are
+   in `build/libretro-final-report-20261115.md`. 16 files per
    directory, identical `.info`, license/notice set and `BUILD_STATUS.txt`; the
    three Linux cores are byte-identical between the two builds. Sizes and
    SHA-256 values are in `build/libretro-final-report-20261115.md`.
@@ -77,8 +84,9 @@ HEAD `6b1e9e2` (tree containing `dda4fc2` graphics work), see item 5.
    documented in `docs/LIBRETRO.md`.
 7. **Local test suite**: isolated RelWithDebInfo build (CLI + libretro + tests,
    SDL2/embedded/web/GLES2-accelerated port off) passed **183/183** CTest tests
-   in **338.26 s** at `bc49c46`, and again **183/183** in **344.82 s** after the
-   artifact refresh at `6b1e9e2`, including `test_libretro_frontend` and
+   in **338.26 s** at `bc49c46`, again **183/183** in **344.82 s** after the
+   artifact refresh at `6b1e9e2`, and **183/183** in **328.80 s** after the
+   state-load fix at `dd39c1c`, including `test_libretro_frontend` and
    `no_statics`. A separate build directory under `/var/tmp` is used so the
    user's in-progress `build/` trees are not touched.
 8. **Upstream patches, exact and build-validated**: `libretro-docs-nano_j2me.patch`
@@ -106,6 +114,11 @@ HEAD `6b1e9e2` (tree containing `dda4fc2` graphics work), see item 5.
    PCM in a 240-frame window (the other three are menu/early-game sections).
    Evidence logs are in `.local-tools/debug-runs/submission-20261115/`
    (`2d-titles-mock-paced.log`, `motion-sample-24.log`, `audio-probe-wav.log`).
+   A MIDI re-sample at 600 frames (`--require .mid`) reported 3/8 titles
+   delivering PCM (街霸2 86,238; 网球大满贯 1,183,744; 圣百合女子学园
+   1,275,810 samples) and 5 silent; the earlier 240-frame window under-reported
+   because menu phases had not reached playback (evidence
+   `audio-probe-midi-600.log`).
 
 ## Remaining external steps (not performed)
 
@@ -126,3 +139,34 @@ HEAD `6b1e9e2` (tree containing `dda4fc2` graphics work), see item 5.
 - Submission kit: `docs/LIBRETRO_SUBMISSION.md`
 - Artifact report: `build/libretro-final-report-20261115.md` (ignored by git)
 - Evidence logs: `.local-tools/debug-runs/submission-20261115/` (ignored by git)
+
+## Update, 2026-11-15 (state-load fix and r12 artifact refresh)
+
+While adding `tools/check_libretro_states.py` (corpus-level libretro save/restore
+probe), one of twenty sampled titles failed the mock frontend's
+`unserialize_after_reset` check: `电子宠物蛋_11972`. Root cause: after
+`retro_reset` the fresh VM boots a title whose startup parks in a blocking
+native waiting for virtual time; the frontend is blocked inside
+`retro_unserialize()` and cannot call `retro_run()`, so the virtual clock stays
+frozen, the VM worker never leaves its frame, and the 4 s state-request timeout
+expires without the load being served.
+
+Fix: `lr_frame_hook()` advances the virtual clock while a LOAD request is
+pending (a load replaces the VM wholesale, so the restored state is unaffected;
+save requests never advance the clock). Fifteen added lines in
+`src/port/libretro/nj_port_libretro.c`. Documented in `docs/LIBRETRO.md` and
+`docs/notes/2026-11-15-libretro-load-state-in-blocking-frame.md`.
+
+Re-checks after the fix:
+
+- `电子宠物蛋_11972` passes `unserialize_after_reset` with the harness restored
+  to its original 4-frame post-reset cadence; the 20-title probe is 20/20.
+- Mock frontend matrix 20/20; real RetroArch 1.22.2 LoopDemo 120 and TextDemo
+  180 frames PASS; 浴火银河2完整版 3D title through the mock frontend 36/36;
+  Windows Wine 4/4.
+- Full CTest 183/183 in 328.80 s.
+- All eight release targets rebuilt at `dd39c1c` (`--out
+  /var/tmp/nj2me-submission-dist-r12`), `.info` byte-identical, tree copied to
+  `build/libretro-dist/`; CI template simulation re-run for all three templates
+  (Linux 3,969,632 B, Windows 3,537,295 B, Android arm64 11,543,776 B).
+- Commit `dd39c1c` pushed to origin/main.

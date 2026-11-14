@@ -38,7 +38,9 @@ version is currently 0.5.7; refresh the metadata version whenever that changes.
 
 This section records the concrete preparation checks run against the current
 tree; the unchecked boxes in [Validation](#validation) remain the external
-steps only. Working HEAD for this check: `bc49c46` (`v0.5.7-9-gbc49c46`).
+steps only. Working HEAD for this check: `dd39c1c` (the state-load fix; the
+metadata/CI/docs checks below were first run at `bc49c46`, and the release
+artifacts were refreshed after the fix as recorded in the hash table).
 
 - **Metadata**. `src/port/libretro/nano_j2me_libretro.info`
   (SHA-256 `c0f30aeae22150208034202986b3db77fd2f423874e2f2bcc1ce7b07c82723c6`)
@@ -70,31 +72,40 @@ steps only. Working HEAD for this check: `bc49c46` (`v0.5.7-9-gbc49c46`).
     and produced `libretro/nano_j2me_libretro.dll` (3,537,295 bytes), i.e. the
     path the template's post-build step expects.
   All three land at `$BUILD_DIR/$EXTRA_PATH/$LIBNAME`, where the templates
-  collect them. `tools/simulate_ci_builds.sh` reproduces these template commands
+  collect them. Re-run after the state-load fix with
+  `tools/simulate_ci_builds.sh --out /var/tmp/ci-sim-r12`: all three
+  contracts pass (Linux 3,969,632 B, Windows 3,537,295 B, Android arm64
+  11,543,776 B at `/var/tmp/ci-sim-r12/...`). `tools/simulate_ci_builds.sh` reproduces these template commands
   (and reads `CORE_ARGS` straight out of `.gitlab-ci.yml` so the simulation
   cannot drift from the committed CI file). No upstream pipeline has been
   executed; that requires maintainer registration.
 - **Fresh eight-target build**. `tools/build_libretro_cores.sh --jobs 12
-  --out /var/tmp/nj2me-submission-dist all` rebuilt every default-feature target
-  from this revision. Per-core SHA-256:
+  --out /var/tmp/nj2me-submission-dist-r12 all` rebuilt every default-feature
+  target from this revision (with the state-load fix) and the tree was copied
+  into `build/libretro-dist/`. Per-core SHA-256:
 
   | Target | SHA-256 |
   | --- | --- |
-  | linux-x86_64 | `b9be275017d35a9a84badf78142b89a9080f1430b694cae89d0c224948c6cf0f` |
-  | linux-aarch64 | `37be7db883464ea834b6ef3a4beef22dafb441c85812e3cb571812c2d5c05391` |
-  | linux-armv7 | `8884d957c4361920f6596697d0de0a3d0d19f2b34b48281fded5957db9ccfc80` |
-  | android-arm64 | `babc55b38ac24174c36114fef21ac6609ba4cb0c09f16d6b5ac8874a209ae45e` |
-  | android-armv7 | `38c1afa540482e12c817772e9ced0cd81e7681c68f0294f33515168249746fe2` |
-  | android-x86_64 | `ec802324cac38137d7659d53041562edaacbef3513fc0b0ec9e7fd5cf52b1355` |
-  | windows-i686 | `b2d01aa6930379a33756082f14efceb31dcff1b120511f5a865fc0c421701ad7` |
-  | windows-x86_64 | `a74e87b322c19803158b895ec42d9b77d35b9db7074eb888b45086ddda2d5f25` |
+  | linux-x86_64 | `abb0fe2318e73d90ac98ed335308c8f77238ce46b0e96ebc00ee9a6940430c67` |
+  | linux-aarch64 | `9a004a97d122b89ed9ad10db7deab12d4ed7854e1d0b42f87dd158084c712dab` |
+  | linux-armv7 | `2e09267721fcf74e3305e3148a5a4f4137a5a102e27d63586a9847056a48f6e2` |
+  | android-arm64 | `29b74966e3b47968844daffc66ca1914a5992a70e9bca125809a32e7f48175e5` |
+  | android-armv7 | `b3b9a141cef62f782500353949102b806044e41ade658f9e28ca7905e6211fe8` |
+  | android-x86_64 | `b49c4580fbfdc0ed638905780bf44eed88c1f870d3be5b52bacb5391042cbe45` |
+  | windows-i686 | `d7f8c6a56d6e1d4b93c48b71dc3ea3f6a4822c7dddb7db22c3bee1fbd04feb9f` |
+  | windows-x86_64 | `84c2e57be5e2f4f72e21c109f87f957d034973929920e77014620815661966af` |
 
   Every target directory contains the same `.info`, license/notice set and
   `BUILD_STATUS.txt`; no external test font is bundled.
 - **Artifact validation**. The fresh linux-x86_64 core passed the mock-frontend
   matrix (20 passed, 0 failed, 0 skipped), and real RetroArch 1.22.2 ran
   LoopDemo (120 frames) and TextDemo (180 frames) to a clean exit. The fresh
-  windows-x86_64 DLL passed the Wine fixture suite 4/4. Seven M3G titles were
+  windows-x86_64 DLL passed the Wine fixture suite 4/4. The corpus-level
+  libretro state probe (`tools/check_libretro_states.py`, 20 titles, 120
+  frames) now reports **20/20 save/restore round trips**, including state
+  load after `retro_reset` in a title that boots inside a blocking frame
+  (电子宠物蛋_11972); see the 2026-11-15 load-state note. The full local CTest
+  suite passed **183/183 in 328.80 s** at this revision. Seven M3G titles were
   checked through the mock frontend at the real-time cadence
   (`--pace-us 16666`): 浴火银河2完整版, 蓝牙真3D格斗, 急速狂飙完美破解版,
   浴火银河2瓦尔基里, 极品飞车16：亡命狂飙, 3D激爆拳击 and 3D跳台滑雪2011 all
@@ -256,6 +267,10 @@ requires its fixture/tool dependencies.
   frontend checks: safe-boundary save/load, fresh-VM restore, damaged-state
   rejection, reset/restore and stable serialized size. Metadata advertises
   `savestate = "true"` / `savestate_features = "basic"` only.
+- [x] Corpus-level libretro state round trips: 20/20 sampled titles save and
+  restore through the mock frontend, including a load into a fresh VM
+  after `retro_reset` while the VM is inside a blocking frame
+  (`tools/check_libretro_states.py`).
 - [x] Decoded AMR heap PCM and playback cursor restore into a fresh codec-free
   VM. Paused and playing cases preserve PCM, resume the remaining samples and
   seek correctly; native handles and device queues are cleared.
