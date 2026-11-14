@@ -101,3 +101,28 @@ monitor acquisition, frame-boundary `serviceRepaints()` blocking, and the
   triage note (game-side exits, auth/no-frame titles, one corrupt JAR) except
   `三国赤壁小乔秘史_7976.jar` (game-side stale 176 `pak`) and
   `愤怒的小鸟-高清版_2353.jar` (needs >16 MB heap; libretro `auto` gives ≥32).
+
+## Revalidation, 2026-11-15 (worktree after the web/GLES2 branch)
+
+    rm -rf .local-tools/debug-runs/compat-20261115-r9
+    NJ_BIN=/var/tmp/nj2me-goal13-build/nj2me \
+      tools/sweep_compat.py .local-tools/debug-runs/compat-20261115-r9
+
+The headless binary was rebuilt from the current worktree, so it also contains
+the other session's in-progress GLES2/Web and M3G changes; this is a
+worktree-level regression check, not a commit-tagged artifact.
+
+- 404 rows: **373 ok**, 26 title-exit, 2 title-exception, 2 no-frame, 0 timeout,
+  1 bad-jar (2026-11-14 final re-run: 372/26/2/2/1/1).
+- Only two verdict changes, both improvements: `美男狂想曲_3876.jar`
+  title-exit → ok (58 → 600 frames, 26 → 583 paints) and
+  `西伯利亚大反击_11466.jar` title-exit → ok (291 → 600 frames/paints).
+- No regression: every previously ok row is still ok; `GT赛车2_36.jar` is ok
+  again in an uncontended run; the remaining non-ok rows are the same
+  adjudicated set as above.
+- Spot checks of the fixes from earlier rounds (600 frames, `--heap 16`, paced
+  30 fps, no uncaught exceptions): 三国塔防－曹操传_1610 reaches 300 frames /
+  300 paints (5 caught game-side AIOOBEs), 空战1944_10321 600/207,
+  明星制造梦工厂_11048 with the `165:right` script 600/538,
+  雷霆战机2012BT版_3101 300/168, 1942空战_10403 600/502 (MPEG-4 movie audio
+  decodes), 愤怒的小鸟-高清版_2353 at `--heap 32` 600/501.
