@@ -2689,6 +2689,21 @@ static int lr_frame_hook(nj_vm *vm, void *ud)
      * lr_run_frames() between two frames instead.
      */
     (void)nj_midp_frame(vm);
+    /*
+     * A frontend blocked inside retro_unserialize() cannot drive retro_run(),
+     * so a MIDlet parked in a blocking native that waits for virtual time
+     * (a splash screen sleeping a few seconds, for example) would keep the VM
+     * thread inside its frame forever and the load would time out.  A pending
+     * LOAD replaces the whole VM, so advancing the clock here is safe: it
+     * lets the blocking native finish, the frame reach its boundary and
+     * lr_run_frames() serve the request.  Save requests never do this.
+     */
+    lr_mutex_lock(&s->lock);
+    if (s->req_kind == LR_REQ_LOAD) {
+        s->vclock_frames++;
+        lr_cond_broadcast(&s->cond);
+    }
+    lr_mutex_unlock(&s->lock);
     return 0;
 }
 
