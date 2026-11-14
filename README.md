@@ -26,8 +26,8 @@ browser — the same runtime everywhere, with one small `nj_port` per platform.
 - **Small and embeddable.** Everything OS-specific is one `nj_port` implementation
   (about ten callbacks). The runtime keeps zero mutable global state; several VMs
   can coexist in one process, and `nj_vm_destroy()` returns the bytes it released.
-- **Verifiable.** 190 registered tests pass under `ctest`; a 400-title real-game
-  corpus runs 398 titles; every claim below is checked by a test, a gate or a
+- **Verifiable.** 190 registered tests pass under `ctest`; 398 of the 400 real-game
+  corpus titles run; every claim below is checked by a test, a gate or a
   recorded playback.
 
 ## Screenshots
@@ -202,9 +202,9 @@ that way:
 | Software rasterizer, bitmap fonts, image decoders, DEFLATE/ZIP | complete |
 | Execution engines | interpreter, plus opt-in RV32/ARM64 JITs |
 
-Compatibility is measured, not claimed: the 400-title corpus in
-[docs/CORPUS.md](docs/CORPUS.md) runs **398 titles**; the two failures are the
-titles' own (a truncated JAR and a licence check). Per-platform results, the
+Compatibility is measured, not claimed: of the 400-title corpus in
+[docs/CORPUS.md](docs/CORPUS.md), **398 run**; the two failures are the titles'
+own (a truncated JAR and a licence check). Per-platform results, the
 test ledger and known limits are in
 [docs/PLATFORM_SUPPORT.md](docs/PLATFORM_SUPPORT.md) and
 [docs/VERIFICATION.md](docs/VERIFICATION.md).

@@ -195,8 +195,8 @@ tools/build_libretro_cores.sh --list    # 交叉编译 libretro 核心
 | 软件光栅器、点阵字体、图像解码器、DEFLATE/ZIP | 完成 |
 | 执行引擎 | 解释器，另有可选的 RV32/ARM64 JIT |
 
-兼容性是测出来的，不是声称的：[docs/CORPUS.md](docs/CORPUS.md) 中的 400 个游戏
-语料有 **398 个可运行**，两个失败来自游戏本身（一个截断的 JAR 和一个授权检查）。
+兼容性是测出来的，不是声称的：[docs/CORPUS.md](docs/CORPUS.md) 的 400 个游戏语料
+中 **398 个可运行**，两个失败来自游戏本身（一个截断的 JAR 和一个授权检查）。
 各平台的实测结果、测试清单和已知限制见
 [docs/PLATFORM_SUPPORT.md](docs/PLATFORM_SUPPORT.md) 与
 [docs/VERIFICATION.md](docs/VERIFICATION.md)。
