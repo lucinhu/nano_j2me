@@ -3881,3 +3881,33 @@ CPU (20000 frames, `taskset -c 5`, 3 runs each, user CPU median):
 the three was lower. Smaller than the theoretical ceiling because the clear
 is memory-bandwidth-bound on this host, but it is free and it applies to every
 3D title that clears a background each frame.
+
+### Re-profile after the opaque clear, and a rejected streaming-store fill, 2026-11-15 (round 36)
+
+gprof of the 20,000-frame `毁灭战士3_10598.jar` run (release CLI, `-pg -O2 -g`, 29.6 s user, 25.3 s sampled):
+
+| function | self % | self s | calls | notes |
+| --- | --- | --- | --- | --- |
+| `sw_span` | 55.7% | 14.09 | 237,591,794 | includes the inlined Gouraud fast path |
+| `m3g_clear` | 20.6% | 5.22 | 39,762 | 131 us per call; color + depth fill of a 240x320 target |
+| `sw_tri_band` | 11.8% | 2.99 | 40,636,764 | 74 ns per call, ~1.5 spans per band |
+| `nj_region_draw` | 7.0% | 1.76 | 119,467 | target-to-surface blit |
+| `jr_fetch` / `jr_lit` | 2.6% | 0.67 | 41,909,148 each | vertex lit pipeline |
+
+The direct opaque fill from round 34 still shows up inside `m3g_clear`: each clear
+writes a 307,200-byte color buffer plus a `memset` of the 32-bit depth buffer, i.e.
+~614 KB per call and ~24 GB per run. That is memory-bound, so the next experiment
+tried non-temporal (`_mm_stream_si128`) stores for the full-width ARGB8888 color
+fill, under `#if defined(__SSE2__)`, with the existing loop as fallback.
+
+Result: **rejected**. Deterministic-prefix parity was perfect (13/13 frames 10-120
+byte-identical), but the benchmark regressed: base 27.758 / 27.584 / 27.648 s user
+(median 27.65) versus streaming 28.019 / 27.989 / 27.961 s (median 27.99), i.e.
+about +1.2%. The target buffers are small enough that the raster unit reads them
+back immediately; bypassing the cache costs more than the avoided
+read-for-ownership. The change was reverted (`git checkout -- src/midp/nj_lib_m3g.c`).
+
+With the color/depth fill at its memory floor and the span loops already
+specialised, the remaining measurable lever is `sw_tri_band` setup (74 ns per band
+with ~1.5 spans per band) — a deeper restructure of the band loop, not a local
+tweak. That is recorded here as the next candidate rather than attempted again.
