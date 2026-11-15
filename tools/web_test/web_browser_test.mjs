@@ -1340,6 +1340,76 @@ async function runRealShellChecks() {
     return `volume ${before.slider}% -> 40% (gain 0.4) -> 55% after mute-touch, restored`;
   });
 
+  await check('frame-rate cap follows the chosen rate and persists', async () => {
+    /* The shell pumps one emulated frame per display refresh by default; the cap
+       keeps a title at the rate it was written for even on 120 Hz panels.  An
+       isolated context keeps the preference away from the other checks. */
+    const ctx = await browser.newContext({ viewport: { width: 960, height: 840 }, locale: 'zh-CN' });
+    try {
+      const page = await ctx.newPage();
+      attachDiagnostics(page, 'fps');
+      await page.goto(realServer.origin + '/', { waitUntil: 'load', timeout: timeoutMs });
+      await waitReady(page);
+      await page.setInputFiles('#file-input', HELLO_JAR);
+      await page.waitForFunction(
+        () => document.querySelectorAll('.game-tile').length >= 1,
+        undefined,
+        { timeout: timeoutMs, polling: 100 });
+      await page.locator('.game-tile').first().click();
+      await page.waitForFunction(
+        () => !!(window.__nj2me.game && window.__nj2me.game.game),
+        undefined,
+        { timeout: timeoutMs, polling: 100 });
+      await waitFrames(page, 20, timeoutMs);
+      await page.click('#panel-handle');
+      await page.waitForSelector('#game-panel.is-open', { timeout: 5000 });
+      /* Opening the tools panel auto-pauses the shell; resume before sampling. */
+      if (await page.evaluate(() => window.__nj2me.game._paused === true)) {
+        await page.click('#btn-pause');
+        await waitPaused(page, false);
+      }
+
+      const sample = async (ms) => {
+        const from = await frames(page);
+        const startedAt = Date.now();
+        await page.waitForTimeout(ms);
+        const to = await frames(page);
+        const seconds = (Date.now() - startedAt) / 1000;
+        return { fps: (to - from) / seconds, pumped: to - from };
+      };
+
+      /* 60 fps is the default: one pump per 60 Hz refresh. */
+      const defaultValue = await page.inputValue('#fps-select');
+      assert(defaultValue === '60', `default frame cap is ${defaultValue}`);
+      const at60 = await sample(1200);
+      assert(at60.fps > 35 && at60.fps < 90, `60 fps cap pumped ${at60.fps.toFixed(1)} fps`);
+
+      await page.selectOption('#fps-select', '30');
+      await waitToast(page, await t(page, 'game.fpsApplied'));
+      const at30 = await sample(2000);
+      assert(at30.fps > 20 && at30.fps < 45, `30 fps cap pumped ${at30.fps.toFixed(1)} fps`);
+
+      await page.selectOption('#fps-select', '15');
+      const at15 = await sample(2000);
+      assert(at15.fps > 8 && at15.fps < 24, `15 fps cap pumped ${at15.fps.toFixed(1)} fps`);
+
+      await page.selectOption('#fps-select', '0');
+      const atDisplay = await sample(1200);
+      /* Headless Firefox can throttle requestAnimationFrame, so "uncapped" only
+         has to be clearly above the lowest cap, not a fixed 60. */
+      assert(atDisplay.fps > 15 && atDisplay.fps > at15.fps * 1.3,
+        `uncapped mode pumped ${atDisplay.fps.toFixed(1)} fps (15 fps cap: ${at15.fps.toFixed(1)})`);
+
+      await page.waitForFunction(
+        () => Number(JSON.parse(localStorage.getItem('nj2me.settings') || '{}').frameCap) === 0,
+        undefined,
+        { timeout: 5000, polling: 100 });
+      return `60 fps -> ${at60.fps.toFixed(0)}, 30 fps -> ${at30.fps.toFixed(0)}, 15 fps -> ${at15.fps.toFixed(0)}, display -> ${atDisplay.fps.toFixed(0)}`;
+    } finally {
+      await ctx.close();
+    }
+  });
+
   await check('save slot 1 writes a real njw_save_state blob', async () => {
     /* Pause again so the save is taken at a stable frame. */
     if (!(await realPage.evaluate(() => window.__nj2me.game._paused === true))) {

@@ -56,6 +56,11 @@ import { GameInput } from './input.js';
 
 const LS_SETTINGS = 'nj2me.settings';
 const HEAP_CHOICES_MB = [16, 32, 64, 128];
+
+/* Emulated-frame cap. 0 means "pump once per display refresh", which is what
+ * the shell did before this setting existed; the numeric choices match the
+ * frame rates J2ME titles were written for and the classic 60 Hz panel. */
+const FPS_CHOICES = [0, 60, 30, 24, 15];
 /* Device screen presets.  'auto' leaves the engine on its 240x320 default;
  * the rest are common J2ME resolutions that titles were drawn for. */
 const SCREEN_PRESETS = Object.freeze({
@@ -67,6 +72,7 @@ const SCREEN_PRESETS = Object.freeze({
 });
 const DEFAULT_SETTINGS = Object.freeze({
   speedPercent: 100,
+  frameCap: 60,         // 0 = one frame per display refresh (uncapped)
   heapMb: 16,           // Java heap for the next start; heavy titles need 64+
   autoResume: false,    // restarting a game continues from its newest save
   autoSave: false,      // leaving a game keeps its newest state for the next launch
@@ -92,6 +98,9 @@ function loadSettings() {
   settings.speedPercent = [100, 150, 200].includes(Number(settings.speedPercent))
     ? Number(settings.speedPercent)
     : 100;
+  settings.frameCap = FPS_CHOICES.includes(Number(settings.frameCap))
+    ? Number(settings.frameCap)
+    : 60;
   settings.heapMb = HEAP_CHOICES_MB.includes(Number(settings.heapMb))
     ? Number(settings.heapMb)
     : 16;
@@ -266,6 +275,21 @@ export class GameView {
         try { this.runtime.setSpeed(value); } catch (error) { /* mock/engine */ }
         this._updateSpeedChip();
         this._updateStatus(true);
+      });
+    }
+
+    /* Frame cap: applied live by the loop below, so it needs no restart
+       (unlike the Java heap, which the engine fixes when the VM is created). */
+    const fps = $('#fps-select');
+    if (fps) {
+      fps.value = String(this.settings.frameCap);
+      fps.addEventListener('change', () => {
+        const value = FPS_CHOICES.includes(Number(fps.value)) ? Number(fps.value) : 60;
+        if (this.settings.frameCap === value) { return; }
+        this.settings.frameCap = value;
+        this._frameAccumMs = 0;
+        saveSettings(this.settings);
+        toast(t('game.fpsApplied'), { kind: 'info', timeout: 2200 });
       });
     }
 
@@ -649,6 +673,7 @@ export class GameView {
     this._fpsFrames = 0;
     this._fpsMark = 0;
     this._lastTs = null;
+    this._frameAccumMs = 0;
     this._paused = false;
     this._pauseReason = null;
     this._running = true;
@@ -679,30 +704,66 @@ export class GameView {
     /* Bound once in the constructor via arrow function assignment. */
     if (!this._running) { return; }
     this._raf = requestAnimationFrame(this._loop);
-    if (this._paused) { this._lastTs = timestamp; return; }
+    if (this._paused) { this._lastTs = timestamp; this._frameAccumMs = 0; return; }
 
     if (this._lastTs === null) {
       this._lastTs = timestamp;
     }
-    let dt = timestamp - this._lastTs;
+    let elapsed = timestamp - this._lastTs;
     this._lastTs = timestamp;
-    if (!Number.isFinite(dt) || dt < 0) { dt = 0; }
-    dt = clamp(dt, 0, 250);
+    if (!Number.isFinite(elapsed) || elapsed < 0) { elapsed = 0; }
+    elapsed = clamp(elapsed, 0, 250);
 
     this.input.pollGamepads();
 
+    /* Frame cap: 0 pumps one frame per display refresh with the real elapsed
+       time (a host clock that follows the monitor); a numeric cap pumps
+       fixed-length frames only when enough time has accumulated, so the
+       emulated clock keeps running at real speed while the title is drawn at
+       the rate it was written for (a 120 Hz screen no longer doubles 30 fps
+       animations). */
+    const cap = Number(this.settings.frameCap) || 0;
+    if (cap > 0) {
+      const frameMs = 1000 / cap;
+      this._frameAccumMs = clamp((this._frameAccumMs || 0) + elapsed, 0, frameMs * 3);
+      let pumps = 0;
+      while (this._frameAccumMs >= frameMs - 0.5 && pumps < 3) {
+        this._frameAccumMs -= frameMs;
+        pumps += 1;
+        if (!this._step(frameMs)) { return; }
+      }
+      if (pumps === 0) {
+        /* No emulated frame this refresh; audio still needs its pull. */
+        this.audio.pump();
+        return;
+      }
+    } else {
+      this._frameAccumMs = 0;
+      if (!this._step(elapsed)) { return; }
+    }
+
+    this.audio.pump();
+    this.input.pollText();
+    this._updateFps(timestamp);
+    this._updateStatus(false);
+    this._updateDiagnostics();
+  }
+
+  /* Run one emulated frame. Returns false when the loop should stop (fatal
+   * error or a clean MIDlet exit). */
+  _step(dt) {
     let flags = 0;
     try {
       flags = this.runtime.frame(dt);
     } catch (error) {
       console.warn('[game] frame() threw', error);
       this._fatal(error && error.message ? error.message : String(error));
-      return;
+      return false;
     }
 
     if (flags < 0) {
       this._fatal(this._engineError() || t('game.errorDefault'));
-      return;
+      return false;
     }
 
     if (flags & NJW.FRAME_DREW) {
@@ -715,17 +776,11 @@ export class GameView {
       this._showLoading(false);
     }
 
-    if (flags & NJW.FRAME_RUNNING) {
-      this.audio.pump();
-      this.input.pollText();
-      this._updateFps(timestamp);
-      this._updateStatus(false);
-      this._updateDiagnostics();
-      return;
-    }
+    if (flags & NJW.FRAME_RUNNING) { return true; }
 
     /* Not running any more: the MIDlet exited cleanly. */
     this._onExited();
+    return false;
   }
 
   _paint() {
@@ -811,6 +866,7 @@ export class GameView {
     this._paused = paused;
     this._pauseReason = paused ? reason : null;
     this._lastTs = null;
+    this._frameAccumMs = 0;
     if (paused) {
       this.input.setEnabled(false);
       this.input.releaseAll();
@@ -1672,6 +1728,8 @@ export class GameView {
   _applySettingsToUi() {
     const speed = $('#speed-select');
     if (speed) { speed.value = String(this.settings.speedPercent); }
+    const fps = $('#fps-select');
+    if (fps) { fps.value = String(this.settings.frameCap); }
     const heap = $('#heap-select');
     if (heap) { heap.value = String(this.settings.heapMb); }
     const autoResume = $('#auto-resume');
