@@ -1,5 +1,5 @@
 diff --git a/docs/development/licenses.md b/docs/development/licenses.md
-index 213a90b..2ee38cb 100644
+index 213a90b8..2ee38cbe 100644
 --- a/docs/development/licenses.md
 +++ b/docs/development/licenses.md
 @@ -178,6 +178,7 @@ See below for a summary of the licenses behind RetroArch and its cores:
@@ -11,20 +11,20 @@ index 213a90b..2ee38cb 100644
  | Neko Project II Kai                                                              | [MIT](https://github.com/AZO234/NP2kai/blob/master/LICENSE)                               |                |
  | [Nestopia](../library/nestopia.md)                                               | [GPLv2](https://github.com/libretro/nestopia/blob/master/COPYING)                         |                |
 diff --git a/docs/guides/core-list.md b/docs/guides/core-list.md
-index 27d6e40..c0780d4 100644
+index 89026d6d..0e7d8b59 100644
 --- a/docs/guides/core-list.md
 +++ b/docs/guides/core-list.md
-@@ -168,6 +168,7 @@
- | [Mupen64Plus-Next](https://docs.libretro.com/library/mupen64plus/)          | Nintendo 64            |                    |
- | [Mupen64Plus-Next GLES2](https://docs.libretro.com/library/mupen64plus/)    | Nintendo 64            |                    |
- | [Mupen64Plus-Next GLES3](https://docs.libretro.com/library/mupen64plus/)    | Nintendo 64            |                    |
+@@ -157,6 +157,7 @@
+ | [Mupen64Plus-Next](https://docs.libretro.com/library/mupen64plus/)          | Nintendo 64            | An up-to-date port of the Mupen64Plus N64 emulator, ported to libretro |
+ | [Mupen64Plus-Next GLES2](https://docs.libretro.com/library/mupen64plus/)    | Nintendo 64            | An up-to-date port of the Mupen64Plus N64 emulator, ported to libretro |
+ | [Mupen64Plus-Next GLES3](https://docs.libretro.com/library/mupen64plus/)    | Nintendo 64            | An up-to-date port of the Mupen64Plus N64 emulator, ported to libretro |
 +| [nano_j2me](../library/nano_j2me.md) | J2ME | A native C99 J2ME runtime with M3G 3D, MIDI/MP3/AMR/MPEG-4 media and manual save states |
  | [Native32Emu](../library/native32emu.md) | Sunplus Native32 | An emulator for the Sunplus Native32 game format used by DVD player and TV chipsets |
  | [CoolbarEmu](../library/coolbaremu.md) | Coolbar/CBE | An emulator for Coolbar/CBE applications on feature phones |
- | [Neko Project II](../library/nekop2.md) | NEC PC-98              |                    |
+ | [Neko Project II](../library/nekop2.md) | NEC PC-98              | An emulator for NEC's PC-9801 (aka PC-98) personal computer platform, ported to libretro |
 diff --git a/docs/library/nano_j2me.md b/docs/library/nano_j2me.md
 new file mode 100644
-index 0000000..b06792b
+index 00000000..b06792b0
 --- /dev/null
 +++ b/docs/library/nano_j2me.md
 @@ -0,0 +1,219 @@
@@ -248,7 +248,7 @@ index 0000000..b06792b
 +specific tested content and environment details; no commercial JARs are supplied
 +by this page.
 diff --git a/docs/meta/see-also.md b/docs/meta/see-also.md
-index d277cc9..53a892f 100644
+index d277cc9a..53a892fe 100644
 --- a/docs/meta/see-also.md
 +++ b/docs/meta/see-also.md
 @@ -71,6 +71,13 @@ This is a list of cores that are related to each other in some way.
@@ -266,10 +266,10 @@ index d277cc9..53a892f 100644
  
  - [Nintendo - Game Boy / Color (Emux GB)](../library/emux_gb.md)
 diff --git a/mkdocs.yml b/mkdocs.yml
-index 6b0496a..9797c8f 100644
+index 67d45268..9980a7e1 100644
 --- a/mkdocs.yml
 +++ b/mkdocs.yml
-@@ -222,6 +222,7 @@ nav:
+@@ -223,6 +223,7 @@ nav:
        - 'Mobile Emulation':
          - 'Mobile - J2ME (FreeJ2ME)': 'library/freej2me.md'
          - 'Mobile - J2ME (FreeJ2ME-Plus)': 'library/freej2me_plus.md'

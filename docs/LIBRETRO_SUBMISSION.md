@@ -1005,3 +1005,14 @@ adjudicated); full serial CTest **189/189 PASS in 357.49 s**.
 prepared pull requests were opened — `libretro/libretro-super#2203` and
 `libretro/docs#1239`. The remaining external steps are the upstream CI run and
 review; nothing is merged or accepted yet.
+
+### Update, 2026-11-16: `libretro/docs#1239` rebased
+
+Upstream `libretro/docs` master advanced to
+`177c669990b659e7cfd00add4564b85c2a692179` (2026-11-16) after the first PR
+revision, which made the PR show as conflicting.  The fork branch
+`add-nano_j2me` was rebased onto that commit, the docs patch regenerated
+(`docs/libretro/upstream/libretro-docs-nano_j2me.patch`, still 5 files,
++229 lines), `mkdocs build` re-run successfully (page 98,129 bytes), and the
+branch force-pushed.  `libretro/libretro-super#2203` remains mergeable against
+its unchanged baseline.

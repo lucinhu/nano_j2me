@@ -935,3 +935,9 @@ The author authorized upstream submission, and the version moved to 0.5.8:
   Remaining external steps: upstream CI and review.
 
 No upstream merge or acceptance is claimed.
+
+One rebase was needed after the first submission: `libretro/docs` master moved
+to `177c669990b659e7cfd00add4564b85c2a692179`, so the docs fork branch was
+rebased, the patch regenerated and `mkdocs build` re-verified. The pages above
+describe the original `d83b34b2` generation; the current patch is valid against
+`177c6699`.

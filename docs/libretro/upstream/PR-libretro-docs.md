@@ -1,7 +1,7 @@
 # Ready-to-post PR: libretro/docs (library page)
 
 Post this as a pull request against **`libretro/docs`** (branch `master`,
-baseline `d83b34b21b8a2c14db573aea66d876e343d316ca`, 2026-11-07). Nothing has
+baseline `177c669990b659e7cfd00add4564b85c2a692179`, 2026-11-16). Nothing has
 been pushed upstream; this file exists so the submission can be opened without
 rewriting text.
 
@@ -12,12 +12,12 @@ rewriting text.
 ## Branch / patch
 
 Apply `docs/libretro/upstream/libretro-docs-nano_j2me.patch` on top of
-`d83b34b2`:
+`177c6699`:
 
 ```
 git clone https://github.com/libretro/libretro-docs.git
 cd libretro-docs
-git checkout d83b34b21b8a2c14db573aea66d876e343d316ca
+git checkout 177c669990b659e7cfd00add4564b85c2a692179
 git clean -fdq
 git checkout -b add-nano_j2me
 git apply /path/to/libretro-docs-nano_j2me.patch
@@ -56,7 +56,7 @@ debugging window, not a save channel.
 
 Validation done before sending this PR (all offline, on the candidate tree):
 
-- Patch applies cleanly to `d83b34b21b8a2c14db573aea66d876e343d316ca`.
+- Patch applies cleanly to `177c669990b659e7cfd00add4564b85c2a692179` (rebased after the first PR revision).
 - `mkdocs build` with the patch applied exits 0 and renders
   `site/library/nano_j2me/index.html`; the only warning is the git-date
   plugin's missing-history note for the new file in a local clone.
