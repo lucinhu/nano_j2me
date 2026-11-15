@@ -120,6 +120,17 @@ def build_case(tmp, jar_path, entry, replacement):
     return out
 
 
+def keep_failure(case, jar, label):
+    """Save a crashing/hanging case so it can be reproduced by hand."""
+    out_dir = os.environ.get('NJ_FUZZ_KEEP')
+    if not out_dir:
+        return None
+    os.makedirs(out_dir, exist_ok=True)
+    dst = os.path.join(out_dir, label + '.jar')
+    shutil.copy(case, dst)
+    return dst
+
+
 def run(jar, frames, timeout):
     cmd = [BIN, '--port', 'headless', '--size', '240x320', '--heap', '16',
            '--fps', '0', '--run-frames', str(frames), '--stats', jar]
@@ -165,13 +176,17 @@ def main():
             status, dt, err = run(case, FRAMES[jar], budgets[jar])
             if status == 'CRASH':
                 crashed += 1
-                print('\nCRASH case %d %s:%s kinds=%s\n%s'
+                saved = keep_failure(case, jar, 'media-crash-%d' % i)
+                print('\nCRASH case %d %s:%s kinds=%s%s\n%s'
                       % (i, jar, entry, kinds,
+                         (' saved=' + saved) if saved else '',
                          err.decode('utf-8', 'replace')))
             elif status == 'HUNG':
                 hung += 1
-                print('\nHUNG case %d %s:%s kinds=%s (%.1fs)'
-                      % (i, jar, entry, kinds, dt))
+                saved = keep_failure(case, jar, 'media-hung-%d' % i)
+                print('\nHUNG case %d %s:%s kinds=%s (%.1fs)%s'
+                      % (i, jar, entry, kinds, dt,
+                         (' saved=' + saved) if saved else ''))
             else:
                 sys.stdout.write('.')
                 sys.stdout.flush()

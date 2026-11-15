@@ -24,6 +24,12 @@
  *                          added the field offset to 0x1 and copied from the
  *                          result: SIGSEGV with no exception at all.
  *   HardeningBadPutfield   the same wild pointer on the write side.
+ *   HardeningBadArray      baload on an int.  `ARRAY_HEAD()` read ->kind
+ *                          through the garbage pointer before the ownership
+ *                          guard was added: SIGSEGV inside the interpreter.
+ *   HardeningBadArrayFused the same garbage through the fused iload+array-load
+ *                          fast path, which repeats the check instead of
+ *                          sharing the macro.
  *   HardeningCircularSuper super_class names the class itself; linking it
  *                          recursed into itself until the C stack ran out
  *                          (SIGSEGV).
@@ -73,6 +79,10 @@ static const malformed_case k_cases[] = {
       "getfield receiver is not an object reference" },
     { "HardeningBadPutfield",
       "putfield receiver is not an object reference" },
+    { "HardeningBadArray",
+      "baload receiver is not an object reference" },
+    { "HardeningBadArrayFused",
+      "fused iload+baload receiver is not an object reference" },
     { "HardeningCircularSuper",
       "class names itself as its superclass" },
     { "HardeningIfaceLoop",

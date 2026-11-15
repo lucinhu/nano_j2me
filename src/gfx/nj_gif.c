@@ -52,6 +52,16 @@
 #define GIF_MAX_CODES   4096
 #define GIF_MAX_CODE_BITS 12
 
+/*
+ * Canvas pixel budget.  A GIF header names the screen as two u16 values, so it
+ * can claim 65535x65535 = 4.29 G pixels: 17 GB as ARGB8888.  Without a limit
+ * the decoder either fails the host allocation or - worse, when the allocator
+ * succeeds lazily - spends minutes clearing the canvas, which is what the
+ * malformed-GIF fuzz run turned into a "hang".  Same budget as the PNG
+ * decoder keeps the two mandatory MIDP formats consistent.
+ */
+#define GIF_MAX_PIXELS  ((nj_u8)4096u * 4096u)
+
 typedef struct gif_reader {
     const nj_u1 *p;
     nj_u4        size;
@@ -333,6 +343,9 @@ static nj_status gif_info(const void *data, nj_u4 size, nj_image_info *out)
     if (out->width <= 0 || out->height <= 0) {
         return NJ_ERR_FORMAT;
     }
+    if ((nj_u8)out->width * (nj_u8)out->height > GIF_MAX_PIXELS) {
+        return NJ_ERR_FORMAT;
+    }
     out->bits_per_pixel = (int)((p[10] & 0x07u) + 1u);
     out->has_alpha = 1;
     out->format = NJ_CODEC_FMT_GIF;
@@ -405,6 +418,12 @@ nj_image *nj_gif_decode(const void *data, nj_u4 size,
     }
     if (screen_w == 0u || screen_h == 0u) {
         goto fail;
+    }
+    if ((nj_u8)screen_w * (nj_u8)screen_h > GIF_MAX_PIXELS) {
+        if (err) {
+            *err = "GIF image is larger than 16.7 million pixels";
+        }
+        return NULL;
     }
     if (!gif_byte(&r, &packed) || !gif_byte(&r, &bg) || !gif_byte(&r, &aspect)) {
         goto fail;

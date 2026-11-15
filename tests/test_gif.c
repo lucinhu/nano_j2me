@@ -18,6 +18,9 @@
  *     GIF87a/GIF89a and refuses anything else, including a PNG;
  *   - malformed input (empty, truncated, corrupted) returns NULL with a
  *     message, never a half-built image, and never crashes;
+ *   - a header that claims a multi-gigapixel canvas is refused before the
+ *     pixel buffer is allocated, so a 13-byte file cannot turn into a
+ *     multi-gigabyte allocation or a canvas-clearing hang;
  *   - every block the decoder takes through its hooks is handed back, so a
  *     failed decode does not leak.
  *
@@ -446,6 +449,55 @@ static void test_malformed(void)
     CHECK_EQ(live_blocks, 0, "no failed decode leaks a block");
 }
 
+static void test_oversized_canvas(void)
+{
+    /*
+     * A GIF header names the screen in two u16 values, so a 13-byte file can
+     * claim 60000x60000 = 3.6 G pixels (14 GB as ARGB8888).  Clients of this
+     * decoder (Image.createImage) must get a refusal, not a multi-gigabyte
+     * allocation and a canvas-clearing loop that reads as a hang, and not a
+     * wild write.  The malformed-GIF fuzz run produced exactly that before the
+     * cap; this test pins "refused before anything is allocated".
+     */
+    static const unsigned char k_oversized[] = {
+        'G', 'I', 'F', '8', '9', 'a',
+        0x60, 0xEA,     /* screen width  60000 */
+        0x60, 0xEA,     /* screen height 60000 */
+        0x00, 0x00, 0x00
+    };
+    static const unsigned char k_at_limit[] = {
+        'G', 'I', 'F', '8', '9', 'a',
+        0x00, 0x10,     /* 4096 */
+        0x00, 0x10,     /* 4096: exactly NJ_GIF_MAX_PIXELS, allowed by the cap */
+        0x00, 0x00, 0x00
+    };
+    const char *err = "untouched";
+    nj_image_info info;
+    int before = live_blocks;
+
+    CHECK(nj_gif_decode(k_oversized, (nj_u4)sizeof(k_oversized),
+                        count_alloc, NULL, count_free, &err) == NULL,
+          "an oversized canvas is refused");
+    CHECK(err != NULL && strstr(err, "larger than") != NULL,
+          "and the refusal names the size limit");
+    CHECK_EQ(live_blocks, before, "an oversized canvas allocates nothing");
+
+    memset(&info, 0, sizeof(info));
+    CHECK(nj_codec_gif_software.info != NULL &&
+              nj_codec_gif_software.info(k_oversized,
+                                         (nj_u4)sizeof(k_oversized),
+                                         &info) != NJ_OK,
+          "the info probe also refuses an oversized canvas");
+    memset(&info, 0, sizeof(info));
+    CHECK(nj_codec_gif_software.info != NULL &&
+              nj_codec_gif_software.info(k_at_limit,
+                                         (nj_u4)sizeof(k_at_limit),
+                                         &info) == NJ_OK,
+          "a canvas exactly at the limit still reports its size");
+    CHECK_EQ(info.width, 4096, "the at-limit probe reports the width");
+    CHECK_EQ(info.height, 4096, "the at-limit probe reports the height");
+}
+
 int main(void)
 {
     test_plain();
@@ -454,6 +506,7 @@ int main(void)
     test_animated();
     test_provider();
     test_malformed();
+    test_oversized_canvas();
 
     printf("test_gif: %d checks, %d failures\n", checks, failures);
     printf("%s\n", failures == 0 ? "PASS" : "FAIL");

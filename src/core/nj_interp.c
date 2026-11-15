@@ -644,6 +644,10 @@ static float nj_interp_farith(nj_u1 op, float a, float b)
             if (!njla_arr_) {                                             \
                 THROW("java/lang/NullPointerException", NULL);            \
             }                                                             \
+            if (!nj_heap_owns_object_fast(vm, njla_arr_)) {               \
+                THROW("java/lang/VerifyError",                            \
+                      "array reference is not an object reference");      \
+            }                                                             \
             if (njla_arr_->kind != NJ_OBJ_ARRAY ||                        \
                 (nj_u4)njla_idx_ >= njla_arr_->length) {                  \
                 THROW("java/lang/ArrayIndexOutOfBoundsException", NULL);  \
@@ -2009,6 +2013,10 @@ nj_status nj_interp_run(nj_vm *vm, nj_thread *th, int stop_depth)
         nj_s4 idx_ = (--sp)->i;                                        \
         nj_ref arr_ = (--sp)->r;                                       \
         if (!arr_) { THROW("java/lang/NullPointerException", NULL); }  \
+        if (!nj_heap_owns_object_fast(vm, arr_)) {                      \
+            THROW("java/lang/VerifyError",                             \
+                  "array reference is not an object reference");       \
+        }                                                              \
         if (arr_->kind != NJ_OBJ_ARRAY || (nj_u4)idx_ >= arr_->length) \
             THROW("java/lang/ArrayIndexOutOfBoundsException", NULL)
 
@@ -3027,11 +3035,19 @@ nj_status nj_interp_run(nj_vm *vm, nj_thread *th, int stop_depth)
         L_0xbe: case 0xbe: {                                       /* arraylength */
             nj_ref a = (--sp)->r;
             if (!a) THROW("java/lang/NullPointerException", NULL);
+            if (!nj_heap_owns_object_fast(vm, a)) {
+                THROW("java/lang/VerifyError",
+                      "arraylength operand is not an object reference");
+            }
             sp->i = (nj_s4)a->length; sp++;
             DISPATCH(); }
         case 0xbf: {                                       /* athrow */
             nj_ref e = (--sp)->r;
             if (!e) THROW("java/lang/NullPointerException", NULL);
+            if (!nj_heap_owns_object_fast(vm, e)) {
+                THROW("java/lang/VerifyError",
+                      "athrow operand is not an object reference");
+            }
             if (!vm->exception) {
                 vm->exception = e;
             }
@@ -3040,7 +3056,12 @@ nj_status nj_interp_run(nj_vm *vm, nj_thread *th, int stop_depth)
             nj_u2 idx = U2();
             nj_ref o = sp[-1].r;
             if (o) {
-                const char *cn = nj_cp_class_name(m->owner, idx);
+                const char *cn;
+                if (!nj_heap_owns_object_fast(vm, o)) {
+                    THROW("java/lang/VerifyError",
+                          "checkcast operand is not an object reference");
+                }
+                cn = nj_cp_class_name(m->owner, idx);
                 nj_class *c = cn ? nj_class_resolve(vm, cn) : NULL;
                 if (!c) THROW("java/lang/NoClassDefFoundError", cn);
                 if (!nj_class_is_assignable(o->cls, c)) {
@@ -3054,7 +3075,12 @@ nj_status nj_interp_run(nj_vm *vm, nj_thread *th, int stop_depth)
             if (!o) {
                 sp->i = 0; sp++;
             } else {
-                const char *cn = nj_cp_class_name(m->owner, idx);
+                const char *cn;
+                if (!nj_heap_owns_object_fast(vm, o)) {
+                    THROW("java/lang/VerifyError",
+                          "instanceof operand is not an object reference");
+                }
+                cn = nj_cp_class_name(m->owner, idx);
                 nj_class *c = cn ? nj_class_resolve(vm, cn) : NULL;
                 if (!c) THROW("java/lang/NoClassDefFoundError", cn);
                 sp->i = nj_class_is_assignable(o->cls, c) ? 1 : 0;
@@ -3065,6 +3091,10 @@ nj_status nj_interp_run(nj_vm *vm, nj_thread *th, int stop_depth)
             nj_ref o = (--sp)->r;
             int rc;
             if (!o) THROW("java/lang/NullPointerException", NULL);
+            if (!nj_heap_owns_object_fast(vm, o)) {
+                THROW("java/lang/VerifyError",
+                      "monitorenter operand is not an object reference");
+            }
             rc = nj_vm_monitor_enter(vm, th, o);
             if (rc == 1) {
                 /* Contended: keep the reference, rewind, and retry when the
@@ -3082,6 +3112,10 @@ nj_status nj_interp_run(nj_vm *vm, nj_thread *th, int stop_depth)
         L_0xc3: case 0xc3: {                                       /* monitorexit */
             nj_ref o = (--sp)->r;
             if (!o) THROW("java/lang/NullPointerException", NULL);
+            if (!nj_heap_owns_object_fast(vm, o)) {
+                THROW("java/lang/VerifyError",
+                      "monitorexit operand is not an object reference");
+            }
             if (nj_vm_monitor_exit(vm, th, o) != 0) {
                 THROW("java/lang/IllegalMonitorStateException",
                       "monitorexit without the monitor");

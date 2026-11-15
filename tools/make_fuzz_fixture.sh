@@ -46,6 +46,12 @@
 #                           so the field fast path added the field offset to
 #                           0x1 and memcpy'd from the result.  SIGSEGV, no
 #                           exception.
+#   HardeningBadArray       main pushes the int 11011 and executes baload on it.
+#                           ARRAY_HEAD dereferenced the int as an array pointer
+#                           before the ownership guard existed: SIGSEGV in the
+#                           interpreter with no exception.  The fused
+#                           iload_0+baload path had the same gap, so
+#                           HardeningBadArrayFused feeds it the same int.
 #   HardeningBadPutfield    the write-side twin: int receiver, putfield to it.
 #   HardeningCircularSuper  super_class names the class itself.  Linking it
 #                           recursed class_link() into itself; the C stack ran
@@ -205,6 +211,26 @@ classes['HardeningBadPutfield.class'] = class_file(
     [field(ACC_PUBLIC, pad_i, int_i)],
     [simple_main(cp, [0x04, 0x05, 0xb5, f_ref >> 8, f_ref & 0xFF, 0xb1],
                  2)])              # iconst_1; iconst_2; putfield; return
+
+# --- baload on an int: the array guard must refuse a non-reference ---
+cp, this_cls, obj_cls = new_class('HardeningBadArray')
+classes['HardeningBadArray.class'] = class_file(
+    cp, ACC_PUBLIC | ACC_SUPER, this_cls, obj_cls, [], [],
+    [simple_main(cp, [0x11, 0x2B, 0x03,       # sipush 11011 (0x2B03)
+                      0x03,                   # iconst_0
+                      0x33,                   # baload
+                      0x57,                   # pop
+                      0xb1], 2)])             # return
+
+# --- the same through the fused iload_0+baload path ---
+cp, this_cls, obj_cls = new_class('HardeningBadArrayFused')
+classes['HardeningBadArrayFused.class'] = class_file(
+    cp, ACC_PUBLIC | ACC_SUPER, this_cls, obj_cls, [], [],
+    [simple_main(cp, [0x03, 0x3b,             # iconst_0; istore_0
+                      0x11, 0x2B, 0x03,       # sipush 11011
+                      0x1a,                   # iload_0
+                      0x33,                   # baload (fused)
+                      0x57, 0xb1], 2)])       # pop; return
 
 # --- superclass loop: the class names itself as its superclass ---
 cp = CP()

@@ -238,3 +238,38 @@ Evidence:
   338.68 s** (`/tmp/r45-ctest.log`).
 - Remaining gap after this: one class per case (a JAR with two independently
   damaged classes in one run is not simulated).
+
+### Array operand guard (round 52)
+
+The 3000-case long campaign found one crash the small runs had missed
+(`tools/fuzz_jar.py ... 3000 2 102`, `saved=jar-crash-2451.jar`): a JAR whose
+`DemoCanvas$2.class` had five bytes rewritten inside its `compare([B[B)I` code.
+The resulting instruction stream (`...; lstore_1; iconst_0; fdiv; ...;
+sipush 11011; baload`) is type-invalid - `lstore_1` consumes an int as a long
+and the later `baload` takes the int 11011 as its array reference - but the
+class-file loader has no type verifier and accepted it.  `ARRAY_HEAD()` checked
+`arr_` for NULL and `->kind != NJ_OBJ_ARRAY`, so the wild pointer was
+dereferenced: SIGSEGV in `baload` inside the interpreter.
+
+Fix: `ARRAY_HEAD()` and the fused array-load body (`NJ_ARRAY_LOAD_BODY`, which
+repeats the checks instead of sharing the macro) now call the existing
+`nj_heap_owns_object_fast(vm, ref)` before touching the pointer and throw
+`java.lang.VerifyError` for a slot that is not a live object; array stores,
+`getfield`/`putfield` and invokes already had the same guard.
+
+Regression coverage:
+
+- `tools/make_fuzz_fixture.sh` gained two classes, `HardeningBadArray`
+  (`sipush 11011; iconst_0; baload`) and `HardeningBadArrayFused`
+  (`iconst_0; istore_0; sipush 11011; iload_0; baload` for the fused path);
+  `tests/fixtures/hardening_malformed.jar` regenerated (SHA-256
+  `eb86bee7dbe5da0d14bfd78761443356754ca609f7d5efd41658ac1ef10a3122`) and
+  force-added.
+- `tests/test_class_hardening.c` lists both; both are rejected with
+  `VerifyError`, twice in a row, and the control class still runs (2 rounds,
+  no leak).
+- Re-run of the failing campaign: `tools/fuzz_jar.py <cli> 3000 2 102` ->
+  **clean: 3000, crashed: 0, HUNG: 0**.
+- `bench.jar` dispatch throughput is unchanged (62,513,694 bytecodes at
+  419.55 M/s, same as the pre-guard binary on the same machine); the guard is
+  two predictable loads per array access.

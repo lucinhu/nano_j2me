@@ -157,3 +157,26 @@ game-side), `愤怒的小鸟-高清版_2353.jar` (>16 MB heap), `乱世Q三国_1
 (auth expiry), `有女倾城破解版_11525.jar` (MIDlet self-exit),
 `鲁宾逊漂流记汉化BT版_4677.jar` (truncated ZIP), fixtures/JBenchmark rows
 (title-exit by design).
+
+## Revalidation, 2026-11-15 (round 52, crash-hardening build)
+
+The guarded interpreter (array/object operand checks) and the GIF canvas budget
+were revalidated with a full sweep against the same recipes (10 workers,
+600 frames at 30 fps, per-title keys) into
+`.local-tools/debug-runs/compat-20261115-r52`:
+
+- **404 rows: 371 ok / 28 title-exit / 2 title-exception / 2 no-frame /
+  0 timeout / 1 bad-jar**, compared with the round-42 run
+  (371 / 27 / 2 / 2 / 1 timeout / 1).
+- `GT赛车2_36.jar` timeout -> ok: standalone the same binary still needs
+  ~78 s for 600 frames, so the round-42 timeout remains parallel-load noise.
+- `西伯利亚大反击_11466.jar` ok -> title-exit (frames 291, paints 291): the
+  title is itself flaky at this point. Running it alone with the same keys,
+  the pre-hardening reference CLI (`/tmp/nj2me-base2`) also called
+  `notifyDestroyed()` at frame 291 on one of two runs and reached 600 frames on
+  the other, so this is a title/keys timing interaction, not a regression from
+  the guards.
+- No new non-ok rows, and all previously adjudicated rows are unchanged
+  (`三国赤壁小乔秘史_7976.jar`, `愤怒的小鸟-高清版_2353.jar`,
+  `乱世Q三国_1649.jar`, `有女倾城破解版_11525.jar`,
+  `鲁宾逊漂流记汉化BT版_4677.jar`, fixtures/JBenchmark by design).

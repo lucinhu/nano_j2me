@@ -51,12 +51,45 @@ The ctest gate `fuzz_media` (`python3 tools/fuzz_media.py <cli> 60 2`,
 TIMEOUT 300) covers the six targets in about 0.7 s; the full serial suite is
 now **189/189 passed in 347.31 s** (`/tmp/r51-ctest2.log`).
 
+## Long campaign, round 52: an oversized GIF canvas
+
+The 3000-case campaign (`tools/fuzz_media.py <cli> 3000 2 103`) found three
+HUNG cases, all in `imagesdemo.jar:res/sample.gif`.  They were not hangs in the
+watchdog sense: each reproduces as a standalone SIGSEGV, and the cause is
+structural.  The mutations rewrote the GIF screen size to 38027x50324,
+40708x49041 and 38109x51747 (roughly 7.6-8.0 GB as ARGB8888).  `nj_gif_decode`
+only checked that both dimensions were non-zero, then allocated
+`width*height*4` bytes and cleared the canvas pixel by pixel; a lazily
+satisfied multi-gigabyte allocation is either a very long clear (the HUNG
+classification) or a wild write when the allocator/fault path disagrees
+(SIGSEGV in libc from the clearing loop).
+
+Fix: `GIF_MAX_PIXELS` = 4096x4096 (the same budget the PNG decoder applies,
+16.7 M pixels) is enforced in two places - `nj_gif_decode` right after the
+header dimensions are read (before any allocation, with the message
+"GIF image is larger than 16.7 million pixels") and `gif_info` (so a caller
+probing the image before decoding gets `NJ_ERR_FORMAT`).
+
+Evidence:
+
+- `tools/fuzz_media.py <cli> 3000 2 103` after the fix ->
+  **clean: 3000, crashed: 0, HUNG: 0**; the three saved reproducers now print
+  `IMAGE gif refused: java.lang.IllegalArgumentException: ... GIF image is
+  larger than 16.7 million pixels` and the fixture exits 0.
+- `tests/test_gif.c` gained `test_oversized_canvas()`: a 13-byte header
+  claiming 60000x60000 is refused with that message and allocates nothing
+  (the counting allocator proves it), while a header exactly at 4096x4096
+  still reports its size through the info probe.
+- The failure artifacts stay at `/tmp/fzkeep/media-hung-{79,1855,2423}.jar`
+  for manual replay; `tools/fuzz_media.py` now saves any crash/hang when
+  `NJ_FUZZ_KEEP` is set.
+
 ## What is still not covered
 
 - video containers: no fixture JAR ships a `.3gp`/`.mp4`/`.h263` resource, so
   the MPEG-4/H.263 demux and video decoders are not fuzzed here (their unit
   tests use constructed streams);
-- JPEG and GIF image decoders (PNG is covered through `gamedemo.jar`; the
-  other two only have their constructed-stream unit tests);
 - decoder state carried across `Player` lifetime (the fixture opens/closes one
-  player per resource).
+  player per resource);
+- multiple independently damaged resources in one JAR (each case mutates one
+  entry).
