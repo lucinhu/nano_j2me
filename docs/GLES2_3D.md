@@ -338,3 +338,22 @@ profiler 代码默认关闭（`NJ_GLES2_PROFILE=0`），只用于后续性能分
 | Linux `nj2me` | 4019352 | `ab390ceeeafc6224a3fce314541bac29c4940f3719a1761e6ac989719cbdfae8` |
 
 回归：全量 `ctest` 197/197 通过（91.81 s）。
+
+## 2026-11-15 真机验证：Xiaomi 23049RAD8C（Adreno 725）
+
+新 APK（含 auto 校准与 ES3 变体）安装到真机、GLES2 开关为「开（下次启动）」后，
+用 `LibraryActivity` 启动 Minecraft 并进入存档世界，logcat 关键行：
+
+```
+I/nj2me: gles2: enabled renderer=Adreno (TM) 725 (private pbuffer)
+I/nj2me: MCJ: LOAD read 26527 ms, prepare 25056 ms, left 175/704, ... world blocks 821K ...
+I/nj2me: m3g: accel calibration gpu=1051us software=818us -> disabled (software is faster)
+I/nj2me: MCJ: HUD3D auto 2d
+```
+
+结论：在这台真机上 GPU 事务（1051 µs）比软件光栅（818 µs）慢约 28%，auto 因此
+保留软件渲染；世界加载、渲染、存档（`MCJ: SAVE 2331 ms`）均正常，退出回到桌面。
+这也解释了「开不开 GLES2 感觉一样」：对 Minecraft 这类小三角形负载，即使 Adreno 725
+也抵不过每帧 CPU↔GPU 往返；GPU 路径只在软件光栅明显更贵（弱 CPU/大三角形/高分辨率）
+时才有机会胜出。证据：`.local-tools/debug-runs/gfx-full-20261113/phone-test/`
+（`phone-calib.log`、`phone-mc-ingame.png`、`phone-mc-worlds.png`）。
