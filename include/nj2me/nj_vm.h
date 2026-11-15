@@ -537,6 +537,18 @@ int     nj_vm_load_mem(nj_vm *vm, const nj_u1 *blob, nj_size size);
 nj_size nj_vm_blob_max(const nj_vm *vm);
 
 /*
+ * Expose the Java arena to frontend debugging features (libretro cheat
+ * search).  The heap is a single non-moving arena: objects are never
+ * relocated, so a live field keeps its host address for as long as the object
+ * stays reachable.  The pointer and size are stable for the VM's lifetime.
+ * This is a raw, unsynchronised window: writes bypass the Java memory model
+ * and can corrupt the VM, so a frontend must present it as a debugging tool,
+ * never as a save-data channel.  Returns NJ_OK and fills the out-parameters,
+ * or NJ_ERR_STATE when the VM has no arena.
+ */
+int     nj_vm_memory_region(nj_vm *vm, void **out_data, nj_size *out_size);
+
+/*
  * Diagnostic: describe where every live thread currently is.
  *
  * One line per thread (id, state, depth) followed by the innermost frames of

@@ -367,9 +367,11 @@ JAR `MIDlet-1` is the entry point; JAD redirects and suite selection are not
 implemented. Network hooks are absent in this core: online scores, HTTP/socket
 services and downloadable content are unavailable. Bluetooth and sensors are
 not provided by this adapter; vibration is forwarded to the frontend when a
-rumble interface is available (see Rumble above). No cheats, disc control,
-exposed libretro memory or achievements are implemented. The core uses one
-process-wide instance and loads one game at a time. Compatibility and
+rumble interface is available (see Rumble above). Code-based cheats, disc
+control and achievements are not implemented; the Java arena is exposed as
+`RETRO_MEMORY_SYSTEM_RAM` so a frontend's own cheat search can scan and patch
+it (see Cheats below). The core uses one process-wide instance and loads one
+game at a time. Compatibility and
 performance vary by title, handset assumptions and host CPU.
 
 ## Feasibility limits
@@ -395,15 +397,22 @@ worse than refusing it.
   stable input-to-frame mapping. The same nondeterminism, the multi-megabyte
   state and the single process-wide VM make lockstep/rollback synchronization
   infeasible in this design. Not advertised.
-- **Cheats** — libretro cheat codes address a flat, stable memory region. A JVM
-  heap has no stable addresses: objects move, the collector compacts, and a
-  Java field offset is not a host address. `retro_cheat_reset()` and
-  `retro_cheat_set()` are exported as no-ops and no cheat database is shipped.
-  Game-specific patching would need per-title support.
-- **Exposed memory** — `retro_get_memory_data()` returns NULL and
-  `retro_get_memory_size()` returns 0. There is no SRAM-like backing store; the
-  VM arena contains managed objects and native bookkeeping, and exposing it
-  would be both meaningless to the frontend and unsafe for the VM.
+- **Code-based cheats** — `retro_cheat_set()`/`retro_cheat_reset()` stay
+  no-ops: a libretro cheat code is a (address, value) pair over a flat memory
+  map, and a managed heap has no object or field addresses a code format could
+  describe. No cheat database is shipped. This does not stop a frontend's
+  search-and-write workflow, which operates on the exposed arena instead.
+- **Exposed memory** — the Java arena is a single non-moving allocation
+  (objects are never relocated), so `retro_get_memory_data(SYSTEM_RAM)`
+  returns its base and `retro_get_memory_size(SYSTEM_RAM)` the heap budget
+  (16-128 MB depending on `nano_j2me_heap`). The pointer is stable for the
+  VM's lifetime and the window is readable and writable, which is what a
+  frontend cheat search needs: scan for a value, then patch it. The window is
+  raw and unsynchronised: a write bypasses the Java memory model, lands
+  without a write barrier and can corrupt any object, so it is a debugging
+  tool for deliberate user actions, not a save-data channel. Only SYSTEM_RAM
+  is exposed; `VIDEO_RAM`/`SAVE_RAM`/`RTC` report NULL/0 because there is no
+  SRAM-like backing store.
 - **Achievements** — rcheevos needs stable memory addresses, deterministic
   execution and content identification. None of the three holds here, so
   achievements are absent rather than silently broken. No achievements

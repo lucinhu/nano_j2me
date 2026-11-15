@@ -3716,14 +3716,40 @@ RETRO_API void retro_cheat_set(unsigned index, bool enabled, const char *code)
     (void)code;
 }
 
+/*
+ * Expose the Java arena as SYSTEM_RAM so frontends can run their own cheat
+ * search.  The heap is a single non-moving arena, so a live field keeps its
+ * host address; the window is raw, though, and a write bypasses the Java
+ * memory model.  Code-based cheats (retro_cheat_set) stay no-ops: a libretro
+ * cheat code has no meaning for a managed heap, but a frontend's search-and-
+ * write workflow works on this window and is the user's explicit choice.
+ */
 RETRO_API void *retro_get_memory_data(unsigned id)
 {
-    (void)id;
-    return NULL;
+    nj_lr *s = core();
+    void *data = NULL;
+    if (id != RETRO_MEMORY_SYSTEM_RAM) {
+        return NULL;
+    }
+    lr_mutex_lock(&s->lock);
+    if (s->loaded && s->vm) {
+        nj_vm_memory_region(s->vm, &data, NULL);
+    }
+    lr_mutex_unlock(&s->lock);
+    return data;
 }
 
 RETRO_API size_t retro_get_memory_size(unsigned id)
 {
-    (void)id;
-    return 0;
+    nj_lr *s = core();
+    nj_size size = 0;
+    if (id != RETRO_MEMORY_SYSTEM_RAM) {
+        return 0;
+    }
+    lr_mutex_lock(&s->lock);
+    if (s->loaded && s->vm) {
+        nj_vm_memory_region(s->vm, NULL, &size);
+    }
+    lr_mutex_unlock(&s->lock);
+    return (size_t)size;
 }

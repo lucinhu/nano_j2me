@@ -301,6 +301,20 @@ nj_size nj_heap_used_bytes(nj_vm *vm)
     return used;
 }
 
+int nj_vm_memory_region(nj_vm *vm, void **out_data, nj_size *out_size)
+{
+    if (!vm || !vm->heap.base || vm->heap.size == 0u) {
+        return NJ_ERR_STATE;
+    }
+    if (out_data) {
+        *out_data = vm->heap.base;
+    }
+    if (out_size) {
+        *out_size = vm->heap.size;
+    }
+    return NJ_OK;
+}
+
 nj_size nj_heap_free_bytes(nj_vm *vm)
 {
     if (!vm || !vm->heap.base) {

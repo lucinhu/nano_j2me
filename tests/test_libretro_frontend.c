@@ -1935,6 +1935,41 @@ static void check_serialize_roundtrip(size_t size_at_load)
    free(buffer);
 }
 
+/* libretro cheat search needs a flat read/write window: SYSTEM_RAM must be
+ * exposed as a stable, non-empty pointer so a frontend can scan and patch it.
+ * The JVM heap is a single non-moving arena, so the pointer is stable for the
+ * VM's lifetime; this checks the contract without writing to it. */
+static void check_memory_window(void)
+{
+   void *data = api.get_memory_data(RETRO_MEMORY_SYSTEM_RAM);
+   size_t size = api.get_memory_size(RETRO_MEMORY_SYSTEM_RAM);
+   void *data2;
+
+   check("memory_data_system_ram", data != NULL,
+         "retro_get_memory_data(SYSTEM_RAM) returned NULL");
+   check("memory_size_system_ram",
+         size >= 8u * 1024u * 1024u && size <= 512u * 1024u * 1024u,
+         "retro_get_memory_size(SYSTEM_RAM)=%zu outside the expected range",
+         size);
+   check("memory_unknown_id_null",
+         api.get_memory_data(RETRO_MEMORY_VIDEO_RAM) == NULL,
+         "unknown memory id must not be exposed");
+   check("memory_size_unknown_zero",
+         api.get_memory_size(RETRO_MEMORY_VIDEO_RAM) == 0,
+         "unknown memory id must report size 0");
+   if (data != NULL)
+   {
+      volatile unsigned char first = ((const unsigned char *)data)[0];
+      check("memory_window_readable", 1, "first byte=%u", (unsigned)first);
+   }
+   run_frames(1);
+   data2 = api.get_memory_data(RETRO_MEMORY_SYSTEM_RAM);
+   check("memory_data_stable", data2 == data,
+         "the arena pointer must not move across frames");
+   check("memory_size_stable", api.get_memory_size(RETRO_MEMORY_SYSTEM_RAM) == size,
+         "the arena size must not change across frames");
+}
+
 /* Runs load -> frames -> (serialize roundtrip) -> unload -> checks.
  * Returns 1 on success, 0 when load_game() failed (game was not loaded). */
 static int run_game_cycle(int cycle)
@@ -1962,6 +1997,7 @@ static int run_game_cycle(int cycle)
       api.set_controller_port_device(0, RETRO_DEVICE_JOYPAD);
 
    check_after_load(cycle);
+   check_memory_window();
 
    serialize_size = api.serialize_size();
    s->serialize_size_at_load = serialize_size;
