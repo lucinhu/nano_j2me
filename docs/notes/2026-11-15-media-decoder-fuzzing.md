@@ -49,7 +49,7 @@ Against `/var/tmp/nj2me-goal13-build/nj2me`:
 
 The ctest gate `fuzz_media` (`python3 tools/fuzz_media.py <cli> 60 2`,
 TIMEOUT 300) covers the six targets in about 0.7 s; the full serial suite is
-now **188/188 passed in 338.75 s** (`/tmp/r49-ctest.log`).
+now **189/189 passed in 347.31 s** (`/tmp/r51-ctest2.log`).
 
 ## What is still not covered
 
