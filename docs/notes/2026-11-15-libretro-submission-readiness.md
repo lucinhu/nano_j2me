@@ -842,3 +842,50 @@ verification block).
   Linux core passed the mock matrix 20/20 and a real RetroArch run.
 - Still external, still unauthorized: opening either PR and letting upstream
   CI build/register the core.
+
+## Update, 2026-11-15 (round 52): r25 candidates built, release held
+
+Two r25 candidates were built from clean detached worktrees (fresh worktrees
+needed `tools/build_libretro_cores.sh` to create its gitignored `build/` log
+directory; that fix is commit `43a38b3`), and both were validated. Neither was
+installed as the canonical `build/libretro-dist`; r24 stays canonical.
+
+Candidate A, tree `a296ce8` (hardening only), kept as
+`/var/tmp/nj2me-submission-dist-r25-a296ce8`:
+
+| target | size | sha256 |
+|--------|------|--------|
+| linux-x86_64 | 3,839,800 | `b708ed57…` |
+| linux-aarch64 | 3,322,920 | `c1413080…` |
+| linux-armv7 | 3,030,604 | `3bc5916d…` |
+| android-arm64 | 3,555,592 | `74df6ed7…` |
+| android-armv7 | 2,743,548 | `78571561…` |
+| android-x86_64 | 3,595,824 | `444543fe…` |
+| windows-i686 | 3,451,392 | `c0edf5f2…` |
+| windows-x86_64 | 3,226,624 | `eb285860…` |
+
+Candidate B, tree `43a38b3` (hardening + `a2abdee` async construction), kept as
+`/var/tmp/nj2me-submission-dist-r25`:
+
+| target | size | sha256 |
+|--------|------|--------|
+| linux-x86_64 | 3,843,896 | `80ed47e8…` |
+| linux-aarch64 | 3,323,832 | `1052b596…` |
+| linux-armv7 | 3,031,724 | `fbdafb4b…` |
+| android-arm64 | 3,556,584 | `29bd43a4…` |
+| android-armv7 | 2,744,492 | `a7c9457e…` |
+| android-x86_64 | 3,596,848 | `a2489bf6…` |
+| windows-i686 | 3,451,392 | `5bd016b8…` |
+| windows-x86_64 | 3,226,624 | `da391cc2…` |
+
+`.info` is unchanged in both (`740df7353c181bd76955f04a64508c4c1d1994509c1b4290b3b420b04da424e1`).
+Validation on both: mock matrix 20/20, real RetroArch LoopDemo 120 frames PASS,
+Windows x86_64 under Wine 4/4, corpus visual probe 370/371 passed plus the one
+known Doom3 loader limitation and 0 failures. Candidate A's libretro state
+probe is 50/50; candidate B's is 49/50 because of the early-save regression
+described in `docs/notes/2026-11-15-libretro-async-load-early-state.md`.
+
+Release decision: hold r25, keep r24 canonical, and revisit after the
+async-load/state path settles (the same area is being iterated as `a2abdee` /
+`68bffb9`). The visual probe for both candidates ran against the private core
+copies, so the shared-tree rebuild the concurrent session does cannot skew it.

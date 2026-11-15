@@ -689,3 +689,16 @@ limitation, 0 failed** (`tools/check_libretro_corpus_visual.py` with
 `--frames 300`, harness save-state round trips included). Regression checks
 (仙剑奇侠传, 雷电4, 超级马里奥, test_vm/test_thread_lifecycle) stay PASS, and
 `tests/test_vm.c` covers the watchdog setter contract.
+
+### Known issue: early saves with the async load path
+
+Building the MIDlet on the VM thread also means the frontend can start asking
+for frames before the constructor's work (including font resolution) has
+settled. A libretro state saved during the first seconds of
+`快打旋风_10825.jar` is refused on restore with `save-state request refused
+(-7)` even though the frontend re-signs it, and that refusal path currently
+ends the session. The pre-async-load cores (r24, `a296ce8`) restore the same
+state fine, and saves taken after a few seconds work on every core. Details,
+reproduction commands and the working hypothesis are in
+`docs/notes/2026-11-15-libretro-async-load-early-state.md`; the r25 release
+package is held until this is resolved or accepted as a documented limitation.
