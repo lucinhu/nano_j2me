@@ -608,3 +608,34 @@ Canonical `build/libretro-dist/` (rebuilt from `14752c9`):
 
 `.info` unchanged (`c0f30aea…`). The older r21 round-34 note above remains as
 history; this r22 section supersedes it for the package identity.
+
+## Update, 2026-11-15 (round 35): end-to-end submission rehearsal
+
+Upstream baselines were re-checked and are unchanged since the patches were
+generated: `libretro/docs` master is still `d83b34b2` (2026-11-07) and
+`libretro-super` master is still `fb15e63` (2026-11-14), so both patch files
+apply as published.
+
+Rehearsal run from the current tree (`c20e752`, the r22 release revision):
+
+- offline bundle validator with clean clones and a real docs build:
+  `tools/check_libretro_submission_bundle.sh --super-clone /var/tmp/lr-super
+  --docs-clone /var/tmp/lr-docs --apply-clones --mkdocs
+  /var/tmp/mkvenv/bin/mkdocs` -> **41 passed, 0 failed** (resets both clones
+  to the baselines, applies both patches, checks the five touched docs files,
+  the `.info` payload and front matter, and renders the library page);
+- fresh `git clone` of `origin/main`: the exact libretro CI template configure
+  and build (Release, `-DNJ_BUILD_LIBRETRO=ON`, `-DNJ_BUILD_TESTS=OFF`, no
+  zlib package) produces a linux libretro core from a clean checkout; that
+  clone-built core passes the mock-frontend conformance matrix **20/20**, and
+  the bundle validator passes 16/16 in the clone (source/bundle `.info`
+  identity path);
+- CI template simulation at the release revision:
+  `tools/simulate_ci_builds.sh --out /var/tmp/ci-sim-r22` -> all three
+  contracts satisfied: linux 3,978,112 B, windows 3,545,006 B, android arm64
+  11,579,752 B (template rename to `nano_j2me_libretro_android.so`).
+
+What remains external is unchanged and needs explicit authorization: opening
+the two upstream pull requests (info file into `libretro-super`, docs page and
+index edits into `libretro/docs`), and letting the maintainers' buildbot
+produce the official artifacts.
