@@ -21,7 +21,10 @@ Fixtures: tests/fixtures/audiodemo.jar ships res/tone.amr, res/beep.wav and
 res/adpcm.wav; tests/fixtures/mididemo.jar ships song.mid; gamedemo.jar decodes
 res/player.png and res/tiles.png through Image.createImage (both the by-name and
 the stream overload); imagesdemo.jar decodes a checked-in baseline JPEG and a
-GIF through Image.createImage.  One target entry is
+GIF through Image.createImage; moviedemo.jar ships a synthetic MPEG-4 Part 2
+clip (res/movie.3gp) and a synthetic H.263 clip (res/movie_h263.3gp), both
+opened through Manager.createPlayer/VideoControl so the 3GP demux and the two
+video decoders see the damage.  One target entry is
 mutated per case; the rest of the JAR is rebuilt unchanged, so the ZIP
 container itself stays valid and only the decoder sees the damage.
 
@@ -58,6 +61,7 @@ TARGETS = [
     ('imagesdemo.jar', 'res/sample.jpg'),
     ('imagesdemo.jar', 'res/sample.gif'),
     ('moviedemo.jar', 'res/movie.3gp'),
+    ('moviedemo.jar', 'res/movie_h263.3gp'),
 ]
 
 # Frames to run: the audio fixture exercises playback, the MIDI fixture needs

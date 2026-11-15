@@ -131,6 +131,14 @@ The fixture was added to `tools/fuzz_media.py` as a ninth target
 (`moviedemo.jar:res/movie.3gp`, 120 frames), so the existing single-target and
 `multi` campaigns cover it automatically.
 
+The H.263 provider is covered the same way: `tests/fixtures/3gp/movie_h263.3gp`
+is a synthetic 6-frame 128x96 H.263 (s263) clip (3513 bytes; 128x96 is the
+smallest size the reference encoder accepts), `MovieDemo` plays it second
+through the same VideoControl path, and it is the tenth fuzz target
+(`moviedemo.jar:res/movie_h263.3gp`).  The `check_movie_decode` gate asserts
+both `media: h263 movie 128x96` and `VIDEO2 started`, so both video providers
+are exercised end to end on every test run.
+
 Evidence: `python3 tools/fuzz_media.py <cli> 1000 2 401` →
 **clean 1000 / crashed 0 / HUNG 0** (log
 `.local-tools/debug-runs/fuzz-r56-media-video.log`); `... 500 2 402 multi` →
@@ -138,7 +146,7 @@ Evidence: `python3 tools/fuzz_media.py <cli> 1000 2 401` →
 
 ## What is still not covered
 
-- H.263 bitstreams (the 3GP fixture uses `mp4v`; `.h263`/`s263` media is
-  still only exercised by corpus titles);
+- video bitstreams other than the two synthetic clips (e.g. a full-size H.263
+  stream with advanced prediction modes, or MPEG-4 with B-frames);
 - decoder state carried across `Player` lifetime (the fixture opens/closes one
   player per resource).
