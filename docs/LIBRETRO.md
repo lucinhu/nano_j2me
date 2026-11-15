@@ -69,8 +69,11 @@ Outputs go to `build/libretro-dist/<target>/`, with a library and its metadata.
 Use `--no-strip` to retain symbols. `all` selects the script's supported targets
 and requires all of their toolchains.
 
-The eight candidates currently in `build/libretro-dist/` are the r25 package
-rebuilt on 2026-11-16 from revision `43219e6`. r25 adds the malformed-bytecode
+The eight candidates currently in `build/libretro-dist/` are the r26 package
+(the 0.5.8 release) built on 2026-11-16 from revision `52c04a0`. r26 adds the
+version bump, the monitor acquisition for synchronized JNI-bridge callbacks
+(`docs/notes/2026-11-16-bridge-synchronized-callbacks.md`), and keeps
+everything below. r25 added the malformed-bytecode
 array-operand ownership guards and the GIF canvas pixel budget from
 `a296ce8`, publishes the `SYSTEM_RAM` memory map and cheat-search window from
 r24, and moves MIDlet construction onto the VM thread (`a2abdee`) with the

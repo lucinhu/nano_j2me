@@ -917,3 +917,21 @@ visual probe 370/371 + 1 known limitation, state probe 50/50, 5000-case
 class/JAR/media fuzz all clean). The only remaining external steps are still
 the upstream CI run and the upstream PRs, both waiting for explicit
 authorization.
+
+## Update, 2026-11-16 (round 54): 0.5.8 release and upstream PRs
+
+The author authorized upstream submission, and the version moved to 0.5.8:
+
+- Release package r26 built from clean tree `52c04a0`, eight targets, `.info`
+  `48ceccf6fc7110a605809c90877a4e16d57ff5e0275503c88ac1f6385790b791`
+  (`display_version = "0.5.8"`); canonical copy in `build/libretro-dist/`;
+  GitHub release `v0.5.8` with `nj2me-0.5.8-libretro-cores.zip`.
+- Validation: mock 20/20; real RetroArch alphademo 300 frames PASS; Wine 4/4;
+  corpus 372 ok / 27 title-exit / 2 title-exception / 2 no-frame / 0 timeout /
+  1 bad-jar; full serial CTest 189/189 in 357.49 s.
+- Upstream PRs opened from forks:
+  `libretro/libretro-super#2203` (branch `add-nano_j2me`, commit `4ec537f`)
+  and `libretro/docs#1239` (branch `add-nano_j2me`, commit `fc6c6c2`).
+  Remaining external steps: upstream CI and review.
+
+No upstream merge or acceptance is claimed.

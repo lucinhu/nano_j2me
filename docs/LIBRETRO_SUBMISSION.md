@@ -1,9 +1,12 @@
 # libretro submission kit
 
-This is a **local preparation kit**, not an announcement of upstream acceptance.
-This project repository is committed and pushed as part of routine work, but no
-pull request, upload or other interaction with libretro upstream is performed
-without further explicit authorization. Runtime code is MIT licensed, built-in
+This is a **submission kit**, not an announcement of upstream acceptance.  The
+project repository is committed and pushed as part of routine work; on
+2026-11-16 the project author explicitly authorized upstream submission and the
+two prepared pull requests were opened from forks:
+[`libretro/libretro-super#2203`](https://github.com/libretro/libretro-super/pull/2203)
+and [`libretro/docs#1239`](https://github.com/libretro/docs/pull/1239).  No
+merge or acceptance is claimed. Runtime code is MIT licensed, built-in
 AMR numeric data are separately Apache-2.0, and bundled font data are SIL OFL
 1.1. The identified codec source replacements and bounded implementation
 reviews are complete, and final local combined-candidate validation passed as
@@ -966,3 +969,39 @@ crashes and zero hangs**. Details and the oracle caveats (concurrent real-
 frontend batches and the parallel sweep can flake; reproduce standalone
 before calling a defect) are in
 `docs/notes/2026-11-16-r25-validation-and-fuzz-campaigns.md`.
+
+## Release 0.5.8 (r26), 2026-11-16 — synchronized callbacks + version bump
+
+Engine and metadata version moved to **0.5.8** (`.info`
+SHA-256 `48ceccf6fc7110a605809c90877a4e16d57ff5e0275503c88ac1f6385790b791`,
+`display_version = "0.5.8"`). This release also carries the round-54
+`fix(core): acquire monitors for synchronized JNI-bridge callbacks`.
+
+**Artifacts** built from clean tree `52c04a0` with
+`tools/build_libretro_cores.sh --jobs 12 --out /var/tmp/nj2me-submission-dist-r26 all`
+(eight targets, 16 files each):
+
+| Target | Core size | SHA-256 |
+| --- | --- | --- |
+| linux-x86_64 | 3,843,912 | `2960da47b3d4cd56dd36c5f4c6d6312d40dc779323c8143f28c815269e959e8f` |
+| linux-aarch64 | 3,324,488 | `192216818e8e2124382fee0a5f36e9539d756db7d0b54b1590ce4b34da80f270` |
+| linux-armv7 | 3,032,420 | `6d17fad81f6b5a38eff61aec08e77defced4fd4abf738daeb38350b02e837c31` |
+| android-arm64 | 3,557,272 | `1db919222f4fca4dac5cff1b9f452f6bb88b166415504b18674514de8cd86684` |
+| android-armv7 | 2,745,044 | `29919a1c54df50e44dd9a6d4893dfc5f93a5e940fbfefe6891f1511a0b92befe` |
+| android-x86_64 | 3,597,520 | `b837ae505de5bf90e711d9b1a132b3abb87ffe49301e7abd65efee3603e65286` |
+| windows-x86_64 | 3,227,136 | `6efd4ca692542dc83f4cda09fb0bc1d204c9d5e665feba3c10187752d9f9ef8e` |
+| windows-i686 | 3,451,904 | `5f0c8f667c2e6e0f925dc4d9d9fc0bcae056bdc07e1d62ca0f3a901106f84982` |
+
+**Validation**: mock-frontend matrix 20/20 on the linux core; real RetroArch
+1.22.2 alphademo 300 frames PASS; Windows x86_64 Wine 4/4; full 404-title
+corpus sweep **372 ok / 27 title-exit / 2 title-exception / 2 no-frame /
+0 timeout / 1 bad-jar** (`compat-20261116-r54b`, all non-ok rows previously
+adjudicated); full serial CTest **189/189 PASS in 357.49 s**.
+`build/libretro-dist/` now holds this package, and the GitHub release
+`v0.5.8` carries `nj2me-0.5.8-libretro-cores.zip` (SHA-256
+`729cbcf21bf5c9db8ce669297d420ce3b599f77bb1ee120b9a62da4c39e4eafa`).
+
+**Upstream**: with the author's explicit authorization (2026-11-16) the two
+prepared pull requests were opened — `libretro/libretro-super#2203` and
+`libretro/docs#1239`. The remaining external steps are the upstream CI run and
+review; nothing is merged or accepted yet.

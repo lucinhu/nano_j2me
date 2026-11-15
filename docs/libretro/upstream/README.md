@@ -1,10 +1,16 @@
-# Upstream submission bundle (prepared, not submitted)
+# Upstream submission bundle (PRs opened 2026-11-16)
 
-These files are ready to copy into the two upstream repositories when the
-project authorizes an actual pull request. Nothing here has been uploaded or
-opened as a PR; the core repository itself is pushed to
-`git@github.com:lucinhu/nano_j2me.git`, but libretro upstream interaction
-remains an explicit, manual decision.
+The project author authorized libretro upstream submission on 2026-11-16, and
+the prepared bundles were opened as pull requests from forks:
+
+* `libretro/libretro-super#2203` — `info: add nano_j2me (Mobile - J2ME)`
+  (branch `add-nano_j2me` in `lucinhu/libretro-super`, commit `4ec537f`)
+* `libretro/docs#1239` — `docs: add nano_j2me (Mobile - J2ME)`
+  (branch `add-nano_j2me` in `lucinhu/docs`, commit `fc6c6c2`)
+
+The files in this directory remain the exact copies used for those PRs, plus
+the validation notes and the manual checklist. If upstream requests changes,
+update the fork branch and regenerate the patch from it.
 
 Prepared 2026-11-15. The exact-index patches below were generated against and
 verified to apply cleanly to `libretro/docs` master

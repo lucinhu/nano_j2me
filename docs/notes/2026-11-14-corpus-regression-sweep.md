@@ -180,3 +180,28 @@ were revalidated with a full sweep against the same recipes (10 workers,
   (`三国赤壁小乔秘史_7976.jar`, `愤怒的小鸟-高清版_2353.jar`,
   `乱世Q三国_1649.jar`, `有女倾城破解版_11525.jar`,
   `鲁宾逊漂流记汉化BT版_4677.jar`, fixtures/JBenchmark by design).
+
+## Round 54 final revalidation, 2026-11-16 (synchronized-callback monitor fix)
+
+The bridge monitor fix (see
+`docs/notes/2026-11-16-bridge-synchronized-callbacks.md`) was revalidated with
+a full sweep against the same recipes (10 workers, 600 frames at 30 fps,
+per-title keys) into `.local-tools/debug-runs/compat-20261116-r54b`:
+
+- **404 rows: 372 ok / 27 title-exit / 2 title-exception / 2 no-frame /
+  0 timeout / 1 bad-jar** — the best distribution recorded so far, and the
+  first sweep with no timeout at all.
+- Compared with the unbounded-monitor intermediate run
+  (`.local-tools/debug-runs/compat-20261116-r54`: 369 / 27 / 2 / 2 /
+  3 timeout / 1), the three titles that deadlocked under the unbounded wait
+  are back: `极品飞车13之变速英文3D版_6646.jar`, `极品飞车16：亡命狂飙_1519.jar`
+  and `荣誉勋章之空降神兵改良版_2993.jar` timeout -> ok (600/617/600 frames).
+- Compared with the round-53 sweep (370 / 29 / 2 / 2 / 0 / 1) the two
+  wall-clock-sensitive improvements are stable: `穿越火线-韩国正版_6874.jar`
+  and `美男狂想曲_3876.jar` title-exit -> ok (600 frames each). No regression
+  in either direction, and all previously adjudicated non-ok rows are
+  unchanged.
+
+`冰淇淋少女成长日记_7307.jar` no longer throws
+`IllegalMonitorStateException` (0 occurrences, was one per frame) but still
+ends itself at frame 290 — that exit is game-side and predates the fix.
