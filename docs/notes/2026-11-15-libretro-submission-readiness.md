@@ -341,3 +341,16 @@ Re-validation at revision `88b4e5d`:
   and the refreshed `visual.jsonl` (373 rows).
 * No source change in this step; it is evidence for the submission materials
   only.
+
+## Update, 2026-11-15 (real RetroArch with corpus titles)
+
+* Four real corpus titles were loaded through RetroArch 1.22.2 (not only the
+  fixtures) with the r17 linux-x86_64 core and run for 300 frames each: the 3D
+  `浴火银河2完整版_7689.jar`, `仙剑奇侠传完美版_11857.jar`,
+  `拳皇98终极之战_7534.jar` and `雷霆战机2012BT版_3101.jar`. Every run exited 0
+  with the core log markers verified (`running <class> (<game> <version>)` /
+  `run ended`); logs `r17-ra-real-<title>.log` in
+  `.local-tools/debug-runs/submission-20261115/`.
+* This closes the gap between "mock frontend" and "real frontend" evidence:
+  content loading, MIDlet start, frame delivery and a clean shutdown all work
+  through RetroArch itself for real J2ME titles, not only for the fixture JARs.
