@@ -941,3 +941,24 @@ to `177c669990b659e7cfd00add4564b85c2a692179`, so the docs fork branch was
 rebased, the patch regenerated and `mkdocs build` re-verified. The pages above
 describe the original `d83b34b2` generation; the current patch is valid against
 `177c6699`.
+
+## Update, 2026-11-16 (round 55): 0.5.9 patch release for the state-buffer bound
+
+The save-state buffer bound was too small for object-dense titles: a title that
+fills its 128 MB auto heap could not save at all, because `retro_serialize()`
+silently rejected the buffer while the core printed nothing
+(`docs/notes/2026-11-16-state-buffer-bound.md`). The fix sizes the metadata
+allowance from the arena (`4 MB + thread stacks + heap/8`, capped at half the
+arena) and makes the writer refuse explicitly instead of returning an unusable
+blob.
+
+- `MinecraftJ2ME_PE_0.6.1_V2.2.jar` now saves and restores: mock harness
+  45/45 checks, `serialize_size = 157,593,664`.
+- Full serial CTest: **190/190 in 357.09 s**.
+- 60-title libretro state probe with the fixed core: 60/60 round trips, 0 failed.
+- Version moved to **0.5.9**; release package r27 built from clean tree
+  `2efd2c7` (eight targets, `.info`
+  `8cd968c9bcab94c798b62e6ac3467d5f1d0c1117a10b8fd6113347bc45c33c97`,
+  `display_version = "0.5.9"`), canonical copy in `build/libretro-dist/`,
+  GitHub release `v0.5.9` with the eight-core zip.
+- The two upstream PR branches were updated to the 0.5.9 `.info` file.

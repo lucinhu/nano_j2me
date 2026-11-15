@@ -69,9 +69,12 @@ Outputs go to `build/libretro-dist/<target>/`, with a library and its metadata.
 Use `--no-strip` to retain symbols. `all` selects the script's supported targets
 and requires all of their toolchains.
 
-The eight candidates currently in `build/libretro-dist/` are the r26 package
-(the 0.5.8 release) built on 2026-11-16 from revision `52c04a0`. r26 adds the
-version bump, the monitor acquisition for synchronized JNI-bridge callbacks
+The eight candidates currently in `build/libretro-dist/` are the r27 package
+(the 0.5.9 release) built on 2026-11-16 from revision `2efd2c7`. r27 fixes the
+save-state buffer bound for object-dense titles
+(`docs/notes/2026-11-16-state-buffer-bound.md`) and bumps the metadata to
+0.5.9; before it, r26 added the version bump, the monitor acquisition for
+synchronized JNI-bridge callbacks
 (`docs/notes/2026-11-16-bridge-synchronized-callbacks.md`), and keeps
 everything below. r25 added the malformed-bytecode
 array-operand ownership guards and the GIF canvas pixel budget from

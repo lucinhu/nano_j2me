@@ -54,7 +54,7 @@ run at `bc49c46`, and the release artifacts were refreshed after each libretro
 change as recorded in the hash table).
 
 - **Metadata**. `src/port/libretro/nano_j2me_libretro.info`
-  (SHA-256 `48ceccf6fc7110a605809c90877a4e16d57ff5e0275503c88ac1f6385790b791`, version 0.5.8), now with `memory_descriptors = "true"` because the core publishes the arena memory map
+  (SHA-256 `8cd968c9bcab94c798b62e6ac3467d5f1d0c1117a10b8fd6113347bc45c33c97`, version 0.5.9), with `memory_descriptors = "true"` because the core publishes the arena memory map
   is the exact file intended for `libretro-super/dist/info`. Its
   `database = "Mobile - J2ME"` names an existing libretro-database platform
   folder (checked against the live repository), its file name matches the core
@@ -1016,3 +1016,38 @@ revision, which made the PR show as conflicting.  The fork branch
 +229 lines), `mkdocs build` re-run successfully (page 98,129 bytes), and the
 branch force-pushed.  `libretro/libretro-super#2203` remains mergeable against
 its unchanged baseline.
+
+## Release 0.5.9 (r27), 2026-11-16 — state buffer bound fix
+
+Patch release over 0.5.8. Version moved to **0.5.9** (`.info`
+SHA-256 `8cd968c9bcab94c798b62e6ac3467d5f1d0c1117a10b8fd6113347bc45c33c97`,
+`display_version = "0.5.9"`); the super patch was regenerated from the new
+file. The release carries the save-state buffer bound fix for object-dense
+titles (`docs/notes/2026-11-16-state-buffer-bound.md`) and the multi-target
+media fuzz gate.
+
+**Artifacts** built from clean tree `2efd2c7` with
+`tools/build_libretro_cores.sh --jobs 12 --out /var/tmp/nj2me-submission-dist-r27 all`
+(eight targets, 16 files each):
+
+| Target | Core size | SHA-256 |
+| --- | --- | --- |
+| linux-x86_64 | 3,843,912 | `3e167228644c68bc64293fb86db371f9b096f256fc4f32c7ece4fc9b6fe12d70` |
+| linux-aarch64 | 3,324,712 | `daa219235b2aa1c86be2d75c1a2c496dc969278b0b25ab366ffa3a7c7a961bdb` |
+| linux-armv7 | 3,032,580 | `c44a0437a17d7a3b02b61034cffa10cfb51eaa4a656f9aea60a180f6ff1e34f8` |
+| android-arm64 | 3,557,496 | `7852d996a4051d2e6fe6ef16e8105f2068a7547dd9e7039858403aff0d9ebae1` |
+| android-armv7 | 2,745,172 | `d6355503a67c703808c2f50bf1551e0600c26fb0d67196678ffbf3d49aa55e33` |
+| android-x86_64 | 3,597,648 | `3ee448916d7d5efafb25af3d076d54706aa2950e070848abf2665518874bfcb9` |
+| windows-i686 | 3,452,416 | `4122ecbece527bdf1a07ee288eca33dbf1ec8f58b7d0627fa1f3d897f6fa88e4` |
+| windows-x86_64 | 3,227,648 | `95abe1323ce7d3f5f3c1ad2b755e0ee5eb4d1f6d8be3d68dd6be6ec7f9f9685b` |
+
+Validation: mock frontend matrix **20/20**; `MinecraftJ2ME_PE_0.6.1_V2.2.jar`
+save-state round trip 45/45 checks (`serialize_size=157,593,664`); real
+RetroArch 1.22.2 alphademo 300 frames PASS; Windows x86_64 under Wine 4/4; full
+serial CTest **190/190 in 357.09 s**; 60-title state probe 60/60. Canonical
+copy installed in `build/libretro-dist/` (previous tree backed up at
+`/var/tmp/libretro-dist-20261116-pre-r27-backup.tgz`); GitHub release `v0.5.9`
+carries `nj2me-0.5.9-libretro-cores.zip` (SHA-256
+`a60e3cec993dda6e8aa833d1741ec73a76a8e5b3874a355bd518454be3f9a1a9`) and the
+checksums file. The two upstream PR branches were updated to the 0.5.9
+`.info`.
