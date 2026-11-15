@@ -836,3 +836,14 @@ buffer does not initialize or the frontend reports a capacity error. The
 helper `tools/check_libretro_retroarch.sh` gained an `EXTRA_CFG` environment
 hook so any extra `retroarch.cfg` lines (rewind, runahead, ...) can be tested
 without editing the script.
+
+## Update, 2026-11-15 (round 43): public-clone reproducibility
+
+A fresh `git clone` of origin/main at `3684016` was used as the only input:
+`tools/simulate_ci_builds.sh` satisfied all three upstream CI template command
+shapes from the clone (linux 3,978,184 B, windows 3,546,661 B, android arm64
+11,588,344 B), the submission-bundle validator reported 16/16 by itself and
+32/32 with the r24 release tree passed via `--dist`, and the clone-built linux
+core ran `loopdemo` in real RetroArch 1.22.2 plus a whole-corpus visual probe of
+370/371 (only the documented slow Doom3 loader fails). Nothing outside the
+public tree is needed to apply the two upstream patches or build the targets.

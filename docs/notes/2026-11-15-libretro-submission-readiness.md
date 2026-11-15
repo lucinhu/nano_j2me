@@ -762,3 +762,33 @@ Re-ran the metadata and bundle gates against the r24 release metadata
 - Whole-corpus headless revalidation on the same tree: 371/404 ok with the two
   adjudicated timing diffs recorded in
   `docs/notes/2026-11-14-corpus-regression-sweep.md` (no emulator regression).
+
+## Update, 2026-11-15 (round 43): the submission kit reproduces from a clean public clone
+
+Goal: prove that everything needed to submit builds from what upstream will see
+(a fresh clone of `git@github.com:lucinhu/nano_j2me.git`), not from local
+untracked state.
+
+- Clone: `git clone --depth 1 git@github.com:lucinhu/nano_j2me.git` at HEAD
+  `3684016`; `.gitlab-ci.yml`, `src/port/libretro/nano_j2me_libretro.info`,
+  `tools/simulate_ci_builds.sh` and `docs/libretro/upstream/` are all tracked
+  and present.
+- `tools/simulate_ci_builds.sh --out /var/tmp/r43-clone-ci --jobs 8` inside the
+  clone: **all three upstream CI template command shapes satisfied** -- linux
+  `libretro/nano_j2me_libretro.so` 3,978,184 B, windows
+  `libretro/nano_j2me_libretro.dll` 3,546,661 B, android
+  `libretro/nano_j2me_libretro.so` 11,588,344 B (the android template renames it
+  to `nano_j2me_libretro_android.so`).
+- `tools/check_libretro_submission_bundle.sh` inside the clone: **16 passed,
+  0 failed** for the bundle-only checks (gitignored fixtures and the release
+  tree are absent in a clean clone, as designed); with
+  `--dist /var/tmp/nj2me-submission-dist-r24` it reports **32 passed, 0 failed**.
+- Clone-built linux core: real RetroArch 1.22.2 `loopdemo` 120 frames PASS with
+  the `running` / `run ended` core markers verified; whole-corpus visual probe
+  with that core = **370 passed / 1 failed out of 371 sampled** (the single
+  failure is the documented very-slow `毁灭战士3_10598.jar` loader). The mock
+  matrix reports 6 passed / 11 skipped because the gitignored fixture JARs are
+  not part of the public tree -- expected, not a build problem.
+- Conclusion: the libretro submission kit (core, metadata, CI config, patches,
+  docs page) is reproducible from the public clone alone; no local-only file is
+  required to apply the two upstream patches or to build all eight targets.
