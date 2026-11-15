@@ -51,9 +51,34 @@ instead of guessed at.
   splash, but the reference composited its 240x160 canvas into the 240x320
   shot while ours painted the forced 240x320 screen, so the MAE is dominated by
   canvas geometry, not by drawing quality.
-- No rendering defect was found in this batch.  The next useful step for this
-  tool would be sampling several of our frames around the reference shot and
-  reporting the best match, so scene phase stops dominating the number.
+- No rendering defect was found in this batch.
+
+## Multi-frame best-match mode
+
+A single frame number is fragile: the reference screenshot is taken after a
+fixed wall-clock schedule, while our frame index advances with the emulated
+clock.  `tools/compare_reference_frame.sh` now accepts `SAMPLES=<n>` (default
+1) and `STEP=<frames>` (default `<frame>/2`): it dumps n of our frames STEP
+apart and reports the minimum MAE, i.e. the best scene alignment inside the
+window.  Re-running the five high-MAE titles with `SAMPLES=5 STEP=150`:
+
+| title | single frame | best of window |
+| --- | --- | --- |
+| 众神殿之王子归来_8404 | 50.99 | **8.19** at frame 750 (match) |
+| 拳皇98终极之战_7534 | 245.69 | **0.02** at frame 450 (match) |
+| 冠军足球经理2010汉化版_5198 | 26.80 | 26.80 at frame 150 (fail) |
+| 文明3_10522 | 107.47 | 107.47 at frame 150..2100 (fail) |
+| 黑暗破坏神II_9009 | 201.63 | 200.80 at frame 600 (fail) |
+
+So the multi-frame window resolves pure timing-phase differences (11 of 14
+titles now match FreeJ2ME-Plus), and the three remaining cases are genuinely
+not comparable with this fixture: 冠军足球经理 and 文明3 are advanced by the
+reference's synthetic key press (it enters a name-input / next screen while our
+headless run idles at the menu, waiting for input), and 黑暗破坏神II has a
+canvas-geometry difference (reference composites a 240x160 content area into
+the 240x320 shot while we paint the forced full size).  A matched input script
+on both sides is the next step if those titles need pixel evidence; a fixed
+frame number alone cannot decide them.
 
 Evidence: `.local-tools/debug-runs/r59-refcmp.log` (batch 1),
 `r59-refcmp2.log` (batch 2), kept composites under

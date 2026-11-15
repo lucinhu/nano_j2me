@@ -12,10 +12,16 @@
 # the optional seventh argument is the MAE threshold (default 12/255) and the
 # eighth the pacing fps (0 = unthrottled).  Set KEEP=<dir> to keep our frame,
 # the reference shot and a side-by-side composite when the check fails.
+# Set SAMPLES=<n> (default 1) to compare n of our frames spread STEP frames
+# apart (default STEP=<frame>/2) and report the best match: a single frame
+# number maps to a different point of each runtime's timeline, so a window of
+# candidates is what actually makes a high MAE meaningful.
 set -u
 
 bin=${1:-}; jar=${2:-}; ref=${3:-}; frame=${4:-300}; w=${5:-240}; h=${6:-320}
 thr=${7:-12}; fps=${8:-0}
+samples=${SAMPLES:-1}; step=${STEP:-$((frame / 2))}
+[ "$step" -gt 0 ] 2>/dev/null || step=$frame
 if [ -z "$bin" ] || [ -z "$jar" ] || [ -z "$ref" ] || [ ! -x "$bin" ] || [ ! -f "$jar" ]; then
     echo "usage: $0 <nj2me> <jar> <run-freej2me-headless.sh> <frame> [w h]" >&2
     exit 2
@@ -32,8 +38,9 @@ keep=${KEEP:-}
 trap 'rm -rf "$tmp"' EXIT
 mkdir -p "$tmp/ours" "$tmp/refdir"
 
+last=$((frame + (samples - 1) * step))
 "$bin" --port headless --size "${w}x${h}" --heap 32 --fps "$fps" \
-       --run-frames "$frame" --dump-frames "$tmp/ours/" --dump-every "$frame" \
+       --run-frames "$last" --dump-frames "$tmp/ours/" --dump-every "$step" \
        "$jar" >"$tmp/ours.log" 2>&1 || { echo "FAIL: our run exited $?"; exit 1; }
 
 if [ "$fps" -gt 0 ] 2>/dev/null; then
@@ -56,31 +63,37 @@ if not ppms:
 if not pngs:
     print('FAIL: the reference produced no screenshot'); sys.exit(1)
 from PIL import Image
-a = Image.open(ppms[0]).convert('RGB')
-b = Image.open(pngs[0]).convert('RGB')
-if a.size != b.size:
-    print('FAIL: sizes differ', a.size, b.size); sys.exit(1)
-pa, pb = a.load(), b.load()
-w, h = a.size
-tot = n = 0
-for y in range(h):
-    for x in range(w):
-        for c in range(3):
-            tot += abs(pa[x, y][c] - pb[x, y][c]); n += 1
-mae = tot / n
-print('MAE %.2f / 255 over %d samples (%dx%d, frame from %s)'
-      % (mae, n, w, h, ppms[0].rsplit('/', 1)[-1]))
+ref = Image.open(pngs[0]).convert('RGB')
+best = None
+for path in ppms:
+    a = Image.open(path).convert('RGB')
+    if a.size != ref.size:
+        print('FAIL: sizes differ', a.size, ref.size); sys.exit(1)
+    pa, pb = a.load(), ref.load()
+    w, h = a.size
+    tot = n = 0
+    for y in range(h):
+        for x in range(w):
+            for c in range(3):
+                tot += abs(pa[x, y][c] - pb[x, y][c]); n += 1
+    mae = tot / n
+    if best is None or mae < best[0]:
+        best = (mae, a, path)
+mae, a, path = best
+label = path.rsplit('/', 1)[-1]
+suffix = ' (best of %d frames)' % len(ppms) if len(ppms) > 1 else ''
+print('MAE %.2f / 255 over %d samples (%dx%d, frame from %s)%s'
+      % (mae, n, w, h, label, suffix))
 if mae > thr:
     print('FAIL: MAE %.2f exceeds the %.2f threshold' % (mae, thr))
     keep = sys.argv[3] if len(sys.argv) > 3 else ''
     if keep:
         import os, shutil
         os.makedirs(keep, exist_ok=True)
-        shutil.copy(ppms[0], os.path.join(keep, 'ours.ppm'))
+        shutil.copy(path, os.path.join(keep, 'ours.ppm'))
         shutil.copy(pngs[0], os.path.join(keep, 'ref.png'))
-        w, h = a.size
         c = Image.new('RGB', (w * 2 + 8, h), (40, 40, 40))
-        c.paste(a, (0, 0)); c.paste(b, (w + 8, 0))
+        c.paste(a, (0, 0)); c.paste(ref, (w + 8, 0))
         c.save(os.path.join(keep, 'side-by-side.png'))
         print('kept artifacts in ' + keep)
     sys.exit(1)
