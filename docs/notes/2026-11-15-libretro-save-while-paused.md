@@ -174,3 +174,42 @@ PASS 僵尸危机2_4349          PASS 足球经理2010汉化版_4756  PASS 冠�
 The remaining documented limitation is a save/load requested while the worker
 is inside a long-running native or M3G load that cannot reach a boundary within
 the budget; normal play and paused saves that reach a boundary are unaffected.
+
+## Update, 2026-11-15 (round 27): the sleep path is not the missing case
+
+After the millis-paint gate landed, the corpus probe still contained a handful
+of state failures, so the next suspected serving hole was `Thread.sleep()` on
+the virtual clock: `lr_sleep_ms()` in `LR_PHASE_RUN` interrupts its wait as
+soon as a request is pending and returns without moving the clock, so a paint
+that sleeps would never reach the frame boundary while the frontend is paused.
+
+Prototype: while a request is pending **and a paint callback is on the worker
+stack** (`nj_vm_in_paint()`), spend the same bounded budget
+(`LR_STATE_CLOCK_MAX_FRAMES`, 1200 virtual frames) inside `lr_sleep_ms()` to
+move the sleep towards its deadline; for any other pending request keep the
+original interrupt-and-return behaviour so a healthy frame is never
+time-warped.  Verified against the eight titles that had ever failed the
+paused-state checks:
+
+```
+PASS 火影忍者汉化版_10735   PASS 空战1944_10321          PASS 迈阿密之夜_9566
+PASS 都市赛车6火线追击_2230 PASS 足球经理2010汉化版_4756  PASS 冠军足球经理2010汉化版_5198
+PASS 电子宠物蛋_11972      PASS 僵尸危机2_4349
+```
+
+The decisive check was the control run: **the shipped r17 core
+(`build/libretro-dist/linux-x86_64/nano_j2me_libretro.so`, which does not have
+the prototype) passes the same eight titles too**.  The existing millis
+paint/stalled gate already covers these frames, so the sleep assistant fixed
+nothing and was reverted (no source change was committed).  The 50-title state
+probe (50/50), the whole-corpus rendering probe (372/373, only the slow loader
+fails) and the mock-frontend matrix (20/20) stay green on the shipped core.
+
+Conclusion: no known paused save/load failure remains in the corpus.  The only
+documented limitation left is a request queued while the worker is inside a
+long native/M3G load that cannot reach a boundary within the budget — clock
+assistance cannot shorten real rendering time (see the slow-loader section of
+`2026-11-15-libretro-black-frames.md`).  If a future title blocks on a
+virtual-clock sleep *outside* a paint, the `lr_sleep_ms()` RUN branch is the
+place to extend, but the in-paint/stalled gate must stay: accelerating healthy
+frames is what broke the football managers earlier.
