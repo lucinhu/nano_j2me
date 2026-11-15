@@ -470,3 +470,30 @@ Consequence for submission: release artifacts, including the Windows pair, are
 now reproducible from the same source tree and toolchain, so the SHA-256 table
 is stable across rebuilds and can be quoted in the upstream PR without the
 "Windows differs in metadata" caveat.
+
+## Update, 2026-11-15 (round 31): full validation matrix on the canonical r19 package
+
+The **r19** tree in `build/libretro-dist/` (the byte-reproducible package from
+round 30) was run through the full validation matrix:
+
+- mock frontend matrix on `linux-x86_64`: 20 passed, 0 failed
+  (`.local-tools/debug-runs/submission-20261115/r19-mock.log`);
+- whole-corpus rendering probe: 373 titles at 300 frames → **372 passed,
+  1 failed** — only the documented slow `毁灭战士3_10598` loader times out
+  (`r19-visual.log`, `goal16-libretro-corpus/visual.jsonl`);
+- libretro state round trips: **50/50** (`r19-state50.log`);
+- real RetroArch 1.22.2 corpus batch: **8/8 titles x 600 frames passed**
+  (`r19-ra-corpus.log`) plus the LoopDemo 120-frame check;
+- libretro CI template simulation: **3/3 contracts pass**
+  (`/var/tmp/ci-sim-r19`, log `/tmp/r19-ci-sim.log`);
+- full CTest on `/var/tmp/nj2me-lrstate-build`: **184/184 in 395.37 s**
+  (`/tmp/r19b-ctest.log`).
+
+One investigation this round was reverted and left in `docs/PERFORMANCE.md`
+instead of the release: the round-28 M3G fast-span "parity failure" turned out
+to come from comparing two separate runs of a title whose loading animation is
+not run-to-run deterministic (two identical general-path runs of `毁灭战士3_10598`
+differ from frame 120). The span fast path is therefore unproven, not disproven;
+the retry needs a deterministic span-level fixture (see the PERFORMANCE.md
+section). No release artifact is affected — the campaign touched no shipped
+code path and the tree was reverted.

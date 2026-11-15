@@ -3759,3 +3759,37 @@ the depth-interaction difference.
 The profiling numbers from round 26 still stand: `sw_span` is 60% of the
 Doom3 CPU sample, `m3g_clear` 16% (105 us per full-surface clear, already a
 single `memset`-class fill), `sw_tri_band` 12%.
+
+## M3G span parity methodology correction, 2026-11-15 (round 31)
+
+The round-28 conclusion above rests on cross-run `--dump-frames` comparisons,
+and that method is invalid for this workload: **two identical general-path runs
+of `毁灭战士3_10598.jar` already differ from frame 120 onward** (13 of 24
+dumped frames at `--dump-every 10` differed between two runs of the same
+binary with `NJDBG_NOFAST=1`; the same binary re-run with the fast path both
+enabled and disabled differs in the same way).  The title's loading animation
+starts worker threads and its frame content depends on run order/timing, so
+pixel dumps are not reproducible across processes.
+
+Consequences:
+
+- the round-26 and round-28 "pixel drift / frame-126 extra layers" evidence
+  does **not** show a defect in the Gouraud fast path — it shows that comparing
+  two separate runs cannot isolate a span change on this title;
+- the fast path was reverted again; its measured -5.1% user CPU on the Doom3
+  20k-frame run stands, but correctness is currently **unproven either way**;
+- `浴火银河2完整版_7689`, `3D跳台滑雪2011_4507` and `灵异村庄_11169` are
+  byte-identical across runs, but they do not exercise the Gouraud+textured+
+  ARGB8888 span class at all (per-pixel probes saw zero spans of that class),
+  so they cannot validate the fast path either.
+
+Next method, in order of preference: (1) build one deterministic span-level
+fixture that drives `sw_span` with a fixed triangle/state sequence and compares
+the full surface after every span (span state in, pixel bytes out) — this is
+the golden test the code should have had first; (2) share the general loop's
+inner body with the fast path through one macro/inline template so the
+arithmetic and per-pixel state updates are identical by construction, leaving
+only the hoisted condition checks to differ; (3) only then re-measure and
+consider shipping.  The experiment patch (fast span + `NJDBG_NOFAST`/
+`NJDBG_PIX`/`NJDBG_FRAME` probes) was kept at `/tmp/m3g_r31_experiment.c` and
+`/tmp/hl_r31_experiment.c` for that follow-up; the tree itself was reverted.
