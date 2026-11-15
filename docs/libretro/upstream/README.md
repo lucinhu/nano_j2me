@@ -37,7 +37,14 @@ The copy in this directory is byte-identical to
 `src/port/libretro/nano_j2me_libretro.info`
 (SHA-256 `740df7353c181bd76955f04a64508c4c1d1994509c1b4290b3b420b04da424e1`).
 Suggested PR title: `Add nano_j2me core information for J2ME MIDlets`.
-A draft body is in `docs/LIBRETRO_SUBMISSION.md` ("Draft PR descriptions").
+The ready-to-post title, patch commands, body text and checklist are in
+[`PR-libretro-super.md`](PR-libretro-super.md).
+
+## 2. `libretro/libretro-docs`
+
+Apply the prepared 5-file patch (library page plus index rows). The
+ready-to-post title, commands, body text and checklist are in
+[`PR-libretro-docs.md`](PR-libretro-docs.md).
 
 ## 2. `libretro/libretro/docs`
 

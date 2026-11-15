@@ -20,6 +20,8 @@ steps below before publication.
 | Copy-ready upstream bundle | [docs/libretro/upstream/](libretro/upstream/README.md) | exact `.info` and documentation-page copies plus index-update checklist for the two PRs |
 | `libretro-super` patch | [libretro-super-nano_j2me-info.patch](libretro/upstream/libretro-super-nano_j2me-info.patch) | one-file diff adding `dist/info/nano_j2me_libretro.info`; verified against `libretro-super` master `fb15e63` |
 | `libretro/docs` patch | [libretro-docs-nano_j2me.patch](libretro/upstream/libretro-docs-nano_j2me.patch) | 5-file diff: library page with upstream front matter, `mkdocs.yml` nav, `core-list.md`, `licenses.md`, `see-also.md`; verified against `libretro/docs` master `d83b34b`, `mkdocs build` passes |
+| Ready-to-post PR: `libretro-super` | [PR-libretro-super.md](libretro/upstream/PR-libretro-super.md) | title, patch commands, body and checklist for the `.info` PR |
+| Ready-to-post PR: `libretro/docs` | [PR-libretro-docs.md](libretro/upstream/PR-libretro-docs.md) | title, patch commands, body and checklist for the library-page PR |
 | CI template simulation | [tools/simulate_ci_builds.sh](../tools/simulate_ci_builds.sh) | local pre-submission check that the Linux/Windows/Android template command shapes build and place artifacts where the templates collect them |
 | Bundle validator | [tools/check_libretro_submission_bundle.sh](../tools/check_libretro_submission_bundle.sh) | one command that re-checks the whole local bundle offline: `.info` byte-identity (source/bundle/release tree), the two exact-index patches, the docs page front matter, and optionally clean-clone apply + `mkdocs build`; also registered as the `check_libretro_submission_bundle` CTest case |
 | Local build/user guide | [LIBRETRO.md](LIBRETRO.md) | project documentation |
@@ -863,3 +865,31 @@ The raw loopdemo snapshot is 140,816,472 bytes with the auto heap, and
 RetroArch's `.state.auto` file is 170,087 bytes -- the frontend's state
 compression makes even auto-heap states practical on disk, while rewind buffers
 still hold raw snapshots (hence the rewind sizing guidance above).
+
+## Update, 2026-11-15 (round 51): ready-to-post PR bodies and a clean-clone rerun
+
+The two upstream changes now have ready-to-post PR descriptions in the
+bundle, so opening them needs no rewriting:
+
+- [`docs/libretro/upstream/PR-libretro-super.md`](libretro/upstream/PR-libretro-super.md)
+  — target repo/branch, baseline `fb15e630655375a50317be2a7953477ef9a5d12a`,
+  exact patch/commit commands, body text and checklist.
+- [`docs/libretro/upstream/PR-libretro-docs.md`](libretro/upstream/PR-libretro-docs.md)
+  — target repo/branch, baseline `d83b34b21b8a2c14db573aea66d876e343d316ca`,
+  the five changed files, body text and checklist.
+
+Re-ran the end-to-end rehearsal on a fresh `git clone --depth 1` of
+`origin/main` at `52752b0` (the current HEAD, after the round 44–50 test
+tooling commits; no core sources changed since the r24 package):
+
+- `tools/simulate_ci_builds.sh --out /var/tmp/r51-ci --jobs 8` → **3/3
+  contracts PASS**: linux `.so` 3,978,184 B, windows `.dll` 3,546,661 B,
+  android `.so` 11,588,344 B (template renames it to `_android.so`).
+- `tools/check_libretro_submission_bundle.sh` inside the clean clone →
+  **16 passed, 0 failed** (bundle-only mode; the gitignored fixtures and
+  release tree are absent by design), and **32 passed, 0 failed** from the
+  main tree with `--dist /var/tmp/nj2me-submission-dist-r24`.
+- The clone-built Linux core passed the mock-frontend matrix **20/20** and a
+  real RetroArch 1.22.2 load/run/exit check (120 frames).
+
+The r24 hash table above remains the canonical release artifact table.

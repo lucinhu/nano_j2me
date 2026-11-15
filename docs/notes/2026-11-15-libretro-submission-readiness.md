@@ -828,3 +828,17 @@ Measured with RetroArch 1.22.2 and the canonical r24 linux-x86_64 core
 frontend compression makes even the auto-heap states practical on disk. The
 check is documented in `docs/LIBRETRO.md` (save-state paragraph and maintainer
 verification block).
+
+## Update, 2026-11-15 (round 51): ready-to-post PRs, clean-clone rerun
+
+- Added ready-to-post PR descriptions next to the patches:
+  `docs/libretro/upstream/PR-libretro-super.md` and
+  `docs/libretro/upstream/PR-libretro-docs.md` (titles, baselines, exact
+  commands, bodies, checklists). Opening the PRs now needs no rewriting.
+- Fresh `git clone --depth 1` of `origin/main` at `52752b0`: CI template
+  simulation 3/3 PASS (linux 3,978,184 B / windows 3,546,661 B / android
+  11,588,344 B); bundle validator 16 passed in the clone and 32 passed from
+  the main tree with `--dist /var/tmp/nj2me-submission-dist-r24`; clone-built
+  Linux core passed the mock matrix 20/20 and a real RetroArch run.
+- Still external, still unauthorized: opening either PR and letting upstream
+  CI build/register the core.
