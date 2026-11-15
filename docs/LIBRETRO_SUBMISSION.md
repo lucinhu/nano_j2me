@@ -35,7 +35,7 @@ steps below before publication.
 The core identifier is `nano_j2me`; metadata uses `systemid = "j2me"`, matching
 existing J2ME metadata. Libraries use `nano_j2me_libretro.so`, `.dll` or `.dylib`.
 The Android CI template publishes the `_libretro_android.so` suffix. The source
-version is currently 0.5.7; refresh the metadata version whenever that changes.
+version is currently 0.5.8; refresh the metadata version whenever that changes.
 
 ## Readiness status, checked 2026-11-15
 
@@ -51,7 +51,7 @@ run at `bc49c46`, and the release artifacts were refreshed after each libretro
 change as recorded in the hash table).
 
 - **Metadata**. `src/port/libretro/nano_j2me_libretro.info`
-  (SHA-256 `740df7353c181bd76955f04a64508c4c1d1994509c1b4290b3b420b04da424e1`), now with `memory_descriptors = "true"` because the core publishes the arena memory map
+  (SHA-256 `48ceccf6fc7110a605809c90877a4e16d57ff5e0275503c88ac1f6385790b791`, version 0.5.8), now with `memory_descriptors = "true"` because the core publishes the arena memory map
   is the exact file intended for `libretro-super/dist/info`. Its
   `database = "Mobile - J2ME"` names an existing libretro-database platform
   folder (checked against the live repository), its file name matches the core
