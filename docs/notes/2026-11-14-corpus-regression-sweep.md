@@ -126,3 +126,34 @@ worktree-level regression check, not a commit-tagged artifact.
   明星制造梦工厂_11048 with the `165:right` script 600/538,
   雷霆战机2012BT版_3101 300/168, 1942空战_10403 600/502 (MPEG-4 movie audio
   decodes), 愤怒的小鸟-高清版_2353 at `--heap 32` 600/501.
+
+## Revalidation, 2026-11-15 (round 42, after the M3G fast path)
+
+Command: `NJ_BIN=/var/tmp/nj2me-goal13-build/nj2me tools/sweep_compat.py
+.local-tools/debug-runs/compat-20261115-r42` (CLI rebuilt from `c16ff5f`,
+Release, 10 workers, 600 frames at 30 fps, per-title keys script).
+
+Result: **404 rows: 371 ok, 27 title-exit, 2 title-exception, 2 no-frame,
+1 timeout, 1 bad-jar** (previous full run 373 ok / 26 title-exit / 2 / 2 / 0 / 1).
+Two verdict changes versus `compat-20261115-r9`, both adjudicated as
+harness/timing noise rather than emulator regressions:
+
+- `生化危机之恶化_8448.jar` ok -> title-exit (frames 271, paints 107). Without
+  the key script the same run reaches 600 frames (frames=600, paints=202,
+  20.0 s). A reference CLI built from tree `91392ee` behaves identically with
+  the key script (frames=271, paints=107, 9.03 s), so the change came from the
+  real-time pacing integration changing which screen each frame-indexed key
+  lands on; the title itself calls `notifyDestroyed()` in response to input.
+  Game/keys interaction, not a defect.
+- `GT赛车2_36.jar` ok -> timeout. Standalone the same binary completes 600
+  frames in 77.96 s (7.7 fps, 313.9 M bytecodes); the reference `91392ee` CLI
+  needs 131.0 s for the same run (4.6 fps), so the current build is faster.
+  The sweep's per-title budget is hit only while ten heavy titles run in
+  parallel. Previously recorded as a load-sensitive title (round 4 sweep);
+  adjudicated as parallel-load noise.
+
+All other adjudications are unchanged: `三国赤壁小乔秘史_7976.jar` (stale pak,
+game-side), `愤怒的小鸟-高清版_2353.jar` (>16 MB heap), `乱世Q三国_1649.jar`
+(auth expiry), `有女倾城破解版_11525.jar` (MIDlet self-exit),
+`鲁宾逊漂流记汉化BT版_4677.jar` (truncated ZIP), fixtures/JBenchmark rows
+(title-exit by design).

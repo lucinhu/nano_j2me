@@ -747,3 +747,18 @@ buffer does not initialize or the frontend reports a capacity error. The
 helper `tools/check_libretro_retroarch.sh` gained an `EXTRA_CFG` environment
 hook so any extra `retroarch.cfg` lines (rewind, runahead, ...) can be tested
 without editing the script.
+
+## Update, 2026-11-15 (round 42): metadata re-scan and bundle revalidation
+
+Re-ran the metadata and bundle gates against the r24 release metadata
+(`memory_descriptors = "true"`, `.info` SHA-256 `740df7353c181bd76955f04a64508c4c1d1994509c1b4290b3b420b04da424e1`):
+
+- RetroArch 1.22.2 core-info scan with `libretro_info_path` pointing at the
+  fresh metadata (null menu/video/audio/input drivers) exited 0 and logged
+  `[INFO] [Core info] Wrote to cache file: "/tmp/coretest42/info/core_info.cache"`,
+  so the new `memory_descriptors` field parses cleanly.
+- `tools/check_libretro_submission_bundle.sh` -> **32 passed, 0 failed** with
+  the r24 release tree.
+- Whole-corpus headless revalidation on the same tree: 371/404 ok with the two
+  adjudicated timing diffs recorded in
+  `docs/notes/2026-11-14-corpus-regression-sweep.md` (no emulator regression).
