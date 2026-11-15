@@ -755,6 +755,14 @@ typedef struct nj_port {
     void  (*bt_close)(void *ud, void *handle);
 
     int   fps_cap;        /* 0 => uncapped */
+    /*
+     * Set by a port while the frontend has queued a save/load state request
+     * and is blocked waiting for it.  Frame pacing is skipped meanwhile: the
+     * pacer waits on the virtual clock, which only the frontend can advance,
+     * so pacing here would strand the request until its timeout.  The state
+     * is taken at the next frame boundary either way.
+     */
+    int   state_request_pending;
     const char *rms_dir;  /* where RecordStore files live (hosted ports) */
 
     /*

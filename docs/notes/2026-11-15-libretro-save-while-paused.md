@@ -213,3 +213,27 @@ assistance cannot shorten real rendering time (see the slow-loader section of
 virtual-clock sleep *outside* a paint, the `lr_sleep_ms()` RUN branch is the
 place to extend, but the in-paint/stalled gate must stay: accelerating healthy
 frames is what broke the football managers earlier.
+
+## Frame-rate cap interaction, 2026-11-15 (round 34)
+
+With `nano_j2me_fps` defaulting to a 30 fps cap, a paused frontend could
+still strand a state request that earlier revisions served: the MIDlet's own
+pacer (`frame_pace()` in `src/midp/nj_lib_midlet.c`) sleeps until a deadline
+measured on the port clock, and `lr_port_millis()` returns the *virtual*
+clock in the run phase. A paused frontend does not advance that clock, so the
+frame never reached the boundary where `lr_serve_state_request()` runs and the
+request expired after 4 s. It showed up as the mock-frontend zero-frame
+`serialize_writes_state` check failing while the host was loaded, and as a
+whole-corpus rendering run dropping to 275/373 with every failure being a
+paused-state serving check (no visual failure).
+
+Fix: `nj_port.state_request_pending`, set by the libretro port while a
+save/load request is queued and cleared when it finishes. `frame_pace()` and
+`frame_pace_wait()` skip pacing while it is set, so the runtime reaches the
+next frame boundary immediately and the request is served at that boundary.
+The flag only affects the frames during which a request is already waiting for
+the frontend, so normal playback and the frame-rate cap are unchanged.
+
+Validation: zero-frame save/load conformance 3/3 PASS (previously 3/3 FAIL
+under load on the affected package), mock-frontend matrix 20/20, 300-frame
+run PASS; corpus-level evidence follows with the packaged build.

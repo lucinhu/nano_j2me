@@ -260,10 +260,19 @@ static void frame_pace_wait(nj_vm *vm, nj_s8 wait)
     if (wait <= 0 || !vm->port) {
         return;
     }
+    /* A blocked frontend cannot advance the virtual clock, so do not sleep on
+     * it while its state request is queued; the request is served at the next
+     * frame boundary. */
+    if (vm->port->state_request_pending) {
+        return;
+    }
     deadline = nj_now_ms(vm) + wait;
     while (nj_vm_running(vm) && nj_now_ms(vm) < deadline) {
         nj_s8 left = deadline - nj_now_ms(vm);
 
+        if (vm->port && vm->port->state_request_pending) {
+            break;              /* serve the queued request, do not pace */
+        }
         if (nj_scheduler_has_threads(vm)) {
             /*
              * Even a thread that is asleep needs the scheduler: its deadline
