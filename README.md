@@ -171,7 +171,8 @@ Open `http://localhost:8000/`, drop a `.jar` in (or import it from an
 http(s) link — the host must allow CORS), play. Input is the keyboard, the
 on-screen keypad or a standard gamepad (Gamepad API); a frame-rate cap
 (display refresh / 60 / 30 / 24 / 15 fps, applied live and remembered per game)
-keeps titles at their intended speed on high-refresh screens; JARs that ship several
+keeps titles at their intended speed on high-refresh screens, and the game speed
+(100/150/200 %) is remembered per title too; JARs that ship several
 MIDlets get a startup chooser in the tools panel. Cards of titles covered by
 the [403-title compatibility audit](docs/WEB.md#full-corpus-audit-403-titles)
 carry its result — a green "verified" badge, or an amber warning with the

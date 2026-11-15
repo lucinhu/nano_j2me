@@ -71,7 +71,7 @@ const SCREEN_PRESETS = Object.freeze({
   '320x240': [320, 240]
 });
 const DEFAULT_SETTINGS = Object.freeze({
-  speedPercent: 100,
+  speedPercent: 100,     // default for games without their own override
   frameCap: 60,         // default cap for games without their own override; 0 = display refresh
   heapMb: 16,           // Java heap for the next start; heavy titles need 64+
   autoResume: false,    // restarting a game continues from its newest save
@@ -265,16 +265,26 @@ export class GameView {
       });
     }
 
+    /* The game clock is a per-title choice like the frame cap: emulated time
+       runs faster for grinding-friendly titles, slower for action games, and
+       the shell setting only seeds a title that has no record yet. */
     const speed = $('#speed-select');
     if (speed) {
-      speed.value = String(this.settings.speedPercent);
+      speed.value = String(this._speedPercent());
       speed.addEventListener('change', () => {
-        const value = clamp(Number(speed.value) || 100, 10, 800);
-        this.settings.speedPercent = value;
-        saveSettings(this.settings);
+        if (!this.game) { return; }
+        const value = [100, 150, 200].includes(Number(speed.value))
+          ? Number(speed.value)
+          : 100;
+        if (this._speedPercent() === value) { return; }
+        this.game.speedPercent = value;
+        void putGame(this.game).catch((error) => {
+          console.warn('[game] could not remember the game speed', error);
+        });
         try { this.runtime.setSpeed(value); } catch (error) { /* mock/engine */ }
         this._updateSpeedChip();
         this._updateStatus(true);
+        toast(t('game.speedApplied'), { kind: 'info', timeout: 2200 });
       });
     }
 
@@ -627,7 +637,7 @@ export class GameView {
       }
 
       runtime.optionsReset();
-      runtime.optionInt(NJW.OPT_SPEED_PERCENT, this.settings.speedPercent);
+      runtime.optionInt(NJW.OPT_SPEED_PERCENT, this._speedPercent());
       runtime.optionInt(NJW.OPT_HEAP_BYTES, this.settings.heapMb * 1024 * 1024);
       /* 'auto' leaves the engine's 240x320 default in place; an explicit
          option value is clamped by the port, so 0 would mean 32x32.  The
@@ -664,7 +674,7 @@ export class GameView {
     } catch (error) { /* keep defaults */ }
     this._initCanvas(width, height);
 
-    try { runtime.setSpeed(this.settings.speedPercent); } catch (error) { /* optional */ }
+    try { runtime.setSpeed(this._speedPercent()); } catch (error) { /* optional */ }
     void markPlayed(game.id).catch(() => {});
 
     /* Continue from the newest save when the user asked for it.  The engine has
@@ -1614,7 +1624,7 @@ export class GameView {
   _updateSpeedChip() {
     const chip = $('#game-speed-chip');
     if (!chip) { return; }
-    const percent = Number(this.settings.speedPercent) || 100;
+    const percent = this._speedPercent();
     chip.hidden = percent === 100;
     chip.textContent = t('game.speedValue', { n: percent });
   }
@@ -1704,6 +1714,13 @@ export class GameView {
   /* The screen preset is a per-game device profile: titles were drawn for a
    * fixed resolution, so the choice travels with the game record (and is
    * absent on records imported before this existed → 'auto'). */
+  _speedPercent() {
+    const override = this.game ? Number(this.game.speedPercent) : NaN;
+    if ([100, 150, 200].includes(override)) { return override; }
+    const fallback = Number(this.settings.speedPercent);
+    return [100, 150, 200].includes(fallback) ? fallback : 100;
+  }
+
   _frameCap() {
     const override = this.game ? Number(this.game.frameCap) : NaN;
     if (FPS_CHOICES.includes(override)) { return override; }
@@ -1740,7 +1757,7 @@ export class GameView {
 
   _applySettingsToUi() {
     const speed = $('#speed-select');
-    if (speed) { speed.value = String(this.settings.speedPercent); }
+    if (speed) { speed.value = String(this._speedPercent()); }
     const fps = $('#fps-select');
     if (fps) { fps.value = String(this._frameCap()); }
     const heap = $('#heap-select');

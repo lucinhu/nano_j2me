@@ -100,7 +100,8 @@ be served with or without a build:
   `1000/fps` frame when a **Frame rate** cap is selected, so the emulated clock
   still runs at real speed while a 120 Hz panel no longer runs 30 fps
   animations at double speed), a loading overlay until the first
-  `Displayable` exists, then pause/resume, speed (100/150/200 %), mute and a
+  `Displayable` exists, then pause/resume, speed (100/150/200 %, applied live
+  and remembered per game like the frame rate), mute and a
   volume slider (the host-side WebAudio gain; touching the slider also
   unmutes, like a phone volume key), a **Frame rate** selector
   (display refresh / 60 / 30 / 24 / 15 fps; applied live and remembered per game
@@ -478,7 +479,7 @@ unreachable, which keeps a flaky network from looking like a shell bug.
   `午夜台球圣诞中文版_8677.jar` installs its `Canvas` in the MIDlet constructor
   and starts its game thread there, which is what caught the runner skipping
   `startApp()`.
-- **Browser test** (`tools/web_test/web_browser_test.mjs`, 43 checks) — serves
+- **Browser test** (`tools/web_test/web_browser_test.mjs`, 44 checks) — serves
   `build/web/` on an ephemeral port and drives the real shell in headless Firefox
   through Playwright: the real engine (`kind=wasm`, API 1, runtime 0.5.7),
   zh-CN UI, import `hello.jar` → metadata and icon in IndexedDB, 240×320
@@ -506,7 +507,10 @@ unreachable, which keeps a flaky network from looking like a shell bug.
   30 and 15 fps and samples the emulated pump rate (about 30 and 15 per second),
   then returns to display-refresh (uncapped) mode. It finishes by picking 30 fps,
   leaving, reloading the page and starting the same title: the game record keeps
-  the cap, the select shows it again and the pump rate follows it.
+  the cap, the select shows it again and the pump rate follows it. Another check
+  does the same round-trip for the game speed: 100 % → 200 % is applied to the
+  engine immediately, stored on the game record, and the reloaded launch comes
+  back at 200 %.
   Another enables Save on exit, leaves the game, reopens the title and checks
   the panel's read-only auto-save row shows its date/frame count, loads it on
   purpose, clears it, and verifies the record no longer carries the snapshot.
@@ -568,11 +572,11 @@ unreachable, which keeps a flaky network from looking like a shell bug.
 
 Measured on the reference build (Emscripten 7.0.0, `include/nj2me/nj_web.h`
 0.5.7): the API suite passes **36/36 checks in 0.4 s**, the corpus suite
-**47/47 checks (42 titles) in 8.7 s**, the browser suite **43/43 checks in about
-23–39 s** (a loaded host slows the page test down; every check is bounded), and
+**47/47 checks (42 titles) in 8.7 s**, the browser suite **44/44 checks in about
+24–40 s** (a loaded host slows the page test down; every check is bounded), and
 the perf suite **9/9 checks in about 0.5 s**, and the live test **7/7 checks in
 about 8 s** against the deployed demo — `tools/check_web.sh --all` is
-**35–49 s** end to end. The sweep suite needs about 2 min for all 403
+**36–50 s** end to end. The sweep suite needs about 2 min for all 403
 titles, the perf suite about 1 s. All 40
 playable titles draw 120/120 frames (the audiodemo and bench fixtures exit on
 their own, as expected), there are no engine `[nj2me] error:` lines,

@@ -473,6 +473,7 @@ async function readLibrary(page) {
         ? (game.jar.byteLength !== undefined ? game.jar.byteLength : game.jar.length)
         : 0,
       screenPreset: game.screenPreset || null,
+      speedPercent: Number.isFinite(Number(game.speedPercent)) ? Number(game.speedPercent) : null,
       frameCap: Number.isFinite(Number(game.frameCap)) ? Number(game.frameCap) : null,
       autoFrames: game.autoState && Number.isFinite(Number(game.autoState.frames))
         ? Number(game.autoState.frames)
@@ -1441,6 +1442,72 @@ async function runRealShellChecks() {
       assert(atReload.fps > 20 && atReload.fps < 45,
         `remembered 30 fps cap pumped ${atReload.fps.toFixed(1)} fps`);
       return `60 -> ${at60.fps.toFixed(0)}, 30 -> ${at30.fps.toFixed(0)}, 15 -> ${at15.fps.toFixed(0)}, display -> ${atDisplay.fps.toFixed(0)}; per-game 30 -> ${atReload.fps.toFixed(0)} after reload`;
+    } finally {
+      await ctx.close();
+    }
+  });
+
+  await check('game speed is remembered per title', async () => {
+    /* Speed is a per-title flavour like the frame cap: the shell setting only
+       seeds new titles, while an existing game keeps the speed it was given. */
+    const ctx = await browser.newContext({ viewport: { width: 960, height: 840 }, locale: 'zh-CN' });
+    try {
+      const page = await ctx.newPage();
+      attachDiagnostics(page, 'speed');
+      await page.goto(realServer.origin + '/', { waitUntil: 'load', timeout: timeoutMs });
+      await waitReady(page);
+      await page.setInputFiles('#file-input', HELLO_JAR);
+      await page.waitForFunction(
+        () => document.querySelectorAll('.game-tile').length >= 1,
+        undefined,
+        { timeout: timeoutMs, polling: 100 });
+      await page.locator('.game-tile').first().click();
+      await page.waitForFunction(
+        () => !!(window.__nj2me.game && window.__nj2me.game.game),
+        undefined,
+        { timeout: timeoutMs, polling: 100 });
+      await page.click('#panel-handle');
+      await page.waitForSelector('#game-panel.is-open', { timeout: 5000 });
+
+      const engineSpeed = () => page.evaluate(() => window.__nj2me.game.runtime.speed());
+      const initial = await page.inputValue('#speed-select');
+      assert(initial === '100', `default game speed is ${initial}`);
+      assert((await engineSpeed()) === 100, 'engine starts at 100 %');
+
+      await page.selectOption('#speed-select', '200');
+      await waitToast(page, await t(page, 'game.speedApplied'));
+      assert((await engineSpeed()) === 200, `engine speed after 200 % is ${await engineSpeed()}`);
+
+      await page.click('#panel-close');
+      await page.waitForFunction(
+        () => document.querySelector('#game-panel').getAttribute('aria-hidden') === 'true',
+        undefined,
+        { timeout: timeoutMs, polling: 50 });
+      await page.click('#game-back');
+      await page.waitForFunction(
+        () => window.getComputedStyle(document.querySelector('#library-view')).display !== 'none',
+        undefined,
+        { timeout: timeoutMs });
+      const [record] = await readLibrary(page);
+      assert(record.speedPercent === 200, `game record speed is ${JSON.stringify(record.speedPercent)}`);
+
+      await page.reload();
+      await waitReady(page);
+      await page.waitForFunction(
+        () => document.querySelectorAll('.game-tile').length >= 1,
+        undefined,
+        { timeout: timeoutMs, polling: 100 });
+      await page.locator('.game-tile').first().click();
+      await page.waitForFunction(
+        () => !!(window.__nj2me.game && window.__nj2me.game.game),
+        undefined,
+        { timeout: timeoutMs, polling: 100 });
+      await page.click('#panel-handle');
+      await page.waitForSelector('#game-panel.is-open', { timeout: 5000 });
+      const remembered = await page.inputValue('#speed-select');
+      assert(remembered === '200', `remembered game speed is ${remembered}`);
+      assert((await engineSpeed()) === 200, 'engine speed after reload is not 200 %');
+      return '100 % -> 200 % for hello.jar; the reloaded launch reports 200 %';
     } finally {
       await ctx.close();
     }
