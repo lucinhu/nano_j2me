@@ -165,7 +165,8 @@ python3 -m http.server -d build/web 8000
 首次访问后可安装为应用，断网也能打开（引擎一并缓存）。JavaScript⇄C 的接口、持久化目录布局和
 限制见 [docs/WEB.md](docs/WEB.md)；验证脚本
 （`tools/check_web.sh --all`）会运行 Node API 测试、42 款语料和真实 Firefox
-页面测试，`tools/check_web.sh --sweep` 则审计全部 403 个标题；内存吃紧的
+页面测试，`tools/check_web.sh --sweep` 则审计全部 403 个标题，`tools/check_web.sh --live`
+还会用无头 Firefox 打开线上演示实际跑一个 JAR；内存吃紧的
 游戏可以在游戏内工具面板里调高 Java 堆（内存不足的错误浮层还提供「以 64 MB 重启」一键重试），屏幕尺寸预设（176×208、176×220、
 128×160、320×240）会在下次启动时切换模拟设备的画布大小，并按游戏记忆；工具面板还会显示
 实时的引擎计数（堆用量、帧/绘制、GC 次数、字节码速率）便于排查问题。

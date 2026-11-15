@@ -428,6 +428,8 @@ tools/check_web.sh --all             # those two plus the Playwright page test
 tools/check_web.sh --sweep           # full-corpus audit, 403 titles, about 2 min
 tools/check_web.sh --perf            # wasm throughput smoke test, about 1 s
 tools/check_web.sh --smoke           # minimal module smoke test, no corpus needed
+tools/check_web.sh --live            # play a JAR in the deployed demo (needs network)
+tools/check_web.sh --live=https://example.dev/   # same, against another deployment
 tools/check_web.sh --build --node    # rebuild build/web/ first
 ```
 
@@ -447,6 +449,12 @@ the render assertions to settle). `--sweep` is deliberately **not** part of
 `--all`: it starts all 403 corpus titles in fresh child processes (~2 min) and is
 for release/CI runs, while `--all` stays a ~21 s edit loop. `--perf` is likewise
 opt-in: it measures four titles and writes `perf-summary.json` next to the log.
+`--live` is opt-in too: it opens a **deployed** copy of the shell (default
+<https://lucinhu.github.io/nano_j2me/>, or `--live=URL`) with Python Playwright
+and headless Firefox, so it needs network access plus
+`python3 -m pip install playwright && python3 -m playwright install firefox`.
+It exits `2` when Python Playwright is missing and `3` when the site itself is
+unreachable, which keeps a flaky network from looking like a shell bug.
 
 - **API test** (`tools/web_test/web_api_test.mjs`) — module load, version,
   manifest probe, error paths, `hello.jar` render, screen-size and speed options,
@@ -537,12 +545,22 @@ opt-in: it measures four titles and writes `perf-summary.json` next to the log.
   deliberately conservative floor (≈10 % of the reference machine) so the suite
   catches order-of-magnitude regressions on unknown CI hardware without failing
   slow hosts; the measured fps/ms land in `<evidence>/perf-summary.{txt,json}`.
+- **Live test** (`tools/web_test/web_live_check.py`, 7 checks) — walks the
+  public deployment the way a visitor does: `index.html` is served, the shell
+  boots the wasm engine from the site, `manifest.json` is served and parses,
+  `hello.jar` (when `tests/games/` is present) is imported through the file
+  input, the tile appears, the game starts, the canvas is 240×320 with content,
+  frames advance, and no page/console errors occur. Screenshots plus
+  `live-check.json`/`live-check.txt` land in the evidence directory; the tool is
+  deliberately outside `--all` because it depends on a deployment and the
+  network.
 
 Measured on the reference build (Emscripten 7.0.0, `include/nj2me/nj_web.h`
 0.5.7): the API suite passes **36/36 checks in 0.4 s**, the corpus suite
 **47/47 checks (42 titles) in 8.7 s**, the browser suite **42/42 checks in about
 22–38 s** (a loaded host slows the page test down; every check is bounded), and
-the perf suite **9/9 checks in about 0.5 s** — `tools/check_web.sh --all` is
+the perf suite **9/9 checks in about 0.5 s**, and the live test **7/7 checks in
+about 8 s** against the deployed demo — `tools/check_web.sh --all` is
 **34–48 s** end to end. The sweep suite needs about 2 min for all 403
 titles, the perf suite about 1 s. All 40
 playable titles draw 120/120 frames (the audiodemo and bench fixtures exit on
@@ -652,6 +670,17 @@ tools/build_web.sh
 node tools/web_test/web_smoke_test.mjs --evidence .local-tools/debug-runs/web-demo
 ```
 
+After a deployment, verify the published site the way a visitor uses it:
+
+```sh
+tools/check_web.sh --live                              # the demo above
+tools/check_web.sh --live=https://your-host.example/   # a custom deployment
+```
+
+The check writes `live-check.json`/`live-check.txt` and a game screenshot to the
+evidence directory. It is not part of `--all` because it needs network access
+and a deployed site (see the environment note in the Verification section).
+
 ## Limitations
 
 - **No networking/sockets/Bluetooth/sensors** in this build: the optional hooks
@@ -715,8 +744,9 @@ node tools/web_test/web_smoke_test.mjs --evidence .local-tools/debug-runs/web-de
 | `web/assets/icon*.png` | 192/512/maskable icons generated from `icon.svg` |
 | `tools/build_web.sh` | SDK discovery, `emcmake` build, `build/web/` assembly |
 | `tools/emsdk_setup.sh` | installs the Emscripten SDK into `.local-tools/emsdk` |
-| `tools/check_web.sh`, `tools/web_test/` | Node API/corpus, full-corpus sweep, throughput and module-smoke suites, Playwright browser verification |
+| `tools/check_web.sh`, `tools/web_test/` | Node API/corpus, full-corpus sweep, throughput, module-smoke and live-demo suites, Playwright browser verification |
 | `tools/web_test/web_smoke_test.mjs` | corpus-free post-build smoke test used by the Pages workflow |
+| `tools/web_test/web_live_check.py` | plays a JAR in the deployed demo (Python Playwright + headless Firefox) |
 | `tools/gen_web_compat_data.mjs` | turns a `--sweep` JSONL report into `web/data/compat.json` |
 | `web/data/compat.json` | committed audit results that badge known titles in the library |
 | `.github/workflows/web-demo.yml` | builds the port and publishes `build/web/` to GitHub Pages |

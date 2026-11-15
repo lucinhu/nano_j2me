@@ -9,6 +9,8 @@
 #   tools/check_web.sh --sweep              slow full-corpus audit over tests/games/
 #   tools/check_web.sh --perf               wasm throughput smoke test (4 light titles)
 #   tools/check_web.sh --smoke              minimal post-build module smoke test
+#   tools/check_web.sh --live               open the deployed demo and play a JAR in it
+#   tools/check_web.sh --live=https://example.dev/  same, against another deployment
 #   tools/check_web.sh --build --node --corpus   rebuild first, then test
 #
 # Suites (default when no suite flag is given: --node --corpus; --all means
@@ -27,10 +29,13 @@
 #               started and run 120 deterministic frames each.  ~9 s on this
 #               machine; the whole node+corpus suite stays under half a minute.
 #   --browser   node tools/web_test/web_browser_test.mjs
-#               Real-page Playwright test of the assembled shell: library import,
-#               play/pause, save slot, exit, offline reload, installable PWA and
-#               the offline-ready badge (23 checks).  Playwright (Firefox) is
-#               required; when it is not installed this is a hard error.
+#               Real-page Playwright test of the assembled shell (42 checks):
+#               library import/URL import/favourites/continue card/compat
+#               badges, play/pause, save slots (naming, thumbnails, .njst
+#               export/import), auto-save/auto-resume, diagnostics, gamepad,
+#               one-engine-per-profile, installable PWA and offline reload.
+#               Playwright (Firefox) is required; when it is not installed this
+#               is a hard error.
 #   --sweep     node tools/web_test/web_sweep_test.mjs
 #               Full-corpus audit: every JAR under tests/games/ (minus the
 #               known-bad titles) runs 90 frames in its own Node process with a
@@ -55,6 +60,15 @@
 #               and a 60-frame hello.jar render when tests/games/ happens to be
 #               present (skipped otherwise).  This is what the GitHub Pages
 #               workflow runs after tools/build_web.sh.
+#   --live      python3 tools/web_test/web_live_check.py
+#               Opens a *deployed* copy of the shell (default
+#               https://lucinhu.github.io/nano_j2me/) in headless Firefox, boots
+#               the wasm engine from it, imports hello.jar when tests/games/ is
+#               present, starts it and asserts a painted 240x320 canvas with
+#               advancing frames and no page/console errors.  Needs network and
+#               Python Playwright (python3 -m pip install playwright &&
+#               python3 -m playwright install firefox); not part of --all, run
+#               it after a deployment.
 #
 # Options:
 #   --build         run tools/build_web.sh (rebuild build/web/ + site) first;
@@ -71,7 +85,8 @@
 #
 # Environment: Node.js >= 18 on PATH.  Building additionally needs the
 # Emscripten SDK as discovered by tools/build_web.sh (emcc on PATH, $EMSDK, or
-# .local-tools/emsdk).  The browser suite additionally needs Playwright/Firefox.
+# .local-tools/emsdk).  The browser suite additionally needs Playwright/Firefox;
+# --live needs Python Playwright and network access.
 #
 # Exit status: 0 when every executed suite passed, 1 when a suite failed, 2 on
 # usage or missing-artifact errors.
@@ -90,6 +105,8 @@ run_browser=0
 run_sweep=0
 run_perf=0
 run_smoke=0
+run_live=0
+live_url=""
 do_build=0
 corpus_frames=120
 started_at=$(date +%s)
@@ -115,6 +132,8 @@ while [ $# -gt 0 ]; do
     --sweep)   run_sweep=1 ;;
     --perf)    run_perf=1 ;;
     --smoke)   run_smoke=1 ;;
+    --live)    run_live=1 ;;
+    --live=*)  run_live=1; live_url="${arg#--live=}" ;;
     --all)     run_node=1; run_corpus=1; run_browser=1 ;;
     --build)   do_build=1 ;;
     --evidence)
@@ -132,7 +151,7 @@ while [ $# -gt 0 ]; do
 done
 
 if [ "$run_node" = 0 ] && [ "$run_corpus" = 0 ] && [ "$run_browser" = 0 ] && [ "$run_sweep" = 0 ] &&
-    [ "$run_perf" = 0 ] && [ "$run_smoke" = 0 ]; then
+    [ "$run_perf" = 0 ] && [ "$run_smoke" = 0 ] && [ "$run_live" = 0 ]; then
     run_node=1
     run_corpus=1
 fi
@@ -161,7 +180,7 @@ say_err() { echo "$*" >&2; echo "$*" >> "$log"; }
 say "== nano_j2me web verification"
 say "   repository: $here"
 say "   evidence:   $evidence"
-say "   suites:     node=$run_node corpus=$run_corpus browser=$run_browser sweep=$run_sweep perf=$run_perf smoke=$run_smoke build=$do_build"
+say "   suites:     node=$run_node corpus=$run_corpus browser=$run_browser sweep=$run_sweep perf=$run_perf smoke=$run_smoke live=$run_live build=$do_build"
 
 # ---- prerequisites ----------------------------------------------------------
 
@@ -201,12 +220,14 @@ rc_browser=0
 rc_sweep=0
 rc_perf=0
 rc_smoke=0
+rc_live=0
 status_node="SKIP"
 status_corpus="SKIP"
 status_browser="SKIP"
 status_sweep="SKIP"
 status_perf="SKIP"
 status_smoke="SKIP"
+status_live="SKIP"
 
 if [ "$run_node" = 1 ]; then
     say ""
@@ -273,6 +294,16 @@ if [ "$run_smoke" = 1 ]; then
     if [ "$rc_smoke" -eq 0 ]; then status_smoke="PASS"; else status_smoke="FAIL"; fi
 fi
 
+if [ "$run_live" = 1 ]; then
+    say ""
+    say "== suite: live deployed demo${live_url:+ ($live_url)}"
+    live_args=(--evidence "$evidence")
+    if [ -n "$live_url" ]; then live_args+=(--url "$live_url"); fi
+    python3 "$here/tools/web_test/web_live_check.py" "${live_args[@]}" 2>&1 | tee -a "$log"
+    rc_live=${PIPESTATUS[0]}
+    if [ "$rc_live" -eq 0 ]; then status_live="PASS"; else status_live="FAIL"; fi
+fi
+
 # ---- summary ----------------------------------------------------------------
 
 finished_at=$(date +%s)
@@ -297,11 +328,14 @@ fi
 if [ "$run_smoke" = 1 ]; then
     say "   smoke:   $status_smoke"
 fi
+if [ "$run_live" = 1 ]; then
+    say "   live:    $status_live"
+fi
 say "   evidence: $evidence"
 say "   elapsed:  ${elapsed}s"
 
 if [ "$rc_node" -ne 0 ] || [ "$rc_corpus" -ne 0 ] || [ "$rc_browser" -ne 0 ] || [ "$rc_sweep" -ne 0 ] ||
-    [ "$rc_perf" -ne 0 ] || [ "$rc_smoke" -ne 0 ]; then
+    [ "$rc_perf" -ne 0 ] || [ "$rc_smoke" -ne 0 ] || [ "$rc_live" -ne 0 ]; then
     say "== RESULT: FAIL"
     exit 1
 fi
