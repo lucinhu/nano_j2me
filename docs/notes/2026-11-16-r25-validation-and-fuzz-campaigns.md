@@ -71,3 +71,14 @@ points). All gates run in CTest.
 Still not covered, unchanged from the round-52 note: the MPEG-4/video
 containers, cross-`Player` decoder state, and several damaged resources in one
 JAR. Those are the next targets, not current defects.
+
+## Where the verified package lives
+
+The release-verified r25 tree is archived at
+`/var/tmp/nj2me-submission-dist-r25b/` and the `.so` hashes match
+`docs/LIBRETRO_SUBMISSION.md`. The shared `build/libretro-dist/` directory is
+rebuilt by the concurrent web/GLES2 workstream; during this round it already
+contained a different build (`76bc0833…` for linux-x86_64 instead of the
+release `117a992f…`). The 600-frame probe above used a private copy of the
+release core for this reason, and anyone comparing against the working
+directory should check the hash first.

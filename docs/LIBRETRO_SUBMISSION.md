@@ -922,6 +922,12 @@ documentation/tooling only, so the binaries match the core sources). It adds:
 
 `.info` is unchanged: `740df7353c181bd76955f04a64508c4c1d1994509c1b4290b3b420b04da424e1`.
 
+The release-verified tree is archived at `/var/tmp/nj2me-submission-dist-r25b/`
+(and the previous canonical r24 at `/var/tmp/nj2me-submission-dist-r24/`).
+The shared `build/libretro-dist/` working directory is rebuilt by the
+concurrent web/GLES2 workstream, so compare hashes with the table above before
+treating it as canonical (round 53 found it replaced by a different build).
+
 Validation on r25: mock frontend matrix **20/20**; real RetroArch 1.22.2
 LoopDemo 120 frames PASS; Windows x86_64 under Wine **4/4**; whole-corpus
 rendering probe **371 titles: 370 passed, 1 known limitation (the documented
