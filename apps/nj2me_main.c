@@ -197,6 +197,8 @@ static void usage(const char *argv0)
         "  --fs-dir <path>      root for file:// (JSR 75); no filesystem by default\n"
 "  --network            enable HTTP/HTTPS/TCP for the headless port\n"
 "  --stats              print bytecode and frame counters at the end\n"
+"  --stats-every <n>    also print the counters every <n> frames (leak\n"
+"                       hunting: watch heap= over a long run)\n"
 "  --verbose <1-3>      log level: 2 is the default, 3 adds decoder and\n"
 "                       media decisions (for diagnosing silent audio/video)\n"
 "  --device <name>      select handset properties and key convention\n"
@@ -304,6 +306,7 @@ typedef struct cli {
     int         heap_grow;
     int         grow_given;     /* explicit on/off wins over saved settings */
     int         stats;
+    int         stats_every;
     int         network;
     int         where;
     int         run_frames;
@@ -766,6 +769,11 @@ int main(int argc, char **argv)
             c.print_library = 1;
         } else if (strcmp(a, "--stats") == 0) {
             c.stats = 1;
+        } else if (strcmp(a, "--stats-every") == 0 && i + 1 < argc) {
+            c.stats_every = atoi(argv[++i]);
+            if (c.stats_every < 0) {
+                c.stats_every = 0;
+            }
         } else if (strcmp(a, "--where") == 0) {
             c.where = 1;
         } else if (strcmp(a, "--run-frames") == 0 && i + 1 < argc) {
@@ -843,6 +851,7 @@ int main(int argc, char **argv)
     opts.argv = (const char *const *)argv;
     opts.argc = argc;
     opts.stats = c.stats;
+    opts.stats_every = (nj_u4)c.stats_every;
     opts.where = c.where;
     opts.run_frames = (nj_u4)(c.run_frames > 0 ? c.run_frames : 0);
     opts.verbose = c.verbose;

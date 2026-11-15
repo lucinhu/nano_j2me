@@ -1592,6 +1592,14 @@ add_test(NAME check_splash_budget
                      ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_state_loop.sh
                      ${NJ_FIXTURES}/loopdemo.jar)
     set_tests_properties(check_state_loop PROPERTIES TIMEOUT 120)
+    # --stats-every prints the counter line every N frames so a long run can be
+    # watched for heap growth instead of only reading the final counters.
+    add_test(NAME check_stats_every
+             COMMAND ${CMAKE_COMMAND} -E env
+                     NJ_BIN=$<TARGET_FILE:nj2me-cli>
+                     ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_stats_every.sh
+                     ${NJ_FIXTURES}/loopdemo.jar)
+    set_tests_properties(check_stats_every PROPERTIES TIMEOUT 120)
   endif()
   nj_add_test(test_directgraphics tests/test_directgraphics.c)
   nj_add_test(test_directgraphics_bytes tests/test_directgraphics_bytes.c --bounded)

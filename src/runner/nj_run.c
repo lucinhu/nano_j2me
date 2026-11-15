@@ -737,7 +737,42 @@ typedef struct run_hook_ctx {
     nj_u8 drawn;
     const nj_port *port;
     key_script *keys;
+    nj_u4 stats_every;  /* >0: print the counters every N frames */
+    nj_u8 next_stats;   /* next presented frame to print at */
+    nj_s8 start_ms;
 } run_hook_ctx;
+
+/*
+ * Periodic counter line for --stats-every.
+ *
+ * A run that leaks keeps passing every functional test as long as the memory
+ * lasts, so the interesting curve is heap_used over time.  This prints the
+ * same shape as the final --stats line, with the frame it describes, so a
+ * script can diff consecutive samples instead of guessing from the last one.
+ */
+static void run_stats_sample(nj_vm *vm, const nj_port *port, nj_s8 start_ms)
+{
+    nj_vm_stats s;
+    nj_s8 now = (nj_s8)(port->millis ? port->millis(port->ud) : 0u);
+    double secs = (now > start_ms) ? (double)(now - start_ms) / 1000.0 : 0.0;
+
+    if (!vm || !port->log) {
+        return;
+    }
+    nj_vm_get_stats(vm, &s);
+    {
+        char buf[224];
+        snprintf(buf, sizeof(buf),
+                 "stats: frames=%lu paints=%lu bytecodes=%lu natives=%lu "
+                 "heap=%lu/%lu tris=%lu m3g=%lu time=%.3fs fps=%.1f",
+                 (unsigned long)s.frames, (unsigned long)s.paints,
+                 (unsigned long)s.insns, (unsigned long)s.native_calls,
+                 (unsigned long)s.heap_used, (unsigned long)s.heap_peak,
+                 (unsigned long)s.tris, (unsigned long)s.m3g_renders,
+                 secs, secs > 0.0 ? (double)s.frames / secs : 0.0);
+        port->log(port->user, 2, buf);
+    }
+}
 
 static int run_frame_hook(nj_vm *vm, void *ud)
 {
@@ -749,6 +784,10 @@ static int run_frame_hook(nj_vm *vm, void *ud)
     key_script_tick(ctx->port, ctx->keys, nj_vm_frames(vm));
     (void)nj_midp_frame(vm);
     ctx->drawn++;
+    if (ctx->stats_every > 0u && nj_vm_frames(vm) >= ctx->next_stats) {
+        run_stats_sample(vm, ctx->port, ctx->start_ms);
+        ctx->next_stats = nj_vm_frames(vm) + (nj_u8)ctx->stats_every;
+    }
     /*
      * End the run once the budget is spent.
      *
@@ -780,6 +819,7 @@ int nj_run(const nj_port *port_in, const nj_run_opts *opts)
     const char *class_name = NULL;
     int rc = 1;
     int stats = 0;
+    nj_u8 next_stats = 1u;  /* set from opts->stats_every below */
     /*
      * --save-state bookkeeping, for the run-end report.
      *
@@ -802,6 +842,7 @@ int nj_run(const nj_port *port_in, const nj_run_opts *opts)
     }
     port = *port_in;
     stats = opts->stats;
+    next_stats = (nj_u8)opts->stats_every;
 
     /*
      * Put RecordStore somewhere that is not the working directory.
@@ -951,6 +992,9 @@ int nj_run(const nj_port *port_in, const nj_run_opts *opts)
         hook_ctx.drawn = 0u;
         hook_ctx.port = &port;
         hook_ctx.keys = &keys;
+        hook_ctx.stats_every = opts->stats_every;
+        hook_ctx.next_stats = (nj_u8)opts->stats_every;
+        hook_ctx.start_ms = nj_start_ms;
         nj_vm_set_frame_hook(vm, run_frame_hook, &hook_ctx);
     }
     if (!vm) {
@@ -1254,6 +1298,11 @@ resumed:
                 key_script_tick(&port, &keys, nj_vm_frames(vm));
                 st = nj_midp_frame(vm);
                 attempted++;
+                if (opts->stats_every > 0u &&
+                    nj_vm_frames(vm) >= next_stats) {
+                    run_stats_sample(vm, &port, nj_start_ms);
+                    next_stats = nj_vm_frames(vm) + (nj_u8)opts->stats_every;
+                }
                 /*
                  * --save-state: one snapshot, written at a frame boundary and
                  * then forgotten, so the run continues with the same timing it
