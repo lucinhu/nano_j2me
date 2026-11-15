@@ -847,3 +847,19 @@ shapes from the clone (linux 3,978,184 B, windows 3,546,661 B, android arm64
 core ran `loopdemo` in real RetroArch 1.22.2 plus a whole-corpus visual probe of
 370/371 (only the documented slow Doom3 loader fails). Nothing outside the
 public tree is needed to apply the two upstream patches or build the targets.
+
+## Update, 2026-11-15 (round 48): real-frontend save-state round trip
+
+The mock frontend proves serialize/unserialize at the API level; the user path
+also needs the frontend's own save/load plumbing. New tracked check
+`tools/check_libretro_retroarch_state.sh` launches RetroArch 1.22.2 headless
+twice against the same content: run 1 plays 150 frames with
+`savestate_auto_save = "true"` (RetroArch writes the state when the content
+unloads), run 2 plays 60 frames with `savestate_auto_load = "true"` and must log
+`[nano_j2me] resumed from a save state`.
+
+Result on the canonical r24 linux-x86_64 core (sha256 `d9feff13...`): PASS.
+The raw loopdemo snapshot is 140,816,472 bytes with the auto heap, and
+RetroArch's `.state.auto` file is 170,087 bytes -- the frontend's state
+compression makes even auto-heap states practical on disk, while rewind buffers
+still hold raw snapshots (hence the rewind sizing guidance above).

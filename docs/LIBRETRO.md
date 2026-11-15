@@ -325,7 +325,12 @@ manual states and the game's own save system. Frontend rewind works in a bounded
 sense: RetroArch's rewind buffer is fed from the same `retro_serialize()` path,
 so it only fits when the Java heap budget keeps snapshots small -- see Rewind
 below and `tools/check_libretro_rewind.sh` for the measured setup. Snapshot
-sizes include the VM heap budget and can be large. The
+sizes include the VM heap budget and can be large, but the frontend's own
+state compression keeps them small on disk: an auto-heap `loopdemo` state is
+140,816,472 bytes raw and 170,087 bytes as the `.state.auto` file RetroArch
+writes. `tools/check_libretro_retroarch_state.sh` proves the real frontend path
+end to end -- first launch auto-saves on unload, second launch auto-loads and
+the core logs `resumed from a save state`. The
 [submission checklist](LIBRETRO_SUBMISSION.md#validation) records final test gates.
 
 ## Timing, media and limitations
@@ -470,6 +475,11 @@ tools/check_libretro_retroarch_corpus.sh \
 # initializes and the snapshots fit, and prints the wall-time cost.
 tools/check_libretro_rewind.sh \
   build/libretro-check/libretro/nano_j2me_libretro.so tests/fixtures/loopdemo.jar 600
+# Real-frontend save-state round trip: launch 1 lets RetroArch auto-save on
+# unload, launch 2 auto-loads the same file and must log
+# "[nano_j2me] resumed from a save state".
+tools/check_libretro_retroarch_state.sh \
+  build/libretro-check/libretro/nano_j2me_libretro.so tests/fixtures/loopdemo.jar 150
 tools/check_no_statics.sh
 # Offline validation of the prepared upstream submission bundle.  Without the
 # clone arguments it checks the .info identity, both patches and the release

@@ -813,3 +813,18 @@ Validation: `git apply --check` on a clean clone passes, `mkdocs build` renders
 `tools/check_libretro_submission_bundle.sh --super-clone /var/tmp/lr-super
 --docs-clone /var/tmp/lr-docs --apply-clones --mkdocs
 /var/tmp/mkvenv/bin/mkdocs` passes all checks.
+
+## Update, 2026-11-15 (round 48): real-frontend save-state round trip
+
+New tracked tool `tools/check_libretro_retroarch_state.sh` checks the path a
+user actually takes: launch 1 plays with `savestate_auto_save = "true"` so
+RetroArch writes the state on unload; launch 2 runs with
+`savestate_auto_load = "true"` and must log
+`[nano_j2me] resumed from a save state`.
+
+Measured with RetroArch 1.22.2 and the canonical r24 linux-x86_64 core
+(sha256 `d9feff13...`): PASS. The raw loopdemo snapshot is 140,816,472 bytes
+(auto heap) and RetroArch's `.state.auto` file is 170,087 bytes, i.e. the
+frontend compression makes even the auto-heap states practical on disk. The
+check is documented in `docs/LIBRETRO.md` (save-state paragraph and maintainer
+verification block).
