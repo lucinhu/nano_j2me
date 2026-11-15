@@ -69,10 +69,10 @@ Outputs go to `build/libretro-dist/<target>/`, with a library and its metadata.
 Use `--no-strip` to retain symbols. `all` selects the script's supported targets
 and requires all of their toolchains.
 
-The eight candidates currently in `build/libretro-dist/` are the r20 package
-rebuilt on 2026-11-15 from revision `91392ee` plus the M3G Gouraud-textured
-span fast path (see `docs/PERFORMANCE.md`; the core also still carries
-everything from `011247e`), so they include the load-lifecycle fix, the
+The eight candidates currently in `build/libretro-dist/` are the r21 package
+rebuilt on 2026-11-15 from revision `a90831e` (which brings the real-time
+pacing of the virtual clock and audio plus the M3G Gouraud-textured span fast
+path; see `docs/PERFORMANCE.md`), so they include the load-lifecycle fix, the
 monitor and repaint-blocking fixes, the CLI/manual-state boundary work, the
 input-bitmask/rumble support and the `nano_j2me_screen`/`nano_j2me_locale`
 options, bounded load/save state clock assistance including the paused

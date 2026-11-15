@@ -518,3 +518,14 @@ single slow-loader failure; no rendering regression), full CTest 184/184 in
 458.09 s, real RetroArch LoopDemo PASS, Wine 4/4. Windows cores remain
 byte-reproducible (zeroth COFF timestamp, stripped at link), so the table's
 Windows hashes change with the code but are stable across rebuilds.
+
+## Update, 2026-11-15 (round 32b): r21 package with real-time pacing
+
+After the concurrent landing of `4ae7790` (real-time virtual clock and audio
+pacing), the canonical package was rebuilt once more from a clean worktree at
+`a90831e`: `/var/tmp/nj2me-submission-dist-r21` installed as
+`build/libretro-dist`, r20 backed up. The Windows cores remain deterministically
+reproducible; Linux/Android hashes changed only because the core code changed.
+Validated: mock frontend 20/20, corpus rendering probe 372/373 (unchanged),
+RetroArch LoopDemo PASS, Wine 4/4, and a clean-worktree CTest of **181/181 in
+364.63 s**.

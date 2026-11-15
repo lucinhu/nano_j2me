@@ -589,3 +589,32 @@ full CTest **184/184 in 458.09 s**, real RetroArch 1.22.2 LoopDemo 120 frames
 PASS, Windows x86_64 under Wine **4/4**. The libretro state probe was not
 re-run this round; the change is rasteriser-only and CTest covers the
 serialize paths.
+
+## Update, 2026-11-15 (round 32b): r21 package (real-time pacing + M3G span fast path)
+
+A second candidate was packaged after the real-time virtual-clock/audio pacing
+change (`4ae7790`) landed on top of the M3G span fast path. The **r21** tree is
+in `build/libretro-dist/` (r20 backed up to
+`/var/tmp/libretro-dist-20261115-r20-backup.tgz`), built from a clean worktree
+at `a90831e` with `tools/build_libretro_cores.sh --jobs 12
+--out /var/tmp/nj2me-submission-dist-r21 all` (8 targets x 16 files, `.info`
+`c0f30aea…` unchanged):
+
+| Target | Size | SHA-256 |
+| --- | --- | --- |
+| linux-x86_64 | 3,827,480 | `87ed2fa913fba5bbfed0d7be8218d95c2d326b7ff299852eccaa55bebbec4f57` |
+| linux-aarch64 | 3,308,328 | `e754bfdde5f2f61a5545354a8bb7920e8ce8e012ccf549d1b43b608eddada915` |
+| linux-armv7 | 3,016,728 | `4ce97996a8b1bec5b289d6a3840ae52c04d92da3505b4c183eeda91db67b2c30` |
+| android-arm64 | 3,537,360 | `fd3c0160bcd7b3c7851e7c735ca80c54f278aad828970820cee6bc46d103cde5` |
+| android-armv7 | 2,726,136 | `edfe6a8f8e06fff15afe6b674d523f814bba6781f236597e76233841462fbd90` |
+| android-x86_64 | 3,583,512 | `b77c15328f30a61a19513933b1da9f7356fc768acb006c9e6182fb3924de4490` |
+| windows-i686 | 3,434,496 | `4b03d6c042a87345f820caa6fca1e2fef0a658fcea28fc00a6bf262870cdda03` |
+| windows-x86_64 | 3,213,312 | `6352ab126998fa3d1a67d75974ea456c5e452a03d298aee5d3f4dc3483af948d` |
+
+Validation of r21: mock-frontend matrix **20/20**, whole-corpus rendering probe
+**372/373** (only the documented slow loader fails, same as r19/r20 → no
+rendering regression from either the pacing change or the fast path), real
+RetroArch 1.22.2 LoopDemo 120 frames PASS, Windows x86_64 under Wine **4/4**;
+the clean-worktree test suite passes **181/181 in 364.63 s** (this tree
+carries the generated `tests/fixtures` set; the committed CI configuration
+generates it with the `nj_fixtures` target).
