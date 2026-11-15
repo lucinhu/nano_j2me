@@ -3827,3 +3827,31 @@ Remaining gap: this is still a transcribed copy of the general loop. The
 single-source inline/macro body suggested in the previous section remains the
 cleaner long-term shape, and a deterministic span-level fixture is still the
 right unit test; neither blocks the measured win.
+
+## Cross-title measurement and a rejected fill tweak, 2026-11-15 (round 33)
+
+A fixed-frame comparison of the reference CLI and the fast-path CLI over eight
+3D titles (`--fps 0`, 3000 frames, user CPU, best of two runs of the same
+binary, `taskset -c 5`) confirmed the fast path where the workload is real and
+found no regression where it is measurable:
+
+- `毁灭战士3_10598.jar`: 4.47 s -> 4.22 s (**-5.5%**) at 3000 frames,
+  matching the **-4.6%** measured at 20000 frames in the previous section;
+- `3D激爆拳击_8805.jar` (the only other title with seconds of CPU):
+  median of five runs each, 9.87 s vs 10.06 s — the +1.9% is inside the
+  run-to-run spread on this shared host (the earlier single-pass +5.1% reading
+  was noise);
+- the remaining six titles finish their frame budget in 0.00-0.10 s of CPU
+  (the loader or an early scene ends before they reach the textured-span
+  class), so their deltas are unmeasurable rather than regressions.
+
+A second, unrelated attempt — replacing the byte-counted loop in the
+`nj_span()` bpp==4 opaque-fill branch with word stores (`nj_u4 *q`), aiming at
+the `m3g_clear` share of the profile — was measured the same way on the same
+20000-frame run: median user CPU 30.64 s the baseline vs 30.68 s with the
+change (**+0.1%**). The compiler already generated equivalent code; the patch
+was reverted (deterministic-prefix parity held in the trial, but the change
+was not worth carrying). Next candidate levers from the profile are
+`sw_tri_band` setup (12% of the sample at ~1.5 spans per call) and the
+remaining general span classes; both would want the same deterministic-prefix
+parity check before shipping.
