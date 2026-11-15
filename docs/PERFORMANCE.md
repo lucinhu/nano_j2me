@@ -3911,3 +3911,13 @@ With the color/depth fill at its memory floor and the span loops already
 specialised, the remaining measurable lever is `sw_tri_band` setup (74 ns per band
 with ~1.5 spans per band) — a deeper restructure of the band loop, not a local
 tweak. That is recorded here as the next candidate rather than attempted again.
+
+One more measurement closes the loop on "what is left": instrumenting the span
+dispatch (temporary counters, `NJ_SPAN_STATS=1`) over the deterministic
+300-frame prefix shows that after the round-32 Gouraud fast path the general
+pixel loop serves **zero** spans on this workload — the 300-frame counts are
+`flat_texargb=973,588`, `gouraud_texargb=941,150`, general=0, fog=0, sprite=0.
+So the remaining `sw_span` cost is the specialised NEAREST texture loops
+themselves (perspective divide per pixel); squeezing them further would need
+fixed-point or approximate sampling, which risks the parity property the
+deterministic-prefix check enforces. Not attempted.
