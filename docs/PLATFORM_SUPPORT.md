@@ -247,6 +247,7 @@ Web 产物也在提交前重新构建并重新跑过 `tools/check_web.sh --all` 
 - 网页版：`.local-tools/debug-runs/web-final-all/`（20 轮收尾最终 `--all`：node 36/36、语料 47/47、浏览器 42/42、48 s）、
   `.local-tools/debug-runs/web-final-perf-smoke/`（最终 `--perf` 9/9 与 `--smoke` 7/7：game15 4689 fps、bubblet 2861、slimevolley 5581、1942空战 5520）、
   `.local-tools/debug-runs/web-head-all/`（当前 HEAD 干净构建产物的 `--all`：node/corpus/browser 全 PASS、58 s）、
+  GitHub Actions `Web demo (GitHub Pages)` 已验证全绿（build+smoke、deploy、verify 三个 job 均 success、零 annotation：run 43663734822 为 upload-artifact v7 后的最新运行，构建 34 s/部署 10 s/线上验证 40 s；此前 43661880888、43662608035、43662849158、43663535473 亦全绿）、
   `.local-tools/debug-runs/web-live-all/`（`--live` 线上演示 7/7、8 s：站点 200、wasm 引擎启动、hello.jar 导入、画布 240x320、帧号 74→134）、
   `.local-tools/debug-runs/web-live-demo/`（线上演示首次手工验证：`live-check.json` + `live-game.png`）、
   `.local-tools/debug-runs/web-final-sweep/`（最终 403 标题全语料审计：392 ok / 8 black / 1 fatal / 1 start / 1 probe、0 timeout、117 s，`sweep-403.jsonl` + `sweep-summary.txt`）、

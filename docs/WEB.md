@@ -756,7 +756,7 @@ because CI has no corpus.
 | `tools/web_test/web_live_check.py` | plays a JAR in the deployed demo (Python Playwright + headless Firefox) |
 | `tools/gen_web_compat_data.mjs` | turns a `--sweep` JSONL report into `web/data/compat.json` |
 | `web/data/compat.json` | committed audit results that badge known titles in the library |
-| `.github/workflows/web-demo.yml` | builds the port and publishes `build/web/` to GitHub Pages |
+| `.github/workflows/web-demo.yml` | builds the port (Node 24 actions), publishes `build/web/` to GitHub Pages and verifies the deployed URL with `web_live_check.py` |
 | `build/web/` | served directory: shell + `js/nj2me.js` + `js/nj2me.wasm` (git-ignored) |
 
 The C API is versioned (`NJW_API_VERSION`); the shell checks it at load time and

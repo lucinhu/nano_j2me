@@ -147,7 +147,8 @@ build/nj2me --prop microedition.platform=Nokia6230/05.50 game.jar
 
 同一个运行时可以用 Emscripten 编译为 WebAssembly。在线演示由
 [web-demo 工作流](.github/workflows/web-demo.yml) 发布在
-<https://lucinhu.github.io/nano_j2me/>：
+<https://lucinhu.github.io/nano_j2me/>（该工作流每次部署后还会用无头 Firefox
+打开线上地址，确认 wasm 引擎能启动）：
 
 [![Web demo](https://github.com/lucinhu/nano_j2me/actions/workflows/web-demo.yml/badge.svg)](https://github.com/lucinhu/nano_j2me/actions/workflows/web-demo.yml)
 
