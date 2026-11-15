@@ -175,6 +175,14 @@ struct env_state
    int support_no_game_set;
    bool support_no_game;
 
+   /* RETRO_ENVIRONMENT_SET_MEMORY_MAPS: the core publishes the VM arena as a
+    * SYSTEM_RAM descriptor for frontend cheat search / memory views. */
+   int memory_maps_calls;
+   unsigned memory_maps_descriptors;
+   void *memory_maps_ptr;
+   size_t memory_maps_len;
+   unsigned memory_maps_flags;
+
    int performance_level_set;
    unsigned performance_level;
 
@@ -742,6 +750,27 @@ static bool RETRO_CALLCONV h_environment(unsigned cmd, void *data)
          if (data)
             *(bool *)data = false;
          return true;
+
+      case (RETRO_ENVIRONMENT_SET_MEMORY_MAPS & 0xffffu):
+      {
+         const struct retro_memory_map *map = (const struct retro_memory_map *)data;
+         g.env.memory_maps_calls++;
+         if (!map || map->num_descriptors == 0u)
+         {
+            g.env.memory_maps_descriptors = 0;
+            g.env.memory_maps_ptr = NULL;
+            g.env.memory_maps_len = 0;
+            g.env.memory_maps_flags = 0;
+            return true;
+         }
+         if (!map->descriptors)
+            return false;
+         g.env.memory_maps_descriptors = map->num_descriptors;
+         g.env.memory_maps_ptr = map->descriptors[0].ptr;
+         g.env.memory_maps_len = map->descriptors[0].len;
+         g.env.memory_maps_flags = map->descriptors[0].flags;
+         return true;
+      }
 
       case (RETRO_ENVIRONMENT_SET_SUPPORT_NO_GAME & 0xffffu):
          if (!data)
@@ -1962,12 +1991,35 @@ static void check_memory_window(void)
       volatile unsigned char first = ((const unsigned char *)data)[0];
       check("memory_window_readable", 1, "first byte=%u", (unsigned)first);
    }
+   check("memory_maps_published", g.env.memory_maps_calls > 0,
+         "the core must publish a memory map for cheat search");
+   check("memory_maps_single_system_ram", g.env.memory_maps_descriptors == 1u,
+         "exactly one SYSTEM_RAM descriptor expected, got %u",
+         g.env.memory_maps_descriptors);
+   check("memory_maps_descriptor",
+         g.env.memory_maps_ptr == data && g.env.memory_maps_len == size &&
+            (g.env.memory_maps_flags & RETRO_MEMDESC_SYSTEM_RAM) != 0u,
+         "descriptor must match the SYSTEM_RAM window and flag SYSTEM_RAM");
    run_frames(1);
    data2 = api.get_memory_data(RETRO_MEMORY_SYSTEM_RAM);
    check("memory_data_stable", data2 == data,
          "the arena pointer must not move across frames");
    check("memory_size_stable", api.get_memory_size(RETRO_MEMORY_SYSTEM_RAM) == size,
          "the arena size must not change across frames");
+}
+
+/* After a state restore the VM (and its arena) may have been replaced; the
+ * frontend's cached memory map must be refreshed to the new arena. */
+static void check_memory_map_after_restore(void)
+{
+   void *data = api.get_memory_data(RETRO_MEMORY_SYSTEM_RAM);
+   size_t size = api.get_memory_size(RETRO_MEMORY_SYSTEM_RAM);
+
+   check("memory_maps_after_restore",
+         data != NULL && g.env.memory_maps_ptr == data &&
+            g.env.memory_maps_len == size &&
+            (g.env.memory_maps_flags & RETRO_MEMDESC_SYSTEM_RAM) != 0u,
+         "memory map must be republished after a state restore");
 }
 
 /* Runs load -> frames -> (serialize roundtrip) -> unload -> checks.
@@ -2021,6 +2073,9 @@ static int run_game_cycle(int cycle)
       /* The roundtrip runs in every mode: a core that advertises save states
        * has to save and restore them whether or not this is a --cycle run. */
       check_serialize_roundtrip(serialize_size);
+      /* A restore may replace the VM, so the published memory map has to be
+       * republished for the new arena. */
+      check_memory_map_after_restore();
    }
 
    api.unload_game();

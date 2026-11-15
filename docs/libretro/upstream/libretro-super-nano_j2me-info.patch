@@ -1,6 +1,6 @@
 diff --git a/dist/info/nano_j2me_libretro.info b/dist/info/nano_j2me_libretro.info
 new file mode 100644
-index 0000000..95e644d
+index 0000000..9ed4973
 --- /dev/null
 +++ b/dist/info/nano_j2me_libretro.info
 @@ -0,0 +1,31 @@
@@ -24,7 +24,7 @@ index 0000000..95e644d
 +savestate_features = "basic"
 +cheats = "false"
 +input_descriptors = "true"
-+memory_descriptors = "false"
++memory_descriptors = "true"
 +libretro_saves = "false"
 +core_options = "true"
 +core_options_version = "2.0"

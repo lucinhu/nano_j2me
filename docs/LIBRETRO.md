@@ -412,7 +412,12 @@ worse than refusing it.
   without a write barrier and can corrupt any object, so it is a debugging
   tool for deliberate user actions, not a save-data channel. Only SYSTEM_RAM
   is exposed; `VIDEO_RAM`/`SAVE_RAM`/`RTC` report NULL/0 because there is no
-  SRAM-like backing store.
+  SRAM-like backing store. The same arena is also published as one
+  `RETRO_MEMDESC_SYSTEM_RAM` descriptor through
+  `RETRO_ENVIRONMENT_SET_MEMORY_MAPS` (`.info` `memory_descriptors = "true"`),
+  which is what frontends prefer for cheat search and memory viewers; it is
+  refreshed after every state load because a load replaces the VM and its
+  arena address.
 - **Achievements** — rcheevos needs stable memory addresses, deterministic
   execution and content identification. None of the three holds here, so
   achievements are absent rather than silently broken. No achievements

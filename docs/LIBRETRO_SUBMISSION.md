@@ -49,7 +49,7 @@ run at `bc49c46`, and the release artifacts were refreshed after each libretro
 change as recorded in the hash table).
 
 - **Metadata**. `src/port/libretro/nano_j2me_libretro.info`
-  (SHA-256 `c0f30aeae22150208034202986b3db77fd2f423874e2f2bcc1ce7b07c82723c6`)
+  (SHA-256 `740df7353c181bd76955f04a64508c4c1d1994509c1b4290b3b420b04da424e1`), now with `memory_descriptors = "true"` because the core publishes the arena memory map
   is the exact file intended for `libretro-super/dist/info`. Its
   `database = "Mobile - J2ME"` names an existing libretro-database platform
   folder (checked against the live repository), its file name matches the core
@@ -769,3 +769,43 @@ slow `毁灭战士3_10598.jar` loader); libretro state round trips **50/50**; fu
 CTest **184/184 in 336.94 s** from the same source tree (that run includes the
 new memory-window checks: SYSTEM_RAM non-NULL, size in range, unknown ids
 NULL/0, pointer and size stable across frames).
+
+## Update, 2026-11-15 (round 40): r24 package with the arena memory map
+
+r24 adds `RETRO_ENVIRONMENT_SET_MEMORY_MAPS` on top of r23: the core publishes
+the JVM arena as a single `RETRO_MEMDESC_SYSTEM_RAM` descriptor (same
+non-moving arena as the `retro_get_memory_data(SYSTEM_RAM)` window). Frontends
+prefer the map for cheat search and memory viewers, and it is republished
+after every state load because a load replaces the VM. `.info` now declares
+`memory_descriptors = "true"` (previously `"false"`); the `.info` file is
+therefore `740df7353c181bd76955f04a64508c4c1d1994509c1b4290b3b420b04da424e1`
+and the prepared `libretro-super` patch was regenerated from it (still one
+added file, still applies cleanly to `fb15e63`). The mock frontend gained
+checks for the map contract (published, one SYSTEM_RAM descriptor, pointer and
+length match the data window, republished after a restore).
+
+Artifacts built from a clean tree at `d2ed8d8` + this change into
+`/var/tmp/nj2me-submission-dist-r24` and installed as canonical
+`build/libretro-dist/` (r23 tree kept at `/var/tmp/nj2me-submission-dist-r23`):
+
+| target | size | SHA-256 |
+| --- | --- | --- |
+| linux-x86_64 | 3827488 | `d9feff13199f659cfc36e93e5fe4268d29bb3c8686e38f43bc38541a1899e56e` |
+| linux-aarch64 | 3311256 | `fa14b7ff96d45fac82d38de8f042001b72da6eae4035844aad68c497a937a52f` |
+| linux-armv7 | 3019208 | `79b0c7088bc5dd77112b21738b4f0d36bf6c1623138592b134588d2c89291d26` |
+| android-arm64 | 3541296 | `7155c0ac69263d6aac4120eddcc417ef2437c76dc4adb472c1deb59477e08c3a` |
+| android-armv7 | 2728408 | `c711a57b26ce2af3eeec8173a1482222f7da62de7a3ca81a286c9cbe273c0f8f` |
+| android-x86_64 | 3587544 | `ee088275b662a47b20c9de14740b36072958386908e060c98017243af0a1b4d7` |
+| windows-i686 | 3440128 | `1836e67609627420227be13040bacdb65905866c137210f79cf3df7ba1dc3873` |
+| windows-x86_64 | 3216896 | `0d3095d6094754751a65c8464fe9c0ddaf05043311c912494816e0180154ab81` |
+
+`.info` `740df735...` identical in all eight targets.
+
+Validation on r24: mock frontend matrix **20/20** (now 45 checks per fixture
+including the memory-map contract); real RetroArch 1.22.2 LoopDemo 120 frames
+PASS; Windows x86_64 under Wine **4/4**; whole-corpus rendering probe
+**372/373** at 300 frames (only the documented slow `毁灭战士3_10598.jar`);
+libretro state round trips **50/50**; full CTest **184/184 in 339.43 s**;
+offline submission-bundle validator **41 passed, 0 failed** with clean clones
+and a real `mkdocs build` (and **32/32** including the release-tree `.info`
+identity).

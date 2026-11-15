@@ -449,6 +449,13 @@ typedef struct nj_lr {
     uint64_t       req_start_ms;  /* real time the pending request was queued */
     unsigned long long req_start_frames; /* presented frames when it was queued */
 
+    /* ---- frontend memory map (cheat search / debugger) ----
+     * The VM heap is a single non-moving arena, so one SYSTEM_RAM descriptor
+     * is enough.  The descriptor points at the arena base and has to be
+     * republished whenever a state load replaces the VM. */
+    struct retro_memory_map        memmap;
+    struct retro_memory_descriptor memdesc;
+
     /* ---- paths ---- */
     char save_dir[1024];
     char base_dir[2048];
@@ -2761,6 +2768,36 @@ static int lr_apply_state(nj_lr *s, const nj_u1 *blob, nj_size size)
     return NJ_OK;
 }
 
+/*
+ * Publish the VM arena as a single SYSTEM_RAM memory descriptor.  Frontends
+ * use RETRO_ENVIRONMENT_SET_MEMORY_MAPS before falling back to
+ * retro_get_memory_data()/retro_get_memory_size() for cheat search and memory
+ * views; both paths describe the same non-moving arena.  Called after a
+ * successful load and after every state load, because a state load swaps in a
+ * freshly created VM whose arena lives at a different address.  The frontend
+ * copies what it needs; the descriptor storage stays valid in nj_lr.
+ */
+static void lr_publish_memory_maps(nj_lr *s)
+{
+    struct retro_memory_map map;
+    void *data = NULL;
+    nj_size size = 0;
+    int have;
+
+    lr_mutex_lock(&s->lock);
+    if (s->loaded && s->vm) nj_vm_memory_region(s->vm, &data, &size);
+    have = (data != NULL && size != 0u);
+    memset(&s->memdesc, 0, sizeof(s->memdesc));
+    s->memdesc.flags  = RETRO_MEMDESC_SYSTEM_RAM;
+    s->memdesc.ptr    = data;
+    s->memdesc.len    = have ? (size_t)size : 0u;
+    s->memmap.descriptors     = have ? &s->memdesc : NULL;
+    s->memmap.num_descriptors = have ? 1u : 0u;
+    map = s->memmap;
+    lr_mutex_unlock(&s->lock);
+    if (s->environ_cb) (void)s->environ_cb(RETRO_ENVIRONMENT_SET_MEMORY_MAPS, &map);
+}
+
 static void lr_serve_state_request(nj_lr *s)
 {
     nj_u1 *blob;
@@ -2793,6 +2830,9 @@ static void lr_serve_state_request(nj_lr *s)
     s->req_done = 1;
     lr_cond_broadcast(&s->cond);
     lr_mutex_unlock(&s->lock);
+    /* A successful load replaced the VM, so the frontend's cached arena
+     * descriptor is stale and must be republished. */
+    if (kind == LR_REQ_LOAD && rc == NJ_OK) lr_publish_memory_maps(s);
 }
 
 /* Frontend owns returned SAVE data; LOAD input is copied so a cancelled wait
@@ -3621,6 +3661,7 @@ RETRO_API bool retro_load_game(const struct retro_game_info *info)
      * and can make Android EGL initialization fail on the second attempt.
      * That environment call is only valid inside retro_run(). */
     if (lr_load(info, 0)) {
+        lr_publish_memory_maps(s);
         return true;
     }
     /* Some titles branch on microedition.platform and refuse the generic
@@ -3638,6 +3679,7 @@ RETRO_API bool retro_load_game(const struct retro_game_info *info)
             lr_log(s, RETRO_LOG_INFO,
                    "loaded with the nokia6230 device profile; set "
                    "nano_j2me_device=nokia6230 to select it explicitly");
+            lr_publish_memory_maps(s);
             return true;
         }
         s->dev_retry = 0;
