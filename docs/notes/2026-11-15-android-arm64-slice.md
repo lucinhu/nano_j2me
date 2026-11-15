@@ -36,8 +36,12 @@
   `lib/armeabi-v7a`、`lib/x86_64`。
 - 安装到真机后 `dumpsys package com.lucinhu.nj2me` 显示
   `primaryCpuAbi=arm64-v8a`，数据保留（`adb install -r`）。
-- 预期手机端 MC 的 GEN/LOAD 接近减半；应用内计时（`MCJ: GEN/LOAD`）尚未
-  在真机上复测，因为测试期间手机在用户手中，只做了无头部分。
+- 应用内实测（同一手机、同一存档，用户手动打开游戏）：
+  `MCJ: LOAD read 14147 ms, prepare 11998 ms`（合计 26.1 s），对比 32 位
+  安装包此前的 `read 26527 ms, prepare 25056 ms`（合计 51.6 s）——
+  **读档快 1.98×**（read 1.87×、prepare 2.09×）。游戏内 `m3g: accel
+  calibration gpu=1017us software=757us -> disabled` 与此前一致，自动
+  选择仍保持软件渲染。
 
 ## 复现
 
