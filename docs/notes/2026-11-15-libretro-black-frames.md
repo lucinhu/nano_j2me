@@ -116,8 +116,12 @@ stacks caught the worker inside `nj_vm_new_midlet()` -> `nj_call_special()` ->
 `Doom/m.s()`, which calls `Graphics3D.render(World)` in a 190-iteration loop
 after a `Thread.sleep(12000)` splash. Each pass is a full software-M3G render,
 so the constructor - and therefore `retro_load_game()` - needs minutes. The
-core keeps the frontend inside load until the constructor returns, so a
-watchdog shorter than that reports a timeout. Also noted: the CLI finishes a
+constructor is where the wait is unavoidable: its bytecode starts a loader
+thread and then calls `Thread.join()` on it (twice, for two loader threads),
+so a JVM does not return from the constructor before the animation finishes.
+The core keeps the frontend inside load until the constructor returns, so a
+watchdog shorter than that reports a timeout; 400 s was not enough, and a
+longer manual run was still inside the same loader when sampled. Also noted: the CLI finishes a
 600-frame run in 13 s because its frame budget ends the run before the loader
 completes, so a CLI "ok" row does not prove this title loads.
 

@@ -304,11 +304,13 @@ is validated on the worker; any refusal is a serving-time limit, not a format
 change.
 
 A very slow loader keeps the frontend inside `retro_load_game()` until the
-MIDlet constructor returns. `毁灭战士3_10598.jar` renders its 3D loading
-sequence 190 times (each a software-M3G pass) before that happens; a harness
-watchdog shorter than several minutes kills the load even though the title is
-progressing (it did not finish within 400 s in the sampling run). Give slow
-3D titles a long load timeout rather than treating this as a hang.
+MIDlet constructor returns, and a constructor that joins its own loader
+threads cannot return earlier. `毁灭战士3_10598.jar` does exactly that: its
+constructor starts two loader threads and `Thread.join()`s them while the
+loader renders a 3D loading animation (190 software-M3G passes). 400 s was not
+enough in the sampling run, so a harness watchdog shorter than several
+minutes kills a load that is progressing. Give slow 3D titles a long load
+timeout rather than treating this as a hang.
 
 There is no determinism claim. Rewind, runahead and netplay are not advertised
 or validated; use manual states and the game's own save system. Snapshot sizes
