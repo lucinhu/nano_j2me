@@ -170,8 +170,9 @@ python3 -m http.server -d build/web 8000
 Open `http://localhost:8000/`, drop a `.jar` in (or import it from an
 http(s) link — the host must allow CORS), play. Input is the keyboard, the
 on-screen keypad or a standard gamepad (Gamepad API); a frame-rate cap
-(display refresh / 60 / 30 / 24 / 15 fps, applied live and remembered per game)
-keeps titles at their intended speed on high-refresh screens, the game speed
+(display refresh / 60 / 30 / 24 / 20 / 15 fps, default 30 — the cadence J2ME
+phones serviced, applied live and remembered per game) keeps titles at their
+intended speed on high-refresh screens, the game speed
 (100/150/200 %) is remembered per title too, and the tools panel can rebind the
 eight game actions to any keyboard key (also remembered per title); JARs that ship several
 MIDlets get a startup chooser in the tools panel. Cards of titles covered by

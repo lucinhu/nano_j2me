@@ -257,6 +257,15 @@ struct nj_thread {
     nj_u1      daemon;
     nj_u1      started;
     nj_u1      is_main;
+    /*
+     * Set once the thread has been seen asking for a paint it then forced
+     * twice inside one frame - the signature of a `repaint();
+     * serviceRepaints(); step();` game loop with no sleep of its own.  From
+     * then on serviceRepaints() parks the thread until the frame ends, so the
+     * loop advances one step per display frame, which is the cadence the
+     * handset gave it.  Sticky because the loop keeps that shape for life.
+     */
+    nj_u1      repaint_paced;
     nj_s4      priority;
     nj_s4      exit_value;
     nj_value   ret_value;   /* result of a C-initiated call */

@@ -57,10 +57,15 @@ import { GameInput, KEY_ACTIONS, codeLabel } from './input.js';
 const LS_SETTINGS = 'nj2me.settings';
 const HEAP_CHOICES_MB = [16, 32, 64, 128];
 
-/* Emulated-frame cap. 0 means "pump once per display refresh", which is what
- * the shell did before this setting existed; the numeric choices match the
- * frame rates J2ME titles were written for and the classic 60 Hz panel. */
-const FPS_CHOICES = [0, 60, 30, 24, 15];
+/* Emulated-frame cap.  0 means "pump once per display refresh", which is what
+ * the shell did before this setting existed.  The numeric choices are the
+ * frame rates J2ME titles were written for: on a J2ME-era handset the display
+ * serviced a frame every 1/15 s to 1/30 s (15 and 20 fps common, 30 fps on the
+ * faster ones), so a title's per-frame logic advanced 15-30 times a second.
+ * Pumping at the browser's 60 Hz made repaint-paced titles run two to four
+ * times too fast - the "game feels accelerated" report.  The default is 30;
+ * owners of 15/20 fps titles can pick those from the tools panel. */
+const FPS_CHOICES = [0, 60, 30, 24, 20, 15];
 /* Device screen presets.  'auto' leaves the engine on its 240x320 default;
  * the rest are common J2ME resolutions that titles were drawn for. */
 const SCREEN_PRESETS = Object.freeze({
@@ -72,7 +77,7 @@ const SCREEN_PRESETS = Object.freeze({
 });
 const DEFAULT_SETTINGS = Object.freeze({
   speedPercent: 100,     // default for games without their own override
-  frameCap: 60,         // default cap for games without their own override; 0 = display refresh
+  frameCap: 30,         // default cap for games without their own override; 0 = display refresh
   heapMb: 16,           // Java heap for the next start; heavy titles need 64+
   autoResume: false,    // restarting a game continues from its newest save
   autoSave: false,      // leaving a game keeps its newest state for the next launch
@@ -301,7 +306,7 @@ export class GameView {
       fps.value = String(this._frameCap());
       fps.addEventListener('change', () => {
         if (!this.game) { return; }
-        const value = FPS_CHOICES.includes(Number(fps.value)) ? Number(fps.value) : 60;
+        const value = FPS_CHOICES.includes(Number(fps.value)) ? Number(fps.value) : 30;
         if (this._frameCap() === value) { return; }
         this.game.frameCap = value;
         this._frameAccumMs = 0;
@@ -1874,7 +1879,7 @@ export class GameView {
     const override = this.game ? Number(this.game.frameCap) : NaN;
     if (FPS_CHOICES.includes(override)) { return override; }
     const fallback = Number(this.settings.frameCap);
-    return FPS_CHOICES.includes(fallback) ? fallback : 60;
+    return FPS_CHOICES.includes(fallback) ? fallback : 30;
   }
 
   _screenPreset() {

@@ -177,7 +177,6 @@ typedef struct njw_runner {
     double base_wall_ms;            /* wall clock when RUN began */
     nj_u8  base_clock_us;           /* clock_us when RUN began */
     nj_u8  host_us;                 /* sum of the host frame deltas */
-    int    wall_ahead;              /* web_port_millis() moved the clock */
     double load_started_ms;         /* wall-clock start of the constructor */
     unsigned load_pumps;            /* frames pumped while constructing */
 
@@ -580,9 +579,10 @@ static double web_wall_ms(void)
  * delta.  Within a pump, however, real time also elapses - Java code runs in
  * between the port callbacks - and MIDlets busy-wait on millis() rather than
  * always sleeping.  Reporting the live wall clock on top of the virtual base
- * keeps those loops finite without slowing sleep-paced games: Thread.sleep()
- * is still fast-forwarded by web_port_sleep_ms(), while a title that spins on
- * currentTimeMillis() burns exactly the wall time it asked for.
+ * keeps those loops finite: a title that spins on currentTimeMillis() burns
+ * exactly the wall time it asked for.  Thread.sleep() is different: it must
+ * NOT advance the clock (see web_port_sleep_ms), because the pump is what
+ * makes time pass for a sleeping thread.
  */
 static nj_u4 web_port_millis(void *ud)
 {
@@ -609,7 +609,6 @@ static nj_u4 web_port_millis(void *ud)
     }
     if (wall_us > g_runner.clock_us) {
         g_runner.clock_us = wall_us;
-        g_runner.wall_ahead = 1;
     }
     return (nj_u4)(g_runner.clock_us / 1000ull);
 }
@@ -622,12 +621,16 @@ static nj_u4 web_port_millis(void *ud)
  * else meanwhile, so advancing the clock is the correct semantics rather than a
  * trick.
  *
- * RUN phase: a pumped C call (see nj_vm.c's in_call_pump path) calls this in a
- * loop waiting for a Java thread's deadline. Give the first few calls 1 ms so
- * the loop makes real progress, then allow a little more: a game whose own
- * frame loop is Thread.sleep(50)-paced must not spin through 50 calls of
- * 1 ms each every frame either. The deadline is virtual time, so the thread
- * always resumes - the loop cannot hang.
+ * RUN phase: do nothing.  A sleep is a request to block for that long, and in
+ * a pumped port the pump is the thing that makes time pass: when the only
+ * runnable thread is asleep, nj_scheduler_frame() returns, njw_frame() ends,
+ * and the next njw_frame() advances the clock by the frame delta, which is
+ * what finally satisfies the deadline.  Advancing the clock here instead would
+ * grant the sleep its time for free and a game whose own loop is
+ * Thread.sleep(33)-paced would run many iterations per display frame - the
+ * "game feels accelerated" bug.  A busy-wait on System.currentTimeMillis()
+ * inside one pump still terminates because web_port_millis() follows the wall
+ * clock (above); such a wait burns exactly the real time it asked for.
  */
 static void web_port_sleep_ms(void *ud, nj_u4 ms)
 {
@@ -643,16 +646,10 @@ static void web_port_sleep_ms(void *ud, nj_u4 ms)
         return;
     }
     /*
-     * In RUN the clock is owned by the host: web_port_millis() already follows
-     * the wall clock, so a sleep must not advance it (that is what made
-     * repaint-paced games run fast).  A host without a wall clock - the
-     * headless Node harness, which pumps frames as fast as it can - still
-     * needs the clock to move or a blocked scheduler would pump forever, so
-     * the first millisecond of a sleep is granted there.
+     * The clock only moves at the next frame pump (or from the wall clock,
+     * which web_port_millis() reports).  See the comment above: granting the
+     * sleep time here is what let sleep-paced games outrun the display.
      */
-    if (!g_runner.wall_ahead) {
-        g_runner.clock_us += (ms > 1u ? 1u : ms) * 1000ull;
-    }
 }
 
 static void web_port_idle(void *ud)
@@ -1564,7 +1561,6 @@ int njw_frame(double dt_ms)
     if (r->host_us > r->clock_us) {
         r->clock_us = r->host_us;
     }
-    r->wall_ahead = 0;
     /* While startApp() is still loading, tick at least once per nominal frame
      * so a loaded game becomes playable in roughly real time even on a host
      * that renders slowly. */
@@ -1572,6 +1568,9 @@ int njw_frame(double dt_ms)
         dt_us = NJW_NOMINAL_TICK_US;
     }
     r->drew_this_pump = 0;
+    fprintf(stderr, "[pump] host=%.1f clock=%.1f wall=%.1f frames=%llu\n",
+            (double)r->host_us / 1000.0, (double)r->clock_us / 1000.0,
+            web_wall_ms() - r->base_wall_ms, (unsigned long long)r->frames);
 
     pumps = r->displayable_ready ? 1u : NJW_LOAD_PUMPS;
     for (i = 0u; i < pumps; i++) {

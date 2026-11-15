@@ -4244,6 +4244,20 @@ NJFN(c_serviceRepaints)
              * drawing at this frame's end. A queued UI event still requires
              * its repaint before presentation and callback delivery. */
             vm->repaint_pending = NJ_MIDP_REPAINT_COALESCED;
+            /*
+             * This thread forced a second paint inside the frame it already
+             * painted in: it is a repaint-paced loop (`repaint();
+             * serviceRepaints(); step();` with no sleep) rather than a title
+             * that forces one publish.  Remember it and park it for the rest
+             * of the frame from now on - a loop like that was written to
+             * advance one step per display frame, and with the inline paint
+             * alone it gets one extra step per frame, doubling its own frame
+             * rate on top of the display's.  A sleep-paced title never reaches
+             * this branch (one forced paint per frame at most), so it keeps
+             * the sub-frame serviceRepaints() latency the midp idiom relies
+             * on for `state = 1; repaint(); serviceRepaints(); state = 0;`.
+             */
+            th->repaint_paced = 1u;
         }
     }
     /*
@@ -4262,8 +4276,8 @@ NJFN(c_serviceRepaints)
      */
     if (vm->in_frame != 0u && th != nj_thread_main(vm) &&
         vm->in_callback == 0u && vm->in_paint == 0u &&
-        vm->repaint_pending != 0u && vm->npace_waiters < 4u &&
-        nj_vm_thread_wait_frame(vm, th)) {
+        (th->repaint_paced || vm->repaint_pending != 0u) &&
+        vm->npace_waiters < 4u && nj_vm_thread_wait_frame(vm, th)) {
         return NJ_ERR_TIMEOUT;
     }
     return NJ_OK;

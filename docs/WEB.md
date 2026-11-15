@@ -96,15 +96,17 @@ be served with or without a build:
   buttons, so a tap on a phone shows the same explanation as a toast.
 - **Game view** — a `<canvas>` sized to `njw_width()`×`njw_height()` and scaled
   with `image-rendering: pixelated`, an `requestAnimationFrame` loop that calls
-  `njw_frame(dt_ms)` once per display refresh by default (or once per fixed
-  `1000/fps` frame when a **Frame rate** cap is selected, so the emulated clock
-  still runs at real speed while a 120 Hz panel no longer runs 30 fps
-  animations at double speed), a loading overlay until the first
+  `njw_frame(dt_ms)` once per display refresh when the **Frame rate** selector
+  is on "display refresh", or once per fixed `1000/fps` frame otherwise — the
+  default is **30 fps**, the cadence a J2ME-era handset serviced (titles were
+  written for 15/20/30 fps, and a 60/120 Hz host would otherwise run their
+  per-frame logic two to four times too fast; 60 Hz was not a J2ME phone
+  rate), a loading overlay until the first
   `Displayable` exists, then pause/resume, speed (100/150/200 %, applied live
   and remembered per game like the frame rate), mute and a
   volume slider (the host-side WebAudio gain; touching the slider also
   unmutes, like a phone volume key), a **Frame rate** selector
-  (display refresh / 60 / 30 / 24 / 15 fps; applied live and remembered per game
+  (display refresh / 60 / 30 / 24 / 20 / 15 fps; applied live and remembered per game
   like the screen size — the shell setting is only the default a new title
   starts with),
   three save states per game (each can be given a name that survives a reload
@@ -220,7 +222,17 @@ runner built on the runtime's public embedder API:
   waits work without blocking the tab.
 - The internal frame pacer is disabled (`nj_vm_set_frame_cap(vm, 0)`; the port
   reports `fps_cap = 0`), so `nj_midp_frame()` never sleeps. Display pacing is the
-  host's business: the shell uses `requestAnimationFrame`.
+  host's business: the shell uses `requestAnimationFrame` and the **Frame rate**
+  setting, and the port is the display for the runtime: a thread parked in
+  `Thread.sleep()` or `serviceRepaints()` resumes at the next pumped frame, so
+  the interval a title sees is the pump interval (1/30 s by default). A
+  repaint-paced loop (`repaint(); serviceRepaints(); step();` with no sleep of
+  its own) was measured doing two steps per pump — the inline forced paint
+  returned without waiting, so one extra step ran in the frame that had just
+  painted — and is now throttled to one step per pumped frame once that shape
+  has been seen; a sleep-paced title keeps the ordinary (sub-frame)
+  `serviceRepaints()` latency the MIDP idiom
+  `state = 1; repaint(); serviceRepaints(); state = 0;` relies on.
 - `njw_stop()` performs the `nj_run()` teardown (bounded `destroyApp()`, app close,
   VM destruction) and can be followed by another `njw_start()`.
 
@@ -245,11 +257,18 @@ The emulated clock is owned by the host and follows real time:
   does. (An earlier model folded each sleep forward on top of the frame-driven
   clock, which made repaint-paced titles — those that never sleep, e.g. 雷电4 —
   see a clock about 1.3× too fast and animate accelerated.) A host without wall
-  time still gets the first millisecond of a sleep so a blocked scheduler cannot
-  pump forever, and `idle()` never advances the clock.
+  time — the Node harness — advances the clock through the `dt_ms` it passes to
+  every `njw_frame()`, so a blocked scheduler still makes progress; `idle()`
+  never advances the clock.
 - `njw_set_speed(percent)` (10–800) scales the virtual clock exactly like
   `nj_vm_set_speed()` on the desktop ports, and does not jump the clock when
   changed.
+- Sleep and paint deadlines are resolved at pumped-frame boundaries: the
+  runtime sees one display frame per `njw_frame()` call, so `Thread.sleep(33)`
+  wakes on the pump that brings the clock past its deadline (about 30 steps/s
+  at the 60 fps pump; measured with the synthetic fixtures below), never in the
+  middle of a pump. The frame interval a title gets is therefore the pump
+  interval: 1/30 s by default, or the chosen **Frame rate**.
 - A MIDlet that busy-waits on `System.currentTimeMillis()` (some racing titles
   do) still terminates because the wall clock keeps the emulated clock moving;
   the constructor budget below covers the case where a constructor never returns.
@@ -512,11 +531,12 @@ unreachable, which keeps a flaky network from looking like a shell bug.
   reports resuming from the exit auto-save and keeps drawing. One check plays a
   title, exits and verifies the library's **continue card** names it, hides
   while the search box has text, and starts the title again when clicked.
-  One more check opens the panel, verifies the default 60 fps cap, switches to
-  30 and 15 fps and samples the emulated pump rate (about 30 and 15 per second),
-  then returns to display-refresh (uncapped) mode. It finishes by picking 30 fps,
-  leaving, reloading the page and starting the same title: the game record keeps
-  the cap, the select shows it again and the pump rate follows it. Another check
+  One more check opens the panel, verifies the default 30 fps cap, switches to
+  60, 20 and 15 fps and samples the emulated pump rate (about 60, 20 and 15 per
+  second), then returns to display-refresh (uncapped) mode. It finishes by
+  picking 30 fps, leaving, reloading the page and starting the same title: the
+  game record keeps the cap, the select shows it again and the pump rate
+  follows it. Another check
   does the same round-trip for the game speed: 100 % → 200 % is applied to the
   engine immediately, stored on the game record, and the reloaded launch comes
   back at 200 %.
@@ -585,10 +605,10 @@ Measured on the reference build (Emscripten 7.0.0, `include/nj2me/nj_web.h`
 40–65 s** (a loaded host slows the page test down; every check is bounded), the
 perf suite **9/9 checks in about 0.5 s**, and the live test **7/7 checks in
 about 8 s** against the deployed demo — `tools/check_web.sh --all` is
-**60–90 s** end to end on a busy machine. The browser suite includes the
+**60–105 s** end to end on a busy machine. The browser suite includes the
 per-game key-remapping round trip: rebind Fire to `Z`, press `Z`, reload, and
-reset back to Space. The sweep suite needs about 2 min for all 403
-titles, the perf suite about 1 s. All 40
+reset back to Space. The sweep suite needs about 65 s for all 403
+titles with `--jobs 4` (about 4 min on one job), the perf suite about 1 s. All 40
 playable titles draw 120/120 frames (the audiodemo and bench fixtures exit on
 their own, as expected), there are no engine `[nj2me] error:` lines,
 and the wasm heap stays at 64 MiB.
@@ -628,12 +648,16 @@ titles are pinned as expectations (`毁灭战士3_10598` constructor refusal,
 audit runs at host speed under the folded wall clock, so whether a title shows
 its picture within the first 90 sampled frames can shift by a few frames.
 
-Latest run: **392 ok, 8 black, 1 fatal, 1 constructor refusal, 1 invalid JAR,
-zero timeouts** in 117 s, RESULT PASS.
+Latest run: **393 ok, 7 black, 1 fatal, 1 constructor refusal, 1 invalid JAR,
+zero timeouts** in about 65 s (four titles in parallel), RESULT PASS.  The
+pacing fix also moved how much a title manages to draw inside the 90-pump
+window: 都市赛车6火线追击, 生化危机之恶化 and 宠物王国6 now render where they
+used to sample black, while L3D and 急速公路狂飙新年版 now sample a loading
+phase; a black result stays a warning, not a regression signal.
 
 | Class | Titles | Verdict |
 |---|---|---|
-| Black (8) | 纯爱物语3, 都市赛车6, 灌篮高手-爆发!樱木, 开心农场BT版, 生化危机之恶化, PC正版-使命召唤5, 乱世Q三国_1649, 有女倾城破解版_11525 | warning — no sampled frame had content; the first six are black at the same checkpoint natively (`--fps 0`), and the last two are timing-sensitive loading screens |
+| Black (7) | L3D, 灌篮高手-爆发!樱木, 急速公路狂飙新年版, 开心农场BT版, PC正版-使命召唤5, 乱世Q三国_1649, 有女倾城破解版_11525 | warning — no sampled frame had content within the 90-pump window; most are titles whose load/fade phase the audit samples early (several are black at the same checkpoint natively with `--fps 0`), and which titles land there shifts a little with pacing |
 | Fatal (1) | 愤怒的小鸟_383 | Java heap exhaustion; the native build also throws `OutOfMemoryError` at its default heap. With `NJW_OPT_HEAP_BYTES` = 64 MiB the wasm run completes 90 frames (76,639 non-black pixels, 32 colours) just like native `--heap 64` — the shell's "Game memory" selector exposes the same option |
 | Constructor refusal (1) | 毁灭战士3_10598 | by design — the MIDlet runs its game loop from the constructor and joins it, so the runner reports the bounded error after ~10 s instead of freezing the page |
 | Invalid JAR (1) | 鲁宾逊漂流记汉化BT版_4677 | parity — native also rejects it (`bad JAR or no MIDlet-1`) |

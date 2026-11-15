@@ -1381,19 +1381,25 @@ async function runRealShellChecks() {
         return { fps: (to - from) / seconds, pumped: to - from };
       };
 
-      /* 60 fps is the default: one pump per 60 Hz refresh. */
+      /* 30 fps is the default: the frame rate a J2ME-era handset serviced (a
+         title written for 15/20/30 fps must not run at the browser's 60 Hz). */
       const defaultValue = await page.inputValue('#fps-select');
-      assert(defaultValue === '60', `default frame cap is ${defaultValue}`);
+      assert(defaultValue === '30', `default frame cap is ${defaultValue}`);
+      const at30 = await sample(1500);
+      assert(at30.fps > 20 && at30.fps < 45, `30 fps cap pumped ${at30.fps.toFixed(1)} fps`);
+
+      await page.selectOption('#fps-select', '60');
+      await waitToast(page, await t(page, 'game.fpsApplied'));
       const at60 = await sample(1200);
       assert(at60.fps > 35 && at60.fps < 90, `60 fps cap pumped ${at60.fps.toFixed(1)} fps`);
 
-      await page.selectOption('#fps-select', '30');
+      await page.selectOption('#fps-select', '20');
       await waitToast(page, await t(page, 'game.fpsApplied'));
-      const at30 = await sample(2000);
-      assert(at30.fps > 20 && at30.fps < 45, `30 fps cap pumped ${at30.fps.toFixed(1)} fps`);
+      const at20 = await sample(1500);
+      assert(at20.fps > 12 && at20.fps < 30, `20 fps cap pumped ${at20.fps.toFixed(1)} fps`);
 
       await page.selectOption('#fps-select', '15');
-      const at15 = await sample(2000);
+      const at15 = await sample(1500);
       assert(at15.fps > 8 && at15.fps < 24, `15 fps cap pumped ${at15.fps.toFixed(1)} fps`);
 
       await page.selectOption('#fps-select', '0');
@@ -1442,7 +1448,7 @@ async function runRealShellChecks() {
       const atReload = await sample(1500);
       assert(atReload.fps > 20 && atReload.fps < 45,
         `remembered 30 fps cap pumped ${atReload.fps.toFixed(1)} fps`);
-      return `60 -> ${at60.fps.toFixed(0)}, 30 -> ${at30.fps.toFixed(0)}, 15 -> ${at15.fps.toFixed(0)}, display -> ${atDisplay.fps.toFixed(0)}; per-game 30 -> ${atReload.fps.toFixed(0)} after reload`;
+      return `default 30 -> ${at30.fps.toFixed(0)}, 60 -> ${at60.fps.toFixed(0)}, 20 -> ${at20.fps.toFixed(0)}, 15 -> ${at15.fps.toFixed(0)}, display -> ${atDisplay.fps.toFixed(0)}; per-game 30 -> ${atReload.fps.toFixed(0)} after reload`;
     } finally {
       await ctx.close();
     }

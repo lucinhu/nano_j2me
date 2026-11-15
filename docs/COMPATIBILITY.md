@@ -312,6 +312,32 @@ for exactly one frame between two identical ones (`男摄影师_11003`), a
 loading spinner that blinks.  None of them is the runtime's - the two that
 were are the ones 08c7c26 fixed.
 
+
+### Repaint-paced loops advance one step per frame
+
+A title whose loop is `repaint(); serviceRepaints(); step();` with no sleep of
+its own is paced by the display: `serviceRepaints()` forces the paint and blocks
+until the display has serviced it.  A host-driven front end such as the web
+shell cannot paint between two Java bytecodes, so the port publishes that paint
+inline and the call returns as soon as the pixels exist - and the loop then runs
+one extra step inside the frame it has just painted.  The desktop ports hide
+this (their frame pacer is already waiting); the web shell pumps exactly one
+frame per display refresh, so the title advanced **two steps per pump**, i.e.
+twice the frame rate it was written for.  `雷电4_39.jar`'s `h.run()` is such a
+loop, and it is what made the browser port feel accelerated.
+
+`nj_thread.repaint_paced` remembers a title once the runtime has seen it force a
+second paint inside one frame, and from then on parks it at the end of every
+frame, so the loop advances one step per pumped frame.  A sleep-paced title
+never forces two paints in a frame and keeps the sub-frame latency the MIDP
+idiom `state = 1; repaint(); serviceRepaints(); state = 0;` relies on.
+
+Synthetic proofs (`/tmp/frametest/RepaintLoop.jar`, `SleepLoop.jar`): the
+repaint-paced MIDlet advanced 60.0/29.9/15.0 steps per second at a 60/30/15 fps
+cap (twice that before the fix), while a `Thread.sleep(33)` MIDlet stayed at
+about 29–30 steps per second at the 60 fps cap.  The web shell's default cap is now
+30 fps - the cadence J2ME-era handsets serviced - and remains adjustable.
+
 ### A mutable image is white, and always opaque
 
 MIDP 2.0 says of `Image.createImage(int, int)`: "Every pixel within the newly
