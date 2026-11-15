@@ -413,3 +413,21 @@ So the release table in `build/libretro-final-report-20261115.md` remains the
 canonical artifact identity; upstream CI-produced Windows binaries will not
 match those hashes byte-for-byte either. This is a property of the PE output,
 not of the core sources.
+
+## Update, 2026-11-15 (round 29: requirements audit and r18 revalidation)
+
+All eight targets were rebuilt at HEAD `d10fe50` into
+`/var/tmp/nj2me-submission-dist-r18`. Linux and Android cores are byte-identical
+to the r17 package (same SHA-256), and the Windows DLLs differ only in PE
+timestamp/checksum bytes, so the canonical package stays r17.
+
+Revalidation on that build: mock frontend 20/20, real RetroArch LoopDemo 120
+frames PASS and corpus batch 8/8 x 600 frames PASS, Wine 4/4, libretro state
+round trips 50/50, whole-corpus rendering probe 372/373 (only the documented
+slow 3D loader times out), CTest 184/184 in 369.41 s, CI template simulation
+3/3. Evidence under `.local-tools/debug-runs/submission-20261115/`.
+
+The upstream requirement audit in `docs/LIBRETRO_SUBMISSION.md` now maps each
+`developing-cores.md` step and each libretro API obligation to its local
+evidence; only the two upstream PRs and the maintainer-run CI remain, and both
+need explicit authorization.

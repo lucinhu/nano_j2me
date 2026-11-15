@@ -147,6 +147,51 @@ change as recorded in the hash table).
   pull request with a real `mkdocs build`, and optional assets/database entries
   are all upstream decisions and are not performed here.
 
+## Update, 2026-11-15 (requirements audit and r18 revalidation)
+
+Rebuilt all eight release targets at HEAD `d10fe50` (`tools/build_libretro_cores.sh
+--jobs 12 --out /var/tmp/nj2me-submission-dist-r18 all`, rc=0; 8 dirs x 16 files,
+`.info` `c0f30aeae22150208034202986b3db77fd2f423874e2f2bcc1ce7b07c82723c6`
+identical). Since `011247e` the tree changes are documentation, web assets and a
+CLI profiler no-op (`d10fe50`); the rebuilt Linux and Android cores are
+byte-identical to the r17 table above (same SHA-256), and the two Windows DLLs
+have identical sizes but differ only in PE timestamp/checksum bytes, which
+matches the reproducibility section of
+[the readiness note](notes/2026-11-15-libretro-submission-readiness.md). The
+canonical `build/libretro-dist` package therefore stays r17; the r18 build is
+the reproducibility and revalidation artifact.
+
+Full revalidation on that build (logs under
+`.local-tools/debug-runs/submission-20261115/`, gitignored):
+
+- mock frontend matrix: 20 passed, 0 failed (`r18-mock.log`)
+- real RetroArch 1.22.2: LoopDemo 120 frames PASS, corpus batch 8/8 titles x
+  600 frames PASS (`r18-ra-loop.log`, `r18-ra-corpus.log`)
+- Windows x86_64 DLL under Wine: 4 passed, 0 failed (`r18-wine.log`)
+- libretro state round trips: 50/50 (`r18-state50.log`)
+- whole-corpus rendering probe at 300 frames: 372/373, only
+  `毁灭战士3_10598.jar` (slow loader, documented) times out
+  (`goal16-libretro-corpus/r18-full.log`)
+- full CTest: 184/184 in 369.41 s (`/tmp/r18-ctest.log`)
+- CI template simulation: 3/3 PASS (`/tmp/r18-ci-sim.log`; Linux 3,973,848,
+  Windows 3,541,251, Android arm64 11,555,520 bytes)
+
+### Upstream requirement audit
+
+| Upstream requirement | Local evidence | Remaining external action |
+| --- | --- | --- |
+| `.info` in `libretro-super/dist/info` | byte-identical file in the bundle; patch applies to clean `fb15e63`; validator checks payload identity | open the `libretro-super` PR |
+| Root `.gitlab-ci.yml` using libretro CI templates | `.gitlab-ci.yml` selects the Linux/Windows/Android templates; all three template command shapes simulated at HEAD and artifact paths match | core repository/mirror and pipeline registration by libretro maintainers; first upstream CI run |
+| `libretro/docs` library page and indices | 5-file patch applies to clean `d83b34b`; `mkdocs build` passes and renders the page | open the `libretro/docs` PR; upstream docs CI |
+| Optional assets / content database | `database = "Mobile - J2ME"` names an existing libretro-database platform, so no new `.dat` is needed; no icon artwork was prepared (optional, not required) | none required for first submission |
+| Libretro API obligations | video callback exactly once per `retro_run`, input polled at least once, no libretro API use outside the permitted contexts, fixed `retro_serialize_size` computed at load, `needs_fullpath = "true"`; checked by the mock-frontend conformance matrix | none |
+| Core/artifact naming | `<name>_libretro.so` / `.dll`; the Android template renames to `_libretro_android.so` | none |
+
+Conclusion: no open local implementation item remains for the submission kit.
+The only remaining steps are the two upstream PRs plus maintainer-run CI and
+pipeline registration, all of which require explicit authorization and are not
+performed by this preparation.
+
 ## Upstream procedure, checked 2026-11-15
 
 Re-verified against the live [Developing Cores guide](https://github.com/libretro/docs/blob/master/docs/development/cores/developing-cores.md);
