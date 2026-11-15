@@ -98,6 +98,41 @@ const GAMEPAD_STICK_DEADZONE = 0.45;
 
 const DIGIT_CODE = /^(?:Digit|Numpad)([0-9])$/;
 
+/*
+ * Actions whose keyboard binding the player may override per game.  The shell
+ * keeps the defaults in CODE_MAP; a game record may carry
+ * `keyMap: { fire: 'KeyZ', clear: 'KeyX', ... }` (KeyboardEvent.code values)
+ * and setKeyOverrides() applies it without touching anything else.
+ */
+export const KEY_ACTIONS = Object.freeze([
+  { id: 'up', key: NJ_KEYS.UP, code: 'ArrowUp' },
+  { id: 'down', key: NJ_KEYS.DOWN, code: 'ArrowDown' },
+  { id: 'left', key: NJ_KEYS.LEFT, code: 'ArrowLeft' },
+  { id: 'right', key: NJ_KEYS.RIGHT, code: 'ArrowRight' },
+  { id: 'fire', key: NJ_KEYS.FIRE, code: 'Enter' },
+  { id: 'softLeft', key: NJ_KEYS.SOFT_LEFT, code: 'F1' },
+  { id: 'softRight', key: NJ_KEYS.SOFT_RIGHT, code: 'F2' },
+  { id: 'clear', key: NJ_KEYS.CLEAR, code: 'Backspace' }
+]);
+
+/** Human label for a KeyboardEvent.code, for the remap dialog. */
+export function codeLabel(code) {
+  if (typeof code !== 'string' || code === '') { return '?'; }
+  if (code === 'Space') { return 'Space'; }
+  if (code === 'ArrowUp') { return '↑'; }
+  if (code === 'ArrowDown') { return '↓'; }
+  if (code === 'ArrowLeft') { return '←'; }
+  if (code === 'ArrowRight') { return '→'; }
+  if (code === 'Escape') { return 'Esc'; }
+  if (code === 'Backspace') { return '⌫'; }
+  if (code === 'Enter' || code === 'NumpadEnter') { return 'Enter'; }
+  if (/^Key[A-Z]$/.test(code)) { return code.slice(3); }
+  if (/^Digit[0-9]$/.test(code)) { return code.slice(5); }
+  if (/^Numpad[0-9]$/.test(code)) { return 'Num ' + code.slice(6); }
+  if (/^F[0-9]{1,2}$/.test(code)) { return code; }
+  return code.replace(/^(Ctrl|Alt|Shift|Meta)(Left|Right)$/, '$1');
+}
+
 /** Map a KeyboardEvent to nj_key, or null when the shell should ignore it. */
 export function keyFromEvent(event) {
   const code = event.code || '';
@@ -163,6 +198,8 @@ export class GameInput {
     this._gestureSeen = false;
 
     this._heldCodes = new Map();      // physical event.code -> nj_key
+    this._keyMap = new Map(CODE_MAP); // effective map (defaults + per-game overrides)
+    this._keyOverrides = {};          // last argument of setKeyOverrides()
     this._gamepadHeld = new Set();    // nj_key currently pressed on a pad
     this._controlPointers = new Map(); // pointerId -> { code, button }
     this._canvasPointer = null;       // { id, x, y }
@@ -182,6 +219,25 @@ export class GameInput {
     this._onGamepadConnected = this._onGamepadConnected.bind(this);
     this._onGamepadDisconnected = this._onGamepadDisconnected.bind(this);
     this._attached = false;
+  }
+
+  /**
+   * Apply a per-game keyboard override table: { actionId: KeyboardEvent.code }.
+   * Default bindings stay in place for actions that are not overridden, and an
+   * override replaces (never duplicates) the default codes of its action.
+   */
+  setKeyOverrides(overrides) {
+    this._keyOverrides = overrides && typeof overrides === 'object' ? overrides : {};
+    const map = new Map(CODE_MAP);
+    for (const action of KEY_ACTIONS) {
+      const code = this._keyOverrides[action.id];
+      if (typeof code !== 'string' || code === '') { continue; }
+      for (const [defaultCode, key] of Array.from(map)) {
+        if (key === action.key) { map.delete(defaultCode); }
+      }
+      map.set(code, action.key);
+    }
+    this._keyMap = map;
   }
 
   attach() {
@@ -367,7 +423,7 @@ export class GameInput {
     if (!this.enabled) { return; }
     if (event.ctrlKey || event.metaKey || event.altKey) { return; }
     if (isFormField(event.target)) { return; }
-    const key = keyFromEvent(event);
+    const key = this._keyFromEvent(event);
     if (key === null) { return; }
     /* Game view owns these keys: no scrolling, no browser back/space quirks. */
     event.preventDefault();
@@ -377,6 +433,18 @@ export class GameInput {
     this._heldCodes.set(event.code, key);
     this._notifyGesture();
     this._emit(key, true);
+  }
+
+  _keyFromEvent(event) {
+    const code = event.code || '';
+    /* '*' and '#' are matched by character first: on common layouts they are
+       Shift+Digit8 / Shift+Digit3, so the code table would read them as 8/3. */
+    if (event.key === '*') { return NJ_KEYS.STAR; }
+    if (event.key === '#') { return NJ_KEYS.POUND; }
+    const digit = DIGIT_CODE.exec(code);
+    if (digit) { return NJ_KEYS.NUM_0 + Number(digit[1]); }
+    const mapped = this._keyMap.get(code);
+    return mapped === undefined ? null : mapped;
   }
 
   _onKeyUp(event) {

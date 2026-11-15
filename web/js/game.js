@@ -52,7 +52,7 @@ import {
   markPlayed
 } from './saves.js';
 import { AudioOutput } from './audio.js';
-import { GameInput } from './input.js';
+import { GameInput, KEY_ACTIONS, codeLabel } from './input.js';
 
 const LS_SETTINGS = 'nj2me.settings';
 const HEAP_CHOICES_MB = [16, 32, 64, 128];
@@ -197,6 +197,9 @@ export class GameView {
       onGesture: () => this._onGesture(),
       onGamepad: (connected) => this._onGamepad(connected)
     });
+    this._keyCapture = null;
+    this._keyCaptureHandler = (event) => this._onKeyCapture(event);
+    this._bindKeymap();
 
     this._bindUi();
     /* One stable callback for requestAnimationFrame. */
@@ -505,6 +508,150 @@ export class GameView {
     };
   }
 
+  /* -------------------------------------------------------- key bindings */
+
+  /** Keyboard override table carried by the game record ({} = defaults). */
+  _keyOverrides() {
+    const raw = this.game && this.game.keyMap;
+    if (!raw || typeof raw !== 'object') { return {}; }
+    const out = {};
+    for (const action of KEY_ACTIONS) {
+      const code = raw[action.id];
+      if (typeof code === 'string' && code !== '') { out[action.id] = code; }
+    }
+    return out;
+  }
+
+  _applyKeyControls() {
+    try {
+      this.input.releaseAll();
+      this.input.setKeyOverrides(this._keyOverrides());
+    } catch (error) {
+      console.warn('[game] could not apply the key bindings', error);
+    }
+  }
+
+  _bindKeymap() {
+    const open = $('#open-keymap');
+    const dialog = $('#keymap-dialog');
+    if (!open || !dialog) { return; }
+    open.addEventListener('click', () => this._openKeymap());
+    $('#keymap-done')?.addEventListener('click', () => this._closeKeymap());
+    $('#keymap-reset')?.addEventListener('click', () => this._resetKeymap());
+    dialog.addEventListener('cancel', (event) => {
+      event.preventDefault();
+      this._closeKeymap();
+    });
+    dialog.addEventListener('click', (event) => {
+      if (event.target === dialog) { this._closeKeymap(); }
+    });
+  }
+
+  _openKeymap() {
+    const dialog = $('#keymap-dialog');
+    if (!dialog || typeof dialog.showModal !== 'function') { return; }
+    this._renderKeymap();
+    if (!dialog.open) { dialog.showModal(); }
+  }
+
+  _closeKeymap() {
+    this._cancelKeyCapture();
+    const dialog = $('#keymap-dialog');
+    if (dialog && dialog.open && typeof dialog.close === 'function') { dialog.close(); }
+  }
+
+  _renderKeymap() {
+    const list = $('#keymap-list');
+    if (!list) { return; }
+    const overrides = this._keyOverrides();
+    list.textContent = '';
+    for (const action of KEY_ACTIONS) {
+      const row = el('li', { className: 'keymap__row' });
+      const name = 'game.keymap' + action.id[0].toUpperCase() + action.id.slice(1);
+      row.append(el('span', { className: 'keymap__name', text: t(name) }));
+      const capturing = this._keyCapture === action.id;
+      const button = el('button', {
+        className: 'btn keymap__key' + (capturing ? ' is-capturing' : ''),
+        attrs: { type: 'button', 'data-action': action.id }
+      });
+      button.textContent = capturing
+        ? t('game.keymapCapturing')
+        : codeLabel(overrides[action.id] || action.code);
+      button.addEventListener('click', () => this._startKeyCapture(action.id));
+      row.append(button);
+      list.append(row);
+    }
+  }
+
+  _startKeyCapture(actionId) {
+    this._cancelKeyCapture();
+    this._keyCapture = actionId;
+    this._renderKeymap();
+    window.addEventListener('keydown', this._keyCaptureHandler, { capture: true });
+  }
+
+  _cancelKeyCapture() {
+    if (this._keyCapture === null) { return; }
+    this._keyCapture = null;
+    window.removeEventListener('keydown', this._keyCaptureHandler, { capture: true });
+    this._renderKeymap();
+  }
+
+  _onKeyCapture(event) {
+    const actionId = this._keyCapture;
+    if (!actionId) { return; }
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.repeat) { return; }
+    if (event.key === 'Escape' || event.code === 'Escape') {
+      this._cancelKeyCapture();
+      return;
+    }
+    if (!event.code) { return; }
+    this._assignKey(actionId, event.code);
+  }
+
+  /**
+   * Bind `code` to one action and persist the table on the game record.
+   * If the code was bound to another remappable action the two swap, so the
+   * player can never end up with two actions that respond to one key.
+   */
+  _assignKey(actionId, code) {
+    const action = KEY_ACTIONS.find((entry) => entry.id === actionId);
+    if (!action) { return; }
+    const map = this._keyOverrides();
+    const previous = map[actionId] || action.code;
+    for (const other of KEY_ACTIONS) {
+      if (other.id !== actionId && (map[other.id] || other.code) === code) {
+        map[other.id] = previous;
+      }
+    }
+    map[actionId] = code;
+    for (const other of KEY_ACTIONS) {
+      if (map[other.id] === other.code) { delete map[other.id]; }
+    }
+    this._cancelKeyCapture();
+    this.game.keyMap = Object.keys(map).length ? map : undefined;
+    if (!this.game.keyMap) { delete this.game.keyMap; }
+    void putGame(this.game).catch((error) => {
+      console.warn('[game] could not save the key bindings', error);
+    });
+    this._applyKeyControls();
+    this._renderKeymap();
+    toast(t('game.keymapSaved'), { kind: 'info', timeout: 2000 });
+  }
+
+  _resetKeymap() {
+    if (!this.game) { return; }
+    delete this.game.keyMap;
+    void putGame(this.game).catch((error) => {
+      console.warn('[game] could not save the key bindings', error);
+    });
+    this._applyKeyControls();
+    this._renderKeymap();
+    toast(t('game.keymapResetDone'), { kind: 'info', timeout: 2000 });
+  }
+
   /* ------------------------------------------------------- open / close */
 
   /**
@@ -530,6 +677,7 @@ export class GameView {
     document.body.classList.remove('in-library');
     this._applySettingsToUi();
     this._refreshMidletSelect();
+    this._applyKeyControls();
 
     this._engineVersion = '';
     try { this._engineVersion = this.runtime.runtimeVersion() || ''; } catch (error) { this._engineVersion = ''; }
@@ -549,6 +697,7 @@ export class GameView {
   async close() {
     if (!this.game || this._closing) { return; }
     this._closing = true;
+    this._closeKeymap();
     this._clearStopTimer();
     this._stopLoop();
     this._running = false;

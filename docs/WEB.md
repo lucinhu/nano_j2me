@@ -135,7 +135,11 @@ be served with or without a build:
   D-pad and left stick with a 0.45 deadzone), an on-screen phone keypad for touch
   devices with multi-touch and slide-off cancel, pointer pass-through for games
   that use canvas pointers, and a hidden textarea bridge for MIDlet text fields
-  using the native-editor callbacks (`njw_text_*`).
+  using the native-editor callbacks (`njw_text_*`). The tools panel's **Keys**
+dialog rebinds the eight game actions (up/down/left/right/fire/soft left/soft
+right/clear) to any keyboard key: click an action, press the new key, Esc
+cancels, and reset restores the defaults; bindings live on the game record,
+apply immediately, and survive a reload.
 - **Audio** — a pull loop drains `njw_audio_read()` into Web Audio buffers
   scheduled roughly 100–150 ms ahead, resumes the `AudioContext` on the first
   user gesture, and suspends it on pause.
@@ -222,28 +226,33 @@ runner built on the runtime's public embedder API:
 
 ### The virtual clock
 
-The emulated clock is owned by the host, not the wall clock:
+The emulated clock is owned by the host and follows real time:
 
 - Until the MIDlet instance exists ("load phase") `sleep_ms()` and `idle` advance
   the virtual clock by the full requested amount, so a constructor that sleeps
   (common in splash-screen MIDlets) completes inside `njw_start()` instead of
   freezing a JavaScript frame.
-- During normal play each `njw_frame(dt_ms)` adds `dt_ms` (clamped to 0–250 ms) to
-  the virtual clock once. Inside a single pump, `sleep_ms()` fast-forwards by
-  small amounts (1 ms for the first few calls, then at most 50 ms per call) so a
-  Java thread waiting on a timer, a blocking native or a `Thread.join()` can make
-  progress instead of deadlocking the pump. `idle()` never advances the clock.
+- During normal play the clock is the **later of two sources**: a host schedule
+  that each `njw_frame(dt_ms)` advances by `dt_ms` (clamped to 0–250 ms), and the
+  browser's wall clock since `startApp()` was queued. On a browser both advance
+  together, so the emulated clock is exactly real time — a MIDlet that measures
+  `System.currentTimeMillis()` deltas runs at the speed of the machine, and a
+  host that renders slower than real time cannot fast-forward it past the wall
+  clock. The host schedule is what a headless Node harness (which has no wall
+  clock to fold in) advances to make progress; the two are combined with
+  `max()`, never added.
+- `sleep_ms()` does **not** advance the clock during play any more: real time
+  does. (An earlier model folded each sleep forward on top of the frame-driven
+  clock, which made repaint-paced titles — those that never sleep, e.g. 雷电4 —
+  see a clock about 1.3× too fast and animate accelerated.) A host without wall
+  time still gets the first millisecond of a sleep so a blocked scheduler cannot
+  pump forever, and `idle()` never advances the clock.
 - `njw_set_speed(percent)` (10–800) scales the virtual clock exactly like
   `nj_vm_set_speed()` on the desktop ports, and does not jump the clock when
   changed.
-- The clock also follows the host's **wall clock**. A single pump can execute a
-  lot of Java, and a MIDlet that busy-waits on `System.currentTimeMillis()`
-  (some racing titles do) must see time pass or the pump never ends. The port
-  folds the real elapsed time since the previous frame into the virtual clock
-  (monotonic, clamped to 250 ms), so those loops terminate; on a fast host the
-  folded-in amount is tiny and the frame-driven `dt` still dominates. Sleeping
-  is unaffected: `Thread.sleep()` is still fast-forwarded, so sleep-paced games
-  run at their intended speed.
+- A MIDlet that busy-waits on `System.currentTimeMillis()` (some racing titles
+  do) still terminates because the wall clock keeps the emulated clock moving;
+  the constructor budget below covers the case where a constructor never returns.
 - The wall clock also lets a **constructor that never returns** be reported
   instead of hanging the tab. If the MIDlet constructor keeps pumping frames for
   more than 10 s of wall time (or 20,000 frame-hook pumps), `njw_start()` fails
@@ -572,11 +581,13 @@ unreachable, which keeps a flaky network from looking like a shell bug.
 
 Measured on the reference build (Emscripten 7.0.0, `include/nj2me/nj_web.h`
 0.5.7): the API suite passes **36/36 checks in 0.4 s**, the corpus suite
-**47/47 checks (42 titles) in 8.7 s**, the browser suite **44/44 checks in about
-24–40 s** (a loaded host slows the page test down; every check is bounded), and
-the perf suite **9/9 checks in about 0.5 s**, and the live test **7/7 checks in
+**47/47 checks (42 titles) in 8.7 s**, the browser suite **45/45 checks in about
+40–65 s** (a loaded host slows the page test down; every check is bounded), the
+perf suite **9/9 checks in about 0.5 s**, and the live test **7/7 checks in
 about 8 s** against the deployed demo — `tools/check_web.sh --all` is
-**36–50 s** end to end. The sweep suite needs about 2 min for all 403
+**60–90 s** end to end on a busy machine. The browser suite includes the
+per-game key-remapping round trip: rebind Fire to `Z`, press `Z`, reload, and
+reset back to Space. The sweep suite needs about 2 min for all 403
 titles, the perf suite about 1 s. All 40
 playable titles draw 120/120 frames (the audiodemo and bench fixtures exit on
 their own, as expected), there are no engine `[nj2me] error:` lines,

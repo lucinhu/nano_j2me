@@ -474,6 +474,7 @@ async function readLibrary(page) {
         : 0,
       screenPreset: game.screenPreset || null,
       speedPercent: Number.isFinite(Number(game.speedPercent)) ? Number(game.speedPercent) : null,
+      keyMap: game.keyMap && typeof game.keyMap === 'object' ? { ...game.keyMap } : null,
       frameCap: Number.isFinite(Number(game.frameCap)) ? Number(game.frameCap) : null,
       autoFrames: game.autoState && Number.isFinite(Number(game.autoState.frames))
         ? Number(game.autoState.frames)
@@ -1508,6 +1509,128 @@ async function runRealShellChecks() {
       assert(remembered === '200', `remembered game speed is ${remembered}`);
       assert((await engineSpeed()) === 200, 'engine speed after reload is not 200 %');
       return '100 % -> 200 % for hello.jar; the reloaded launch reports 200 %';
+    } finally {
+      await ctx.close();
+    }
+  });
+
+  await check('custom key bindings take effect and are saved per game', async () => {
+    /* The tools panel can rebind D-pad / fire / soft keys / clear per game.
+       Capture key presses by wrapping the runtime key sink, so the assertion
+       covers the shell -> input -> engine path rather than the dialog only. */
+    const ctx = await browser.newContext({ viewport: { width: 960, height: 840 }, locale: 'zh-CN' });
+    try {
+      const page = await ctx.newPage();
+      attachDiagnostics(page, 'keymap');
+      await page.goto(realServer.origin + '/', { waitUntil: 'load', timeout: timeoutMs });
+      await waitReady(page);
+      await page.setInputFiles('#file-input', HELLO_JAR);
+      await page.waitForFunction(
+        () => document.querySelectorAll('.game-tile').length >= 1,
+        undefined,
+        { timeout: timeoutMs, polling: 100 });
+      await page.locator('.game-tile').first().click();
+      await page.waitForFunction(
+        () => !!(window.__nj2me.game && window.__nj2me.game.game),
+        undefined,
+        { timeout: timeoutMs, polling: 100 });
+
+      const installKeyProbe = () => page.evaluate(() => {
+        const view = window.__nj2me.game;
+        if (view.__keyProbeInstalled) { view.__keyLog = []; return; }
+        view.__keyProbeInstalled = true;
+        view.__keyLog = [];
+        const original = view.runtime.key.bind(view.runtime);
+        view.runtime.key = (key, down) => {
+          view.__keyLog.push([key, down]);
+          return original(key, down);
+        };
+      });
+      const clearKeyLog = () => page.evaluate(() => { window.__nj2me.game.__keyLog = []; });
+      const keyLog = () => page.evaluate(() => window.__nj2me.game.__keyLog);
+      await installKeyProbe();
+
+      await page.click('#panel-handle');
+      await page.waitForSelector('#game-panel.is-open', { timeout: 5000 });
+      await page.click('#open-keymap');
+      await page.waitForSelector('#keymap-dialog[open]', { timeout: 5000 });
+      // The dialog lists the actions in KEY_ACTIONS order: fire is the 5th.
+      await page.click('#keymap-list .keymap__row:nth-child(5) .keymap__key');
+      await page.keyboard.press('KeyZ');
+      const fireLabel = await page.evaluate(
+        () => document.querySelector('#keymap-list .keymap__row:nth-child(5) .keymap__key').textContent.trim());
+      assert(fireLabel === 'Z', `fire row shows ${JSON.stringify(fireLabel)} after rebinding to Z`);
+      await page.click('#keymap-done');
+      await page.waitForFunction(
+        () => !document.querySelector('#keymap-dialog').open,
+        undefined,
+        { timeout: 5000 });
+      await page.click('#panel-close');
+      await page.waitForFunction(
+        () => document.querySelector('#game-panel').getAttribute('aria-hidden') === 'true',
+        undefined,
+        { timeout: 5000, polling: 50 });
+
+      await clearKeyLog();
+      await page.keyboard.press('KeyZ');
+      let entries = await keyLog();
+      assert(entries.some(([key, down]) => key === 17 && down === true), `Z presses fire: ${JSON.stringify(entries)}`);
+      assert(entries.some(([key, down]) => key === 17 && down === false), `Z releases fire: ${JSON.stringify(entries)}`);
+      await clearKeyLog();
+      await page.keyboard.press('Space');
+      entries = await keyLog();
+      assert(!entries.some(([key]) => key === 17), `Space no longer fires: ${JSON.stringify(entries)}`);
+
+      await page.click('#game-back');
+      await page.waitForFunction(
+        () => window.getComputedStyle(document.querySelector('#library-view')).display !== 'none',
+        undefined,
+        { timeout: timeoutMs });
+      let [record] = await readLibrary(page);
+      assert(record.keyMap && record.keyMap.fire === 'KeyZ',
+        `game record keyMap is ${JSON.stringify(record.keyMap)}`);
+
+      await page.reload();
+      await waitReady(page);
+      await page.waitForFunction(
+        () => document.querySelectorAll('.game-tile').length >= 1,
+        undefined,
+        { timeout: timeoutMs, polling: 100 });
+      await page.locator('.game-tile').first().click();
+      await page.waitForFunction(
+        () => !!(window.__nj2me.game && window.__nj2me.game.game),
+        undefined,
+        { timeout: timeoutMs, polling: 100 });
+      await installKeyProbe();
+      await clearKeyLog();
+      await page.keyboard.press('KeyZ');
+      entries = await keyLog();
+      assert(entries.some(([key, down]) => key === 17 && down === true),
+        `reloaded launch still fires with Z: ${JSON.stringify(entries)}`);
+
+      // Reset through the same dialog and make sure the default comes back.
+      await page.click('#panel-handle');
+      await page.waitForSelector('#game-panel.is-open', { timeout: 5000 });
+      await page.click('#open-keymap');
+      await page.waitForSelector('#keymap-dialog[open]', { timeout: 5000 });
+      await page.click('#keymap-reset');
+      await page.waitForSelector('#keymap-dialog[open]', { timeout: 5000 });
+      await page.click('#keymap-done');
+      await page.waitForFunction(
+        () => !document.querySelector('#keymap-dialog').open,
+        undefined,
+        { timeout: 5000 });
+      await page.click('#panel-close');
+      await page.waitForFunction(
+        () => document.querySelector('#game-panel').getAttribute('aria-hidden') === 'true',
+        undefined,
+        { timeout: 5000, polling: 50 });
+      await clearKeyLog();
+      await page.keyboard.press('Space');
+      entries = await keyLog();
+      assert(entries.some(([key, down]) => key === 17 && down === true),
+        `Space fires again after resetting the bindings: ${JSON.stringify(entries)}`);
+      return 'Z fires after rebinding, Space does not, the record keeps keyMap.fire, reload keeps it, reset restores Space';
     } finally {
       await ctx.close();
     }

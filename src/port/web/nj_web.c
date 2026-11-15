@@ -174,13 +174,12 @@ typedef struct njw_runner {
     /* --- virtual clock --- */
     nj_u8 clock_us;                 /* monotonic, host advanced */
     nj_u8 start_us;                 /* when startApp() was queued */
-    unsigned pump_sleep_calls;      /* fast-forward budget of this pump */
-    double wall_ref_ms;             /* real-time reference of this pump */
+    double base_wall_ms;            /* wall clock when RUN began */
+    nj_u8  base_clock_us;           /* clock_us when RUN began */
+    nj_u8  host_us;                 /* sum of the host frame deltas */
+    int    wall_ahead;              /* web_port_millis() moved the clock */
     double load_started_ms;         /* wall-clock start of the constructor */
     unsigned load_pumps;            /* frames pumped while constructing */
-
-    /* --- engine timing diagnostics (host statistics, not gameplay) --- */
-    double pump_started_ms;         /* when the current njw_frame() began */
 
     /* --- display --- */
     int           fb_w;
@@ -587,13 +586,32 @@ static double web_wall_ms(void)
  */
 static nj_u4 web_port_millis(void *ud)
 {
-    double extra = web_wall_ms() - g_runner.wall_ref_ms;
+    /*
+     * Guest clock.  Two clocks drive it: the host frame deltas (host_us, which
+     * is what a headless harness that has no wall time relies on) and the real
+     * wall clock since startApp() was queued.  Taking the maximum of both
+     * keeps one source from double counting the other: in a browser the host
+     * deltas and the wall clock advance together, so the clock is exactly real
+     * time (a title that integrates currentTimeMillis() deltas - the classic
+     * J2ME game loop - runs at the speed of the machine it is running on), and
+     * a host that renders slower than real time cannot fast-forward the game
+     * past the wall clock.
+     */
+    double wall_ms = web_wall_ms();
+    nj_u8 wall_us = 0u;
 
     (void)ud;
-    if (extra < 0.0) {
-        extra = 0.0;
+    if (wall_ms > g_runner.base_wall_ms) {
+        wall_us = g_runner.base_clock_us +
+                  (nj_u8)((wall_ms - g_runner.base_wall_ms) * 1000.0);
+    } else {
+        wall_us = g_runner.base_clock_us;
     }
-    return (nj_u4)(g_runner.clock_us / 1000ull + (nj_u8)extra);
+    if (wall_us > g_runner.clock_us) {
+        g_runner.clock_us = wall_us;
+        g_runner.wall_ahead = 1;
+    }
+    return (nj_u4)(g_runner.clock_us / 1000ull);
 }
 
 /*
@@ -618,20 +636,23 @@ static void web_port_sleep_ms(void *ud, nj_u4 ms)
         return;
     }
     if (g_runner.phase == NJW_PHASE_LOAD) {
+        /* The constructor owns the start-up pacing (splash screens): let its
+         * sleeps pass instantly so the frame that constructs the MIDlet can
+         * finish. */
         g_runner.clock_us += (nj_u8)ms * 1000ull;
         return;
     }
-    g_runner.pump_sleep_calls++;
-    if (g_runner.pump_sleep_calls > 3u) {
-        if (ms > 50u) {
-            ms = 50u;
-        }
-    } else {
-        if (ms > 1u) {
-            ms = 1u;
-        }
+    /*
+     * In RUN the clock is owned by the host: web_port_millis() already follows
+     * the wall clock, so a sleep must not advance it (that is what made
+     * repaint-paced games run fast).  A host without a wall clock - the
+     * headless Node harness, which pumps frames as fast as it can - still
+     * needs the clock to move or a blocked scheduler would pump forever, so
+     * the first millisecond of a sleep is granted there.
+     */
+    if (!g_runner.wall_ahead) {
+        g_runner.clock_us += (ms > 1u ? 1u : ms) * 1000ull;
     }
-    g_runner.clock_us += (nj_u8)ms * 1000ull;
 }
 
 static void web_port_idle(void *ud)
@@ -1284,10 +1305,10 @@ int njw_start(const char *jar_path)
     r->displayable_ready = 0;
     r->phase = NJW_PHASE_LOAD;
     r->clock_us = 0u;
-    r->pump_sleep_calls = 0u;
-    r->wall_ref_ms = web_wall_ms();
-    r->pump_started_ms = r->wall_ref_ms;
-    r->load_started_ms = r->wall_ref_ms;
+    r->base_wall_ms = web_wall_ms();
+    r->base_clock_us = r->clock_us;
+    r->host_us = r->clock_us;
+    r->load_started_ms = r->base_wall_ms;
     r->load_pumps = 0u;
     r->ev_head = 0u;
     r->ev_tail = 0u;
@@ -1499,6 +1520,9 @@ int njw_start(const char *jar_path)
     r->phase = NJW_PHASE_RUN;
     r->started = 1;
     r->start_us = r->clock_us;
+    r->base_clock_us = r->clock_us;
+    r->host_us = r->clock_us;
+    r->base_wall_ms = web_wall_ms();
     r->displayable_ready = (nj_midp_current(r->vm) != NULL);
     if (nj_vm_start_app_async(r->vm, midlet) != NJ_OK) {
         runner_set_error("nj_vm_start_app_async failed");
@@ -1533,31 +1557,20 @@ int njw_frame(double dt_ms)
     if (dt_us > NJW_MAX_DT_US) {
         dt_us = NJW_MAX_DT_US;
     }
-    {
-        /* Fold the real time that passed since the previous pump into the
-         * virtual clock.  This is exactly the time web_port_millis() has
-         * already reported, so the clock stays monotonic; taking the larger
-         * of it and the host dt keeps a slow host from fast-forwarding the
-         * game while a fast host still gets the full dt. */
-        double now_ms = web_wall_ms();
-        double extra_ms = now_ms - r->wall_ref_ms;
-
-        r->wall_ref_ms = now_ms;
-        if (extra_ms > 0.0 && (nj_u8)(extra_ms * 1000.0) > dt_us) {
-            dt_us = (nj_u8)(extra_ms * 1000.0);
-            if (dt_us > NJW_MAX_DT_US) {
-                dt_us = NJW_MAX_DT_US;
-            }
-        }
+    /* The host delta is the scheduled step.  web_port_millis() raises the
+     * clock to real time when the wall clock has moved further, so the two
+     * sources never add up to double real time. */
+    r->host_us += dt_us;
+    if (r->host_us > r->clock_us) {
+        r->clock_us = r->host_us;
     }
+    r->wall_ahead = 0;
     /* While startApp() is still loading, tick at least once per nominal frame
      * so a loaded game becomes playable in roughly real time even on a host
      * that renders slowly. */
     if (!r->displayable_ready && dt_us < NJW_NOMINAL_TICK_US) {
         dt_us = NJW_NOMINAL_TICK_US;
     }
-    r->clock_us += dt_us;
-    r->pump_sleep_calls = 0u;
     r->drew_this_pump = 0;
 
     pumps = r->displayable_ready ? 1u : NJW_LOAD_PUMPS;
