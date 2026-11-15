@@ -906,3 +906,14 @@ diagnosed as a frontend-cadence artifact of the async load (see
 `docs/notes/2026-11-15-libretro-async-load-early-state.md`), the state probe now
 paces frames like a real frontend, and the recommended `load_ready` gate is
 recorded for the load/state owner rather than blocking the release.
+
+## Update, 2026-11-16 (round 53): r25 validation refresh
+
+No core change; r25 (tree `43219e6`) stays the canonical package. Re-ran the
+submission checks and extended the adversarial campaigns:
+`docs/notes/2026-11-16-r25-validation-and-fuzz-campaigns.md` has the table
+(CTest 189/189, option matrix 88/88, real RetroArch corpus 8/8, 600-frame
+visual probe 370/371 + 1 known limitation, state probe 50/50, 5000-case
+class/JAR/media fuzz all clean). The only remaining external steps are still
+the upstream CI run and the upstream PRs, both waiting for explicit
+authorization.

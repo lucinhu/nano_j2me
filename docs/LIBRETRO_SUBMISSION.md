@@ -935,3 +935,28 @@ state. Real frontends call `retro_run()` at 60 Hz and are unaffected, and the
 state probe now paces frames for that reason; the note
 `docs/notes/2026-11-15-libretro-async-load-early-state.md` records the
 reproduction and the recommended `load_ready` gate for the load/state path.
+
+## Update, 2026-11-16 (round 53): validation refresh on r25
+
+r25 remains canonical; no core sources changed this round. The verification set
+was re-run against `build/libretro-dist/` and extended:
+
+* full serial CTest **189/189 passed** (349.38 s) on the r25 tree;
+* libretro option matrix **88/88** profiles passed (8 corpus titles × 11
+  non-default profiles through the mock frontend);
+* real RetroArch 1.22.2 corpus batch **8/8** titles passed at 600 frames
+  (serial rerun; one earlier batch lost an end-of-run marker while another
+  probe saturated the machine — re-running alone passed);
+* whole-corpus rendering probe at **600 frames**: 371 titles, **370 passed,
+  1 known limitation (the documented slow `毁灭战士3_10598` loader), 0
+  failed**, using a private copy of the r25 core;
+* libretro state-corpus probe **50/50** at the 60 Hz cadence;
+* long-run deep probe: 24 titles × 1800 frames, **0 failures** (2 optional
+  titles stop themselves by design).
+
+The hardening campaigns were extended to **5000 cases each** — class files
+(any class in the JAR), JAR containers and media decoders — with **zero
+crashes and zero hangs**. Details and the oracle caveats (concurrent real-
+frontend batches and the parallel sweep can flake; reproduce standalone
+before calling a defect) are in
+`docs/notes/2026-11-16-r25-validation-and-fuzz-campaigns.md`.
