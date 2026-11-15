@@ -413,6 +413,9 @@ typedef struct nj_lr {
     unsigned long long vm_frames;    /* VM frames rendered (profiling)   */
     unsigned long long prof_last_ms; /* profiling log cadence            */
     unsigned long long load_ms;       /* virtual ms while loading        */
+    unsigned long long load_start_us; /* wall clock when the load began  */
+    const char *midlet_class;         /* MIDlet-1 class, built on the VM thread */
+    int         load_ready;           /* construction finished (success or not)  */
     unsigned long long posted;        /* frames produced by the VM       */
     unsigned long long consumed;      /* frames handed to the frontend   */
 
@@ -2345,7 +2348,14 @@ static nj_u4 lr_port_millis(void *ud)
     }
     switch (s->phase) {
     case LR_PHASE_RUN:  now = lr_virtual_ms(s); break;
-    case LR_PHASE_LOAD: now = s->load_ms;       break;
+    case LR_PHASE_LOAD:
+        /* Loading runs synchronously on the frontend thread, so no retro_run()
+         * call drives the virtual clock.  A title whose startApp() busy-waits
+         * on System.currentTimeMillis() would spin forever if the clock were
+         * frozen; add the wall time elapsed since the load began on top of the
+         * fast-forwarded sleeps so such a wait makes progress at real speed. */
+        now = s->load_ms + (lr_real_us() - s->load_start_us) / 1000ull;
+        break;
     default:            now = lr_real_ms();     break;
     }
     lr_mutex_unlock(&s->lock);
@@ -2361,10 +2371,15 @@ static void lr_sleep_ms(void *ud, nj_u4 ms)
     lr_mutex_lock(&s->lock);
     if (s->phase == LR_PHASE_LOAD) {
         /* Loading may run from a constructor: fast-forward the clock instead
-         * of waiting for a frontend that is still inside retro_load_game(). */
+         * of waiting for a frontend that is still inside retro_load_game().
+         * Still yield a millisecond of real time: a constructor that starts a
+         * loader thread and waits for it needs the scheduler to run that
+         * thread, and an immediate return would keep the constructor on the
+         * CPU forever. */
         s->load_ms += ms;
         lr_cond_broadcast(&s->cond);
         lr_mutex_unlock(&s->lock);
+        lr_real_sleep(1);
         return;
     }
     if (s->phase == LR_PHASE_RUN) {
@@ -2973,7 +2988,38 @@ static void *lr_vm_thread(void *arg)
     s->hw.worker_known = 1;
     lr_mutex_unlock(&s->lock);
 #endif
+    /*
+     * The MIDlet is constructed on the VM thread, not on the frontend thread
+     * inside retro_load_game().  A constructor that runs a loading screen (a
+     * 3D splash loop that paints and sleeps, for example) blocks the caller
+     * until it finishes; on the VM thread it is just another cooperative
+     * Java frame that can yield to the app's loader threads, and the
+     * frontend's retro_load_game() returns after a bounded wait instead of
+     * hanging on it.
+     */
+    if (!s->midlet) {
+        nj_ref exc = NULL;
+        nj_ref midlet = nj_vm_new_midlet(s->vm, s->midlet_class, &exc);
+        lr_mutex_lock(&s->lock);
+        s->midlet = midlet;
+        s->load_ready = 1;
+        lr_cond_broadcast(&s->cond);
+        lr_mutex_unlock(&s->lock);
+        if (!midlet) {
+            const char *why = nj_exception_describe(s->vm);
+            lr_log(s, RETRO_LOG_ERROR, "cannot instantiate %s: %s",
+                   s->midlet_class ? s->midlet_class : "the MIDlet",
+                   why ? why : "unknown error");
+            st = NJ_ERR;
+            goto started;
+        }
+    }
+    lr_mutex_lock(&s->lock);
+    s->phase = LR_PHASE_RUN;
+    lr_cond_broadcast(&s->cond);
+    lr_mutex_unlock(&s->lock);
     st = nj_vm_start_app_async(s->vm, s->midlet);
+started:
 
     lr_mutex_lock(&s->lock);
     stop = s->stop;
@@ -3132,6 +3178,8 @@ static void lr_unload(nj_lr *s)
     s->sys_props = NULL;
     s->nsys_props = 0;
     s->midlet = 0;
+    s->midlet_class = NULL;
+    s->load_ready = 0;
     s->loaded = 0;
     s->vm_done = 0;
     s->vm_failed = 0;
@@ -3145,6 +3193,7 @@ static void lr_unload(nj_lr *s)
     s->audio_frac = 0;
     s->run_frames = 0;
     s->load_ms = 0;
+    s->load_start_us = lr_real_us();
     s->event_rd = s->event_wr = 0;
     memset(s->key_down, 0, sizeof s->key_down);
     s->ptr_down = 0;
@@ -3180,7 +3229,6 @@ static bool lr_load(const struct retro_game_info *info, int resetting)
 {
     nj_lr *s = core();
     const char *midlet_class;
-    nj_ref exc = 0;
 #if NJ_LIBRETRO_HW
     int requested = s->hw.requested;
 #else
@@ -3281,19 +3329,20 @@ static bool lr_load(const struct retro_game_info *info, int resetting)
     (void)nj_vm_set_frame_hook(s->vm, lr_frame_hook, s);
 
     /*
-     * Construct the MIDlet synchronously: a bad manifest class or a
-     * constructor that throws is a load failure the frontend should see, not a
-     * core that loads and then exits.  Constructors that sleep are handled by
-     * the fast-forwarding load clock, so this does not block on real time.
+     * The constructor runs on the VM thread (see lr_vm_thread) so a title
+     * whose constructor paints a loading screen cannot block the frontend
+     * inside retro_load_game().  Only the class lookup is done here, which is
+     * enough to reject a manifest that names a missing class.
      */
-    s->midlet = nj_vm_new_midlet(s->vm, midlet_class, &exc);
-    if (!s->midlet) {
-        const char *why = nj_exception_describe(s->vm);
-        lr_log(s, RETRO_LOG_ERROR, "cannot instantiate %s: %s", midlet_class,
-               why ? why : "unknown error");
+    if (!nj_class_lookup(s->vm, midlet_class)) {
+        lr_log(s, RETRO_LOG_ERROR, "the manifest names a missing MIDlet class %s",
+               midlet_class);
         lr_unload(s);
         return false;
     }
+    s->midlet_class = midlet_class;
+    s->midlet = NULL;
+    s->load_ready = 0;
 
 #if NJ_LIBRETRO_HW
     if (!resetting) lr_hw_negotiate(s);
@@ -3310,13 +3359,28 @@ static bool lr_load(const struct retro_game_info *info, int resetting)
     }
     s->thread_started = 1;
 
-    /* From here on the VM waits on the virtual clock that retro_run() drives.
-     * The thread may already be blocked in startApp(), which is exactly what
-     * those first calls wake up. */
-    lr_mutex_lock(&s->lock);
-    s->phase = LR_PHASE_RUN;
-    lr_cond_broadcast(&s->cond);
-    lr_mutex_unlock(&s->lock);
+    /* Give construction a short grace period so a constructor that throws is
+     * still reported as a load failure.  A slow constructor (loading screen)
+     * is not waited for: the core loads and the first frames are blank until
+     * it installs its Displayable. */
+    {
+        unsigned long long deadline = lr_real_ms() + 250ull;
+        lr_mutex_lock(&s->lock);
+        while (!s->load_ready && !s->vm_failed && !s->stop &&
+               lr_real_ms() < deadline) {
+            (void)lr_cond_wait_ms(&s->cond, &s->lock, 20u);
+        }
+        if (s->load_ready && !s->midlet) {
+            lr_mutex_unlock(&s->lock);
+            lr_unload(s);
+            return false;
+        }
+        /* The VM thread switches the phase to RUN itself once the MIDlet is
+         * constructed, so a slow constructor keeps the load clock and cannot
+         * make retro_run() wait for a frame it cannot produce yet. */
+        lr_cond_broadcast(&s->cond);
+        lr_mutex_unlock(&s->lock);
+    }
 
     return true;
 }
@@ -3388,7 +3452,7 @@ RETRO_API void retro_init(void)
     s->phase = LR_PHASE_STOP;
     s->out_w = 240;
     s->out_h = 320;
-    lr_log(s, RETRO_LOG_INFO, "nano_j2me %s libretro core (pacing rev 7: realtime clock + frame limit + audio backpressure + fast-forward + reflection)", NJ_VERSION_STRING);
+    lr_log(s, RETRO_LOG_INFO, "nano_j2me %s libretro core (pacing rev 8: realtime clock + frame limit + audio backpressure + fast-forward + reflection + async load)", NJ_VERSION_STRING);
 }
 
 RETRO_API void retro_deinit(void)

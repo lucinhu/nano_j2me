@@ -643,3 +643,39 @@ receives a fifth `RUMBLE effect=1 strength=65535` / `strength=0` pair.
 Reminder for Android: RetroArch only forwards rumble when its own
 `enable_device_vibration` setting is on (`retroarch.cfg`, default off), so a
 correct core can still stay silent until that switch is enabled.
+
+## Loading robustness and the async constructor (2026-11-15)
+
+`retro_load_game()` used to construct the MIDlet synchronously on the frontend
+thread. A title whose constructor runs its own loading screen (paint + sleep
+loop, for example a 3D splash) therefore blocked the frontend inside
+`retro_load_game()` until the constructor returned: `毁灭战士3_10598.jar`
+painted 991 frames over 29 s there, and the mock harness (and any frontend with
+a load watchdog) killed the core before it ever returned.
+
+The constructor now runs on the VM thread. `retro_load_game()` only validates
+the manifest class (`nj_class_lookup`) and waits up to 250 ms so a constructor
+that throws is still reported as a load failure; the VM thread then switches
+the phase to `RUN` itself before `startApp()`. A slow constructor keeps the
+load clock and cannot make `retro_run()` wait for a frame it cannot produce.
+
+The load clock was also made honest: while loading, the port's `millis()` is
+now the fast-forwarded `load_ms` plus the wall time elapsed since the load
+began, so a constructor that busy-waits on `System.currentTimeMillis()` makes
+progress at real speed, and load sleeps still yield one real millisecond so a
+loader thread gets scheduler time.
+
+Result for `毁灭战士3_10598.jar`: the core no longer hangs `retro_load_game()`
+and paints the title's own loading scene (the harness sees 61/61 frames with
+content and real audio), but this title's constructor never returns in this
+runtime - the CLI headless runner stalls in the same call and only ends because
+its frame budget runs out - so the VM never reaches a savable point and the
+harness reports `save-state request refused (-8)`. This is recorded as a known
+limitation in `tools/check_libretro_corpus_visual.py`
+(`KNOWN_LIMITATIONS`) instead of a silent failure, and the corpus visual sweep
+reports it separately from pass/fail.
+
+Corpus visual sweep after the change: **371 titles: 370 passed, 1 known
+limitation, 0 failed** (`tools/check_libretro_corpus_visual.py` with
+`--frames 300`, harness save-state round trips included). Three-title
+regression check (仙剑奇侠传, 雷电4, 超级马里奥) stays PASS.
