@@ -15,7 +15,9 @@ Usage:
     SEED       deterministic seed (default 1)
 
 Fixtures: tests/fixtures/audiodemo.jar ships res/tone.amr, res/beep.wav and
-res/adpcm.wav; tests/fixtures/mididemo.jar ships song.mid.  One target entry is
+res/adpcm.wav; tests/fixtures/mididemo.jar ships song.mid; gamedemo.jar decodes
+res/player.png and res/tiles.png through Image.createImage (both the by-name and
+the stream overload).  One target entry is
 mutated per case; the rest of the JAR is rebuilt unchanged, so the ZIP
 container itself stays valid and only the decoder sees the damage.
 
@@ -46,11 +48,13 @@ TARGETS = [
     ('audiodemo.jar', 'res/beep.wav'),
     ('audiodemo.jar', 'res/adpcm.wav'),
     ('mididemo.jar', 'song.mid'),
+    ('gamedemo.jar', 'res/player.png'),
+    ('gamedemo.jar', 'res/tiles.png'),
 ]
 
 # Frames to run: the audio fixture exercises playback, the MIDI fixture needs
 # a moment before it opens the player.
-FRAMES = {'audiodemo.jar': 240, 'mididemo.jar': 240}
+FRAMES = {'audiodemo.jar': 240, 'mididemo.jar': 240, 'gamedemo.jar': 120}
 
 
 def pick():

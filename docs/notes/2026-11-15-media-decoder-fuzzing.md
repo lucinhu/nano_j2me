@@ -18,6 +18,8 @@ Fixtures and targets:
 | `tests/fixtures/audiodemo.jar` | `res/beep.wav` | RIFF/WAVE PCM |
 | `tests/fixtures/audiodemo.jar` | `res/adpcm.wav` | IMA ADPCM |
 | `tests/fixtures/mididemo.jar` | `song.mid` | SMF → built-in MIDI renderer |
+| `tests/fixtures/gamedemo.jar` | `res/player.png` | PNG → `Image.createImage(String)` |
+| `tests/fixtures/gamedemo.jar` | `res/tiles.png` | PNG → `Image.createImage(InputStream)` |
 
 One target entry is mutated per case and the JAR is rebuilt around it with the
 untouched entries, so the ZIP stays valid and only the decoder sees the damage.
@@ -35,10 +37,13 @@ Against `/var/tmp/nj2me-goal13-build/nj2me`:
 
 - 120 cases, two mutations, seed 3 → **clean 120 / crashed 0 / HUNG 0**;
 - 400 cases, two mutations, seed 17 → **clean 400 / crashed 0 / HUNG 0**
-  (log `.local-tools/debug-runs/fuzz-media-r49.log`, gitignored).
+  (log `.local-tools/debug-runs/fuzz-media-r49.log`, gitignored);
+- 300 cases over all six targets including the PNG decoder, two mutations,
+  seed 29 → **clean 300 / crashed 0 / HUNG 0**
+  (log `.local-tools/debug-runs/fuzz-media-images-r50.log`, gitignored).
 
 The ctest gate `fuzz_media` (`python3 tools/fuzz_media.py <cli> 60 2`,
-TIMEOUT 300) covers the four decoders in about 0.6 s; the full serial suite is
+TIMEOUT 300) covers the six targets in about 0.7 s; the full serial suite is
 now **188/188 passed in 338.75 s** (`/tmp/r49-ctest.log`).
 
 ## What is still not covered
@@ -46,7 +51,7 @@ now **188/188 passed in 338.75 s** (`/tmp/r49-ctest.log`).
 - video containers: no fixture JAR ships a `.3gp`/`.mp4`/`.h263` resource, so
   the MPEG-4/H.263 demux and video decoders are not fuzzed here (their unit
   tests use constructed streams);
-- PNG/JPEG/GIF image decoders (the M3G canvas decodes them; there are
-  `test_png`/`test_jpeg`/`test_gif` unit tests but no corpus-file fuzzer);
+- JPEG and GIF image decoders (PNG is covered through `gamedemo.jar`; the
+  other two only have their constructed-stream unit tests);
 - decoder state carried across `Player` lifetime (the fixture opens/closes one
   player per resource).
