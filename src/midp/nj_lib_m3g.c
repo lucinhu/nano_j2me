@@ -11746,6 +11746,7 @@ typedef struct {
         dxr, dxgc, dxb, dxa;
     double pz, dxz;
     int flat_opaque, flat_tex565, flat_texargb, fog_state;
+    int gouraud_texargb;
 } m3g_span;
 
 #if NJ_M3G_FAST_PATHS
@@ -12151,6 +12152,89 @@ static nj_u4 sw_span_flat_texargb(const m3g_span *p)
 
     return drawn;
 }
+
+/* Gouraud-shaded span with a nearest-sampled ARGB texture, MODULATE texfunc,
+   opaque blending, no fog and no sprite: the class the general loop below
+   serves for most of a textured 3D title's fill (measured on the Doom3
+   loading animation: about 49% of spans).  The body mirrors the near-texture
+   branch of sw_span() statement by statement, including the per-pixel
+   increments and the conditional depth write, so the two paths must agree
+   byte for byte; the run-to-run deterministic opening frames of a textured
+   3D title are compared against the previous build as a regression check. */
+static nj_u4 sw_span_gouraud_texargb(const m3g_span *p)
+{
+    int px;
+    nj_u4 drawn = 0u;
+    m3g_sw *sw = p->sw;
+    int format = p->format;
+    int bpp = p->bpp;
+    int st_outer = p->st_outer;
+    int depth_constant = p->depth_constant;
+    int depth_clamp = p->depth_clamp;
+    int dtest = p->dtest;
+    int dwrite = p->dwrite;
+    int xl = p->xl;
+    int xr = p->xr;
+    nj_u4 flat = p->flat;
+    nj_s4 constant_key = p->constant_key;
+    nj_s4 *z = p->z;
+    nj_size o = p->o;
+    nj_u1 *drow = p->drow;
+    float ia = p->ia;
+    float pg = p->pg;
+    float ph = p->ph;
+    float pk = p->pk;
+    float rr = p->rr;
+    float rgc = p->rgc;
+    float rbc = p->rbc;
+    float dxg = p->dxg, dxh = p->dxh, dxk = p->dxk;
+    float dxr = p->dxr, dxgc = p->dxgc, dxb = p->dxb;
+    double pz = p->pz;
+    double dxz = p->dxz;
+
+    for (px = xl; px <= xr; px++, o++, drow += bpp, pz += dxz, pg += dxg, ph += dxh,
+        pk += dxk, rr += dxr, rgc += dxgc, rbc += dxb) {
+        nj_s4 key = depth_constant ? constant_key : sw_depth_key(pz, depth_clamp);
+        nj_u4 c, ca;
+
+        if (key <= 0) {
+            continue;
+        }
+        if (dtest && key < z[o]) {
+            continue;
+        }
+        c = (flat & 0xFF000000u) | ((nj_u4)(rr * ia + 0.5f) << 16) |
+            ((nj_u4)(rgc * ia + 0.5f) << 8) | (nj_u4)(rbc * ia + 0.5f);
+        {
+            float rcp = 1.0f / pg;
+            const nj_u1 *tp = sw_near_texel(sw, st_outer ? ph / pg : ph * rcp,
+                                            st_outer ? pk / pg : pk * rcp);
+            nj_u4 tr = tp[0], tg = tp[1], tb = tp[2];
+            nj_u4 ta = sw_tex_alpha(sw, (sw->tex_bpp == 4) ? (nj_u4)tp[3] : 255u, c);
+
+            c = (ta << 24) | (((tr * ((c >> 16) & 0xFFu)) / 255u) << 16) |
+                (((tg * ((c >> 8) & 0xFFu)) / 255u) << 8) |
+                ((tb * (c & 0xFFu)) / 255u);
+        }
+        ca = (c >> 24) & 0xFFu;
+        if (dwrite) {
+            z[o] = key;
+        }
+        if (ca < 255u) {
+            m3g_pixel_write(
+                drow, format,
+                sw_blend(c, m3g_pixel_read(drow, format), sw->blend, sw->awrite));
+        } else {
+            m3g_pixel_write(drow, format,
+                            sw->awrite
+                                ? c
+                                : ((c & 0x00FFFFFFu) |
+                                   (m3g_pixel_read(drow, format) & 0xFF000000u)));
+        }
+        drawn = 1u;
+    }
+    return drawn;
+}
 #endif
 
 static nj_u4 sw_span(const m3g_span *p)
@@ -12205,6 +12289,7 @@ static nj_u4 sw_span(const m3g_span *p)
     int flat_opaque = p->flat_opaque;
     int flat_tex565 = p->flat_tex565;
     int flat_texargb = p->flat_texargb;
+    int gouraud_texargb = p->gouraud_texargb;
 #endif
 #if NJ_M3G_FAST_PATHS
     /* Window depth is independent of 1/w (used only for UV/fog).
@@ -12218,6 +12303,8 @@ static nj_u4 sw_span(const m3g_span *p)
         drawn |= sw_span_flat_tex565(p);
     } else if (flat_texargb) {
         drawn |= sw_span_flat_texargb(p);
+    } else if (gouraud_texargb) {
+        drawn |= sw_span_gouraud_texargb(p);
     } else
 #endif
         for (px = xl; px <= xr; px++, o++, drow += bpp, pz += dxz, pg += dxg, ph += dxh,
@@ -12381,6 +12468,7 @@ static nj_u4 sw_tri_band(m3g_sw *sw, const float xy[6], const float inv[3],
 #if NJ_M3G_FAST_PATHS
     int flat_opaque;
     int flat_tex, flat_tex565, flat_texargb;
+    int gouraud_texargb;
 #endif
 #if NJ_M3G_FAST_PATHS
     int fog_state = 0; /* 0 per pixel, 1 no fog, 2 fully fogged */
@@ -12458,6 +12546,13 @@ static nj_u4 sw_tri_band(m3g_sw *sw, const float xy[6], const float inv[3],
                sw->tex_h > 0 && !sw->sprite && sw->filt_image != 209 &&
                sw->filt_image != 129;
 #endif
+    /* The general loop's Gouraud + nearest ARGB texture + MODULATE class has
+       a dedicated span loop; it must see exactly the state the general loop
+       would, so only the branches proven absent from that class are skipped. */
+    gouraud_texargb = tex_near && format == NJ_PIXFMT_ARGB8888 && gouraud &&
+                      !alpha_ramp && sw->tex_bpp == 4 && sw->texfunc == 227 &&
+                      !sw->fog && sw->blend == 64 && sw->athresh == 0 &&
+                      sw->awrite;
 #endif
     ia = 1.0f / area;
     /* The linear ramp's two saturated halves can be decided per triangle:
@@ -12804,6 +12899,7 @@ static nj_u4 sw_tri_band(m3g_sw *sw, const float xy[6], const float inv[3],
             span.flat_opaque = flat_opaque;
             span.flat_tex565 = flat_tex565;
             span.flat_texargb = flat_texargb;
+            span.gouraud_texargb = gouraud_texargb;
             span.fog_state = fog_state;
 #endif
 #if NJ_ENABLE_GFX_ACCEL

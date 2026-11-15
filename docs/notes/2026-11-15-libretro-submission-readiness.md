@@ -497,3 +497,24 @@ differ from frame 120). The span fast path is therefore unproven, not disproven;
 the retry needs a deterministic span-level fixture (see the PERFORMANCE.md
 section). No release artifact is affected — the campaign touched no shipped
 code path and the tree was reverted.
+
+## Update, 2026-11-15 (round 32): M3G span fast path and r20 package
+
+The M3G deterministic-prefix method proposed in the round-31 note worked:
+for `毁灭战士3_10598` the first 120 presented frames are run-to-run
+reproducible, and the previous build and the fast-path build produce
+byte-identical frames over that prefix (13/13 dumped frames at
+`--dump-every 10`). The Gouraud + nearest-textured + MODULATE span fast path
+was therefore shipped after measuring **-4.6% user CPU** on the 20k-frame
+profile run (median of 5 runs each: 29.21 s -> 27.88 s; details in
+`docs/PERFORMANCE.md`).
+
+r20 package: rebuilt from a clean worktree at `91392ee` plus the patch into
+`/var/tmp/nj2me-submission-dist-r20`, and installed as canonical
+`build/libretro-dist` (r19 backed up to
+`/var/tmp/libretro-dist-20261115-r19-backup.tgz`). Validation: mock frontend
+20/20 on the packaged linux core, whole-corpus rendering probe 372/373 (same
+single slow-loader failure; no rendering regression), full CTest 184/184 in
+458.09 s, real RetroArch LoopDemo PASS, Wine 4/4. Windows cores remain
+byte-reproducible (zeroth COFF timestamp, stripped at link), so the table's
+Windows hashes change with the code but are stable across rebuilds.

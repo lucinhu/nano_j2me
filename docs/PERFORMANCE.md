@@ -3793,3 +3793,37 @@ only the hoisted condition checks to differ; (3) only then re-measure and
 consider shipping.  The experiment patch (fast span + `NJDBG_NOFAST`/
 `NJDBG_PIX`/`NJDBG_FRAME` probes) was kept at `/tmp/m3g_r31_experiment.c` and
 `/tmp/hl_r31_experiment.c` for that follow-up; the tree itself was reverted.
+
+## M3G Gouraud textured span fast path, 2026-11-15 (round 32)
+
+The deterministic-prefix method from the previous section turned out to be
+enough for this workload. For `毁灭战士3_10598.jar` the first 120 presented
+frames are run-to-run deterministic (two reference runs of the same binary:
+frames 10, 20, ..., 120 at `--dump-every 10` are byte-identical; the first
+divergence is frame 130), and that prefix carries the heavy software-M3G
+loading animation, i.e. the span class in question. Comparing the fast-path
+build against the reference build over the same prefix: **all 13 dumped frames
+(10-120) are byte-identical**.
+
+The shipped fast path is `sw_span_gouraud_texargb()` in
+`src/midp/nj_lib_m3g.c`, selected in `sw_tri_band()` for
+`NJ_PIXFMT_ARGB8888 && gouraud && nearest texture && texfunc == MODULATE &&
+opaque blend && !fog && !sprite && awrite && athresh == 0`. It mirrors the
+near-texture branch of the general loop statement by statement, including the
+conditional depth write (`if (dwrite) z[o] = key;`) and the exact per-pixel
+increments. The condition is additionally compiled behind the existing
+`NJ_M3G_FAST_PATHS` switch.
+
+CPU on the same 20k-frame run (`taskset -c 5`, `--fps 0`, 5 runs each,
+user CPU median): **29.21 s reference vs 27.88 s with the fast path
+(-4.6%)**.
+
+Validation with the fast path in the tree: full CTest 184/184 (458.09 s),
+mock-frontend matrix 20/20, whole-corpus libretro rendering probe 373 titles ->
+372 passed / 1 failed (the documented slow loader only), real RetroArch 1.22.2
+LoopDemo 120 frames PASS, Windows x86_64 under Wine 4/4.
+
+Remaining gap: this is still a transcribed copy of the general loop. The
+single-source inline/macro body suggested in the previous section remains the
+cleaner long-term shape, and a deterministic span-level fixture is still the
+right unit test; neither blocks the measured win.

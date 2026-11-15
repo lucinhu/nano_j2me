@@ -551,3 +551,41 @@ subdirectory `libretro`, desired jobs, selected dependency baseline, contact
 maintainer and the final license/validation record. Ask maintainers which mirror
 or repository integration change they require; the published guide does not
 specify a universal self-service registration PR or guarantee acceptance.
+
+## Update, 2026-11-15 (round 32): M3G span fast path and the r20 package
+
+A measured rendering optimisation landed this round (details and methodology
+in `docs/PERFORMANCE.md`, section "M3G Gouraud textured span fast path"):
+`sw_span_gouraud_texargb()` handles the Gouraud + nearest-textured + MODULATE +
+opaque-blend span class that the general loop served for roughly half of a
+textured 3D title's spans. It was verified with a deterministic-prefix
+comparison (the first 120 presented frames of the profiled title are
+run-to-run reproducible; all dumped prefix frames are byte-identical between
+the previous build and the new one) and measures **-4.6% user CPU** on the
+20k-frame profile run.
+
+The **r20** candidate package (`build/libretro-dist/`, built from a clean
+worktree at `91392ee` plus that patch with
+`tools/build_libretro_cores.sh --jobs 12 --out /var/tmp/nj2me-submission-dist-r20 all`,
+8 targets x 16 files, `.info` `c0f30aea…`) is the package to submit:
+
+| Target | Size | SHA-256 |
+| --- | --- | --- |
+| linux-x86_64 | 3,823,384 | `ab709a3b7995767b2d567042be8f8d0918db4cb5f429923df3c9f231312fb760` |
+| linux-aarch64 | 3,307,176 | `107c2a2af6875a72e4d8b236af85a1c2e06ccc5ae99ca3075eb491d7fc7f7502` |
+| linux-armv7 | 3,015,464 | `f7cae5d456c9dfddbfb97968349c9381284c8891bb5db8eba46e8db817750491` |
+| android-arm64 | 3,536,112 | `1b45f8f8b3d8027436f105c352879e302ca2169ccb25992add05a5d97c722343` |
+| android-armv7 | 2,725,160 | `13d4f77ac38911d62c0d8f5c5da26ba174318429660aa628b8c912588c689b00` |
+| android-x86_64 | 3,582,088 | `8d4746ea1cc24bbbde2bfe888a0e0d32585c455efd29efc0cb16718134722fb7` |
+| windows-i686 | 3,432,448 | `be76b2fe234d7e32753db1089a068c9b7a1d7bfd8c8194e817f1336a00ac2da8` |
+| windows-x86_64 | 3,211,264 | `e9109375e9209f199cf408b784e759099c5669e5cfb8fdb56b7f42a76237c088` |
+
+Validation of r20: mock-frontend matrix **20/20** (a first r20 matrix run
+flaked one audiodemo serialize check while the corpus probe and the full test
+suite were saturating the machine; the immediate rerun passed 20/20), whole-
+corpus rendering probe **372/373** (only the documented slow loader fails;
+same number as r19, so the optimisation introduces no rendering regression),
+full CTest **184/184 in 458.09 s**, real RetroArch 1.22.2 LoopDemo 120 frames
+PASS, Windows x86_64 under Wine **4/4**. The libretro state probe was not
+re-run this round; the change is rasteriser-only and CTest covers the
+serialize paths.
