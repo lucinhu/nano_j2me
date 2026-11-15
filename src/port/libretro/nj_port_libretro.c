@@ -236,6 +236,7 @@ static int lr_thread_equal(lr_thread_id a, lr_thread_id b) { return pthread_equa
 
 #define LR_AUDIO_RATE      44100
 #define LR_FRAMES_PER_RUN  735   /* 44100 / 60, exact */
+#define LR_MAX_FRAMES_PER_RUN 4410 /* 100 ms cap for adaptive pacing */
 #define LR_AUDIO_FRAMES    88200 /* two seconds of stereo slack */
 #define LR_EVENT_QUEUE     512
 #define LR_PATH_MAX        4096
@@ -401,7 +402,14 @@ typedef struct nj_lr {
     /* ---- clocks / synchronization ---- */
     lr_mutex          lock;
     lr_cond           cond;
-    unsigned long long vclock_frames; /* retro_run() calls so far        */
+    unsigned long long vclock_frames; /* whole virtual frames elapsed    */
+    unsigned long long vclock_us;    /* real-time driven virtual clock  */
+    unsigned long long last_run_us;  /* previous retro_run() timestamp  */
+    unsigned int audio_frac;         /* sub-sample audio accumulator    */
+    unsigned int run_frames;         /* audio frames for this call      */
+    unsigned long long frame_due_us; /* next 60 Hz slot for the VM thread */
+    unsigned long long vm_frames;    /* VM frames rendered (profiling)   */
+    unsigned long long prof_last_ms; /* profiling log cadence            */
     unsigned long long load_ms;       /* virtual ms while loading        */
     unsigned long long posted;        /* frames produced by the VM       */
     unsigned long long consumed;      /* frames handed to the frontend   */
@@ -423,7 +431,7 @@ typedef struct nj_lr {
     long long src_base;
     int      have_prev;
     int16_t  prev_l, prev_r;
-    int16_t  mix[LR_FRAMES_PER_RUN * 2];
+    int16_t  mix[LR_MAX_FRAMES_PER_RUN * 2];
 
     /* ---- save states ---- */
     int            req_kind;
@@ -739,7 +747,7 @@ static void lr_hw_pump(nj_lr *s)
             lr_cond_broadcast(&s->cond);
             count++;
         } else {
-            if (h->parked && h->park_until > s->vclock_frames * 1000u / 60u) break;
+            if (h->parked && h->park_until > s->vclock_us / 1000u) break;
             (void)lr_cond_wait_ms(&s->cond, &s->lock, 1u);
         }
     }
@@ -777,6 +785,18 @@ static int lr_hw_end(nj_lr *s)
     return presented;
 }
 #endif
+
+static uint64_t lr_real_us(void)
+{
+#if defined(_WIN32)
+    return (uint64_t)GetTickCount64() * 1000ull;
+#else
+    struct timespec ts;
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0)
+        return lr_real_ms() * 1000ull;
+    return (uint64_t)ts.tv_sec * 1000000ull + (uint64_t)ts.tv_nsec / 1000ull;
+#endif
+}
 
 /* The frontend calls this table's callback from its input thread. */
 static void RETRO_CALLCONV lr_keyboard_event(bool down, unsigned keycode,
@@ -2208,7 +2228,7 @@ static void lr_rumble_release(nj_lr *s)
 
 static unsigned long long lr_virtual_ms(const nj_lr *s)
 {
-    return (s->vclock_frames * 1000ull) / 60ull;
+    return s->vclock_us / 1000ull;
 }
 
 static nj_u4 lr_port_millis(void *ud)
@@ -2234,7 +2254,8 @@ static nj_u4 lr_port_millis(void *ud)
          (nj_vm_frames(s->vm) == s->req_start_frames &&
           lr_real_ms() >= s->req_start_ms + 100u))) {
         s->clock_budget--;
-        s->vclock_frames++;
+        s->vclock_us += 16667ull;
+        s->vclock_frames = s->vclock_us / 16667ull;
         lr_cond_broadcast(&s->cond);
     }
     switch (s->phase) {
@@ -2304,7 +2325,8 @@ static void lr_idle(void *ud)
          * restores the old clock when it is refused or times out. */
         if (s->req_kind != LR_REQ_NONE && s->clock_budget > 0u) {
             s->clock_budget--;
-            s->vclock_frames++;
+            s->vclock_us += 16667ull;
+            s->vclock_frames = s->vclock_us / 16667ull;
             lr_cond_broadcast(&s->cond);
             target = lr_virtual_ms(s) + 1;
         }
@@ -2763,6 +2785,7 @@ static void lr_run_frames(nj_lr *s)
 
 static int lr_frame_hook(nj_vm *vm, void *ud)
 {
+    unsigned long long posted_before;
     nj_lr *s = (nj_lr *)ud;
     int stop;
 
@@ -2777,6 +2800,8 @@ static int lr_frame_hook(nj_vm *vm, void *ud)
      * (nj_vm_can_save() refuses exactly that).  Save requests are served by
      * lr_run_frames() between two frames instead.
      */
+    s->vm_frames++;
+    posted_before = s->posted;
     (void)nj_midp_frame(vm);
     /*
      * A frontend blocked inside retro_unserialize() or retro_serialize()
@@ -2792,10 +2817,45 @@ static int lr_frame_hook(nj_vm *vm, void *ud)
     lr_mutex_lock(&s->lock);
     if (s->req_kind != LR_REQ_NONE && s->clock_budget > 0u) {
         s->clock_budget--;
-        s->vclock_frames++;
+        s->vclock_us += 16667ull;
+        s->vclock_frames = s->vclock_us / 16667ull;
         lr_cond_broadcast(&s->cond);
     }
     lr_mutex_unlock(&s->lock);
+    if (s->posted == posted_before)
+        return 0;   /* pure native-call pump, no new frame: never throttle I/O */
+    /*
+     * Real-time frame gate.  The VM thread renders as fast as the MIDlet lets
+     * it; a title that does not sleep (or sleeps too little) would otherwise
+     * run above real time and produce audio faster than the frontend consumes
+     * it.  Cap the VM to one frame per 60 Hz slot measured on the monotonic
+     * clock so game time, audio production and frontend pacing agree.
+     */
+    {
+        int gate;
+        for (gate = 0; gate < 4000; gate++) {
+            uint64_t now, due;
+            lr_mutex_lock(&s->lock);
+            if (s->stop) { lr_mutex_unlock(&s->lock); return 1; }
+            if (s->phase != LR_PHASE_RUN) { lr_mutex_unlock(&s->lock); return 0; }
+            if (s->req_kind != LR_REQ_NONE) {
+                s->frame_due_us += 16667ull;
+                lr_mutex_unlock(&s->lock);
+                return 0;
+            }
+            now = lr_real_us();
+            if (s->frame_due_us == 0 || now > s->frame_due_us + 200000ull)
+                s->frame_due_us = now;
+            due = s->frame_due_us;
+            if (now >= due) {
+                s->frame_due_us = due + 16667ull;
+                lr_mutex_unlock(&s->lock);
+                return 0;
+            }
+            lr_mutex_unlock(&s->lock);
+            lr_real_sleep((nj_u4)((due - now + 999ull) / 1000ull));
+        }
+    }
     return 0;
 }
 
@@ -2978,6 +3038,11 @@ static void lr_unload(nj_lr *s)
     s->posted = 0;
     s->consumed = 0;
     s->vclock_frames = 0;
+    s->vclock_us = 0;
+    s->last_run_us = 0;
+    s->audio_frac = 0;
+    s->run_frames = 0;
+    s->frame_due_us = 0;
     s->load_ms = 0;
     s->event_rd = s->event_wr = 0;
     memset(s->key_down, 0, sizeof s->key_down);
@@ -3222,7 +3287,7 @@ RETRO_API void retro_init(void)
     s->phase = LR_PHASE_STOP;
     s->out_w = 240;
     s->out_h = 320;
-    lr_log(s, RETRO_LOG_INFO, "nano_j2me %s libretro core", NJ_VERSION_STRING);
+    lr_log(s, RETRO_LOG_INFO, "nano_j2me %s libretro core (pacing rev 3: realtime clock + 60 Hz VM gate)", NJ_VERSION_STRING);
 }
 
 RETRO_API void retro_deinit(void)
@@ -3358,7 +3423,28 @@ RETRO_API void retro_run(void)
 #if NJ_LIBRETRO_HW
     if (hw_active) s->hw.gate = 1;
 #endif
-    s->vclock_frames++;
+    {
+        uint64_t now_us = lr_real_us();
+        uint64_t delta;
+        uint64_t scaled;
+        if (s->last_run_us == 0 || now_us < s->last_run_us) {
+            delta = 16667ull;
+        } else {
+            delta = now_us - s->last_run_us;
+        }
+        s->last_run_us = now_us;
+        if (delta > 100000ull) {
+            /* After a pause or a long stall, resume at normal speed instead of
+             * fast-forwarding the whole gap. */
+            delta = 16667ull;
+        }
+        s->vclock_us += delta;
+        s->vclock_frames = s->vclock_us / 16667ull;
+        scaled = delta * (uint64_t)LR_AUDIO_RATE + (uint64_t)s->audio_frac;
+        s->run_frames = (unsigned int)(scaled / 1000000ull);
+        s->audio_frac = (unsigned int)(scaled % 1000000ull);
+        if (s->run_frames > LR_MAX_FRAMES_PER_RUN) s->run_frames = LR_MAX_FRAMES_PER_RUN;
+    }
     lr_cond_broadcast(&s->cond);
 #if NJ_LIBRETRO_HW
     if (hw_active) {
@@ -3376,7 +3462,7 @@ RETRO_API void retro_run(void)
         s->consumed = s->posted;
     }
 
-    lr_audio_drain(s, s->mix, LR_FRAMES_PER_RUN);
+    lr_audio_drain(s, s->mix, (int)s->run_frames);
 
     lr_mutex_unlock(&s->lock);
 
@@ -3399,11 +3485,24 @@ RETRO_API void retro_run(void)
     }
 
     if (s->batch_cb) {
-        (void)s->batch_cb(s->mix, LR_FRAMES_PER_RUN);
+        (void)s->batch_cb(s->mix, s->run_frames);
     } else if (s->sample_cb) {
         int i;
-        for (i = 0; i < LR_FRAMES_PER_RUN; i++) {
+        for (i = 0; i < (int)s->run_frames; i++) {
             s->sample_cb(s->mix[i * 2 + 0], s->mix[i * 2 + 1]);
+        }
+    }
+
+    if (getenv("NJ_LR_PROF")) {
+        uint64_t rms = lr_real_ms();
+        if (rms - s->prof_last_ms >= 1000ull) {
+            s->prof_last_ms = rms;
+            fprintf(stderr, "LRPROF real_ms=%llu vclock_ms=%llu calls=%llu vm_frames=%llu audio=%llu\n",
+                    (unsigned long long)rms,
+                    (unsigned long long)(s->vclock_us / 1000ull),
+                    (unsigned long long)s->vclock_frames,
+                    (unsigned long long)s->vm_frames,
+                    (unsigned long long)s->run_frames);
         }
     }
 

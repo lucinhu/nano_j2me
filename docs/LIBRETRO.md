@@ -483,3 +483,27 @@ cannot see. At the time of writing it reports 372/373 at both the default
 failure is one very slow 3D loader (see below) that cannot finish within the
 sampling watchdog; the two titles that need the `nokia6230` profile now load
 through the device-property answers and the handset retry.
+
+## Real-time pacing (2026-11-15)
+
+`retro_run` used to advance the virtual clock by one frame per call, so a
+frontend running at the panel rate (adaptive 60/90/120 Hz Android displays)
+made `System.currentTimeMillis()` and `Thread.sleep()` run at that rate: a
+120 Hz frontend ran games 2x fast and produced audio twice as fast as it was
+consumed. The port now advances `vclock_us` by the real monotonic delta between
+`retro_run` calls (clamped to 16.67 ms after a pause or a stall longer than
+100 ms) and derives the audio batch from the same delta, so game time and audio
+follow real time regardless of the frontend call rate.
+
+The VM thread is also gated to one frame per 60 Hz real-time slot inside
+`lr_frame_hook`. The gate is skipped when a pump produced no new frame, so
+blocking native calls (file I/O, audio waits) are never throttled; this keeps
+titles that never sleep from outrunning real time without slowing load phases.
+
+Verified on the desktop: a probe MIDlet that sleeps 16 ms per frame reports the
+same in-game elapsed time under 60 Hz and 120 Hz frontend pacing (5068 ms and
+5119 ms for 300 frames), audio output stays at ~44100 samples/s at both rates,
+AudioDemo keeps `state=400` for WAV/AMR/ADPCM, and the same probe inside real
+RetroArch reports real-time game time. Cores with this change log
+`nano_j2me 0.5.7 libretro core (pacing rev 3: realtime clock + 60 Hz VM gate)`
+at startup so the installed binary can be identified from the frontend log.
