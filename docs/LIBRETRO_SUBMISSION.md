@@ -728,3 +728,44 @@ What remains external is unchanged and needs explicit authorization: opening
 the two upstream pull requests (info file into `libretro-super`, docs page and
 index edits into `libretro/docs`), and letting the maintainers' buildbot
 produce the official artifacts.
+
+## Update, 2026-11-15 (round 39): r23 package with the cheat-search memory window
+
+r23 differs from r22 by one commit (`d2ed8d8`): the JVM arena is now exposed
+as `RETRO_MEMORY_SYSTEM_RAM` so a frontend cheat search can scan and patch it.
+The heap is a single non-moving arena (objects are never relocated) reserved
+in full at VM creation, so the base pointer is stable for the VM's lifetime.
+`retro_cheat_set()`/`retro_cheat_reset()` remain no-ops -- libretro cheat
+codes cannot describe a managed heap -- and `.info` `cheats = "false"` is
+unchanged (honest about code-based support). The window is raw and
+unsynchronised: a write bypasses the Java memory model and can corrupt
+objects, so it is a deliberate user action (frontend "search and write"), not
+a save channel; `VIDEO_RAM`/`SAVE_RAM`/`RTC` still report NULL/0.
+
+Artifacts built from a clean tree at `d2ed8d8` into
+`/var/tmp/nj2me-submission-dist-r23` and installed as canonical
+`build/libretro-dist/` (the previous shared tree was backed up to
+`/var/tmp/libretro-dist-20261115-concurrent-1831-backup.tgz`; the canonical
+r22b tree is still kept at `/var/tmp/nj2me-submission-dist-r22b`):
+
+| target | size | SHA-256 |
+| --- | --- | --- |
+| linux-x86_64 | 3827488 | `c70d3a437427b95bea7cd5c2ca63d40c75239e5f92d73751351dffcd8e5df514` |
+| linux-aarch64 | 3310936 | `d6e7d40fd87cf2f6f2a5fad9d5ec9ab8cff15063468b03b53c78718add7017dd` |
+| linux-armv7 | 3018856 | `770cfd87b9f20fb302873d9ca4792150448153788b4b0ffd22e7fee15fc1a8a0` |
+| android-arm64 | 3540688 | `d01679423777da75121dfe97c997b38a6c3842d94ae1a6b79c8a8a4b8e945c00` |
+| android-armv7 | 2728072 | `9cdd205eee8eefe7a275106cf6c3a7068482a045b9f6c5afc115b446a86f0246` |
+| android-x86_64 | 3586856 | `316f258e1116e6b6bebacb24ab4bb66aeca7993793846f5aa3f5c39136c1d867` |
+| windows-i686 | 3439616 | `89780270b7c391fb52d317eab716c6af283b4285841c6e3381c2be53ccc84361` |
+| windows-x86_64 | 3216384 | `429aaf66548cecf614cc9ed3beea6480290e0eec3f4320a899024b860fc449a1` |
+
+`.info` unchanged (`c0f30aea...`). The Windows DLLs remain byte-reproducible
+(PE timestamp epoch, no post-link `strip`).
+
+Validation on r23: mock frontend matrix **20/20**; real RetroArch 1.22.2
+LoopDemo 120 frames PASS; Windows x86_64 under Wine **4/4**; whole-corpus
+rendering probe **372/373** at 300 frames (the only failure is the documented
+slow `毁灭战士3_10598.jar` loader); libretro state round trips **50/50**; full
+CTest **184/184 in 336.94 s** from the same source tree (that run includes the
+new memory-window checks: SYSTEM_RAM non-NULL, size in range, unknown ids
+NULL/0, pointer and size stable across frames).
