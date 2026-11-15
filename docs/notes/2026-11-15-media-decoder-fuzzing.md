@@ -84,12 +84,27 @@ Evidence:
   for manual replay; `tools/fuzz_media.py` now saves any crash/hang when
   `NJ_FUZZ_KEEP` is set.
 
+## Round 55: several damaged media entries in one JAR
+
+A real damaged download usually breaks more than one resource, so every case can
+now damage several *different* entries of the same archive: pass a fifth
+argument `multi` to `tools/fuzz_media.py`; it picks `MUTATIONS` entries (at
+least two) from the same JAR, rebuilds the ZIP with all of them replaced, and
+runs the fixture once.  Archives with a single media entry (the MIDI fixture)
+fall back to the single-target path.  The CTest gate `fuzz_media_multi`
+(`60 2 7 multi`) keeps this covered.
+
+Evidence: `python3 tools/fuzz_media.py /var/tmp/nj2me-goal13-build/nj2me 3000 2 77 multi`
+→ **clean 3000 / crashed 0 / HUNG 0** (log
+`.local-tools/debug-runs/fuzz-r55/media-multi-3000.log`), on top of the earlier
+single-target 3000-case run.  No new decoder defect found: the two crashes the
+long campaign did find (oversized GIF canvas, array operand not checked as an
+object) are fixed and covered by `tests/test_gif.c` and the hardening fixture.
+
 ## What is still not covered
 
 - video containers: no fixture JAR ships a `.3gp`/`.mp4`/`.h263` resource, so
   the MPEG-4/H.263 demux and video decoders are not fuzzed here (their unit
   tests use constructed streams);
 - decoder state carried across `Player` lifetime (the fixture opens/closes one
-  player per resource);
-- multiple independently damaged resources in one JAR (each case mutates one
-  entry).
+  player per resource).

@@ -106,8 +106,22 @@ static int restore_native_object(nj_vm *vm, nj_ref object, nj_u4 offset, void *u
 #define NJ_SAVE_HEAP_MAX(vm) ((vm)->heap_limit ? (nj_u8)(vm)->heap_limit : \
                              ((nj_u8)(vm)->heap.size > (nj_u8)NJ_MAX_HEAP \
                               ? (nj_u8)(vm)->heap.size : (nj_u8)NJ_MAX_HEAP))
-/* the largest blob worth believing: arena + stacks + statics + records */
-#define NJ_SAVE_BLOB_MAX(vm) (NJ_SAVE_HEAP_MAX(vm) + (nj_u8)NJ_MAX_THREADS * (nj_u8)NJ_MAX_STACK_SLOTS * 8u + 4u * 1024u * 1024u)
+/* The largest blob worth believing: arena + thread stacks + the two
+ * per-object metadata sections (every live object contributes a 2-byte class
+ * index, and every live ref slot a record; both scale with how densely the
+ * arena is packed with small objects) + a floor.  A flat 4 MB allowance was
+ * not enough: MinecraftJ2ME_PE_0.6.1_V2.2 fills its 128 MB auto heap
+ * (~130 MB used, ~7 MB of object metadata) and produced a 141,365,895-byte
+ * blob against the old 140,816,448-byte frontend bound, so the save silently
+ * failed.  The allowance is capped at half the arena so an explicit huge heap
+ * cannot make the state buffer absurd. */
+#define NJ_SAVE_THREAD_MAX ((nj_u8)NJ_MAX_THREADS * (nj_u8)NJ_MAX_STACK_SLOTS * 8u)
+#define NJ_SAVE_META_MAX(vm) \
+    (((4u * 1024u * 1024u) + NJ_SAVE_THREAD_MAX + (NJ_SAVE_HEAP_MAX(vm) / 8u)) \
+        < (NJ_SAVE_HEAP_MAX(vm) / 2u) \
+     ? ((4u * 1024u * 1024u) + NJ_SAVE_THREAD_MAX + (NJ_SAVE_HEAP_MAX(vm) / 8u)) \
+     : (NJ_SAVE_HEAP_MAX(vm) / 2u))
+#define NJ_SAVE_BLOB_MAX(vm) (NJ_SAVE_HEAP_MAX(vm) + NJ_SAVE_META_MAX(vm))
 #define NJ_SAVE_NONE      0xFFFFFFFFu   /* NULL arena offset / no thread   */
 #define NJ_SAVE_NO_CLASS  0xFFFFu       /* NULL nj_class                   */
 #define NJ_SAVE_NAME_MAX  1024u
@@ -1314,6 +1328,12 @@ static int save_blob(nj_vm *vm, nj_swriter *w)
     }
     /* Records B. */
     if (!save_records_b(vm, w)) {
+        return NJ_ERR_STATE;
+    }
+    /* The blob is handed to a frontend buffer sized from nj_vm_blob_max() and
+     * the loader refuses anything larger.  Refuse here instead of producing a
+     * blob that neither side can accept. */
+    if ((nj_u8)w->len > (nj_u8)NJ_SAVE_BLOB_MAX(vm)) {
         return NJ_ERR_STATE;
     }
     /* CRC. */

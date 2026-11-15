@@ -1153,7 +1153,7 @@ static void test_mem_api(const nj_port *port, const nj_u1 *jar, nj_u4 jar_len)
     blob_max = nj_vm_blob_max(source);
     CHECK(nj_vm_blob_max(NULL) == 0u, "nj_vm_blob_max(NULL) is 0");
     {
-        nj_u8 heap_max;
+        nj_u8 heap_max, meta_max, thread_max;
 
         if (source->heap_limit != 0u) {
             heap_max = (nj_u8)source->heap_limit;
@@ -1161,10 +1161,18 @@ static void test_mem_api(const nj_port *port, const nj_u1 *jar, nj_u4 jar_len)
             heap_max = (nj_u8)source->heap.size > (nj_u8)NJ_MAX_HEAP
                      ? (nj_u8)source->heap.size : (nj_u8)NJ_MAX_HEAP;
         }
-        CHECK(blob_max == (nj_size)(heap_max +
-                                    (nj_u8)NJ_MAX_THREADS *
-                                        (nj_u8)NJ_MAX_STACK_SLOTS * 8u +
-                                    4u * 1024u * 1024u),
+        /* The documented bound: arena + 4 MB floor + thread stacks + an
+         * object-metadata allowance of heap/8 (2 bytes of class index per
+         * object plus one record per live ref slot), capped at half the
+         * arena.  A flat 4 MB allowance lost the state of a title that fills
+         * its 128 MB auto heap with small objects. */
+        thread_max = (nj_u8)NJ_MAX_THREADS *
+                     (nj_u8)NJ_MAX_STACK_SLOTS * 8u;
+        meta_max = 4u * 1024u * 1024u + thread_max + heap_max / 8u;
+        if (meta_max >= heap_max / 2u) {
+            meta_max = heap_max / 2u;
+        }
+        CHECK(blob_max == (nj_size)(heap_max + meta_max),
               "nj_vm_blob_max() is the documented worst-case bound");
     }
 

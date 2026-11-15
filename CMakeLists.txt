@@ -17,7 +17,7 @@
 #  built and is what the tests use).
 # =====================================================================
 cmake_minimum_required(VERSION 3.16)
-project(nano_j2me VERSION 0.5.8 LANGUAGES C)
+project(nano_j2me VERSION 0.5.9 LANGUAGES C)
 
 set(CMAKE_C_STANDARD 99)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -1675,6 +1675,13 @@ nj_add_test(test_clip tests/test_clip.c)
              COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/tools/fuzz_media.py
                      $<TARGET_FILE:nj2me-cli> 60 2)
     set_tests_properties(fuzz_media PROPERTIES
+      WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} TIMEOUT 300)
+    # Damaging several media entries in one archive must also be handled: a
+    # single damaged resource is the easy case.
+    add_test(NAME fuzz_media_multi
+             COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/tools/fuzz_media.py
+                     $<TARGET_FILE:nj2me-cli> 60 2 7 multi)
+    set_tests_properties(fuzz_media_multi PROPERTIES
       WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} TIMEOUT 300)
   endif()
 
