@@ -1653,6 +1653,17 @@ nj_add_test(test_clip tests/test_clip.c)
       WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} TIMEOUT 300)
   endif()
 
+  # The container itself must be fuzzed too: a damaged JAR must be rejected by
+  # the loader, not crash and not hang.  Small count so it stays a smoke test;
+  # run the tool directly for a real session (see the malformed-JAR note).
+  if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tools/fuzz_jar.py)
+    add_test(NAME fuzz_jar
+             COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/tools/fuzz_jar.py
+                     $<TARGET_FILE:nj2me-cli> 60 2)
+    set_tests_properties(fuzz_jar PROPERTIES
+      WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} TIMEOUT 300)
+  endif()
+
   # Every nj_field_lookup() must name a field its class declares.  A lookup
   # that asks for the wrong descriptor answers NULL, and the native built on
   # it then silently does nothing - which is how a Light came to be
