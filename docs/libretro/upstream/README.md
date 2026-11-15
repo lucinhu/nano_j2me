@@ -40,12 +40,6 @@ Suggested PR title: `Add nano_j2me core information for J2ME MIDlets`.
 The ready-to-post title, patch commands, body text and checklist are in
 [`PR-libretro-super.md`](PR-libretro-super.md).
 
-## 2. `libretro/libretro-docs`
-
-Apply the prepared 5-file patch (library page plus index rows). The
-ready-to-post title, commands, body text and checklist are in
-[`PR-libretro-docs.md`](PR-libretro-docs.md).
-
 ## 2. `libretro/libretro/docs`
 
 Apply the prepared patch, which adds the page and every index update in one
@@ -64,7 +58,7 @@ nano_j2me.md  ->  docs/library/nano_j2me.md
 
 - `mkdocs.yml`: add one nav entry in the library section, alphabetically with
   the other `Mobile - ...` pages:
-  `- Mobile - J2ME (nano_j2me): library/nano_j2me.md`
+  `'Mobile - J2ME (nano_j2me)': 'library/nano_j2me.md'`
 - `docs/guides/core-list.md`: add a row for
   `Mobile - J2ME (nano_j2me)` like the neighbouring emulator entries.
 - `docs/development/licenses.md`: add a `nano_j2me` entry describing
@@ -82,8 +76,9 @@ python3 -m pip install -r docs/requirements.txt
 mkdocs build
 ```
 
-Suggested PR title: `Document the nano_j2me J2ME core`. A draft body is in
-`docs/LIBRETRO_SUBMISSION.md`.
+Suggested PR title: `Add nano_j2me (Mobile - J2ME)`. The ready-to-post
+title, commands, body text and checklist are in
+[`PR-libretro-docs.md`](PR-libretro-docs.md).
 
 ## 3. Core repository
 
