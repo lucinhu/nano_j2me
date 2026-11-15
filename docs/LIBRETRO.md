@@ -70,13 +70,14 @@ Use `--no-strip` to retain symbols. `all` selects the script's supported targets
 and requires all of their toolchains.
 
 The eight candidates currently in `build/libretro-dist/` were rebuilt on
-2026-11-15 at revision `e625707`, so they include the load-lifecycle fix, the
+2026-11-15 at revision `011247e`, so they include the load-lifecycle fix, the
 monitor and repaint-blocking fixes, the CLI/manual-state boundary work, the
 input-bitmask/rumble support and the `nano_j2me_screen`/`nano_j2me_locale`
 options, bounded load/save state clock assistance including the paused
 `System.currentTimeMillis()` poll assist (paint-aware and stalled-frame gated),
 the level-3 Player-start diagnostics, and three corpus rendering fixes (stray
-paint waiters, pre-show `Displayable` sizes, longer startup grace). The report
+paint waiters, pre-show `Displayable` sizes, longer startup grace), plus the
+device-property answers and the generic-handset load retry described above. The report
 also records the whole-corpus rendering probe, which is what found those
 rendering bugs. `build/libretro-final-report-20261115.md` records sizes, SHA-256 values
 and what was run per target: linux-x86_64 in the mock frontend and real

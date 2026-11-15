@@ -38,9 +38,10 @@ version is currently 0.5.7; refresh the metadata version whenever that changes.
 
 This section records the concrete preparation checks run against the current
 tree; the unchecked boxes in [Validation](#validation) remain the external
-steps only. Working HEAD for this check: `e625707` (paused state requests
-that poll `System.currentTimeMillis()` are now served by a paint-aware,
-stalled-frame-gated clock assist; this comes on top of the three corpus
+steps only. Working HEAD for this check: `011247e` (the port now answers the
+device properties titles probe before their MIDlet starts, and a load that
+fails with the generic handset is retried once with the documented `nokia6230`
+profile; this comes on top of the paused-state clock assist, the three corpus
 rendering fixes, the bounded state clock assistance and the whole-corpus visual
 probe from the previous revisions; the metadata/CI/docs checks below were first
 run at `bc49c46`, and the release artifacts were refreshed after each libretro
@@ -76,53 +77,48 @@ change as recorded in the hash table).
     and produced `libretro/nano_j2me_libretro.dll` (3,537,295 bytes), i.e. the
     path the template's post-build step expects.
   All three land at `$BUILD_DIR/$EXTRA_PATH/$LIBNAME`, where the templates
-  collect them. Re-run at the r16 tree with
-  `tools/simulate_ci_builds.sh`: all three contracts pass (Linux 3,973,800 B
-  and Android arm64 11,553,544 B at `/var/tmp/ci-sim-r16/...` in one run;
-  Windows 3,540,679 B at `/var/tmp/ci-sim-r16b/...` after re-running that
-  target alone — the first attempt hit a mingw GCC internal compiler error
-  while many test jobs were running, and the same command then passed). `tools/simulate_ci_builds.sh` reproduces these template commands
+  collect them. Re-run at the r17 tree with
+  `tools/simulate_ci_builds.sh`: all three contracts pass (Linux 3,973,848 B,
+  Windows 3,541,251 B and Android arm64 11,555,520 B at
+  `/var/tmp/ci-sim-r17/...` in one run). `tools/simulate_ci_builds.sh` reproduces these template commands
   (and reads `CORE_ARGS` straight out of `.gitlab-ci.yml` so the simulation
   cannot drift from the committed CI file). No upstream pipeline has been
   executed; that requires maintainer registration.
 - **Fresh eight-target build**. `tools/build_libretro_cores.sh --jobs 12
-  --out /var/tmp/nj2me-submission-dist-r16 all` rebuilt every default-feature
-  target from this revision (paused-clock-poll fix) and the tree was copied
-  into `build/libretro-dist/`. Per-core SHA-256:
+  --out /var/tmp/nj2me-submission-dist-r17 all` rebuilt every default-feature
+  target from this revision (device properties and generic-handset retry) and
+  the tree was copied into `build/libretro-dist/`. Per-core SHA-256:
 
   | Target | SHA-256 |
   | --- | --- |
-  | linux-x86_64 | `e71e3dfadc67d01070cf816fc0aa653429adb06a0510dab1d21897f07a07ce35` |
-  | linux-aarch64 | `598ca59619b66253d9254d4d2238e46bf853269594109b62e57f55eb382d3f92` |
-  | linux-armv7 | `8f32caa89ca2514d712e3b246c912db42337fe946701a97da1dac0c1bb95cb8a` |
-  | android-arm64 | `739bf8eae8dea1441ace6192f2a920ed0a986e93fba0d45065bd97bfad3c75a7` |
-  | android-armv7 | `394e270b6cd8b41745423d64df27198eb02849602475591f748440957e0251c2` |
-  | android-x86_64 | `97a88b777766b7bd04c296cd6a7f3243358d7ae90d3fa0abaaa46d3171ce6021` |
-  | windows-i686 | `1eddf0026d35bcc5ae3e4b17db99e1f4df90783e8f646ce8a43e64f6d771cfab` |
-  | windows-x86_64 | `22e3b1ddedee8f3fb038ecb28f56ae805985d94adfb5f398e8a5caa7fd1e93ed` |
+  | linux-x86_64 | `a90368876f572b65886102b175ba0f49b60d3d5af211008cf7f43130bebfbbfa` |
+  | linux-aarch64 | `8ee5ecd8da49cd42c13800f8d53aedad2abc14df9fb32f42132e152665e1700c` |
+  | linux-armv7 | `fb384296703f2159445e48a60587d5b28718595ed7bf02d5b1eea32056c086a8` |
+  | android-arm64 | `4ad4e145d09ca459f1790460c5da8022a49b9fc6714fdb79aab77fa748e6370f` |
+  | android-armv7 | `e74c994d3845c3cf1f048fec7a9a00af6c7cb47bee643c5d595ecf90d7f4e417` |
+  | android-x86_64 | `9d6294cc9749b1ff66df831d41b9f643b22993fc39913ba512ea925f831276f9` |
+  | windows-i686 | `a8673238dd035615b00a6d9d76d76c70d2a0f091bcbf3af8b469ec7087c4d2da` |
+  | windows-x86_64 | `b787d4abf4e7bf78133ec808631e68053b04fe980c0e4ab074d54ee8acb070c8` |
 
   Every target directory contains the same `.info`, license/notice set and
   `BUILD_STATUS.txt`; no external test font is bundled.
 - **Artifact validation**. The fresh linux-x86_64 core passed the mock-frontend
-  matrix (20 passed, 0 failed, 0 skipped), and real RetroArch 1.22.2 ran
-  LoopDemo (120 frames) and TextDemo (180 frames) to a clean exit. The fresh
-  windows-x86_64 DLL passed the Wine fixture suite 4/4. The corpus-level
-  libretro state probe (`tools/check_libretro_states.py`, 50 titles, 120
-  frames) reports **50/50 save/restore round trips**, including state load
-  after `retro_reset` in a title that boots inside a blocking frame
-  (电子宠物蛋_11972) and titles whose save needed the paused-frontend clock
-  assistance (see the 2026-11-15 load-state and save-while-paused notes). The
-  whole-corpus rendering probe on the r16 core
-  (`tools/check_libretro_corpus_visual.py`, 373 sweep-ok titles, 300 frames,
-  real-time cadence) reported **370 passed, 3 failed**; the remaining failures
-  are not visual: two titles that need the documented
-  `nano_j2me_device=nokia6230` profile (they render with it) and one very slow
-  3D loader (毁灭战士3_10598, which renders its loading sequence 190 times and
-  cannot finish within the sampling watchdog). The paused-save/serving class
+  matrix (20 passed, 0 failed, 0 skipped), and real RetroArch 1.22.2 loaded and
+  ran the core to a clean 600-frame exit. The fresh windows-x86_64 DLL passed
+  the Wine fixture suite 4/4. The corpus-level libretro state probe
+  (`tools/check_libretro_states.py`, 50 titles, 120 frames) reports
+  **50/50 save/restore round trips**. The whole-corpus rendering probe on the
+  r17 core (`tools/check_libretro_corpus_visual.py`, 373 sweep-ok titles, 300
+  frames, real-time cadence) reported **372 passed, 1 failed**; the single
+  remaining failure is not visual: one very slow 3D loader (毁灭战士3_10598,
+  which renders its loading sequence 190 times and cannot finish within the
+  sampling watchdog). The two titles that refused the generic handset
+  (`bubblet.jar`, `1945空战英雄_6105.jar`) now load through the device-property
+  answers and the one-time `nokia6230` retry. The paused-save/serving class
   and the six black-frame failures found earlier are gone; details in
   `docs/notes/2026-11-15-libretro-black-frames.md` and
   `docs/notes/2026-11-15-libretro-save-while-paused.md`. The full local CTest
-  suite passed **183/183 in 366.18 s** at this revision. Seven M3G titles were
+  suite passed **183/183 in 348.03 s** at this revision. Seven M3G titles were
   checked through the mock frontend at the real-time cadence
   (`--pace-us 16666`): 浴火银河2完整版, 蓝牙真3D格斗, 急速狂飙完美破解版,
   浴火银河2瓦尔基里, 极品飞车16：亡命狂飙, 3D激爆拳击 and 3D跳台滑雪2011 all

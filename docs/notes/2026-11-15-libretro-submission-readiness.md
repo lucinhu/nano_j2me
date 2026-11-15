@@ -302,3 +302,28 @@ Re-validation at revision `88b4e5d`:
   tree backed up to `/var/tmp/libretro-dist-20261115-r15-backup.tgz`).
 * Commit: `e625707` "fix(libretro): serve paused state requests that poll the
   clock" (plus this documentation refresh).
+
+## Update, 2026-11-15 (r17: device properties and generic-handset retry)
+
+* Production fix at `011247e`: the port now installs `port.device_property` and
+  answers `com.nokia.keyboard.type` (`None`), `com.nokia.mid.ui.version`
+  (`1.1`) and `microedition.platform` (`nano_j2me/libretro`) the way the other
+  host ports do. `bubblet.jar` called `.equals()` on the first one from its
+  constructor and died with `NullPointerException` before its MIDlet started.
+  A load that still fails while `nano_j2me_device=generic` is retried once with
+  the documented `nokia6230` profile (both attempts logged, profile kept for
+  `retro_reset`, explicit selection disables the retry); this fixes
+  `1945空战英雄_6105.jar`, which branches on `microedition.platform`.
+* Validation at the r17 artifacts: whole-corpus rendering probe 373 titles →
+  **372 passed, 1 failed** (only the very slow `毁灭战士3_10598` loader, which
+  cannot finish inside the sampling watchdog); libretro state probe 50/50; mock
+  frontend matrix 20/20; real RetroArch 1.22.2 clean 600-frame exit; Wine 4/4;
+  CI template simulation Linux / Windows / Android all pass in one run
+  (3,973,848 / 3,541,251 / 11,555,520 bytes at `/var/tmp/ci-sim-r17/...`);
+  CTest 183/183 in 348.03 s.
+* Artifacts: `--out /var/tmp/nj2me-submission-dist-r17`, eight targets, hashes
+  in `build/libretro-final-report-20261115.md` and the readiness table in
+  `docs/LIBRETRO_SUBMISSION.md`; `build/libretro-dist/` swapped to r17 (r16
+  tree backed up to `/var/tmp/libretro-dist-20261115-r16-backup.tgz`).
+* Commit: `011247e` "fix(libretro): answer device properties and retry
+  generic-handset load" (plus this documentation refresh).
