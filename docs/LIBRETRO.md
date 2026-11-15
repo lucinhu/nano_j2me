@@ -421,6 +421,13 @@ CORE="$PWD/build/libretro-check/libretro/nano_j2me_libretro.so" \
 RETROARCH=/path/to/retroarch tools/check_libretro_retroarch.sh \
   build/libretro-check/libretro/nano_j2me_libretro.so \
   tests/fixtures/alphademo.jar 600
+# The same end-to-end contract over a set of real corpus titles (serial, one
+# RetroArch instance per title; logs per title under
+# .local-tools/debug-runs/retroarch-corpus/).  Runs are unpaced because the
+# null video driver does not throttle, so this is an integration check rather
+# than a frame-rate measurement.
+tools/check_libretro_retroarch_corpus.sh \
+  build/libretro-check/libretro/nano_j2me_libretro.so 600
 tools/check_no_statics.sh
 # Offline validation of the prepared upstream submission bundle.  Without the
 # clone arguments it checks the .info identity, both patches and the release

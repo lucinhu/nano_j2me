@@ -373,3 +373,25 @@ Re-validation at revision `88b4e5d`:
 * The bundle validator itself reports 41 passed, 0 failed when pointed at clean
   `libretro-super` (`fb15e63`) and `libretro/docs` (`d83b34b`) clones with
   `--apply-clones --mkdocs /var/tmp/mkvenv/bin/mkdocs`.
+
+## Update, 2026-11-15 (real-RetroArch corpus batch)
+
+* New maintainer tool `tools/check_libretro_retroarch_corpus.sh`: runs the
+  existing single-title real-RetroArch end-to-end check over a set of corpus
+  titles serially, keeps one log per title, and prints a PASS/FAIL summary. It
+  asserts, per title, a clean RetroArch exit after the requested frame count and
+  the core's forwarded `[nano_j2me] running <class> (<game> <version>)` /
+  `[nano_j2me] run ended: ...` markers.
+* Evidence on the r17 linux-x86_64 release core:
+  - eight corpus titles × 600 frames (3D 浴火银河2完整版, 仙剑奇侠传完美版,
+    拳皇98终极之战, 雷霆战机2012BT版, 灵异村庄, 超级马里奥, 三国杀单机战功修改版,
+    美女滑雪胜地): **8/8 passed**;
+  - four of them × 1800 frames (3D, 仙剑, 雷霆战机, 超级马里奥): **4/4 passed**.
+  - Total **14/14 runs** with clean exits and verified log markers; logs under
+    `.local-tools/debug-runs/submission-20261115/ra-corpus*/`.
+* The runs are unpaced because RetroArch's null video driver does not throttle
+  (600 frames finish in under a second), so this is an integration check of the
+  frontend/core contract, not a wall-clock frame-rate measurement. Real-time
+  cadence and pixel/black-frame checks remain covered by
+  `tools/check_libretro_corpus_visual.py` (mock frontend, `--pace-us 16667`) and
+  `tools/check_libretro_states.py`.

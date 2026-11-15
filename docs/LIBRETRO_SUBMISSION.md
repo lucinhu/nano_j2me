@@ -111,7 +111,13 @@ change as recorded in the hash table).
   **50/50 save/restore round trips**. Real RetroArch 1.22.2 also loaded and ran
   four real corpus titles (3D 浴火银河2完整版, 仙剑奇侠传完美版, 拳皇98终极之战,
   雷霆战机2012BT版) for 300 frames each, clean exits and verified core log
-  markers. The whole-corpus rendering probe on the
+  markers. The batch checker `tools/check_libretro_retroarch_corpus.sh` then ran
+  the same end-to-end contract over **eight** corpus titles (3D, 2D, audio and
+  save-state users) for 600 frames each, and over four of them for 1800 frames
+  each — **14/14 runs passed** with clean exits and both core log markers
+  (the runs are unpaced under RetroArch's null video driver, so they are an
+  integration check, not a wall-clock frame-rate measurement; cadence is
+  covered by the mock-frontend probes). The whole-corpus rendering probe on the
   r17 core (`tools/check_libretro_corpus_visual.py`, 373 sweep-ok titles, 300
   frames, real-time cadence) reported **372 passed, 1 failed**, and a re-run at
   **600 frames** (10 s of play per title) reported the same **372/373**; the
