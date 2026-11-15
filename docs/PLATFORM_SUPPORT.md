@@ -183,8 +183,10 @@ cmake -S . -B build -DNJ_ENABLE_MEDIA=ON -DNJ_ENABLE_VIDEO=ON
 cmake --build build -j6
 ctest --test-dir build -j4
 
-# Android 5+（现代，含 GLES2 实验后端）
-tools/build_android_apk.sh --out build/android --abi "armeabi-v7a x86_64" --gles2
+# Android 5+（现代，含 GLES2 实验后端）。arm64-v8a 必须列进去：只在
+# 64 位设备上装 armeabi-v7a 会让进程跑 32 位解释器（寄存器少、生成代码差），
+# 实测在真机上明显更慢；三个 ABI 一起打，Android 会自动选 64 位。
+tools/build_android_apk.sh --out build/android --abi "arm64-v8a armeabi-v7a x86_64" --gles2
 
 # Android 2.0+（API 5，ARMv5 软浮点，仅软件）
 tools/build_android_legacy.sh --out build/android-legacy
