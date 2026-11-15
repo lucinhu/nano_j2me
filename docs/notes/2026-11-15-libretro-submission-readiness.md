@@ -395,3 +395,21 @@ Re-validation at revision `88b4e5d`:
   cadence and pixel/black-frame checks remain covered by
   `tools/check_libretro_corpus_visual.py` (mock frontend, `--pace-us 16667`) and
   `tools/check_libretro_states.py`.
+
+## Update, 2026-11-15 (round 27): rebuild reproducibility check
+
+A rebuild of all eight targets from the r17 tree (no source change since
+`011247e`, only documentation commits) was compared with the shipped
+`build/libretro-dist` tree:
+
+- Linux x86_64/aarch64/armv7 and all three Android cores reproduce
+  **byte-identically** (same SHA-256);
+- the two Windows DLLs have identical sizes but differ in exactly six bytes
+  (`COFF` timestamp, PE checksum and the linker build-id/debug entry), i.e. the
+  PE outputs are functionally identical and not byte-reproducible across
+  rebuilds without a `SOURCE_DATE_EPOCH`-style timestamp fix.
+
+So the release table in `build/libretro-final-report-20261115.md` remains the
+canonical artifact identity; upstream CI-produced Windows binaries will not
+match those hashes byte-for-byte either. This is a property of the PE output,
+not of the core sources.
