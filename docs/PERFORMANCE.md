@@ -3719,3 +3719,43 @@ should the ~5% be taken.  The rejected patches and builds were kept only in ephe
 `/var/tmp` paths (`nj_lib_m3g.c.opt*`, `nj2me-{prof,base,opt,nofast}-build`);
 the profiling recipe is repeatable with any `-pg` CLI build and a
 `--dump-frames` comparison for parity.
+
+## M3G Gouraud span follow-up, 2026-11-15 (round 28)
+
+The round-26 recommendation was a bit-exact parity test before any span fast
+path.  This round re-implemented `sw_span_gouraud_texargb()` (the 49% class on
+`毁灭战士3_10598.jar`: ARGB8888 target, Gouraud, nearest texture, `MODULATE`,
+unfogged, `blend == 64`, `athresh == 0`, `awrite`, no sprite) and built the
+test apparatus before deciding whether it could ship:
+
+* per-pixel probe prints in both loops, gated by `NJDBG_PIX="x,y"`
+  (`B` from the general loop, `O` from the fast path, with
+  key/`st_outer`/`filt_image`/`texfunc`/gouraud accumulators/`pg`/`ph`/`pk`/
+  texel/`c`),
+* a runtime switch `NJDBG_NOFAST` that keeps the fast path compiled but
+  dispatches the same span state into the general loop, so both variants came
+  from one binary and differ only in that dispatch,
+* `NJDBG_DUMP` frame markers so the paint stream can be grouped per frame.
+
+Result: the fast path reproduces the general loop's immediate pixel values
+(deviation is not in the per-pixel arithmetic), but it perturbs *later* draws.
+On `毁灭战士3_10598.jar` the dump of the loading animation first differs at
+frame 126: at screen pixel (85,126) both builds paint the same 17 overdraw
+layers, then the general build paints two more layers (depth keys 57063 and
+57126) that the fast build depth-culls.  `浴火银河2完整版_7689` and
+`3D跳台滑雪2011_4507` remain bit-identical.  CPU was -5.1% on the Doom3 run.
+
+The divergence therefore is not "wrong colour math" but a change in the
+overdraw/depth-test sequence that this analysis did not explain, and shipping
+it is not acceptable.  Both trees were reverted; no code shipped.
+
+Next attempt should share the general loop's inner body with the fast path
+through one inline template (so arithmetic and state updates are identical by
+construction, and only the hoisted conditions differ), and add span-level
+golden tests (span state in, pixel bytes out) rather than whole-frame captures:
+the frame captures depend on the title's timing and are too coarse to localise
+the depth-interaction difference.
+
+The profiling numbers from round 26 still stand: `sw_span` is 60% of the
+Doom3 CPU sample, `m3g_clear` 16% (105 us per full-surface clear, already a
+single `memset`-class fill), `sw_tri_band` 12%.
