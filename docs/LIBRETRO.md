@@ -540,3 +540,41 @@ duration matches the wall clock at both rates.
 Cores with these changes log
 `nano_j2me 0.5.7 libretro core (pacing rev 5: realtime clock + frame limit + audio backpressure)`
 at startup so the installed binary can be identified from the frontend log.
+
+## Fast-forward (2026-11-15)
+
+The frontend's fast-forward key (RetroArch: the FF toggle / hold) is honoured
+through `RETRO_ENVIRONMENT_GET_FASTFORWARDING`. While the frontend reports
+fast-forwarding, one 60 Hz virtual frame is advanced per `retro_run()` call
+instead of the measured real-time delta, so the frontend's unthrottled call
+rate becomes game speed; audio is generated from the same delta, so it speeds
+up (or is muted by the frontend) instead of drifting behind the picture.
+
+The run loop also yields 1 ms per call while fast-forwarding: without it the
+frontend can reacquire the audio/clock lock before the VM thread it just woke
+is scheduled, and the game does not actually speed up. 1 ms still allows about
+16x, which is well above the 2x-10x users normally want.
+
+Verified with the headless frontend at 0 Hz (back-to-back `retro_run`, like the
+frontend in fast-forward): a 300-frame self-paced probe reports its normal
+5000 ms of game time in ~0.5 s of wall time, while the same run without
+fast-forward does not advance at all. A second probe driven by
+`repaint()`/`serviceRepaints()` speeds up the same way.
+
+## Vibration (2026-11-15)
+
+MIDlet vibration already reaches the frontend: `Display.vibrate()` and the
+Nokia `DeviceComtrol.startVibra()`/`startVibra` paths call the port `vibrate`
+hook, which records the request, and `retro_run()` forwards it through
+`RETRO_ENVIRONMENT_GET_RUMBLE_INTERFACE` as `RETRO_RUMBLE_WEAK` (full strength
+while active, 0 when the requested duration ends). RetroArch's Android build
+implements the interface with the phone's `Vibrator`, so a game that vibrates
+on a handset vibrates in RetroArch too. The port logs `MIDlet vibrate(N ms)`,
+`rumble set on/off`, and `frontend has no rumble interface` (at most a few
+times) so a missing frontend implementation is visible in the log instead of
+being silent.
+
+Verified end-to-end with the headless frontend (which provides a rumble
+callback): a probe that calls `Display.vibrate(600)` four times produces
+`MIDlet vibrate(600 ms)` followed by `rumble set on (weak, 0xFFFF)` and
+`rumble set off` at the end of each request.

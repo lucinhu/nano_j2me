@@ -371,6 +371,8 @@ typedef struct nj_lr {
     retro_set_rumble_state_t rumble_cb;     /* NULL: no rumble interface    */
     int                      rumble_active;
     int                      rumble_sent;
+    int                      fastforward;   /* frontend fast-forward */
+    int                      rumble_logs;   /* diagnostic: logged requests */
     uint64_t                 rumble_deadline_ms;
     int                      rumble_warned;
 
@@ -1310,6 +1312,8 @@ static void lr_register_environment(nj_lr *s)
             s->rumble_cb = rumble.set_rumble_state;
         } else {
             s->rumble_cb = NULL;
+            lr_log(s, RETRO_LOG_INFO,
+                   "frontend has no rumble interface; vibration requests are ignored");
         }
     }
 
@@ -2240,6 +2244,10 @@ static void lr_read_pointer(nj_lr *s)
 static void lr_port_vibrate(void *ud, int ms)
 {
     nj_lr *s = (nj_lr *)ud;
+    if (s && ms > 0 && s->rumble_logs < 8) {
+        s->rumble_logs++;
+        lr_log(s, RETRO_LOG_INFO, "MIDlet vibrate(%d ms)", ms);
+    }
 
     if (!s || !s->sync_ready) return;
     if (ms < 0) ms = 0;
@@ -2266,6 +2274,11 @@ static void lr_service_rumble(nj_lr *s)
     lr_mutex_unlock(&s->lock);
 
     if (want == s->rumble_sent) return;
+    if (s->rumble_logs < 16) {
+        s->rumble_logs++;
+        lr_log(s, RETRO_LOG_INFO, "rumble set %s",
+               want ? "on (weak, 0xFFFF)" : "off");
+    }
     if (!s->rumble_cb(0, RETRO_RUMBLE_WEAK,
                       (uint16_t)(want ? 0xFFFFu : 0u)) &&
         want && !s->rumble_warned) {
@@ -3475,7 +3488,25 @@ RETRO_API void retro_run(void)
         uint64_t now_us = lr_real_us();
         uint64_t delta;
         uint64_t scaled;
-        if (s->last_run_us == 0 || now_us < s->last_run_us) {
+        bool ff = false;
+
+        /* Fast-forward is frontend-driven: it calls retro_run() as fast as it
+         * can, so the real-time delta collapses and the game would otherwise
+         * keep running at 1x.  When the frontend says it is fast-forwarding,
+         * advance exactly one 60 Hz frame per call instead; audio follows the
+         * same delta, so the frontend gets sped-up (or muted) sound rather
+         * than a stream that drifts behind the game. */
+        if (s->environ_cb) {
+            (void)s->environ_cb(RETRO_ENVIRONMENT_GET_FASTFORWARDING, &ff);
+        }
+        if (ff != (s->fastforward != 0)) {
+            s->fastforward = ff ? 1 : 0;
+            lr_log(s, RETRO_LOG_INFO, "fast-forward %s",
+                   ff ? "enabled" : "disabled");
+        }
+        if (ff) {
+            delta = 16667ull;
+        } else if (s->last_run_us == 0 || now_us < s->last_run_us) {
             delta = 16667ull;
         } else {
             delta = now_us - s->last_run_us;
@@ -3530,6 +3561,14 @@ RETRO_API void retro_run(void)
 #endif
             s->video_cb(s->send, (unsigned)s->out_w, (unsigned)s->out_h,
                         (size_t)pitch);
+    }
+
+    /* While fast-forwarding the frontend calls us back-to-back.  Without a
+     * small yield the run loop can reacquire s->lock before the VM thread it
+     * just woke gets scheduled, and the game would not speed up at all.
+     * 1 ms per call still allows ~16x (one 60 Hz game frame per call). */
+    if (s->fastforward) {
+        lr_real_sleep(1);
     }
 
     if (s->batch_cb) {
