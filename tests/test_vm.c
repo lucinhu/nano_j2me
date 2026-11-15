@@ -263,6 +263,26 @@ int main(int argc, char **argv)
     int rounds = 3;
     int i;
 
+    /* Ports that pump frames while a Java thread is parked (libretro) tune the
+     * blocked-call watchdog: five seconds by default, zero waits until the VM
+     * stops, and the setter reports the previous value. */
+    {
+        nj_vm *probe = nj_vm_create(NULL, 1u * 1024u * 1024u);
+        nj_u4 previous;
+        if (!probe) {
+            fprintf(stderr, "vm create failed\n");
+            return 1;
+        }
+        previous = nj_vm_set_call_block_ms(probe, 0u);
+        if (previous != 5000u ||
+            nj_vm_set_call_block_ms(probe, previous) != 0u) {
+            fprintf(stderr, "FAIL: nj_vm_set_call_block_ms() contract\n");
+            nj_vm_destroy(probe);
+            return 1;
+        }
+        nj_vm_destroy(probe);
+    }
+
     if (argc < 3) {
         fprintf(stderr, "usage: %s <app.jar> <main-class> [expected]\n", argv[0]);
         return 2;

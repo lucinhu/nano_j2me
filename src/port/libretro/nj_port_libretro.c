@@ -2999,7 +2999,19 @@ static void *lr_vm_thread(void *arg)
      */
     if (!s->midlet) {
         nj_ref exc = NULL;
-        nj_ref midlet = nj_vm_new_midlet(s->vm, s->midlet_class, &exc);
+        nj_u4 block_ms;
+        nj_ref midlet;
+        /*
+         * Some titles (毁灭战士3) run their whole game loop inside the MIDlet
+         * constructor: the constructor joins the render thread, so it only
+         * returns when the player quits.  A five second blocked-call watchdog
+         * would kill such a title while it is running normally, so wait until
+         * the frontend stops the core instead; the frame hook still breaks the
+         * wait when the core is unloaded.
+         */
+        block_ms = nj_vm_set_call_block_ms(s->vm, 0u);
+        midlet = nj_vm_new_midlet(s->vm, s->midlet_class, &exc);
+        (void)nj_vm_set_call_block_ms(s->vm, block_ms);
         lr_mutex_lock(&s->lock);
         s->midlet = midlet;
         s->load_ready = 1;
@@ -3007,9 +3019,14 @@ static void *lr_vm_thread(void *arg)
         lr_mutex_unlock(&s->lock);
         if (!midlet) {
             const char *why = nj_exception_describe(s->vm);
-            lr_log(s, RETRO_LOG_ERROR, "cannot instantiate %s: %s",
-                   s->midlet_class ? s->midlet_class : "the MIDlet",
-                   why ? why : "unknown error");
+            /* Unloading while a title runs its game loop inside the
+             * constructor ends that call with a halt; that is a normal
+             * teardown, not a load failure. */
+            if (!s->stop) {
+                lr_log(s, RETRO_LOG_ERROR, "cannot instantiate %s: %s",
+                       s->midlet_class ? s->midlet_class : "the MIDlet",
+                       why ? why : "unknown error");
+            }
             st = NJ_ERR;
             goto started;
         }

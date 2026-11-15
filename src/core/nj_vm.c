@@ -232,6 +232,7 @@ nj_vm *nj_vm_create_with_heap_limit(const nj_port *port, nj_size heap_bytes,
     memset(vm, 0, sizeof(*vm));
     /* Real time until the player says otherwise. */
     vm->speed_percent = 100;
+    vm->call_block_ms = 5000u;
     vm->frame_cap = -1;
     vm->heap_limit = heap_limit;
 
@@ -1312,8 +1313,23 @@ int nj_vm_set_halt_after_ms(nj_vm *vm, nj_u4 ms)
     return elapsed;
 }
 
-static /* How long a C caller will let a blocked Java call wait to be resumable. */
-#define NJ_CALL_BLOCK_MS 5000u
+/*
+ * How long a C caller lets a blocked Java call wait to be resumable.  The
+ * default lives in nj_vm.call_block_ms; a port that drives frames itself
+ * (libretro) sets it to 0 while it constructs the MIDlet, because some titles
+ * run their whole game loop inside the constructor.
+ */
+nj_u4 nj_vm_set_call_block_ms(nj_vm *vm, nj_u4 ms)
+{
+    nj_u4 previous;
+
+    if (!vm) {
+        return 0u;
+    }
+    previous = vm->call_block_ms;
+    vm->call_block_ms = ms;
+    return previous;
+}
 
 nj_status vm_invoke(nj_vm *vm, nj_ref obj, const char *cls,
                            const char *name, const char *desc,
@@ -1616,7 +1632,8 @@ nj_status vm_invoke(nj_vm *vm, nj_ref obj, const char *cls,
                         }
                     }
                     if (can_progress) start = now;
-                    else if (now - start >= (nj_s8)NJ_CALL_BLOCK_MS) break;
+                    else if (vm->call_block_ms != 0u &&
+                             now - start >= (nj_s8)vm->call_block_ms) break;
                 }
                 if (vm->frame_hook && !vm->in_frame_hook) {
                     int stop;

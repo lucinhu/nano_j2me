@@ -660,6 +660,15 @@ struct nj_vm {
      * able to hold the process open.
      */
     nj_s8      halt_at_ms;
+    /*
+     * How long a C caller waits for a Java call that parked in a blocking
+     * native to become resumable, in milliseconds; 0 waits until the embedder
+     * stops the VM.  A title may run its whole game loop inside its MIDlet
+     * constructor (毁灭战士3 does: the constructor joins the render thread),
+     * so a port that drives frames wants to wait for it instead of failing the
+     * load after five seconds.
+     */
+    nj_u4      call_block_ms;
     const char *stop_why;     /* who asked the VM to stop, or NULL */
     /*
      * Called while a Java thread is parked in a blocking native, so a runner

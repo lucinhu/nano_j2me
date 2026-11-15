@@ -665,17 +665,27 @@ began, so a constructor that busy-waits on `System.currentTimeMillis()` makes
 progress at real speed, and load sleeps still yield one real millisecond so a
 loader thread gets scheduler time.
 
-Result for `毁灭战士3_10598.jar`: the core no longer hangs `retro_load_game()`
-and paints the title's own loading scene (the harness sees 61/61 frames with
-content and real audio), but this title's constructor never returns in this
-runtime - the CLI headless runner stalls in the same call and only ends because
-its frame budget runs out - so the VM never reaches a savable point and the
-harness reports `save-state request refused (-8)`. This is recorded as a known
-limitation in `tools/check_libretro_corpus_visual.py`
-(`KNOWN_LIMITATIONS`) instead of a silent failure, and the corpus visual sweep
-reports it separately from pass/fail.
+The blocked-call watchdog became tunable for this case: `nj_vm.call_block_ms`
+(default 5000 ms) bounds how long a C caller waits for a parked Java call to
+resume, and `nj_vm_set_call_block_ms(vm, 0)` waits until the VM is stopped.
+The libretro port sets 0 while constructing the MIDlet, because some titles run
+their **whole game loop inside the constructor**: `毁灭战士3_10598.jar` starts a
+render thread and then `Thread.join()`s it from its constructor, so the
+constructor only returns when the player quits. With the five second watchdog
+such a title was killed while it was running normally; now it keeps running for
+as long as the frontend keeps it loaded, and unloading ends the constructor
+call as a normal teardown (no error is logged).
+
+The consequence for that title is save states: the VM thread is inside a C call
+for the whole game, so `nj_vm_can_save()` is never true at a frame boundary and
+`retro_serialize` refuses (`save-state request refused (-8); the game
+continues`). The game itself loads, renders and accepts input. This is recorded
+as a known limitation in `tools/check_libretro_corpus_visual.py`
+(`KNOWN_LIMITATIONS`), which reports it separately from pass/fail instead of
+silently accepting a failure.
 
 Corpus visual sweep after the change: **371 titles: 370 passed, 1 known
 limitation, 0 failed** (`tools/check_libretro_corpus_visual.py` with
-`--frames 300`, harness save-state round trips included). Three-title
-regression check (仙剑奇侠传, 雷电4, 超级马里奥) stays PASS.
+`--frames 300`, harness save-state round trips included). Regression checks
+(仙剑奇侠传, 雷电4, 超级马里奥, test_vm/test_thread_lifecycle) stay PASS, and
+`tests/test_vm.c` covers the watchdog setter contract.

@@ -46,10 +46,10 @@ GAMES = ROOT / "tests" / "games"
 # regression in them would still stand out from an accepted limitation.
 KNOWN_LIMITATIONS = {
     "毁灭战士3_10598.jar": (
-        "the MIDlet constructor never returns in this runtime (the CLI headless "
-        "runner stalls the same way and only ends by frame budget), so the mock "
-        "harness cannot save a state; the core now loads and paints the title's "
-        "own loading scene instead of hanging retro_load_game()"
+        "runs its whole game loop inside the MIDlet constructor (it starts a "
+        "render thread and joins it), so startApp() never runs and the VM is "
+        "never at a frame boundary the core could serialize; the game loads, "
+        "renders and accepts input, but save states are unavailable"
     ),
 }
 

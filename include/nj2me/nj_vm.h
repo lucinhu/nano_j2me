@@ -175,6 +175,14 @@ nj_ref  nj_vm_new_midlet(nj_vm *vm, const char *class_name, nj_ref *out_exc);
  * already elapsed, which is how a caller learns the call had to be cut short.
  */
 int     nj_vm_set_halt_after_ms(nj_vm *vm, nj_u4 ms);
+/*
+ * Blocked-C-call watchdog, in milliseconds; 0 waits until the VM is stopped.
+ * Returns the previous value.  Ports that pump frames while a Java thread is
+ * parked (libretro) set 0 around MIDlet construction: a title may run its game
+ * loop inside the constructor, and failing the load after five seconds would
+ * kill a game that is running normally.
+ */
+nj_u4   nj_vm_set_call_block_ms(nj_vm *vm, nj_u4 ms);
 
 nj_thread *nj_thread_self(nj_vm *vm);
 void       nj_yield(nj_vm *vm);
