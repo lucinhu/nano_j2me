@@ -180,8 +180,10 @@ without a JDK and without running the python fuzzer.
 - The historical "18 of 36 hang" figure cannot be reproduced and its mechanism
   is unknown; the control-run bug is the only verified cause of that report.
   Nothing here should be read as confirming it.
-- The fuzzer is single-locus: one mutation per case, applied to the MIDlet's
-  own class only. Multi-mutation and multi-class corruption are not covered.
+- The default fuzz mode is single-locus: one mutation per case, applied to the
+  MIDlet's own class only. An optional third argument selects several
+  mutations per case (the new `fuzz_classfile_multi` gate uses two); multi-class
+  corruption is still not covered.
 - There is no bytecode verifier. Malformed Code that is structurally valid
   still executes, and the runtime relies on per-instruction checks
   (receiver type, operand-stack bounds, handler bounds) to fail cleanly
@@ -190,3 +192,26 @@ without a JDK and without running the python fuzzer.
 - Class bytes from a JAR are trusted for memory layout arithmetic beyond the
   checked bounds; the fixture and fuzzer only cover what the loader and
   interpreter walk today.
+
+## Update, 2026-11-15 (round 44): multi-locus coverage
+
+`tools/fuzz_classfile.py` now takes an optional third argument: the number of
+mutations applied to the same class per case. The mutation kinds combine the
+same mix as before; a later structural mutation that no longer lands because an
+earlier one truncated or moved bytes falls back to a shorter buffer, and the
+result is still a malformed class from the runtime's point of view.
+
+Evidence and gate:
+
+- Two-locus run against the current release CLI:
+  `python3 tools/fuzz_classfile.py /var/tmp/nj2me-goal13-build/nj2me 300 2` ->
+  **clean: 300, crashed: 0, HUNG: 0** (control run first, so the per-case
+  budget is derived from the same machine; `.local-tools` log kept).
+- New ctest gate `fuzz_classfile_multi`
+  (`python3 tools/fuzz_classfile.py <cli> 60 2`, TIMEOUT 300) runs next to the
+  single-locus `fuzz_classfile` smoke test; both pass. The suite is now
+  185 tests.
+- Remaining gaps: corruption spread across several classes of a JAR (only the
+  MIDlet's own class is mutated), and bytecode that is structurally valid but
+  semantically malformed (there is no verifier; the runtime relies on
+  per-instruction checks).

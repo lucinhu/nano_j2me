@@ -27,6 +27,13 @@ kinds below now come from an actual walk of the constant pool and the method
 attributes, so 'methodcount', 'fieldcount', 'exc_handler' and 'super_self'
 mutate what they claim to mutate.
 
+A FIFTH point: coverage used to be single-locus (one mutation per case, and
+only in the MIDlet's own class).  The optional third argument now applies
+several mutations to the same class, which is the corruption shape a damaged
+JAR actually has.  Two-locus runs over 300 cases are clean on the current
+build; the ctest gate keeps the default single-locus smoke count and the
+second `fuzz_classfile_multi` case exercises a small two-locus set.
+
 WHAT THE MUTATIONS EXERCISE (all fixed on 2026-10-27; see
 docs/notes/2026-10-27-malformed-class-hangs.md and
 tests/test_class_hardening.c): an exception table entry whose handler resumes
@@ -60,6 +67,7 @@ def pick_source():
 SRC = pick_source()
 BIN = sys.argv[1] if len(sys.argv) > 1 else './build/nj2me'
 N   = int(sys.argv[2]) if len(sys.argv) > 2 else 60
+N_MUT = int(sys.argv[3]) if len(sys.argv) > 3 else 1
 PER = 6
 random.seed(20261012)
 
@@ -70,7 +78,8 @@ mf = d['META-INF/MANIFEST.MF'].decode('latin-1')
 line = [l for l in mf.splitlines() if l.startswith('MIDlet-1:')][0]
 cls_name = line.split(',')[-1].strip().replace('.', '/') + '.class'
 base = d[cls_name]
-print('mutating', cls_name, len(base), 'bytes,', N, 'cases')
+print('mutating', cls_name, len(base), 'bytes,', N, 'cases,', N_MUT,
+      'mutations/case')
 
 #
 # Class-file layout walker.  The structural mutation kinds need real offsets,
@@ -179,8 +188,7 @@ if LAYOUT is not None:
     if any(ent for (_cl, ent) in LAYOUT['exceptions']):
         KINDS.insert(4, 'exc_handler')
 
-def mutate(kind):
-    m = bytearray(base)
+def mutate_on(m, kind):
     if kind == 'truncate':
         return bytes(m[:random.randint(1, len(m)-1)])
     if kind == 'byte':
@@ -225,6 +233,25 @@ def mutate(kind):
         m[len(m)-1] = random.randrange(256)
     return bytes(m)
 
+def mutate(kind):
+    return mutate_on(bytearray(base), kind)
+
+def mutate_multi(kinds):
+    """Apply several mutation kinds to one class, in order.
+
+    A later structural mutation may no longer find what the earlier one left
+    behind (truncate shrinks the array, a count change moves no offsets here
+    because they were captured from the pristine file).  Such a case is still a
+    valid malformed class from the runtime's point of view, so the failure to
+    re-apply falls back to a shorter buffer instead of aborting the run."""
+    m = bytearray(base)
+    for kind in kinds:
+        try:
+            m = bytearray(mutate_on(m, kind))
+        except (struct.error, IndexError, ValueError):
+            m = m[:max(1, len(m) - 1)]
+    return bytes(m)
+
 #
 # THE CONTROL COMES FIRST.  An absolute per-case timeout is a claim about this
 # machine's speed, and this test runs under `ctest -j` alongside a corpus scan
@@ -248,8 +275,10 @@ print('control: unmutated fixture took %.2fs, so a case is a hang after %.1fs'
 
 hangs, crashed, ok = [], [], 0
 for i in range(N):
-    kind = KINDS[i % len(KINDS)] if i < len(KINDS) else random.choice(KINDS)
-    jar = build({cls_name: mutate(kind)})
+    kinds = [KINDS[i % len(KINDS)] if i < len(KINDS) else random.choice(KINDS)]
+    while len(kinds) < N_MUT:
+        kinds.append(random.choice(KINDS))
+    jar = build({cls_name: (mutate_multi(kinds) if N_MUT > 1 else mutate(kinds[0]))})
     try:
         # --run-frames is ESSENTIAL and its absence produced a completely wrong
         # result the first time: nj_midp_run loops until the MIDlet exits, so a
