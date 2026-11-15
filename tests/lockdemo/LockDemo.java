@@ -51,9 +51,21 @@ public class LockDemo extends MIDlet {
     }
 
     static class Screen extends Canvas {
-        protected void paint(Graphics g) {
+        static int paints;
+
+        /*
+         * paint() is invoked by the runtime through the C bridge, and a
+         * synchronized callback must own its monitor there too.  notifyAll()
+         * is the ownership probe: it throws IllegalMonitorStateException when
+         * the caller does not own the monitor.  The runtime used to call Java
+         * callbacks from C without taking the monitor, so this threw once per
+         * frame.
+         */
+        protected synchronized void paint(Graphics g) {
             g.setColor(0xFFFFFF);
             g.fillRect(0, 0, getWidth(), getHeight());
+            paints++;
+            notifyAll();
         }
     }
 
@@ -75,7 +87,8 @@ public class LockDemo extends MIDlet {
                 }
             }
         }
-        System.out.println("LOCK counter=" + counter + " overlap=" + overlap);
+        System.out.println("LOCK counter=" + counter + " overlap=" + overlap +
+                           " paints=" + Screen.paints);
         notifyDestroyed();
     }
 

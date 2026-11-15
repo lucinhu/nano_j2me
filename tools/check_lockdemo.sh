@@ -52,5 +52,21 @@ case "$out" in
     *) say 0 "no exception escaped a thread" ;;
 esac
 
+# A synchronized Canvas.paint() is invoked through the C bridge, not through
+# the interpreter's invoke opcodes.  notifyAll() inside it is the ownership
+# probe: it throws IllegalMonitorStateException unless the callback already
+# owns the monitor.  The runtime used to call Java callbacks from C without
+# taking it, so this threw once per frame.
+case "$out" in
+    *"IllegalMonitorStateException"*)
+        say 1 "a synchronized callback ran without its monitor" ;;
+    *)
+        say 0 "synchronized callbacks own their monitor" ;;
+esac
+
+paints="$(printf '%s\n' "$out" | sed -n 's/.*paints=\([0-9][0-9]*\).*/\1/p' | tail -1)"
+[ -n "$paints" ] && [ "$paints" -gt 0 ]
+say $? "the synchronized paint() ran (${paints:-0} frames)"
+
 [ "$fail" = 0 ] && echo "PASS: synchronized excludes other threads"
 exit "$fail"

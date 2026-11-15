@@ -1479,6 +1479,106 @@ nj_status vm_invoke(nj_vm *vm, nj_ref obj, const char *cls,
     }
 
     /*
+     * A synchronized Java method reached through this bridge owns its monitor
+     * before its first bytecode, exactly as the interpreter's invoke opcodes
+     * arrange.  The MIDlet callbacks are all invoked this way - Canvas.paint(),
+     * keyPressed(), commandAction() - so a title whose callback is
+     * `public synchronized void paint()` used to run it unlocked: its own
+     * notify() then threw IllegalMonitorStateException.  冰淇淋少女成长日记_7307
+     * did exactly that once per frame for the whole run.
+     *
+     * The frame is already on the stack, so a contended entry has the shape
+     * mon_start_pending() recognises: when the scheduler hands the monitor
+     * over, mon_wake_waiters() records it on this entry frame.  When it is
+     * free, it is recorded here.  Either way the normal frame teardown path
+     * releases it, so no explicit exit is needed below.
+     */
+    if ((m->flags & NJ_ACC_SYNCHRONIZED) != 0u)
+    {
+        nj_ref mon = (m->flags & NJ_ACC_STATIC)
+                         ? nj_class_object(vm, m->owner->name)
+                         : obj;
+        int rc;
+
+        if (!mon)
+        {
+            nj_frame_pop_fast(th);
+            th->top = saved_top;
+            return NJ_ERR;      /* exception already raised */
+        }
+        rc = nj_vm_monitor_enter(vm, th, mon);
+        if (rc == 2)
+        {
+            nj_frame_pop_fast(th);
+            th->top = saved_top;
+            return nj_throw(vm, "java/lang/IllegalStateException",
+                            "too many monitors");
+        }
+        if (rc == 1)
+        {
+            /*
+             * Another thread owns it.  A C caller cannot be suspended, so wait
+             * here: the scheduler runs the other threads and mon_wake_waiters()
+             * hands the monitor to this entry frame when it frees up.
+             *
+             * The wait is bounded on purpose.  A display thread entering a
+             * synchronized paint() can block on a monitor held by a title
+             * thread that is itself waiting for this paint to finish (its
+             * serviceRepaints() native pumps the scheduler): on a handset the
+             * display thread would simply block, but this runtime's frame
+             * painter is the C caller and cannot be resumed by anyone else, so
+             * an unbounded wait deadlocks the whole VM - 极品飞车16：亡命狂飙_1519
+             * and 极品飞车13之变速英文3D版_6646 ran for ever.
+             *
+             * Falling back to running the callback without the monitor after a
+             * short grace period preserves the pre-fix forward progress (that
+             * was the old behaviour for every callback) while still giving the
+             * common case a real monitor: a title whose synchronized paint()
+             * notifies a loader (冰淇淋少女成长日记_7307) now works, and one that
+             * merely holds its own lock across serviceRepaints still paints.
+             */
+            int prev_in_c_call = th->in_c_call;
+            nj_s8 start = nj_now_ms(vm);
+            int waited = 0;
+
+            th->in_c_call = 1;
+            while (th->state == NJ_THREAD_BLOCKED && vm->running)
+            {
+                if (nj_scheduler_step(vm) == NJ_ERR_HALT)
+                {
+                    break;
+                }
+                waited = (int)(nj_now_ms(vm) - start);
+                if (waited >= 100)
+                {
+                    break;
+                }
+            }
+            th->in_c_call = prev_in_c_call;
+            if (th->state == NJ_THREAD_BLOCKED)
+            {
+                /*
+                 * Still held: run this callback without the monitor instead of
+                 * stalling the frame painter.  The frame does not record it,
+                 * so the return path has nothing to release.
+                 */
+                th->state = NJ_THREAD_RUNNING;
+                th->wait_kind = NJ_WAIT_NONE;
+                th->wait_monitor = NULL;
+                th->wait_deadline = 0;
+            }
+            else if (!nj_vm_monitor_owned(vm, th, mon))
+            {
+                /* Woken but not handed the monitor: same fallback. */
+            }
+        }
+        if (nj_vm_monitor_owned(vm, th, mon))
+        {
+            th->frames[th->nframes - 1].monitor = mon;
+        }
+    }
+
+    /*
      * Run to completion, absorbing scheduling quanta.
      *
      * nj_exec() returns NJ_ERR_YIELD when the thread has executed its quantum;
