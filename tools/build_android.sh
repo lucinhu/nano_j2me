@@ -168,6 +168,24 @@ else
     FEATURE_DEFS="$FEATURE_DEFS -DNJ_THREADED_DISPATCH=1"
 fi
 
+# Optional baseline JIT (default off).  NJ_ENABLE_JIT also needs the engine
+# interface and the port's executable-memory callbacks, which
+# src/port/android/nj_port_android.c provides.  ARM64 is the backend a phone
+# uses; x86_64 covers the emulator.  It stays opt-in because the interpreter is
+# the shipped configuration and the JIT's bounded code cache is a measured
+# trade, not an unconditional win.
+if [ "${NJ_ANDROID_JIT:-0}" = "1" ]; then
+    FEATURE_DEFS="$FEATURE_DEFS -DNJ_ENABLE_JIT=1 -DNJ_ENABLE_ENGINE=1 \
+-DNJ_JIT_STATS=1 -DNJ_JIT_DETAILED_STATS=1"
+    # Optional tuning for A/B experiments; the defaults are the shipped sizes.
+    [ -n "${NJ_ANDROID_JIT_CACHE:-}" ] &&
+        FEATURE_DEFS="$FEATURE_DEFS -DNJ_JIT_CACHE_ENTRIES=${NJ_ANDROID_JIT_CACHE}"
+    [ -n "${NJ_ANDROID_JIT_METHODS:-}" ] &&
+        FEATURE_DEFS="$FEATURE_DEFS -DNJ_JIT_METHOD_ENTRIES=${NJ_ANDROID_JIT_METHODS}"
+    [ -n "${NJ_ANDROID_JIT_ARENA:-}" ] &&
+        FEATURE_DEFS="$FEATURE_DEFS -DNJ_JIT_METHOD_ARENA_BYTES=${NJ_ANDROID_JIT_ARENA}"
+fi
+
 # --no-png / --no-jpeg / --no-gif / --no-inflate / --no-wav / --no-amr: cut one
 # built-in decoder out of the library.  On Android that is a real choice rather
 # than a loss, because the port installs the platform's own decoders behind the

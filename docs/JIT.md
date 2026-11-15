@@ -357,9 +357,15 @@ are in [JIT_PERFORMANCE.md](JIT_PERFORMANCE.md).
 Ports must implement writable allocation, executable commit (including instruction
 cache synchronization), and free with `port->ud`. Alignment is at least 4 bytes;
 callbacks must not re-enter Java or mutate engines on the same VM. The existing
-POSIX headless port provides W^X allocation. ESP32 currently leaves these hooks
-NULL: an ESP32-C3/C6 deployment needs a board-specific executable-memory/cache
-implementation before native execution can be enabled; it otherwise falls back.
+POSIX headless port provides W^X allocation; the Android port provides the same
+three callbacks behind `NJ_ENABLE_JIT` (`NJ_ANDROID_JIT=1` in
+`tools/build_android.sh`), using an inline aarch64 cache flush so the library
+keeps zero writable static state. That path is opt-in and unshipped: on
+Minecraft the JIT measured slower than the interpreter on Android
+([2026-11-15-android-jit-experiment.md](notes/2026-11-15-android-jit-experiment.md)).
+ESP32 currently leaves these hooks NULL: an ESP32-C3/C6 deployment needs a
+board-specific executable-memory/cache implementation before native execution
+can be enabled; it otherwise falls back.
 
 ### Validation
 

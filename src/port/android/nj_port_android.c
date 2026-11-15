@@ -66,6 +66,7 @@
 #include <pthread.h>
 #include <dirent.h>
 #include <sys/stat.h>
+#include <sys/mman.h>          /* executable memory for the optional JIT */
 #include <zlib.h>              /* DEFLATE, for JAR entries and .m3g sections */
 
 /*
@@ -4706,6 +4707,120 @@ static void android_legacy_free(void *ud, void *p)
 }
 #endif
 
+/* ------------------------------------------------------------------ */
+/* Executable memory for the optional baseline JIT (NJ_ENABLE_JIT).  Off in
+ * the shipped build, where the VM interprets. */
+#if NJ_ENABLE_JIT
+/* Executable memory for the optional baseline JIT                      */
+/* ------------------------------------------------------------------ */
+/*
+ * The contract lives in include/nj2me/nj_port.h: code_alloc hands out writable
+ * pages that are NOT executable, code_commit flips them to read+execute and
+ * synchronises the instruction cache, code_free releases the mapping.  Android
+ * app processes may map and re-protect anonymous memory this way; if any step
+ * fails the JIT stays uninstalled and the VM keeps interpreting, so this is an
+ * accelerator rather than a requirement.  The mapping length is recorded in a
+ * header word so code_free can munmap the same range without the caller having
+ * to remember it.
+ */
+typedef struct android_code_block {
+    nj_size len;                /* total, header included */
+} android_code_block;
+
+static void *android_code_alloc(void *ud, nj_size n)
+{
+    void *p;
+    nj_size total;
+    (void)ud;
+
+    if (n == 0u) {
+        return NULL;
+    }
+    total = n + sizeof(android_code_block);
+    p = mmap(NULL, (size_t)total, PROT_READ | PROT_WRITE,
+             MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (p == MAP_FAILED) {
+        return NULL;
+    }
+    ((android_code_block *)p)->len = total;
+    return (unsigned char *)p + sizeof(android_code_block);
+}
+
+/*
+ * Instruction-cache maintenance without a writable static.
+ *
+ * __builtin___clear_cache on aarch64 pulls in a compiler-rt routine that caches
+ * CTR_EL0 in a writable static, and this library is built with a hard "no
+ * writable static state" rule (tools/build_android.sh checks .data/.bss).  Do
+ * the maintenance inline instead: clean data lines to the point of
+ * unification, then invalidate the instruction lines.  x86 has coherent
+ * instruction caches and needs nothing; other targets here are not JIT hosts.
+ */
+static void android_clear_cache(void *begin, nj_size len)
+{
+#if defined(__aarch64__)
+    nj_u8 ctr;
+    nj_u8 dline;
+    nj_u8 iline;
+    nj_u8 p;
+    nj_u8 end;
+
+    __asm__ __volatile__("mrs %0, ctr_el0" : "=r"(ctr));
+    dline = (nj_u8)4u << ((ctr >> 16) & 0xfu);
+    iline = (nj_u8)4u << (ctr & 0xfu);
+    end = (nj_u8)(nj_u8)(size_t)begin + len;
+    for (p = (nj_u8)(size_t)begin & ~(dline - 1u); p < end; p += dline) {
+        __asm__ __volatile__("dc cvau, %0" : : "r"(p) : "memory");
+    }
+    __asm__ __volatile__("dsb ish" : : : "memory");
+    for (p = (nj_u8)(size_t)begin & ~(iline - 1u); p < end; p += iline) {
+        __asm__ __volatile__("ic ivau, %0" : : "r"(p) : "memory");
+    }
+    __asm__ __volatile__("dsb ish\n\tisb" : : : "memory");
+#else
+    (void)begin;
+    (void)len;
+#endif
+}
+
+static int android_code_commit(void *ud, void *p, nj_size n)
+{
+    unsigned char *base;
+    nj_size total;
+    (void)ud;
+
+    if (!p) {
+        return -1;
+    }
+    base = (unsigned char *)p - sizeof(android_code_block);
+    total = ((android_code_block *)base)->len;
+    if (n + sizeof(android_code_block) > total) {
+        return -1;              /* the caller is describing someone else's block */
+    }
+    android_clear_cache(p, n);
+    if (mprotect(base, (size_t)total, PROT_READ | PROT_EXEC) != 0) {
+        return -1;
+    }
+    return 0;
+}
+
+static void android_code_free(void *ud, void *p, nj_size n)
+{
+    nj_size total;
+    (void)ud;
+    (void)n;
+
+    if (!p) {
+        return;
+    }
+    total = ((android_code_block *)((unsigned char *)p -
+                                    sizeof(android_code_block)))->len;
+    (void)munmap((unsigned char *)p - sizeof(android_code_block),
+                 (size_t)total);
+}
+
+#endif /* NJ_ENABLE_JIT */
+
 /* Construction and the public configuration entry points              */
 /* ------------------------------------------------------------------ */
 /*
@@ -4860,6 +4975,13 @@ nj_status nj_port_android_ex(nj_port *out, int screen_w, int screen_h)
     out->bt_write = android_bt_write;
     out->bt_close = android_bt_close;
     out->log = android_log;
+#if NJ_ENABLE_JIT
+    /* Optional baseline JIT: without these the VM interprets, which is the
+     * shipping default.  See the contract above the callbacks. */
+    out->code_alloc = android_code_alloc;
+    out->code_commit = android_code_commit;
+    out->code_free = android_code_free;
+#endif
     out->shutdown = android_shutdown;
     out->fps_cap = android_fps_cap();
     {

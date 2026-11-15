@@ -1,3 +1,8 @@
+/* NJ_PROF_FEATURE: the dev sampler needs POSIX/GNU signal types even in
+ * strict -std=c99 builds; define this before any system header. */
+#if defined(__linux__) && (defined(__x86_64__) || defined(__aarch64__))
+#define _GNU_SOURCE 1
+#endif
 /*
  * nano_j2me - apps/nj2me_main.c
  *
@@ -11,6 +16,127 @@
 #include <stdlib.h>
 #include <errno.h>
 #include <limits.h>
+
+/*
+ * Dev-only self-sampling profiler: NJ_SAMPLE_PROF=1 arms a 1 kHz SIGPROF
+ * timer that records the interrupted program counter; at exit the addresses
+ * are printed as "PROF <hex>" lines on stderr so an offline symbolizer can
+ * map them. It never touches the VM, so a profiled run measures the same
+ * code as a normal run.
+ */
+#if defined(__linux__) && (defined(__x86_64__) || defined(__aarch64__))
+#define NJ_PROF 1
+#include <signal.h>
+#include <sys/time.h>
+#include <ucontext.h>
+#include <unistd.h>
+#define NJ_PROF_MAX 131072u
+static volatile sig_atomic_t nj_prof_on;
+static unsigned nj_prof_n;
+static unsigned long nj_prof_pc[NJ_PROF_MAX];
+static unsigned long nj_prof_base;
+
+static void nj_prof_handler(int sig, siginfo_t *si, void *ucv)
+{
+    ucontext_t *uc = (ucontext_t *)ucv;
+    unsigned long pc;
+    (void)sig;
+    (void)si;
+#if defined(__x86_64__)
+    pc = (unsigned long)uc->uc_mcontext.gregs[REG_RIP];
+#else
+    pc = (unsigned long)uc->uc_mcontext.pc;
+#endif
+    if (nj_prof_n < NJ_PROF_MAX) {
+        nj_prof_pc[nj_prof_n++] = pc;
+    }
+}
+
+static void nj_prof_start(void)
+{
+    struct sigaction sa;
+    struct itimerval it;
+    FILE *f = fopen("/proc/self/maps", "r");
+    char line[1024];
+    char self[512];
+    ssize_t slen;
+    if (!f) {
+        return;
+    }
+    slen = readlink("/proc/self/exe", self, sizeof(self) - 1);
+    if (slen <= 0) {
+        fclose(f);
+        return;
+    }
+    self[slen] = 0;
+    /* The whole executable mapping: min start .. max end for this path. */
+    while (fgets(line, (int)sizeof(line), f)) {
+        unsigned long lo = 0, hi = 0;
+        char perms[8], path[600];
+        int got;
+        path[0] = 0;
+        got = sscanf(line, "%lx-%lx %7s %*s %*s %*s %599s", &lo, &hi, perms,
+                     path);
+        if (got >= 4 && strcmp(path, self) == 0) {
+            if (!nj_prof_base || lo < nj_prof_base) {
+                nj_prof_base = lo;
+            }
+        }
+    }
+    fclose(f);
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_sigaction = nj_prof_handler;
+    sa.sa_flags = SA_SIGINFO | SA_RESTART;
+    sigemptyset(&sa.sa_mask);
+    if (sigaction(SIGPROF, &sa, NULL) != 0) {
+        return;
+    }
+    it.it_interval.tv_sec = 0;
+    it.it_interval.tv_usec = 1000;
+    it.it_value = it.it_interval;
+    if (setitimer(ITIMER_PROF, &it, NULL) != 0) {
+        return;
+    }
+    nj_prof_on = 1;
+}
+
+static void nj_prof_dump(void)
+{
+    unsigned i;
+    struct itimerval zero;
+    if (!nj_prof_on) {
+        return;
+    }
+    memset(&zero, 0, sizeof(zero));
+    setitimer(ITIMER_PROF, &zero, NULL);
+    {
+        FILE *f = fopen("/proc/self/maps", "r");
+        char line[1024];
+        if (f) {
+            while (fgets(line, (int)sizeof(line), f)) {
+                unsigned long lo = 0, hi = 0, off = 0;
+                char perms[8], path[600];
+                int got;
+                path[0] = 0;
+                got = sscanf(line, "%lx-%lx %7s %lx %*s %*s %599s", &lo, &hi,
+                             perms, &off, path);
+                if (got >= 4 && perms[2] == 'x') {
+                    fprintf(stderr, "MAP %lx %lx %lx %s\n", lo, hi, off,
+                            got >= 5 ? path : "");
+                }
+            }
+            fclose(f);
+        }
+    }
+    for (i = 0; i < nj_prof_n; ++i) {
+        fprintf(stderr, "PROF %lx\n", nj_prof_pc[i]);
+    }
+    fprintf(stderr, "PROF samples=%u\n", nj_prof_n);
+}
+#else
+#define nj_prof_start() ((void)0)
+#define nj_prof_dump() ((void)0)
+#endif
 
 #if defined(_WIN32)
 #  ifndef WIN32_LEAN_AND_MEAN
@@ -488,6 +614,11 @@ static char **win32_utf8_argv(int *out_argc)
 int main(int argc, char **argv)
 {
     cli c;
+    const char *nj_prof_env = getenv("NJ_SAMPLE_PROF");
+    if (nj_prof_env && nj_prof_env[0] == '1') {
+        nj_prof_start();
+        atexit(nj_prof_dump);
+    }
     nj_port port;
     nj_run_opts opts;
     nj_client_settings settings;
