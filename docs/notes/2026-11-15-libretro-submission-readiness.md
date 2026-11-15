@@ -431,3 +431,42 @@ The upstream requirement audit in `docs/LIBRETRO_SUBMISSION.md` now maps each
 `developing-cores.md` step and each libretro API obligation to its local
 evidence; only the two upstream PRs and the maintainer-run CI remain, and both
 need explicit authorization.
+
+## Update, 2026-11-15 (round 30): byte-reproducible Windows PE output
+
+The round-27 check left one reproducibility gap: two builds of the same tree
+produced Windows DLLs with identical code but six differing bytes.  The cause
+was two-fold: the linker writes the build time into the COFF header, and GNU
+`strip` (run by the release script on the installed copy) rewrites that header
+with the current time when it rewrites a PE file.
+
+Fix (tools only, no core sources):
+- `tools/toolchain-mingw-w64.cmake` and `tools/toolchain-mingw-w64-i686.cmake`
+  initialise `CMAKE_SHARED_LINKER_FLAGS` with
+  `-Wl,--no-insert-timestamp -Wl,--build-id=none`;
+- `tools/build_libretro_cores.sh` passes those flags explicitly to the Windows
+  targets, appends `-s` at link time when stripping is requested, and skips the
+  post-link GNU `strip` for `windows-*` targets (that step was what re-stamped
+  the header).
+
+Verification: two independent `--clean` builds of both Windows targets are now
+byte-identical, and `objdump -p` shows `Time/Date Thu Jan 1 08:00:00 1970`
+(Unix epoch). The resulting r19 DLLs are:
+
+| Target | Size | SHA-256 |
+| --- | --- | --- |
+| windows-i686 | 3,428,352 B | `ee490673d218829ec8e8ea7ab85c48d70dd4d43cfbc21e35dd5df58f5335e47b` |
+| windows-x86_64 | 3,211,776 B | `8bcdbd2ac402808c0325304175f1eeb2e69bcca401a832a52f9872d886543158` |
+
+All eight targets were rebuilt cleanly into
+`/var/tmp/nj2me-submission-dist-r19`; Linux/Android hashes equal the r17 table
+(byte-identical), the two Windows rows are the values above.  That tree is now
+the canonical `build/libretro-dist` (r17 backed up to
+`/var/tmp/libretro-dist-20261115-r17-backup.tgz`).  Spot validation on r19:
+linux-x86_64 mock-frontend matrix 20/20, real RetroArch 1.22.2 LoopDemo 120
+frames PASS, windows-x86_64 DLL under Wine 4/4.
+
+Consequence for submission: release artifacts, including the Windows pair, are
+now reproducible from the same source tree and toolchain, so the SHA-256 table
+is stable across rebuilds and can be quoted in the upstream PR without the
+"Windows differs in metadata" caveat.

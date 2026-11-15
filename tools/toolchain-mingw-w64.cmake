@@ -79,5 +79,12 @@ endif()
 set(CMAKE_C_FLAGS_INIT "-DWIN32_LEAN_AND_MEAN -DNOMINMAX")
 set(CMAKE_EXE_LINKER_FLAGS_INIT "-static -static-libgcc -Wl,--enable-auto-import")
 
+# Keep the PE output byte-reproducible: without these flags the linker writes the
+# build time into the COFF timestamp and into a second copy (CodeView/build-id) at
+# the end of the image, so two builds of the same tree differ in a handful of
+# bytes even though the code is identical.  tools/build_libretro_cores.sh relies
+# on this for the release-artifact reproducibility check.
+set(CMAKE_SHARED_LINKER_FLAGS_INIT "-Wl,--no-insert-timestamp -Wl,--build-id=none")
+
 # No CMake host tools are executed during a cross build; tests need wine, so
 # tools/build_windows.sh passes -DNJ_BUILD_TESTS=OFF -DNJ_BUILD_LIBRETRO=OFF.

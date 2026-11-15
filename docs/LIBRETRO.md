@@ -69,8 +69,9 @@ Outputs go to `build/libretro-dist/<target>/`, with a library and its metadata.
 Use `--no-strip` to retain symbols. `all` selects the script's supported targets
 and requires all of their toolchains.
 
-The eight candidates currently in `build/libretro-dist/` were rebuilt on
-2026-11-15 at revision `011247e`, so they include the load-lifecycle fix, the
+The eight candidates currently in `build/libretro-dist/` are the r19 package
+rebuilt on 2026-11-15 from a tree whose core sources are identical to revision
+`011247e` (only documentation and toolchain files changed since), so they include the load-lifecycle fix, the
 monitor and repaint-blocking fixes, the CLI/manual-state boundary work, the
 input-bitmask/rumble support and the `nano_j2me_screen`/`nano_j2me_locale`
 options, bounded load/save state clock assistance including the paused
@@ -79,7 +80,10 @@ the level-3 Player-start diagnostics, and three corpus rendering fixes (stray
 paint waiters, pre-show `Displayable` sizes, longer startup grace), plus the
 device-property answers and the generic-handset load retry described above. The report
 also records the whole-corpus rendering probe, which is what found those
-rendering bugs. `build/libretro-final-report-20261115.md` records sizes, SHA-256 values
+rendering bugs. Windows cores are linked with a zero COFF timestamp and no
+build-id, and are stripped at link time, so the whole package is byte-reproducible
+across clean rebuilds (verified twice for both Windows targets).
+`build/libretro-final-report-20261115.md` records sizes, SHA-256 values
 and what was run per target: linux-x86_64 in the mock frontend and real
 RetroArch, windows-x86_64 under Wine, and ABI/dependency checks only for the
 Android and ARM-Linux cores (no device run in this rebuild). That report also

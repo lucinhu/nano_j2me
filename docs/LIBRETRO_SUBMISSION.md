@@ -98,9 +98,12 @@ change as recorded in the hash table).
   | android-arm64 | `4ad4e145d09ca459f1790460c5da8022a49b9fc6714fdb79aab77fa748e6370f` |
   | android-armv7 | `e74c994d3845c3cf1f048fec7a9a00af6c7cb47bee643c5d595ecf90d7f4e417` |
   | android-x86_64 | `9d6294cc9749b1ff66df831d41b9f643b22993fc39913ba512ea925f831276f9` |
-  | windows-i686 | `a8673238dd035615b00a6d9d76d76c70d2a0f091bcbf3af8b469ec7087c4d2da` |
-  | windows-x86_64 | `b787d4abf4e7bf78133ec808631e68053b04fe980c0e4ab074d54ee8acb070c8` |
+  | windows-i686 | `ee490673d218829ec8e8ea7ab85c48d70dd4d43cfbc21e35dd5df58f5335e47b` (r19, deterministic link) |
+  | windows-x86_64 | `8bcdbd2ac402808c0325304175f1eeb2e69bcca401a832a52f9872d886543158` (r19, deterministic link) |
 
+  Linux and Android hashes are unchanged from r17. The two Windows rows were
+  regenerated in the r19 build (after the deterministic-PE change below); the
+  earlier r17 PE DLLs differed only in COFF timestamp/checksum bytes.
   Every target directory contains the same `.info`, license/notice set and
   `BUILD_STATUS.txt`; no external test font is bundled.
 - **Artifact validation**. The fresh linux-x86_64 core passed the mock-frontend
@@ -147,19 +150,30 @@ change as recorded in the hash table).
   pull request with a real `mkdocs build`, and optional assets/database entries
   are all upstream decisions and are not performed here.
 
-## Update, 2026-11-15 (requirements audit and r18 revalidation)
+## Update, 2026-11-15 (requirements audit, r18 revalidation and r19 deterministic Windows PE)
 
 Rebuilt all eight release targets at HEAD `d10fe50` (`tools/build_libretro_cores.sh
 --jobs 12 --out /var/tmp/nj2me-submission-dist-r18 all`, rc=0; 8 dirs x 16 files,
 `.info` `c0f30aeae22150208034202986b3db77fd2f423874e2f2bcc1ce7b07c82723c6`
 identical). Since `011247e` the tree changes are documentation, web assets and a
-CLI profiler no-op (`d10fe50`); the rebuilt Linux and Android cores are
-byte-identical to the r17 table above (same SHA-256), and the two Windows DLLs
-have identical sizes but differ only in PE timestamp/checksum bytes, which
-matches the reproducibility section of
-[the readiness note](notes/2026-11-15-libretro-submission-readiness.md). The
-canonical `build/libretro-dist` package therefore stays r17; the r18 build is
-the reproducibility and revalidation artifact.
+CLI profiler no-op; the rebuilt Linux and Android cores are byte-identical to the
+r17 table above (same SHA-256), while the two Windows DLLs differed only in PE
+timestamp/checksum bytes.
+
+That remaining Windows difference is now fixed: GNU `strip` on PE rewrites the
+COFF header with the build time, and the linker also embedded a build timestamp,
+so `tools/toolchain-mingw-w64.cmake`, `tools/toolchain-mingw-w64-i686.cmake` and
+`tools/build_libretro_cores.sh` now link Windows cores with
+`-Wl,--no-insert-timestamp -Wl,--build-id=none` plus link-time `-s` and skip the
+post-link `strip` for PE targets. Two independent clean builds of both Windows
+targets are now byte-identical (COFF `Time/Date` is the Unix epoch), and Wine
+still reports 4 passed / 0 failed. All eight targets were then rebuilt into the
+**r19** package and that tree is now the canonical `build/libretro-dist`
+(the r17 tree was backed up to `/var/tmp/libretro-dist-20261115-r17-backup.tgz`).
+On r19 the linux-x86_64 mock matrix reports 20/20, real RetroArch 1.22.2 still
+runs LoopDemo 120 frames to a clean exit, and the Windows DLL passes Wine 4/4.
+See the reproducibility notes in
+[the readiness note](notes/2026-11-15-libretro-submission-readiness.md).
 
 Full revalidation on that build (logs under
 `.local-tools/debug-runs/submission-20261115/`, gitignored):

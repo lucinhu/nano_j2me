@@ -71,7 +71,7 @@ set(CMAKE_EXE_LINKER_FLAGS_INIT "-static -static-libgcc -Wl,--enable-auto-import
 # defaults to importing them from libgcc_s_dw2-1.dll.  A libretro core is
 # dlopen()ed from the frontend's own process, so that DLL would have to be
 # installed next to RetroArch; link the GCC runtime statically instead.
-set(CMAKE_SHARED_LINKER_FLAGS_INIT "-static-libgcc -Wl,--enable-auto-import")
+set(CMAKE_SHARED_LINKER_FLAGS_INIT "-static-libgcc -Wl,--enable-auto-import -Wl,--no-insert-timestamp -Wl,--build-id=none")
 
 # No CMake host tools are executed during a cross build; tests need wine, so
 # tools/build_windows.sh passes -DNJ_BUILD_TESTS=OFF -DNJ_BUILD_LIBRETRO=OFF.

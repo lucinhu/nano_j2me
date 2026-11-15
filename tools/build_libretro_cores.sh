@@ -71,6 +71,10 @@ OUT="${NJ_LIBRETRO_OUT:-$ROOT/build/libretro-dist}"
 API=21
 DO_CLEAN=0
 DO_STRIP=1
+# Deterministic PE linking: no COFF timestamp, no build-id, and strip at
+# link time so the post-link GNU strip cannot stamp the header with the
+# build time.  Appended with -s below when stripping is requested.
+WIN_LINK_FLAGS="-Wl,--no-insert-timestamp -Wl,--build-id=none"
 NDK_ARG=""
 TARGETS=()
 
@@ -124,6 +128,12 @@ done
 if [ "${#TARGETS[@]}" -eq 0 ]; then
     usage
     exit 2
+fi
+
+# Windows cores are stripped at link time (deterministic PE output); see
+# WIN_LINK_FLAGS.  --no-strip therefore keeps symbols for those targets too.
+if [ "$DO_STRIP" -eq 1 ]; then
+    WIN_LINK_FLAGS="$WIN_LINK_FLAGS -s"
 fi
 
 for setting in "$JOBS" "$API"; do
@@ -456,12 +466,14 @@ build_target()
             command -v "$MINGW64_CC" >/dev/null 2>&1 || {
                 echo "$name: needs $MINGW64_CC (install the mingw-w64 package)" >&2
                 return 1; }
-            extra+=( -DCMAKE_TOOLCHAIN_FILE="$ROOT/tools/toolchain-mingw-w64.cmake" ) ;;
+            extra+=( -DCMAKE_TOOLCHAIN_FILE="$ROOT/tools/toolchain-mingw-w64.cmake"
+                     -DCMAKE_SHARED_LINKER_FLAGS="$WIN_LINK_FLAGS" ) ;;
         windows-i686)
             command -v "$MINGW32_CC" >/dev/null 2>&1 || {
                 echo "$name: needs $MINGW32_CC (install the mingw-w64-i686 package)" >&2
                 return 1; }
-            extra+=( -DCMAKE_TOOLCHAIN_FILE="$ROOT/tools/toolchain-mingw-w64-i686.cmake" ) ;;
+            extra+=( -DCMAKE_TOOLCHAIN_FILE="$ROOT/tools/toolchain-mingw-w64-i686.cmake"
+                     -DCMAKE_SHARED_LINKER_FLAGS="$WIN_LINK_FLAGS" ) ;;
         *)
             echo "unknown target: $name (try --list)" >&2
             return 2 ;;
@@ -531,7 +543,10 @@ EOF
     [ "$?" -eq 0 ] || return 1
     art="$dist/$(basename "$art")"
 
-    if [ "$DO_STRIP" -eq 1 ]; then
+    # GNU strip on PE rewrites the COFF header with the current time, which
+    # would make two builds of the same tree differ.  Windows cores are instead
+    # linked with -s (see WIN_LINK_FLAGS), so the strip step is skipped for them.
+    if [ "$DO_STRIP" -eq 1 ] && [ "${name#windows-}" = "$name" ]; then
         local tool
         tool="$(strip_tool_for "$name")"
         if [ -n "$tool" ] && [ -x "$tool" ]; then
