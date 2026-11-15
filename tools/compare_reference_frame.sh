@@ -9,7 +9,9 @@
 # Both runtimes advance animations on their own clocks, so the number this
 # prints bounds "same scene, small differences" - it is not a frame-locked
 # pixel certificate.  Exits 77 (skip) when PIL or the reference is missing;
-# the optional seventh argument is the MAE threshold (default 12/255).
+# the optional seventh argument is the MAE threshold (default 12/255) and the
+# eighth the pacing fps (0 = unthrottled).  Set KEEP=<dir> to keep our frame,
+# the reference shot and a side-by-side composite when the check fails.
 set -u
 
 bin=${1:-}; jar=${2:-}; ref=${3:-}; frame=${4:-300}; w=${5:-240}; h=${6:-320}
@@ -26,6 +28,7 @@ if ! python3 -c 'import PIL' 2>/dev/null; then
 fi
 
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/njrefcmp.XXXXXX") || exit 2
+keep=${KEEP:-}
 trap 'rm -rf "$tmp"' EXIT
 mkdir -p "$tmp/ours" "$tmp/refdir"
 
@@ -42,7 +45,7 @@ printf 'wait 3000\npress 5 200\nwait %s\nshot %s/ref.png\nquit\n' "$hold" "$tmp"
     "$ref" "$jar" "$tmp/refdir" "$w" "$h" >"$tmp/ref.log" 2>&1 ||
     { echo "FAIL: reference run exited $?"; exit 1; }
 
-python3 - "$tmp" "$thr" <<'PY'
+python3 - "$tmp" "$thr" "$keep" <<'PY'
 import glob, sys
 d = sys.argv[1]
 thr = float(sys.argv[2])
@@ -69,5 +72,16 @@ print('MAE %.2f / 255 over %d samples (%dx%d, frame from %s)'
       % (mae, n, w, h, ppms[0].rsplit('/', 1)[-1]))
 if mae > thr:
     print('FAIL: MAE %.2f exceeds the %.2f threshold' % (mae, thr))
+    keep = sys.argv[3] if len(sys.argv) > 3 else ''
+    if keep:
+        import os, shutil
+        os.makedirs(keep, exist_ok=True)
+        shutil.copy(ppms[0], os.path.join(keep, 'ours.ppm'))
+        shutil.copy(pngs[0], os.path.join(keep, 'ref.png'))
+        w, h = a.size
+        c = Image.new('RGB', (w * 2 + 8, h), (40, 40, 40))
+        c.paste(a, (0, 0)); c.paste(b, (w + 8, 0))
+        c.save(os.path.join(keep, 'side-by-side.png'))
+        print('kept artifacts in ' + keep)
     sys.exit(1)
 PY
