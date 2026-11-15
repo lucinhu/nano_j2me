@@ -20,6 +20,8 @@ Fixtures and targets:
 | `tests/fixtures/mididemo.jar` | `song.mid` | SMF → built-in MIDI renderer |
 | `tests/fixtures/gamedemo.jar` | `res/player.png` | PNG → `Image.createImage(String)` |
 | `tests/fixtures/gamedemo.jar` | `res/tiles.png` | PNG → `Image.createImage(InputStream)` |
+| `tests/fixtures/imagesdemo.jar` | `res/sample.jpg` | baseline JPEG → `Image.createImage(String)` |
+| `tests/fixtures/imagesdemo.jar` | `res/sample.gif` | GIF → `Image.createImage(byte[],int,int)` |
 
 One target entry is mutated per case and the JAR is rebuilt around it with the
 untouched entries, so the ZIP stays valid and only the decoder sees the damage.
@@ -40,7 +42,10 @@ Against `/var/tmp/nj2me-goal13-build/nj2me`:
   (log `.local-tools/debug-runs/fuzz-media-r49.log`, gitignored);
 - 300 cases over all six targets including the PNG decoder, two mutations,
   seed 29 → **clean 300 / crashed 0 / HUNG 0**
-  (log `.local-tools/debug-runs/fuzz-media-images-r50.log`, gitignored).
+  (log `.local-tools/debug-runs/fuzz-media-images-r50.log`, gitignored);
+- 300 cases over eight targets including the JPEG and GIF decoders, two
+  mutations, seed 31 → **clean 300 / crashed 0 / HUNG 0**
+  (log `.local-tools/debug-runs/fuzz-media-images-r51.log`, gitignored).
 
 The ctest gate `fuzz_media` (`python3 tools/fuzz_media.py <cli> 60 2`,
 TIMEOUT 300) covers the six targets in about 0.7 s; the full serial suite is

@@ -1538,6 +1538,18 @@ void nj_natives_collect(nj_vm *vm);
 nj_status nj_builtins_register_all(nj_vm *vm);
 /* Create one builtin class from its descriptor (nj_class.c). */
 nj_class *nj_class_create_builtin(nj_vm *vm, const nj_builtin_class *bc);
+/*
+ * Wrapper TYPE statics (java.lang.Integer.TYPE and friends) point at the
+ * primitive Class mirrors.  They can only be filled after every builtin class
+ * is linked, so nj_builtins_register_all() calls this (nj_lib_boxing.c).
+ */
+nj_status   nj_boxing_init(nj_vm *vm);
+/* Class mirror for a primitive descriptor character ('I','J','S','B','C',
+ * 'Z','F','D'). */
+nj_ref      nj_primitive_class_object(nj_vm *vm, char desc);
+/* Class mirror for any field descriptor ("I", "[I", "Ljava/lang/String;").
+ * Used by java.lang.reflect.Method for parameter and return types. */
+nj_ref      nj_class_object_for_desc(nj_vm *vm, const char *desc);
 
 /* ------------------------------------------------------------------ */
 /* Interpreter (nj_vm.c)                                               */

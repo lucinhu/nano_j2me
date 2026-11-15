@@ -809,9 +809,536 @@ NJFN(weak_clear)
 }
 
 /* ------------------------------------------------------------------ */
+/* java.lang.reflect.Method                                            */
+/* ------------------------------------------------------------------ */
+/*
+ * CLDC had no reflection API, but J2ME titles use it anyway: Class.forName()
+ * followed by getMethod()/invoke() is the standard way to call an optional
+ * vendor API (Nokia DeviceControl vibration, for one) without a compile-time
+ * dependency.  Without it those titles die with NoSuchMethodError.  This is
+ * the smallest implementation that makes the idiom work: find a method by
+ * name and parameter classes, then invoke it.
+ */
+static nj_size reflect_text_len(const char *s)
+{
+    nj_size n = 0u;
+    if (s) {
+        while (s[n]) {
+            n++;
+        }
+    }
+    return n;
+}
+
+static int reflect_text_eq(const char *a, const char *b)
+{
+    nj_size i = 0u;
+    if (!a || !b) {
+        return 0;
+    }
+    while (a[i] && b[i]) {
+        if (a[i] != b[i]) {
+            return 0;
+        }
+        i++;
+    }
+    return a[i] == b[i];
+}
+
+/* Descriptor text of one Class mirror: "I" for a primitive, the descriptor
+ * itself for an array ("[I"), "Lname;" for a class. */
+static int reflect_class_desc(nj_class *c, char *out, nj_size cap)
+{
+    nj_size n;
+    char d = 0;
+
+    if (!c || !out || cap < 2u) {
+        return 0;
+    }
+    if (c->prim) {
+        switch (c->prim) {
+        case NJ_PT_BOOLEAN: d = 'Z'; break;
+        case NJ_PT_BYTE:    d = 'B'; break;
+        case NJ_PT_CHAR:    d = 'C'; break;
+        case NJ_PT_SHORT:   d = 'S'; break;
+        case NJ_PT_INT:     d = 'I'; break;
+        case NJ_PT_LONG:    d = 'J'; break;
+        case NJ_PT_FLOAT:   d = 'F'; break;
+        case NJ_PT_DOUBLE:  d = 'D'; break;
+        default:            return 0;
+        }
+        out[0] = d;
+        out[1] = '\0';
+        return 1;
+    }
+    n = reflect_text_len(c->name);
+    if (c->is_array) {
+        if (n + 1u > cap) {
+            return 0;
+        }
+        memcpy(out, c->name, n + 1u);
+        return 1;
+    }
+    if (n + 3u > cap) {
+        return 0;
+    }
+    out[0] = 'L';
+    memcpy(out + 1, c->name, n);
+    out[n + 1] = ';';
+    out[n + 2] = '\0';
+    return 1;
+}
+
+/* Length of one field descriptor at p ("I", "[I", "Ljava/lang/String;"). */
+static nj_size reflect_desc_len(const char *p)
+{
+    nj_size n = 1u;
+
+    if (!p || !*p) {
+        return 0u;
+    }
+    if (*p == '[') {
+        return 1u + reflect_desc_len(p + 1);
+    }
+    if (*p == 'L') {
+        while (p[n] && p[n] != ';') {
+            n++;
+        }
+        if (p[n] == ';') {
+            n++;
+        }
+        return n;
+    }
+    return 1u;
+}
+
+/* Does a method descriptor take exactly the parameter classes in `params`? */
+static int reflect_args_match(const char *desc, nj_ref params)
+{
+    const char *p;
+    nj_u4 i, n;
+    char want[300];
+
+    if (!desc || desc[0] != '(') {
+        return 0;
+    }
+    p = desc + 1;
+    n = params ? nj_array_length(params) : 0u;
+    for (i = 0u; i < n; i++) {
+        nj_ref a = nj_array_get_ref(params, i);
+        nj_class *ac = (a && a->kind == NJ_OBJ_CLASS) ? a->u.mirror : NULL;
+        nj_size span;
+
+        if (!ac || !reflect_class_desc(ac, want, sizeof(want))) {
+            return 0;
+        }
+        span = reflect_desc_len(p);
+        if (span == 0u || span != reflect_text_len(want) ||
+            memcmp(p, want, span) != 0) {
+            return 0;
+        }
+        p += span;
+    }
+    return *p == ')';
+}
+
+static nj_ref reflect_method_new(nj_vm *vm, nj_class *decl,
+                                 const char *name, const char *desc)
+{
+    nj_class *mc = nj_class_lookup(vm, "java/lang/reflect/Method");
+    nj_ref o;
+    nj_field *f;
+    nj_ref s;
+
+    if (!mc) {
+        return NULL;
+    }
+    o = nj_new_instance(vm, mc);
+    if (!o) {
+        return NULL;
+    }
+    f = nj_field_lookup(vm, "java/lang/reflect/Method", "clazz",
+                        "Ljava/lang/Class;", 0);
+    if (f) {
+        nj_field_write_ref(vm, o, f, nj_class_object(vm, decl->name));
+    }
+    f = nj_field_lookup(vm, "java/lang/reflect/Method", "name",
+                        "Ljava/lang/String;", 0);
+    if (f) {
+        s = nj_string_new(vm, name);
+        nj_field_write_ref(vm, o, f, s);
+    }
+    f = nj_field_lookup(vm, "java/lang/reflect/Method", "desc",
+                        "Ljava/lang/String;", 0);
+    if (f) {
+        s = nj_string_new(vm, desc);
+        nj_field_write_ref(vm, o, f, s);
+    }
+    return o;
+}
+
+static nj_ref reflect_method_field(nj_vm *vm, nj_ref m,
+                                   const char *name, const char *desc)
+{
+    nj_field *f = nj_field_lookup(vm, "java/lang/reflect/Method", name, desc, 0);
+    return f ? nj_field_read_ref(vm, m, f) : NULL;
+}
+
+static nj_status reflect_lookup(nj_vm *vm, nj_class *c, int inherited,
+                                nj_ref name_ref, nj_ref params,
+                                nj_value *ret)
+{
+    char name[160];
+    nj_class *k;
+
+    if (!c || !name_ref) {
+        return nj_throw(vm, "java/lang/NullPointerException", NULL);
+    }
+    if (nj_string_to_utf8(name_ref, name, (int)sizeof(name)) <= 0) {
+        return nj_throw(vm, "java/lang/NullPointerException", NULL);
+    }
+    for (k = c; k != NULL; k = (inherited ? k->super : NULL)) {
+        nj_u2 i;
+        for (i = 0u; i < k->method_count; i++) {
+            nj_method *m = &k->methods[i];
+            /* Builtin method tables only set NJ_ACC_PUBLIC on a few
+             * entries; everything registered here is reachable from Java. */
+            if (!reflect_text_eq(m->name, name) ||
+                !reflect_args_match(m->desc, params)) {
+                continue;
+            }
+            ret->r = reflect_method_new(vm, k, m->name, m->desc);
+            if (!ret->r) {
+                return nj_throw_oom(vm);
+            }
+            return NJ_OK;
+        }
+    }
+    return nj_throw(vm, "java/lang/NoSuchMethodException", name);
+}
+
+NJFN(class_getMethod)
+{
+    return reflect_lookup(vm, NJ_CLASS_OF(args), 1,
+                          NJ_ARG_REF(args, 0), NJ_ARG_REF(args, 1), ret);
+}
+
+NJFN(class_getDeclaredMethod)
+{
+    return reflect_lookup(vm, NJ_CLASS_OF(args), 0,
+                          NJ_ARG_REF(args, 0), NJ_ARG_REF(args, 1), ret);
+}
+
+NJFN(method_getName)
+{
+    ret->r = reflect_method_field(vm, NJ_THIS(args), "name",
+                                  "Ljava/lang/String;");
+    return NJ_OK;
+}
+
+NJFN(method_getDeclaringClass)
+{
+    ret->r = reflect_method_field(vm, NJ_THIS(args), "clazz",
+                                  "Ljava/lang/Class;");
+    return NJ_OK;
+}
+
+NJFN(method_getParameterTypes)
+{
+    nj_ref m = NJ_THIS(args);
+    nj_ref desc_ref = reflect_method_field(vm, m, "desc",
+                                           "Ljava/lang/String;");
+    char desc[400];
+    nj_ref arr;
+    nj_u4 n = 0u;
+    const char *p;
+
+    if (!desc_ref || nj_string_to_utf8(desc_ref, desc, (int)sizeof(desc)) <= 0) {
+        ret->r = NULL;
+        return NJ_OK;
+    }
+    for (p = desc + 1; *p && *p != ')'; ) {
+        nj_size span = reflect_desc_len(p);
+        if (span == 0u) {
+            break;
+        }
+        n++;
+        p += span;
+    }
+    arr = nj_array_new_of(vm, "[Ljava/lang/Class;", n);
+    if (!arr) {
+        return nj_throw_oom(vm);
+    }
+    p = desc + 1;
+    {
+        nj_u4 i;
+        for (i = 0u; i < n; i++) {
+            char one[300];
+            nj_size span = reflect_desc_len(p);
+            nj_size j;
+            if (span == 0u || span >= sizeof(one)) {
+                break;
+            }
+            for (j = 0u; j < span; j++) {
+                one[j] = p[j];
+            }
+            one[span] = '\0';
+            nj_array_set_ref(arr, i, nj_class_object_for_desc(vm, one));
+            p += span;
+        }
+    }
+    ret->r = arr;
+    return NJ_OK;
+}
+
+NJFN(method_getReturnType)
+{
+    nj_ref m = NJ_THIS(args);
+    nj_ref desc_ref = reflect_method_field(vm, m, "desc",
+                                           "Ljava/lang/String;");
+    char desc[400];
+    const char *p;
+
+    if (!desc_ref || nj_string_to_utf8(desc_ref, desc, (int)sizeof(desc)) <= 0) {
+        ret->r = NULL;
+        return NJ_OK;
+    }
+    p = desc + 1;
+    while (*p && *p != ')') {
+        nj_size span = reflect_desc_len(p);
+        if (span == 0u) {
+            break;
+        }
+        p += span;
+    }
+    ret->r = (*p == ')') ? nj_class_object_for_desc(vm, p + 1) : NULL;
+    return NJ_OK;
+}
+
+/* Box one primitive value through the wrapper's static valueOf. */
+static nj_ref reflect_box(nj_vm *vm, nj_u1 ptype, nj_value *v)
+{
+    const char *cls;
+    const char *desc;
+    nj_value out;
+
+    switch (ptype) {
+    case NJ_PT_BOOLEAN:
+        cls = "java/lang/Boolean"; desc = "(Z)Ljava/lang/Boolean;"; break;
+    case NJ_PT_BYTE:
+        cls = "java/lang/Byte"; desc = "(B)Ljava/lang/Byte;"; break;
+    case NJ_PT_CHAR:
+        cls = "java/lang/Character"; desc = "(C)Ljava/lang/Character;"; break;
+    case NJ_PT_SHORT:
+        cls = "java/lang/Short"; desc = "(S)Ljava/lang/Short;"; break;
+    case NJ_PT_INT:
+        cls = "java/lang/Integer"; desc = "(I)Ljava/lang/Integer;"; break;
+    case NJ_PT_LONG:
+        cls = "java/lang/Long"; desc = "(J)Ljava/lang/Long;"; break;
+    case NJ_PT_FLOAT:
+        cls = "java/lang/Float"; desc = "(F)Ljava/lang/Float;"; break;
+    case NJ_PT_DOUBLE:
+        cls = "java/lang/Double"; desc = "(D)Ljava/lang/Double;"; break;
+    default:
+        return NULL;
+    }
+    out.bits = 0u;
+    if (nj_call_static(vm, cls, "valueOf", desc, v, &out) != NJ_OK) {
+        return NULL;
+    }
+    return out.r;
+}
+
+/* Read a wrapper's value field as the requested primitive.  A null argument
+ * is 0/false, as the Java reflection API specifies. */
+static int reflect_unbox(nj_vm *vm, nj_u1 ptype, nj_ref box, nj_value *out)
+{
+    nj_field *f;
+    const char *desc;
+
+    out->bits = 0u;
+    if (!box) {
+        return 1;
+    }
+    switch (ptype) {
+    case NJ_PT_BOOLEAN: desc = "Z"; break;
+    case NJ_PT_BYTE:    desc = "B"; break;
+    case NJ_PT_CHAR:    desc = "C"; break;
+    case NJ_PT_SHORT:   desc = "S"; break;
+    case NJ_PT_INT:     desc = "I"; break;
+    case NJ_PT_LONG:    desc = "J"; break;
+    case NJ_PT_FLOAT:   desc = "F"; break;
+    case NJ_PT_DOUBLE:  desc = "D"; break;
+    default:            return 0;
+    }
+    if (!box->cls) {
+        return 0;
+    }
+    f = nj_field_lookup(vm, box->cls->name, "value", desc, 0);
+    if (!f) {
+        return 0;
+    }
+    switch (ptype) {
+    case NJ_PT_LONG:
+        out->j = nj_field_read_long(vm, box, f);
+        break;
+    case NJ_PT_FLOAT: {
+        nj_u4 b = nj_field_read_bits32(vm, box, f);
+        memcpy(&out->f, &b, sizeof(b));
+        break;
+    }
+    case NJ_PT_DOUBLE: {
+        nj_u8 b = nj_field_read_bits64(vm, box, f);
+        memcpy(&out->d, &b, sizeof(b));
+        break;
+    }
+    default:
+        out->i = nj_field_read_int(vm, box, f);
+        break;
+    }
+    return 1;
+}
+
+NJFN(method_invoke)
+{
+    nj_ref m = NJ_THIS(args);
+    nj_ref target = NJ_ARG_REF(args, 0);
+    nj_ref params = NJ_ARG_REF(args, 1);
+    nj_ref clazz_ref = reflect_method_field(vm, m, "clazz",
+                                            "Ljava/lang/Class;");
+    nj_ref name_ref = reflect_method_field(vm, m, "name",
+                                           "Ljava/lang/String;");
+    nj_ref desc_ref = reflect_method_field(vm, m, "desc",
+                                           "Ljava/lang/String;");
+    nj_class *decl;
+    nj_class *k;
+    nj_method *found = NULL;
+    char name[160];
+    char desc[400];
+    nj_value argv[20];
+    nj_u2 argc = 0u;
+    nj_value result;
+    nj_status st;
+
+    if (!clazz_ref || clazz_ref->kind != NJ_OBJ_CLASS ||
+        !clazz_ref->u.mirror) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException",
+                        "Method has no declaring class");
+    }
+    decl = clazz_ref->u.mirror;
+    if (!name_ref || !desc_ref ||
+        nj_string_to_utf8(name_ref, name, (int)sizeof(name)) <= 0 ||
+        nj_string_to_utf8(desc_ref, desc, (int)sizeof(desc)) <= 0) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException",
+                        "Method is malformed");
+    }
+    for (k = decl; k != NULL && !found; k = k->super) {
+        nj_u2 i;
+        for (i = 0u; i < k->method_count; i++) {
+            if (reflect_text_eq(k->methods[i].name, name) &&
+                reflect_text_eq(k->methods[i].desc, desc)) {
+                found = &k->methods[i];
+                break;
+            }
+        }
+    }
+    if (!found) {
+        return nj_throw(vm, "java/lang/NoSuchMethodException", name);
+    }
+    memset(argv, 0, sizeof(argv));
+    if ((found->flags & NJ_ACC_STATIC) == 0u) {
+        if (!target) {
+            return nj_throw(vm, "java/lang/NullPointerException", name);
+        }
+        argv[argc++].r = target;
+    }
+    {
+        const char *p = desc + 1;
+        nj_u4 i = 0u;
+        while (*p && *p != ')') {
+            nj_size span = reflect_desc_len(p);
+            nj_u1 pt;
+            nj_u1 w = 1u;
+            nj_ref arg_ref = params ? nj_array_get_ref(params, i) : NULL;
+            nj_value v;
+
+            if (span == 0u) {
+                return nj_throw(vm, "java/lang/IllegalArgumentException",
+                                name);
+            }
+            pt = nj_desc_ptype(p, &w);
+            v.bits = 0u;
+            if (pt == NJ_PT_OBJECT) {
+                v.r = arg_ref;
+            } else if (!reflect_unbox(vm, pt, arg_ref, &v)) {
+                return nj_throw(vm, "java/lang/IllegalArgumentException",
+                                name);
+            }
+            if ((nj_u4)argc + 2u >= (nj_u4)(sizeof(argv) / sizeof(argv[0]))) {
+                return nj_throw(vm, "java/lang/IllegalArgumentException",
+                                name);
+            }
+            argv[argc++] = v;
+            if (*p == 'J' || *p == 'D') {
+                argc++;
+            }
+            p += span;
+            i++;
+        }
+    }
+    result.bits = 0u;
+    if ((found->flags & NJ_ACC_STATIC) != 0u) {
+        st = nj_call_static(vm, decl->name, name, desc, argv, &result);
+    } else {
+        st = nj_call(vm, target, decl->name, name, desc, argv, &result);
+    }
+    if (st != NJ_OK) {
+        return st;   /* the target's exception is already pending */
+    }
+    switch (found->ret_ptype) {
+    case NJ_PT_VOID:
+        ret->r = NULL;
+        break;
+    case NJ_PT_OBJECT:
+        ret->r = result.r;
+        break;
+    default:
+        ret->r = reflect_box(vm, found->ret_ptype, &result);
+        if (!ret->r) {
+            return nj_throw_oom(vm);
+        }
+        break;
+    }
+    return NJ_OK;
+}
+
+NJFN(method_toString)
+{
+    ret->r = reflect_method_field(vm, NJ_THIS(args), "name",
+                                  "Ljava/lang/String;");
+    return NJ_OK;
+}
+
+/* ------------------------------------------------------------------ */
 /* Tables                                                              */
 /* ------------------------------------------------------------------ */
 #define M(name, desc, flags) { name, desc, flags }
+static const nj_builtin_field method_fields[] = {
+    { "clazz", "Ljava/lang/Class;", 0 },
+    { "name",  "Ljava/lang/String;", 0 },
+    { "desc",  "Ljava/lang/String;", 0 }
+};
+
+static const nj_builtin_method method_methods[] = {
+    M("getName",             "()Ljava/lang/String;", 0),
+    M("getDeclaringClass",   "()Ljava/lang/Class;", 0),
+    M("getParameterTypes",   "()[Ljava/lang/Class;", 0),
+    M("getReturnType",       "()Ljava/lang/Class;", 0),
+    M("invoke",
+      "(Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;", 0),
+    M("toString",            "()Ljava/lang/String;", 0)
+};
+
 
 static const nj_builtin_method object_methods[] = {
     M("<init>",     "()V",                  0),
@@ -837,6 +1364,10 @@ static const nj_builtin_method class_methods[] = {
     M("getSuperclass",  "()Ljava/lang/Class;",                  0),
     M("forName",        "(Ljava/lang/String;)Ljava/lang/Class;", NJ_ACC_STATIC),
     M("newInstance",    "()Ljava/lang/Object;",                 0),
+    M("getMethod",
+      "(Ljava/lang/String;[Ljava/lang/Class;)Ljava/lang/reflect/Method;", 0),
+    M("getDeclaredMethod",
+      "(Ljava/lang/String;[Ljava/lang/Class;)Ljava/lang/reflect/Method;", 0),
     M("toString",       "()Ljava/lang/String;",                 0)
 };
 
@@ -897,6 +1428,7 @@ static const nj_builtin_method throwable_methods[] = {
     X("java/lang/ClassNotFoundException",        "java/lang/Exception")       \
     X("java/lang/InstantiationException",        "java/lang/Exception")       \
     X("java/lang/IllegalAccessException",        "java/lang/Exception")       \
+    X("java/lang/NoSuchMethodException",        "java/lang/Exception")       \
     X("java/lang/CloneNotSupportedException",    "java/lang/Exception")       \
     X("java/lang/OutOfMemoryError",              "java/lang/Error")           \
     X("java/lang/StackOverflowError",            "java/lang/Error")           \
@@ -929,6 +1461,11 @@ const nj_builtin_class nj_lib_object_classes[] = {
     { "java/lang/Class", "java/lang/Object", NJ_ACC_PUBLIC | NJ_ACC_FINAL,
       NULL, 0u, class_methods,
       (nj_u2)(sizeof(class_methods) / sizeof(class_methods[0])) },
+    { "java/lang/reflect/Method", "java/lang/Object",
+      NJ_ACC_PUBLIC | NJ_ACC_FINAL,
+      method_fields, (nj_u2)(sizeof(method_fields) / sizeof(method_fields[0])),
+      method_methods,
+      (nj_u2)(sizeof(method_methods) / sizeof(method_methods[0])) },
     { "java/lang/Throwable", "java/lang/Object", NJ_ACC_PUBLIC,
       throwable_fields, (nj_u2)(sizeof(throwable_fields) / sizeof(throwable_fields[0])),
       throwable_methods,
@@ -972,6 +1509,18 @@ const nj_native_entry nj_lib_object_table[] = {
     { "java/lang/Class",     "forName",           "(Ljava/lang/String;)Ljava/lang/Class;", class_forName },
     { "java/lang/Class",     "newInstance",       "()Ljava/lang/Object;",  class_newInstance },
     { "java/lang/Class",     "toString",          "()Ljava/lang/String;",  class_toString },
+    { "java/lang/Class",     "getMethod",
+      "(Ljava/lang/String;[Ljava/lang/Class;)Ljava/lang/reflect/Method;", class_getMethod },
+    { "java/lang/Class",     "getDeclaredMethod",
+      "(Ljava/lang/String;[Ljava/lang/Class;)Ljava/lang/reflect/Method;", class_getDeclaredMethod },
+
+    { "java/lang/reflect/Method", "getName",            "()Ljava/lang/String;", method_getName },
+    { "java/lang/reflect/Method", "getDeclaringClass",  "()Ljava/lang/Class;",  method_getDeclaringClass },
+    { "java/lang/reflect/Method", "getParameterTypes",  "()[Ljava/lang/Class;", method_getParameterTypes },
+    { "java/lang/reflect/Method", "getReturnType",      "()Ljava/lang/Class;",  method_getReturnType },
+    { "java/lang/reflect/Method", "invoke",
+      "(Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;", method_invoke },
+    { "java/lang/reflect/Method", "toString",           "()Ljava/lang/String;", method_toString },
 
     { "java/lang/Throwable", "<init>",            "()V",                          throwable_init },
     { "java/lang/Throwable", "<init>",            "(Ljava/lang/String;)V",        throwable_init_msg },

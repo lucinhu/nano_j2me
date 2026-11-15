@@ -115,5 +115,10 @@ nj_status nj_builtins_register_all(nj_vm *vm)
         nj_logf(vm, 0, "builtin class library is missing java/lang/Object");
         return NJ_ERR;
     }
+    /* Wrapper TYPE statics need the primitive Class mirrors, which exist only
+     * after the whole builtin table is linked. */
+    if (nj_boxing_init(vm) != NJ_OK) {
+        return NJ_ERR;
+    }
     return nj_lib_sax_init(vm);
 }

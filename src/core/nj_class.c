@@ -768,6 +768,53 @@ static nj_class *primitive_class(nj_vm *vm, const char *desc)
     return NULL;
 }
 
+/* Forward declaration: nj_class_object_for_desc() below also builds array
+ * classes, whose helper is defined after this point. */
+static nj_class *array_class(nj_vm *vm, const char *desc);
+
+/*
+ * Public face of the primitive mirrors: the Class object for 'I' is what
+ * java.lang.Integer.TYPE holds, and what a reflective parameter lookup needs.
+ */
+nj_ref nj_primitive_class_object(nj_vm *vm, char desc)
+{
+    char one[2];
+    nj_class *c;
+
+    if (!vm) {
+        return NULL;
+    }
+    one[0] = desc;
+    one[1] = '\0';
+    c = primitive_class(vm, one);
+    return c ? nj_class_object(vm, c->name) : NULL;
+}
+
+/* Class object for a field descriptor: primitive, array or object. */
+nj_ref nj_class_object_for_desc(nj_vm *vm, const char *desc)
+{
+    nj_class *c = NULL;
+
+    if (!vm || !desc || !*desc) {
+        return NULL;
+    }
+    if (*desc == '[') {
+        c = array_class(vm, desc);
+    } else if (desc[1] == '\0') {
+        return nj_primitive_class_object(vm, desc[0]);
+    } else if (*desc == 'L') {
+        char buf[300];
+        nj_u4 n = 0u;
+        const char *q = desc + 1;
+        while (q && *q && *q != ';' && n + 1u < (nj_u4)sizeof(buf)) {
+            buf[n++] = *q++;
+        }
+        buf[n] = '\0';
+        c = nj_class_lookup(vm, buf);
+    }
+    return c ? nj_class_object(vm, c->name) : NULL;
+}
+
 /*
  * Build (or fetch) the nj_class for an array whose descriptor is `desc`
  * (e.g. "[I", "[[Ljava/lang/String;").

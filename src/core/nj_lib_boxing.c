@@ -1396,14 +1396,46 @@ NJFN(Character_toUpperCase)
       CLS##_methods,                                                          \
       (nj_u2)(sizeof(CLS##_methods) / sizeof(CLS##_methods[0])) },
 
-static const nj_builtin_field Integer_fields[]   = { { "value", "I", 0 } };
-static const nj_builtin_field Long_fields[]      = { { "value", "J", 0 } };
-static const nj_builtin_field Short_fields[]     = { { "value", "S", 0 } };
-static const nj_builtin_field Byte_fields[]      = { { "value", "B", 0 } };
-static const nj_builtin_field Character_fields[] = { { "value", "C", 0 } };
-static const nj_builtin_field Boolean_fields[]   = { { "value", "Z", 0 } };
-static const nj_builtin_field Float_fields[]     = { { "value", "F", 0 } };
-static const nj_builtin_field Double_fields[]    = { { "value", "D", 0 } };
+static const nj_builtin_field Integer_fields[] = {
+    { "value", "I", 0 },
+    { "TYPE",  "Ljava/lang/Class;",
+      NJ_ACC_PUBLIC | NJ_ACC_STATIC | NJ_ACC_FINAL }
+};
+static const nj_builtin_field Long_fields[] = {
+    { "value", "J", 0 },
+    { "TYPE",  "Ljava/lang/Class;",
+      NJ_ACC_PUBLIC | NJ_ACC_STATIC | NJ_ACC_FINAL }
+};
+static const nj_builtin_field Short_fields[] = {
+    { "value", "S", 0 },
+    { "TYPE",  "Ljava/lang/Class;",
+      NJ_ACC_PUBLIC | NJ_ACC_STATIC | NJ_ACC_FINAL }
+};
+static const nj_builtin_field Byte_fields[] = {
+    { "value", "B", 0 },
+    { "TYPE",  "Ljava/lang/Class;",
+      NJ_ACC_PUBLIC | NJ_ACC_STATIC | NJ_ACC_FINAL }
+};
+static const nj_builtin_field Character_fields[] = {
+    { "value", "C", 0 },
+    { "TYPE",  "Ljava/lang/Class;",
+      NJ_ACC_PUBLIC | NJ_ACC_STATIC | NJ_ACC_FINAL }
+};
+static const nj_builtin_field Boolean_fields[] = {
+    { "value", "Z", 0 },
+    { "TYPE",  "Ljava/lang/Class;",
+      NJ_ACC_PUBLIC | NJ_ACC_STATIC | NJ_ACC_FINAL }
+};
+static const nj_builtin_field Float_fields[] = {
+    { "value", "F", 0 },
+    { "TYPE",  "Ljava/lang/Class;",
+      NJ_ACC_PUBLIC | NJ_ACC_STATIC | NJ_ACC_FINAL }
+};
+static const nj_builtin_field Double_fields[] = {
+    { "value", "D", 0 },
+    { "TYPE",  "Ljava/lang/Class;",
+      NJ_ACC_PUBLIC | NJ_ACC_STATIC | NJ_ACC_FINAL }
+};
 
 static const nj_builtin_method Integer_methods[] = {
     M("<init>",        "(I)V", 0),
@@ -1524,6 +1556,41 @@ const nj_builtin_class nj_lib_boxing_classes[] = {
 };
 const int nj_lib_boxing_class_count =
     (int)(sizeof(nj_lib_boxing_classes) / sizeof(nj_lib_boxing_classes[0]));
+
+/*
+ * java.lang.Integer.TYPE and friends.  The bytecode for `int.class` is
+ * `getstatic java/lang/Integer.TYPE`, so any reflective code path (including
+ * the classic "call an optional vendor API if it exists" idiom) needs these
+ * statics to hold real Class objects for the primitive types.
+ */
+nj_status nj_boxing_init(nj_vm *vm)
+{
+    static const struct { const char *cls; char desc; } types[] = {
+        { "java/lang/Integer",   'I' },
+        { "java/lang/Long",      'J' },
+        { "java/lang/Short",     'S' },
+        { "java/lang/Byte",      'B' },
+        { "java/lang/Character", 'C' },
+        { "java/lang/Boolean",   'Z' },
+        { "java/lang/Float",     'F' },
+        { "java/lang/Double",    'D' }
+    };
+    nj_u4 i;
+
+    if (!vm) {
+        return NJ_ERR;
+    }
+    for (i = 0u; i < (nj_u4)(sizeof(types) / sizeof(types[0])); i++) {
+        nj_field *f = nj_field_lookup(vm, types[i].cls, "TYPE",
+                                      "Ljava/lang/Class;", 1);
+        nj_ref mirror = nj_primitive_class_object(vm, types[i].desc);
+        if (!f || !mirror) {
+            return NJ_ERR;
+        }
+        nj_field_write_ref(vm, NULL, f, mirror);
+    }
+    return NJ_OK;
+}
 
 const nj_native_entry nj_lib_boxing_table[] = {
     { "java/lang/Integer",   "<init>",       "(I)V", int_init },
