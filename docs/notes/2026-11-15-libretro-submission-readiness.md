@@ -281,3 +281,24 @@ Re-validation at revision `88b4e5d`:
   /var/tmp/nj2me-submission-dist-r15`, `.info` byte-identical) and the tree
   copied to `build/libretro-dist/` (previous tree backed up to
   `/var/tmp/libretro-dist-20261115-r14-backup.tgz`).
+
+## Update, 2026-11-15 (r16: paused-clock-poll fix)
+
+* Production fix at `e625707`: a paused state request is now served for titles
+  that busy-poll `System.currentTimeMillis()` inside a frame. The port assists
+  from `lr_port_millis()` only when a paint callback is on the worker stack
+  (`nj_vm_in_paint()`) or the presented-frame counter has not moved for 100 ms,
+  bounded by 1200 virtual frames; a load restores the pre-request clock when it
+  is refused or times out. An unconditional assist was rejected because it made
+  timer-driven titles (the football managers) hit `OutOfMemoryError`.
+* Validation at the r16 artifacts: whole-corpus rendering probe 373 titles →
+  **370 passed, 3 failed** (two need `nano_j2me_device=nokia6230`, one is a very
+  slow 3D loader); libretro state probe 50/50; mock matrix 20/20; RetroArch
+  LoopDemo 120 + TextDemo 180 pass; Wine 4/4; CI template simulation Linux /
+  Windows / Android all pass; CTest 183/183 in 366.18 s.
+* Artifacts: `--out /var/tmp/nj2me-submission-dist-r16`, eight targets, hashes
+  in `build/libretro-final-report-20261115.md` and the readiness table in
+  `docs/LIBRETRO_SUBMISSION.md`; `build/libretro-dist/` swapped to r16 (r15
+  tree backed up to `/var/tmp/libretro-dist-20261115-r15-backup.tgz`).
+* Commit: `e625707` "fix(libretro): serve paused state requests that poll the
+  clock" (plus this documentation refresh).

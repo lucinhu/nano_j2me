@@ -70,13 +70,15 @@ Use `--no-strip` to retain symbols. `all` selects the script's supported targets
 and requires all of their toolchains.
 
 The eight candidates currently in `build/libretro-dist/` were rebuilt on
-2026-11-15 at revision `88b4e5d`, so they include the load-lifecycle fix, the
+2026-11-15 at revision `e625707`, so they include the load-lifecycle fix, the
 monitor and repaint-blocking fixes, the CLI/manual-state boundary work, the
 input-bitmask/rumble support and the `nano_j2me_screen`/`nano_j2me_locale`
-options, bounded load/save state clock assistance, the level-3 Player-start
-diagnostics, and three corpus rendering fixes (stray paint waiters, pre-show
-`Displayable` sizes, longer startup grace). The report also records the
-whole-corpus rendering probe, which is what found those rendering bugs. `build/libretro-final-report-20261115.md` records sizes, SHA-256 values
+options, bounded load/save state clock assistance including the paused
+`System.currentTimeMillis()` poll assist (paint-aware and stalled-frame gated),
+the level-3 Player-start diagnostics, and three corpus rendering fixes (stray
+paint waiters, pre-show `Displayable` sizes, longer startup grace). The report
+also records the whole-corpus rendering probe, which is what found those
+rendering bugs. `build/libretro-final-report-20261115.md` records sizes, SHA-256 values
 and what was run per target: linux-x86_64 in the mock frontend and real
 RetroArch, windows-x86_64 under Wine, and ABI/dependency checks only for the
 Android and ARM-Linux cores (no device run in this rebuild). That report also
@@ -260,21 +262,21 @@ reject a save request. A load request made while the VM is inside a blocking
 native call is completed by fast-forwarding the virtual clock so the VM reaches
 the next frame boundary (the load replaces the VM, so this cannot alter the
 restored state); this also makes loading a state immediately after a reset work
-for titles whose startup sleeps in a splash screen. A save requested while the
-frontend is paused may likewise advance the virtual clock by up to about five
-seconds of game time (300 virtual frames) so that a frame which busy-waits on
-the clock can finish; the snapshot is then taken at the next frame boundary and
-includes that additional progress. If the frame still cannot finish, the save
-is refused as before. One measured remaining case is a title whose `paint()`
-itself waits on the virtual clock while the frontend is paused
-(`火影忍者汉化版_10735.jar`): the frame never reaches the boundary where
-requests are served and the save is refused after the four-second deadline.
-The same serving-time limitation applies to load requests: titles that keep the
-worker inside a native callback after a refused restore
-(`明星制造梦工厂_11048.jar`, `空战1944_10321.jar`, `迈阿密之夜_9566.jar`) can
-refuse a valid restore queued while the frontend is paused. The blob itself is
-validated on the worker; this is a serving-time limit, not a format change.
-Saving or loading during normal play, at a frame boundary, is unaffected.
+for titles whose startup sleeps in a splash screen. A save or load requested while the
+frontend is paused advances the virtual clock by up to about twenty seconds of
+game time (1200 virtual frames) so that a frame which busy-waits on the clock
+-- including one that polls `System.currentTimeMillis()` in a loop -- can reach
+the boundary where the request is served; a save is then taken at that boundary
+and includes the additional progress, while a load replaces the VM and restores
+the pre-request clock if it is refused. The assist only runs when the frame
+cannot finish on its own: during a paint callback, or after the frame has
+stopped advancing presented frames for 100 ms. A frame that keeps advancing
+normally is never accelerated, which keeps titles whose logic is timer-driven
+(e.g. the football managers) intact. If the frame still cannot finish within
+the budget, the request is refused after the four-second deadline. Saving or
+loading during normal play, at a frame boundary, is unaffected. The blob itself
+is validated on the worker; any refusal is a serving-time limit, not a format
+change.
 
 A very slow loader keeps the frontend inside `retro_load_game()` until the
 MIDlet constructor returns. `毁灭战士3_10598.jar` renders its 3D loading
@@ -430,7 +432,7 @@ geometry pass the matching frontend expectation. Both are sampling tools, not
 CI gates. The corpus visual probe (`check_libretro_corpus_visual.py`) runs every
 sweep-ok title through the mock frontend and requires a non-black animated
 frame, so it catches "loads but paints nothing" regressions that the CLI sweep
-cannot see. At the time of writing it reports 362/373 with the remaining
-failures limited to the paused-save class, two titles that need the documented
-`nano_j2me_device=nokia6230` profile, and heavy titles that need a larger
-harness timeout.
+cannot see. At the time of writing it reports 370/373: the remaining three
+failures are two titles that need the documented
+`nano_j2me_device=nokia6230` profile and one very slow 3D loader (see below)
+that cannot finish within the sampling watchdog.
