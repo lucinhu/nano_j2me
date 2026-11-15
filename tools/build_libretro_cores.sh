@@ -422,6 +422,10 @@ build_target()
     local extra=()
     local art dist size
 
+    # A fresh clone has no build/ directory (it is gitignored) and the log
+    # redirections below would fail before configure even starts.
+    mkdir -p "$ROOT/build" || return 1
+
     case "$name" in
         linux-x86_64)
             [ "$HOST_TARGET" = "linux-x86_64" ] || {
