@@ -7,8 +7,11 @@
 # uploads build/web/ as the Pages artifact and deploys it.
 #
 # One-time setup for a fork or a new clone of this repository: Settings ->
-# Pages -> Build and deployment -> Source: "GitHub Actions".  The deployed URL
-# is https://<owner>.github.io/nano_j2me/ (custom domains work the same way).
+# Pages -> Build and deployment -> Source: "GitHub Actions".  Without that the
+# deploy job fails with "Ensure GitHub Pages has been enabled"; the
+# configure-pages step below checks it early so a missing site fails before the
+# wasm build instead of after it.  The deployed URL is
+# https://<owner>.github.io/nano_j2me/ (custom domains work the same way).
 #
 # The demo ships no game JARs - users import their own files into the local
 # library.  The site is a full PWA, so once opened it also works offline.
@@ -45,6 +48,9 @@ jobs:
     steps:
       - name: Check out the repository
         uses: actions/checkout@v4
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
 
       - name: Set up Node.js
         uses: actions/setup-node@v4

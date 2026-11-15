@@ -153,7 +153,9 @@ build/nj2me --prop microedition.platform=Nokia6230/05.50 game.jar
 The same runtime compiles to WebAssembly with Emscripten. There is no
 server-side emulation and no pthreads: the interpreter is driven one frame per
 `requestAnimationFrame` through a virtual clock, so any static file host is
-enough, and imported games never leave the browser.
+enough, and imported games never leave the browser. A live demo is published
+at <https://lucinhu.github.io/nano_j2me/> by
+[`.github/workflows/web-demo.yml`](.github/workflows/web-demo.yml).
 
 ```sh
 tools/emsdk_setup.sh                    # once: installs the SDK into .local-tools/

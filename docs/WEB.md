@@ -637,7 +637,10 @@ deployments.
 One-time setup: in the repository, *Settings → Pages → Build and deployment →
 Source* choose **GitHub Actions**. The demo then lives at
 `https://<owner>.github.io/nano_j2me/` (custom domains work through the same
-environment). No game JARs are shipped; visitors import their own files into
+environment). The workflow runs `actions/configure-pages@v5` first, so a
+missing Pages site fails with a clear "ensure GitHub Pages has been enabled"
+error in the build job instead of a 404 in the deploy job. For this repository
+the demo is live at <https://lucinhu.github.io/nano_j2me/>. No game JARs are shipped; visitors import their own files into
 the local library, and because the site is a PWA it keeps working offline after
 the first visit. Builds are path-reproducible, so the deployed wasm should
 match a local `tools/build_web.sh` byte for byte.
