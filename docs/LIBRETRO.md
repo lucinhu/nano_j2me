@@ -499,15 +499,44 @@ consumed. The port now advances `vclock_us` by the real monotonic delta between
 100 ms) and derives the audio batch from the same delta, so game time and audio
 follow real time regardless of the frontend call rate.
 
-The VM thread is also gated to one frame per 60 Hz real-time slot inside
-`lr_frame_hook`. The gate is skipped when a pump produced no new frame, so
-blocking native calls (file I/O, audio waits) are never throttled; this keeps
-titles that never sleep from outrunning real time without slowing load phases.
+The frame rate itself is limited by the runtime's own `frame_pace()` through
+the port `fps_cap`, exactly like the Android APK: the core option
+`nano_j2me_fps` ("Frame rate limit", default **30**) sets it to 15, 20, 30, 60
+or Unlimited. Old MIDP handsets ran titles at 12-30 fps (60 fps is essentially
+absent), so 30 fps is the default that keeps frame-loop games at their intended
+speed; titles that pace themselves with `Thread.sleep()` are not slowed by it.
+Measured with a self-driven loop probe: cap 30 -> 33.4 ms/frame, cap 20 -> 50 ms,
+cap 60 -> 16.7 ms, cap 0 -> 8.5 ms.
 
 Verified on the desktop: a probe MIDlet that sleeps 16 ms per frame reports the
 same in-game elapsed time under 60 Hz and 120 Hz frontend pacing (5068 ms and
 5119 ms for 300 frames), audio output stays at ~44100 samples/s at both rates,
 AudioDemo keeps `state=400` for WAV/AMR/ADPCM, and the same probe inside real
-RetroArch reports real-time game time. Cores with this change log
-`nano_j2me 0.5.7 libretro core (pacing rev 3: realtime clock + 60 Hz VM gate)`
+RetroArch reports real-time game time.
+
+## Audio backpressure and latency (2026-11-15)
+
+Decoded audio was pushed into a two-second ring that accepted every frame and
+silently dropped whatever did not fit. Titles that decode ahead of real time
+(one measured title produced ~1.24x real time) filled the ring in under two
+seconds and then lost roughly a fifth of every buffer, which is heard as
+chopped/stuttering sound with the pitch intact ("缺帧", sound not glued
+together) while the video is fine.
+
+The port now reports real backpressure: `pcm_write()` accepts only the frames
+that fit in a short 100 ms ring and returns how many source frames it took, so
+the runtime keeps the rest and offers it again next frame (this is the port
+contract the other backends already follow). The resampler state is rolled back
+when it cannot finish an input frame, so no sample is duplicated or lost.
+`pcm_queued()` is implemented as well, so `Player.getMediaTime()` reports the
+audible position instead of a position one ring ahead.
+
+Verified by capturing the raw stereo output of the headless frontend: after the
+startup silence, 3D拉力赛 at 60 Hz and 120 Hz frontend pacing is continuous
+(only the game's own short engine-loop gaps remain), a 400 ms-per-note
+`Manager.playTone()` probe yields exact 400 ms tone segments, and the captured
+duration matches the wall clock at both rates.
+
+Cores with these changes log
+`nano_j2me 0.5.7 libretro core (pacing rev 5: realtime clock + frame limit + audio backpressure)`
 at startup so the installed binary can be identified from the frontend log.

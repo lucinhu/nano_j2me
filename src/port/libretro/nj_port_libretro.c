@@ -237,7 +237,8 @@ static int lr_thread_equal(lr_thread_id a, lr_thread_id b) { return pthread_equa
 #define LR_AUDIO_RATE      44100
 #define LR_FRAMES_PER_RUN  735   /* 44100 / 60, exact */
 #define LR_MAX_FRAMES_PER_RUN 4410 /* 100 ms cap for adaptive pacing */
-#define LR_AUDIO_FRAMES    88200 /* two seconds of stereo slack */
+#define LR_AUDIO_FRAMES    88200 /* two seconds of stereo slack (tones) */
+#define LR_PCM_FRAMES       4410 /* 100 ms of stereo slack for decoded audio */
 #define LR_EVENT_QUEUE     512
 #define LR_PATH_MAX        4096
 #define LR_TONE_AMPLITUDE  6000
@@ -1909,6 +1910,7 @@ static int lr_pcm_write(void *ud, const nj_s2 *samples, int frames)
 {
     nj_lr *s = (nj_lr *)ud;
     int i;
+    int taken = 0;
 
     if (!s || !s->sound || !samples || frames <= 0) return 0;
     if (s->src_rate <= 0) {
@@ -1924,13 +1926,30 @@ static int lr_pcm_write(void *ud, const nj_s2 *samples, int frames)
             int16_t l = samples[i * s->src_ch];
             int16_t r = (s->src_ch > 1) ? samples[i * s->src_ch + 1] : l;
             long long k = s->src_base + i;
+            double pos0;
+            int16_t prev0;
+            int16_t prev0r;
+            int full = 0;
 
             if (!s->have_prev) {
                 s->prev_l = l;
                 s->prev_r = r;
                 s->have_prev = 1;
+                taken = i + 1;
                 continue;
             }
+            /* Keep a few slots free so the interpolation loop cannot fail
+             * halfway through this input frame.  When the ring is full, stop
+             * and report the frames actually taken: the runtime keeps the
+             * rest of the source and offers it again next frame, which is
+             * what paces a decoder that would otherwise run ahead. */
+            if (lr_ring_count(s->pcm_rd, s->pcm_wr, s->pcm_cap) + 8u >
+                s->pcm_cap) {
+                break;
+            }
+            pos0 = s->src_pos;
+            prev0 = s->prev_l;
+            prev0r = s->prev_r;
             while (s->src_pos < (double)k) {
                 double alpha = s->src_pos - (double)(k - 1);
                 int16_t ol;
@@ -1938,24 +1957,55 @@ static int lr_pcm_write(void *ud, const nj_s2 *samples, int frames)
 
                 if (alpha < 0.0) alpha = 0.0;
                 if (alpha > 1.0) alpha = 1.0;
-                ol = (int16_t)((double)s->prev_l +
-                               ((double)l - (double)s->prev_l) * alpha);
-                orr = (int16_t)((double)s->prev_r +
-                                ((double)r - (double)s->prev_r) * alpha);
-                (void)lr_ring_push(s->pcm_ring, s->pcm_cap, &s->pcm_rd,
-                                   &s->pcm_wr, ol, orr);
+                ol = (int16_t)((double)prev0 +
+                               ((double)l - (double)prev0) * alpha);
+                orr = (int16_t)((double)prev0r +
+                                ((double)r - (double)prev0r) * alpha);
+                if (!lr_ring_push(s->pcm_ring, s->pcm_cap, &s->pcm_rd,
+                                  &s->pcm_wr, ol, orr)) {
+                    full = 1;
+                    break;
+                }
                 s->src_pos += step;
+            }
+            if (full) {
+                s->src_pos = pos0;
+                s->prev_l = prev0;
+                s->prev_r = prev0r;
+                break;
             }
             s->prev_l = l;
             s->prev_r = r;
+            taken = i + 1;
         }
-        s->src_base += frames;
+        s->src_base += taken;
     }
     lr_mutex_unlock(&s->lock);
-    return frames;
+    return taken;
 }
 
 static void lr_pcm_close(void *ud) { (void)ud; }
+
+/*
+ * Frames still sitting in the ring, in the *source* rate the Player writes at,
+ * so the runtime can subtract them from its write frontier and report the
+ * audible position instead of a position one ring-length ahead.
+ */
+static int lr_pcm_queued(void *ud)
+{
+    nj_lr *s = (nj_lr *)ud;
+    size_t fill;
+    long long queued;
+
+    if (!s || !s->sound) return 0;
+    lr_mutex_lock(&s->lock);
+    fill = lr_ring_count(s->pcm_rd, s->pcm_wr, s->pcm_cap);
+    queued = ((long long)fill * (long long)(s->src_rate > 0 ? s->src_rate
+                                                           : LR_AUDIO_RATE))
+             / (long long)LR_AUDIO_RATE;
+    lr_mutex_unlock(&s->lock);
+    return (int)queued;
+}
 
 static int lr_pcm_free(void *ud)
 {
@@ -2484,6 +2534,7 @@ static void lr_port_init(nj_lr *s)
         s->port.pcm_write = lr_pcm_write;
         s->port.pcm_close = lr_pcm_close;
         s->port.pcm_free = lr_pcm_free;
+        s->port.pcm_queued = lr_pcm_queued;
     }
 
     s->port.width = s->fb_w;
@@ -3060,12 +3111,12 @@ static void lr_unload(nj_lr *s)
 
 static int lr_allocate_audio(nj_lr *s)
 {
-    s->pcm_ring = (int16_t *)calloc(LR_AUDIO_FRAMES, 2 * sizeof(int16_t));
+    s->pcm_ring = (int16_t *)calloc(LR_PCM_FRAMES, 2 * sizeof(int16_t));
     s->tone_ring = (int16_t *)calloc(LR_AUDIO_FRAMES, 2 * sizeof(int16_t));
     if (!s->pcm_ring || !s->tone_ring) {
         return 0;
     }
-    s->pcm_cap = LR_AUDIO_FRAMES;
+    s->pcm_cap = LR_PCM_FRAMES;
     s->tone_cap = LR_AUDIO_FRAMES;
     s->pcm_rd = s->pcm_wr = 0;
     s->tone_rd = s->tone_wr = 0;
@@ -3284,7 +3335,7 @@ RETRO_API void retro_init(void)
     s->phase = LR_PHASE_STOP;
     s->out_w = 240;
     s->out_h = 320;
-    lr_log(s, RETRO_LOG_INFO, "nano_j2me %s libretro core (pacing rev 4: realtime clock + configurable frame limit)", NJ_VERSION_STRING);
+    lr_log(s, RETRO_LOG_INFO, "nano_j2me %s libretro core (pacing rev 5: realtime clock + frame limit + audio backpressure)", NJ_VERSION_STRING);
 }
 
 RETRO_API void retro_deinit(void)
