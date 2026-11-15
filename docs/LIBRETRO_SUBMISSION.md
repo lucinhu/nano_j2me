@@ -107,7 +107,10 @@ change as recorded in the hash table).
   ran the core to a clean 600-frame exit. The fresh windows-x86_64 DLL passed
   the Wine fixture suite 4/4. The corpus-level libretro state probe
   (`tools/check_libretro_states.py`, 50 titles, 120 frames) reports
-  **50/50 save/restore round trips**. The whole-corpus rendering probe on the
+  **50/50 save/restore round trips**. Real RetroArch 1.22.2 also loaded and ran
+  four real corpus titles (3D 浴火银河2完整版, 仙剑奇侠传完美版, 拳皇98终极之战,
+  雷霆战机2012BT版) for 300 frames each, clean exits and verified core log
+  markers. The whole-corpus rendering probe on the
   r17 core (`tools/check_libretro_corpus_visual.py`, 373 sweep-ok titles, 300
   frames, real-time cadence) reported **372 passed, 1 failed**, and a re-run at
   **600 frames** (10 s of play per title) reported the same **372/373**; the
