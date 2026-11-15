@@ -75,8 +75,12 @@ def load_rows(rows_dir):
 
 def run_one(row, frames, timeout):
     jar = Path(row["jar"])
+    # The harness has its own watchdog (default 30 s); a paced 300-frame run
+    # plus the state round trips can take that long for heavy titles, so give
+    # it the probe's timeout instead of letting it kill a healthy session.
     cmd = [str(HARNESS), "--core", str(CORE), "--jar", str(jar),
            "--frames", str(frames), "--pace-us", "16667",
+           "--timeout", str(max(60, timeout)),
            "--visual-required", "--static-ok", "--min-nonblack", "8",
            "--save-dir", tempfile.mkdtemp(prefix="lj-vis-")]
     try:
@@ -99,7 +103,7 @@ def main():
     ap.add_argument("rows_dir")
     ap.add_argument("--frames", type=int, default=300)
     ap.add_argument("--jobs", type=int, default=int(os.environ.get("NJ_JOBS", "8")))
-    ap.add_argument("--timeout", type=int, default=180)
+    ap.add_argument("--timeout", type=int, default=240)
     ap.add_argument("--out", default=None)
     args = ap.parse_args()
 

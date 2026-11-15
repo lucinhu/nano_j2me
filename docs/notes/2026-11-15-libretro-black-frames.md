@@ -107,3 +107,23 @@ three bugs above render; the remaining failures are not visual:
 
 The same fixed core passed 20/20 libretro save-state round trips
 (`tools/check_libretro_states.py`) and 183/183 CTest.
+
+### Very slow loader (`毁灭战士3_10598.jar`)
+
+The whole-corpus probe still times this title out, and it is not a crash: gdb
+stacks caught the worker inside `nj_vm_new_midlet()` -> `nj_call_special()` ->
+`nj_scheduler_step()` while another Java thread (`Doom/m.run`) walks
+`Doom/m.s()`, which calls `Graphics3D.render(World)` in a 190-iteration loop
+after a `Thread.sleep(12000)` splash. Each pass is a full software-M3G render,
+so the constructor - and therefore `retro_load_game()` - needs minutes. The
+core keeps the frontend inside load until the constructor returns, so a
+watchdog shorter than that reports a timeout. Also noted: the CLI finishes a
+600-frame run in 13 s because its frame budget ends the run before the loader
+completes, so a CLI "ok" row does not prove this title loads.
+
+Sampling note: the visual probe now passes its own `--timeout` to the harness
+watchdog (default 240 s); before that the harness's 30 s default misreported
+three heavy titles as `rc=4 watchdog` under parallel load. The re-run at
+`--frames 300` with the raised watchdog still shows the same 11 failures and
+362/373 passes, i.e. all of them are the paused save/load serving class or the
+two device-profile titles; the slow loader above is the only timeout.
