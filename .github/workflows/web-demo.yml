@@ -4,7 +4,10 @@
 # This workflow is intentionally self-contained: the only external download is
 # the pinned Emscripten SDK.  It runs tools/build_web.sh (the same script
 # developers use), smoke-tests the freshly built module with Node, then
-# uploads build/web/ as the Pages artifact and deploys it.
+# uploads build/web/ as the Pages artifact, deploys it, and finally opens the
+# deployed URL with Python Playwright to prove the published site boots the
+# wasm engine (the live-demo check skips the JAR step in CI because tests/games/
+# is git-ignored; local runs with a corpus play a real game).
 #
 # One-time setup for a fork or a new clone of this repository: Settings ->
 # Pages -> Build and deployment -> Source: "GitHub Actions".  Without that the
@@ -81,6 +84,8 @@ jobs:
     name: deploy to Pages
     needs: build
     runs-on: ubuntu-24.04
+    outputs:
+      page_url: ${{ steps.deployment.outputs.page_url }}
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
@@ -88,3 +93,36 @@ jobs:
       - name: Deploy
         id: deployment
         uses: actions/deploy-pages@v5
+
+  verify:
+    name: verify the deployed demo
+    needs: [build, deploy]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install Playwright (Firefox)
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install playwright
+          python3 -m playwright install --with-deps firefox
+
+      - name: Open the deployed demo in a real browser
+        run: |
+          python3 tools/web_test/web_live_check.py \
+            --url "${{ needs.deploy.outputs.page_url }}" \
+            --evidence .local-tools/debug-runs/web-live-ci
+
+      - name: Upload live-demo evidence
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: live-demo-check
+          path: .local-tools/debug-runs/web-live-ci
+          if-no-files-found: warn

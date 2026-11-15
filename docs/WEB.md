@@ -657,7 +657,12 @@ Source* choose **GitHub Actions**. The demo then lives at
 `https://<owner>.github.io/nano_j2me/` (custom domains work through the same
 environment). The workflow runs `actions/configure-pages@v5` first, so a
 missing Pages site fails with a clear "ensure GitHub Pages has been enabled"
-error in the build job instead of a 404 in the deploy job. For this repository
+error in the build job instead of a 404 in the deploy job. The workflow also
+runs `tools/web_test/web_live_check.py` against the just-deployed URL in a third
+job (`verify the deployed demo`), so a deployment that breaks the published
+shell is caught without a manual step; that CI run has no corpus, so the live
+check verifies the shell/manifest/engine boot but skips the game step there (the
+`live-demo-check` artifact keeps the JSON report). For this repository
 the demo is live at <https://lucinhu.github.io/nano_j2me/>. No game JARs are shipped; visitors import their own files into
 the local library, and because the site is a PWA it keeps working offline after
 the first visit. Builds are path-reproducible, so the deployed wasm should
@@ -679,7 +684,9 @@ tools/check_web.sh --live=https://your-host.example/   # a custom deployment
 
 The check writes `live-check.json`/`live-check.txt` and a game screenshot to the
 evidence directory. It is not part of `--all` because it needs network access
-and a deployed site (see the environment note in the Verification section).
+and a deployed site (see the environment note in the Verification section); the
+Pages workflow runs it automatically after deploying, with the JAR step skipped
+because CI has no corpus.
 
 ## Limitations
 
