@@ -4249,11 +4249,50 @@ NJFN(m3g_clear)
     }
     if (bg && !nj_iget(vm, bg, m3g_fof(vm, NJ_C_BG, "_nj_cclear", "Z"))) return NJ_OK;
     {
-        nj_gfx g;
         nj_u4 colour = bg ? (nj_u4)nj_iget(vm, bg, m3g_fof(vm, NJ_C_BG, "_nj_color", "I")) : 0;
-        nj_gfx_init(&g, surface);
-        nj_gfx_set_color(&g, colour | 0xff000000u);
-        nj_gfx_fill_rect(&g, x0, y0, x1 - x0, y1 - y0);
+        int bpp = surface->format == NJ_PIXFMT_RGB565 ? 2 :
+                  surface->format == NJ_PIXFMT_RGB888 ? 3 : 4;
+        if ((bpp == 2 || bpp == 4) && x1 > x0 && y1 > y0) {
+            /* Opaque solid clear: the same bytes nj_gfx_fill_rect() would
+             * write through nj_span() row by row, but without re-entering the
+             * clip/format machinery once per row.  The clear is one of the
+             * top two raster entries on real 3D titles. */
+            nj_u4 packed = nj_surface_format_color(surface->format,
+                                                   colour | 0xff000000u);
+            int yy;
+            for (yy = y0; yy < y1; yy++) {
+                nj_u1 *row = (nj_u1 *)surface->pixels
+                           + (nj_s8)yy * surface->stride + (nj_s8)x0 * bpp;
+                int n = x1 - x0;
+                if (bpp == 4) {
+                    nj_u4 *q = (nj_u4 *)row;
+                    for (; n >= 4; n -= 4) {
+                        q[0] = packed; q[1] = packed;
+                        q[2] = packed; q[3] = packed;
+                        q += 4;
+                    }
+                    for (; n > 0; n--) {
+                        *q++ = packed;
+                    }
+                } else {
+                    nj_u2 v = (nj_u2)packed;
+                    nj_u2 *q = (nj_u2 *)row;
+                    for (; n >= 8; n -= 8) {
+                        q[0] = v; q[1] = v; q[2] = v; q[3] = v;
+                        q[4] = v; q[5] = v; q[6] = v; q[7] = v;
+                        q += 8;
+                    }
+                    for (; n > 0; n--) {
+                        *q++ = v;
+                    }
+                }
+            }
+        } else {
+            nj_gfx g;
+            nj_gfx_init(&g, surface);
+            nj_gfx_set_color(&g, colour | 0xff000000u);
+            nj_gfx_fill_rect(&g, x0, y0, x1 - x0, y1 - y0);
+        }
     }
     vx = nj_iget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_vx", "I"));
     vy = nj_iget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_vy", "I"));

@@ -3855,3 +3855,29 @@ was not worth carrying). Next candidate levers from the profile are
 `sw_tri_band` setup (12% of the sample at ~1.5 spans per call) and the
 remaining general span classes; both would want the same deterministic-prefix
 parity check before shipping.
+
+## Opaque M3G clear without the gfx row loop, 2026-11-15 (round 34)
+
+The post-fast-path profile still had `m3g_clear` at **17%** of the sampled CPU
+on the 20000-frame `毁灭战士3_10598.jar` run (39,762 clears, ~106 us each for a
+240x320 ARGB target — i.e. the clear wrote ~307 KB at under 3 GB/s). It went
+through `nj_gfx_init()` + `nj_gfx_fill_rect()`, which re-enters the clip and
+format machinery once per row and then calls `nj_span()` per row.
+
+The opaque solid-clear case (`bg == NULL` defaults to opaque black, and an
+explicit background colour is always written opaque here) now fills the
+clipped rectangle directly in `m3g_clear()`: packed 32-bit stores for
+ARGB8888/ARGB targets, packed 16-bit stores for RGB565, four (resp. eight)
+pixels per iteration. The RGB888 surface keeps the old path, because its
+3-byte pixel packing does not benefit from the wider stores.
+
+Verification (same determinants as the span work): the first 120 presented
+frames of the profiled title are byte-identical to the previous build
+(deterministic prefix, 13/13 dumped frames at `--dump-every 10`);
+`ctest -R "gfx|m3g|paint|display|graphics|image|codec"` passes 37/37.
+
+CPU (20000 frames, `taskset -c 5`, 3 runs each, user CPU median):
+**30.17 s reference vs 29.80 s with the direct clear (-1.3%)** — every run of
+the three was lower. Smaller than the theoretical ceiling because the clear
+is memory-bandwidth-bound on this host, but it is free and it applies to every
+3D title that clears a background each frame.
