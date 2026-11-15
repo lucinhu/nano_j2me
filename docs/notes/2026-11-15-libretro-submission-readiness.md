@@ -720,3 +720,30 @@ libretro state round trips **50/50**; full CTest **184/184 in 339.43 s**;
 offline submission-bundle validator **41 passed, 0 failed** with clean clones
 and a real `mkdocs build` (and **32/32** including the release-tree `.info`
 identity).
+
+## Update, 2026-11-15 (round 41): frontend rewind measured and checked
+
+Rewind was previously documented as impractical without measurements. With
+the current core it is a sizing question, not a functional blocker: RetroArch
+feeds its rewind ring buffer from `retro_serialize()`, and the snapshot size
+tracks the Java heap budget.
+
+Measured with the r24 linux-x86_64 release core, RetroArch 1.22.2 headless
+(null drivers), loopdemo, 600 frames, `rewind_buffer_size = 64` (RetroArch
+reports a 67 MB buffer):
+
+| heap option | snapshot size | rewind result |
+| --- | --- | --- |
+| `nano_j2me_heap=16` | 23,375,936 B | buffer initializes, granularity 2 runs clean in ~2.5 s (0.5 s without rewind); history fits |
+| `nano_j2me_heap=16`, granularity 60 | 23,375,936 B | clean in ~0.5 s (sparse snapshots) |
+| auto (128 MB here) | 140,816,448 B | clean exit but frontend logs "rewind buffer capacity insufficient" -- no history stored |
+
+So rewind is usable with `nano_j2me_heap=16` and a buffer of at least twice
+the snapshot size; history fidelity stays VM-only (external RMS/files are not
+rewound and native media handles are lost on restore), so it is documented as
+a convenience rather than a validated guarantee. New tracked check
+`tools/check_libretro_rewind.sh` encodes the working setup and fails if the
+buffer does not initialize or the frontend reports a capacity error. The
+helper `tools/check_libretro_retroarch.sh` gained an `EXTRA_CFG` environment
+hook so any extra `retroarch.cfg` lines (rewind, runahead, ...) can be tested
+without editing the script.

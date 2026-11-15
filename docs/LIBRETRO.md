@@ -320,9 +320,12 @@ enough in the sampling run, so a harness watchdog shorter than several
 minutes kills a load that is progressing. Give slow 3D titles a long load
 timeout rather than treating this as a hang.
 
-There is no determinism claim. Rewind, runahead and netplay are not advertised
-or validated; use manual states and the game's own save system. Snapshot sizes
-include the VM heap budget and can be large. The
+There is no determinism claim. Netplay and runahead are not advertised; use
+manual states and the game's own save system. Frontend rewind works in a bounded
+sense: RetroArch's rewind buffer is fed from the same `retro_serialize()` path,
+so it only fits when the Java heap budget keeps snapshots small -- see Rewind
+below and `tools/check_libretro_rewind.sh` for the measured setup. Snapshot
+sizes include the VM heap budget and can be large. The
 [submission checklist](LIBRETRO_SUBMISSION.md#validation) records final test gates.
 
 ## Timing, media and limitations
@@ -380,14 +383,24 @@ These are deliberate non-features, not untested paths. The libretro API can
 advertise each of them, and claiming support the core cannot honour would be
 worse than refusing it.
 
-- **Rewind** — `retro_serialize()` is a request posted to the VM worker, not a
-  synchronous frame snapshot: the frontend thread hands over the request and
-  the worker copies the whole Java heap (32–128 MB), both framebuffers and VM
-  state. Rewind needs one such snapshot per displayed frame with bounded
-  latency; the size and the worker round-trip make that impractical. A restored
-  VM also keeps newer RecordStore/FileConnection data and loses native media
-  handles, so history would not be a faithful rewind anyway. Rewind is not
-  advertised; manual save states are supported.
+- **Rewind** — `retro_serialize()` is a request posted to the VM worker, not
+  a synchronous frame snapshot: the frontend thread hands over the request and
+  the worker copies the whole Java heap, both framebuffers and VM state. The
+  snapshot therefore costs the heap budget: about **23 MB with
+  `nano_j2me_heap=16`**, 40 MB at 32, and ~140 MB with the auto heap on a big
+  host. RetroArch's rewind ring buffer must hold at least one snapshot
+  (`rewind_buffer_size` in MB; the default 67 MB buffer at granularity 2 fills
+  with the 16 MB-heap snapshot and, measured headless, costs ~2.5 s for 600
+  frames versus 0.5 s without rewind). With the auto heap the frontend reports
+  "rewind buffer capacity insufficient" and cannot store history. Recommended
+  setup if rewind is wanted: `nano_j2me_heap=16` plus a rewind buffer of at
+  least twice the snapshot size, and a coarser `rewind_granularity` to trade
+  history resolution for buffer use -- `tools/check_libretro_rewind.sh` runs
+  exactly that check (it asserts the buffer initializes, snapshots fit and the
+  frontend does not report capacity errors). History fidelity is still
+  VM-only: a restored VM keeps newer RecordStore/FileConnection data and
+  loses native media handles, so rewind is a convenience, not a validated
+  guarantee. Manual save states remain the supported mechanism.
 - **Runahead** — runahead requires running frames ahead of presentation and
   restoring a state every frame deterministically. The asynchronous worker,
   host wall-clock timers, external file side effects and Java scheduling
@@ -452,6 +465,11 @@ RETROARCH=/path/to/retroarch tools/check_libretro_retroarch.sh \
 # than a frame-rate measurement.
 tools/check_libretro_retroarch_corpus.sh \
   build/libretro-check/libretro/nano_j2me_libretro.so 600
+# Frontend rewind smoke check.  RetroArch snapshots the whole Java heap, so
+# this only fits with a small heap budget; the script asserts the rewind buffer
+# initializes and the snapshots fit, and prints the wall-time cost.
+tools/check_libretro_rewind.sh \
+  build/libretro-check/libretro/nano_j2me_libretro.so tests/fixtures/loopdemo.jar 600
 tools/check_no_statics.sh
 # Offline validation of the prepared upstream submission bundle.  Without the
 # clone arguments it checks the .info identity, both patches and the release

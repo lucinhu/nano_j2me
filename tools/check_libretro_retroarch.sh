@@ -51,6 +51,9 @@
 #   RETROARCH  RetroArch executable   default: <repo>/.local-tools/retroarch/retroarch
 #                                     (extracted AppImage 1.22.2 wrapper), else
 #                                     "retroarch" from PATH
+#   EXTRA_CFG         optional extra retroarch.cfg lines (e.g.
+#                     rewind_enable = "true"), appended verbatim after the
+#                     generated settings; one setting per line.
 #   CORE_OPTIONS_CFG  optional file with libretro core option lines, e.g.
 #                     nano_j2me_device = "nokia6230"
 #                     It is copied next to the temp config as
@@ -87,6 +90,7 @@ TIMEOUT=${TIMEOUT:-120}
 VERBOSE=${VERBOSE:-0}
 KEEP_LOG=${KEEP_LOG:-0}
 CORE_OPTIONS_CFG=${CORE_OPTIONS_CFG:-}
+EXTRA_CFG=${EXTRA_CFG:-}
 CORE_OPTIONS=${CORE_OPTIONS:-}
 
 case $FRAMES in
@@ -164,6 +168,10 @@ screenshot_directory = "$WORK/screenshots"
 system_directory = "$WORK/system"
 playlist_directory = "$WORK/playlists"
 EOF
+
+if [ -n "$EXTRA_CFG" ]; then
+   printf '%s\n' "$EXTRA_CFG" >> "$CFG" || setup_fail "cannot append EXTRA_CFG"
+fi
 
 # Core option overrides.  RetroArch 1.22.2 in global_core_options mode reads
 # <dir of --config>/retroarch-core-options.cfg, so a sibling of the temp config
