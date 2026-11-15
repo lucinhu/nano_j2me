@@ -90,7 +90,7 @@ artifacts were refreshed once more after the state-load fix at HEAD `dd39c1c`
    `no_statics`. A separate build directory under `/var/tmp` is used so the
    user's in-progress `build/` trees are not touched.
 8. **Upstream patches, exact and build-validated**: `libretro-docs-nano_j2me.patch`
-   (5 files, +213 lines) and `libretro-super-nano_j2me-info.patch` (one added
+   (5 files, +229 lines) and `libretro-super-nano_j2me-info.patch` (one added
    file) were generated inside clean shallow clones of `libretro/docs` master
    `d83b34b21b8a2c14db573aea66d876e343d316ca` and `libretro-super` master
    `fb15e630655375a50317be2a7953477ef9a5d12a`, and each was re-checked with
@@ -792,3 +792,24 @@ untracked state.
 - Conclusion: the libretro submission kit (core, metadata, CI config, patches,
   docs page) is reproducible from the public clone alone; no local-only file is
   required to apply the two upstream patches or to build all eight targets.
+
+## Update, 2026-11-15 (round 47): upstream library page refreshed for the new features
+
+The copy-ready `libretro/docs` page was stale on two points that the core now
+implements:
+
+- exposed memory: the page now says `SYSTEM_RAM` publishes the JVM arena as a
+  memory map (for frontend cheat search) and that there is no `SAVE_RAM`;
+  a short "Cheat search memory" section explains the raw-window semantics,
+  the `nano_j2me_heap` sizing and the re-publish after a state load;
+- rewind: the feature table no longer says "not advertised or validated"; it
+  describes the measured sizing rule (16 MB heap fits a normal frontend
+  rewind buffer, auto-heap states do not) and keeps the no-determinism claim.
+
+`libretro-docs-nano_j2me.patch` was regenerated from the same clean
+`d83b34b2` clone: 5 files, **+229 lines** (the library page is 219 lines).
+Validation: `git apply --check` on a clean clone passes, `mkdocs build` renders
+`site/library/nano_j2me/index.html` (97,916 B) with rc=0, and
+`tools/check_libretro_submission_bundle.sh --super-clone /var/tmp/lr-super
+--docs-clone /var/tmp/lr-docs --apply-clones --mkdocs
+/var/tmp/mkvenv/bin/mkdocs` passes all checks.

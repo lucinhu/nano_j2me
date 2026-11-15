@@ -39,7 +39,7 @@ runtime compatibility is not established by those checks. macOS is unverified.
 | Restart | Yes; reloads the content |
 | In-game RecordStore / FileConnection saves | Yes; core-managed files |
 | Save states | Basic manual save/load; see limitations below |
-| Rewind | Not advertised or validated |
+| Rewind | Usable when the state fits the frontend buffer (see above); no claim for auto-heap states |
 | Runahead | Not advertised or validated |
 | Netplay | Not advertised or validated |
 | Deterministic states | No claim |
@@ -48,8 +48,8 @@ runtime compatibility is not established by those checks. macOS is unverified.
 | Keyboard | Yes, handset keypad callback |
 | Pointer | Yes, touch/mouse canvas input |
 | Hardware rendering | No; software RGB565 |
-| Cheats / achievements / disc control | No |
-| libretro save RAM / exposed memory | No; persistent files are managed by the core |
+| Cheats / achievements / disc control | No code-based cheats; the arena is exposed for frontend cheat search (below) |
+| libretro save RAM / exposed memory | No SAVE_RAM; SYSTEM_RAM exposes the JVM arena as a memory map |
 | Network / Bluetooth / sensors / rumble | Not provided by this adapter |
 
 ### Save-state limitations
@@ -68,8 +68,26 @@ files, FileConnection contents and other external resources are not rewound.
 A load can therefore combine earlier Java state with later files. A VM unable
 to reach a safe point can refuse a request, and a save or load requested while
 the frontend is paused can be refused when the current frame never reaches the
-boundary where requests are served. State size scales with the heap budget. These basic manual states do not establish determinism or support for
-rewind, netplay or runahead.
+boundary where requests are served. State size scales with the heap budget. These basic manual states do not
+establish determinism or support for netplay or runahead. Frontend rewind is a
+frontend feature over these states: it works when the state size fits the
+frontend's rewind buffer (a 16 MB heap is comfortably usable), and is not
+advertised for the auto-heap states.
+
+### Cheat search memory
+
+The runtime keeps its Java objects in a single arena that is reserved at
+startup and never moved, so a frontend can run a cheat search (scan a value,
+then patch it) over a stable window. The core publishes that arena as
+`RETRO_MEMORY_SYSTEM_RAM` and as one `RETRO_MEMDESC_SYSTEM_RAM` descriptor in
+`SET_MEMORY_MAPS`; both follow the `nano_j2me_heap` option (16-128 MB) and are
+re-published after a save state is loaded, because a load replaces the arena.
+
+Writes into the window are raw and unsynchronised: they are a debugging tool,
+not a save channel, and a wrong write can corrupt the running program. There is
+no database of core-level cheat codes; code-based cheats (`retro_cheat_set`)
+remain unimplemented, and the frontend's own search-and-write UI is the intended
+way to use the window.
 
 ## Directories
 
