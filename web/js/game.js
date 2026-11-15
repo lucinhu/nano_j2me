@@ -72,7 +72,7 @@ const SCREEN_PRESETS = Object.freeze({
 });
 const DEFAULT_SETTINGS = Object.freeze({
   speedPercent: 100,
-  frameCap: 60,         // 0 = one frame per display refresh (uncapped)
+  frameCap: 60,         // default cap for games without their own override; 0 = display refresh
   heapMb: 16,           // Java heap for the next start; heavy titles need 64+
   autoResume: false,    // restarting a game continues from its newest save
   autoSave: false,      // leaving a game keeps its newest state for the next launch
@@ -279,16 +279,22 @@ export class GameView {
     }
 
     /* Frame cap: applied live by the loop below, so it needs no restart
-       (unlike the Java heap, which the engine fixes when the VM is created). */
+       (unlike the Java heap, which the engine fixes when the VM is created).
+       Titles were written for different rates, so the choice is remembered on
+       the game record like the screen size; the shell setting is only the
+       default a game starts with. */
     const fps = $('#fps-select');
     if (fps) {
-      fps.value = String(this.settings.frameCap);
+      fps.value = String(this._frameCap());
       fps.addEventListener('change', () => {
+        if (!this.game) { return; }
         const value = FPS_CHOICES.includes(Number(fps.value)) ? Number(fps.value) : 60;
-        if (this.settings.frameCap === value) { return; }
-        this.settings.frameCap = value;
+        if (this._frameCap() === value) { return; }
+        this.game.frameCap = value;
         this._frameAccumMs = 0;
-        saveSettings(this.settings);
+        void putGame(this.game).catch((error) => {
+          console.warn('[game] could not remember the frame-rate cap', error);
+        });
         toast(t('game.fpsApplied'), { kind: 'info', timeout: 2200 });
       });
     }
@@ -722,7 +728,7 @@ export class GameView {
        emulated clock keeps running at real speed while the title is drawn at
        the rate it was written for (a 120 Hz screen no longer doubles 30 fps
        animations). */
-    const cap = Number(this.settings.frameCap) || 0;
+    const cap = this._frameCap();
     if (cap > 0) {
       const frameMs = 1000 / cap;
       this._frameAccumMs = clamp((this._frameAccumMs || 0) + elapsed, 0, frameMs * 3);
@@ -1698,6 +1704,13 @@ export class GameView {
   /* The screen preset is a per-game device profile: titles were drawn for a
    * fixed resolution, so the choice travels with the game record (and is
    * absent on records imported before this existed → 'auto'). */
+  _frameCap() {
+    const override = this.game ? Number(this.game.frameCap) : NaN;
+    if (FPS_CHOICES.includes(override)) { return override; }
+    const fallback = Number(this.settings.frameCap);
+    return FPS_CHOICES.includes(fallback) ? fallback : 60;
+  }
+
   _screenPreset() {
     const preset = this.game && typeof this.game.screenPreset === 'string'
       ? this.game.screenPreset
@@ -1729,7 +1742,7 @@ export class GameView {
     const speed = $('#speed-select');
     if (speed) { speed.value = String(this.settings.speedPercent); }
     const fps = $('#fps-select');
-    if (fps) { fps.value = String(this.settings.frameCap); }
+    if (fps) { fps.value = String(this._frameCap()); }
     const heap = $('#heap-select');
     if (heap) { heap.value = String(this.settings.heapMb); }
     const autoResume = $('#auto-resume');

@@ -473,6 +473,7 @@ async function readLibrary(page) {
         ? (game.jar.byteLength !== undefined ? game.jar.byteLength : game.jar.length)
         : 0,
       screenPreset: game.screenPreset || null,
+      frameCap: Number.isFinite(Number(game.frameCap)) ? Number(game.frameCap) : null,
       autoFrames: game.autoState && Number.isFinite(Number(game.autoState.frames))
         ? Number(game.autoState.frames)
         : null
@@ -1400,11 +1401,46 @@ async function runRealShellChecks() {
       assert(atDisplay.fps > 15 && atDisplay.fps > at15.fps * 1.3,
         `uncapped mode pumped ${atDisplay.fps.toFixed(1)} fps (15 fps cap: ${at15.fps.toFixed(1)})`);
 
+      /* The cap belongs to the game record: pick 30 fps again, leave, reload
+         and start the same title — the select and the pump rate both remember. */
+      await page.selectOption('#fps-select', '30');
+      await waitToast(page, await t(page, 'game.fpsApplied'));
+      await page.click('#panel-close');
       await page.waitForFunction(
-        () => Number(JSON.parse(localStorage.getItem('nj2me.settings') || '{}').frameCap) === 0,
+        () => document.querySelector('#game-panel').getAttribute('aria-hidden') === 'true',
         undefined,
-        { timeout: 5000, polling: 100 });
-      return `60 fps -> ${at60.fps.toFixed(0)}, 30 fps -> ${at30.fps.toFixed(0)}, 15 fps -> ${at15.fps.toFixed(0)}, display -> ${atDisplay.fps.toFixed(0)}`;
+        { timeout: timeoutMs, polling: 50 });
+      await page.click('#game-back');
+      await page.waitForFunction(
+        () => window.getComputedStyle(document.querySelector('#library-view')).display !== 'none',
+        undefined,
+        { timeout: timeoutMs });
+      const [record] = await readLibrary(page);
+      assert(record.frameCap === 30, `game record frame cap is ${JSON.stringify(record.frameCap)}`);
+
+      await page.reload();
+      await waitReady(page);
+      await page.waitForFunction(
+        () => document.querySelectorAll('.game-tile').length >= 1,
+        undefined,
+        { timeout: timeoutMs, polling: 100 });
+      await page.locator('.game-tile').first().click();
+      await page.waitForFunction(
+        () => !!(window.__nj2me.game && window.__nj2me.game.game),
+        undefined,
+        { timeout: timeoutMs, polling: 100 });
+      await page.click('#panel-handle');
+      await page.waitForSelector('#game-panel.is-open', { timeout: 5000 });
+      if (await page.evaluate(() => window.__nj2me.game._paused === true)) {
+        await page.click('#btn-pause');
+        await waitPaused(page, false);
+      }
+      const remembered = await page.inputValue('#fps-select');
+      assert(remembered === '30', `remembered frame cap is ${remembered}`);
+      const atReload = await sample(1500);
+      assert(atReload.fps > 20 && atReload.fps < 45,
+        `remembered 30 fps cap pumped ${atReload.fps.toFixed(1)} fps`);
+      return `60 -> ${at60.fps.toFixed(0)}, 30 -> ${at30.fps.toFixed(0)}, 15 -> ${at15.fps.toFixed(0)}, display -> ${atDisplay.fps.toFixed(0)}; per-game 30 -> ${atReload.fps.toFixed(0)} after reload`;
     } finally {
       await ctx.close();
     }

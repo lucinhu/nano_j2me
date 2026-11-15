@@ -103,7 +103,9 @@ be served with or without a build:
   `Displayable` exists, then pause/resume, speed (100/150/200 %), mute and a
   volume slider (the host-side WebAudio gain; touching the slider also
   unmutes, like a phone volume key), a **Frame rate** selector
-  (display refresh / 60 / 30 / 24 / 15 fps; applied live, default 60),
+  (display refresh / 60 / 30 / 24 / 15 fps; applied live and remembered per game
+  like the screen size — the shell setting is only the default a new title
+  starts with),
   three save states per game (each can be given a name that survives a reload
   and names the exported file) plus one read-only **exit auto-save** row that
   appears once Save on exit has written a snapshot (it shows when it was taken
@@ -502,8 +504,9 @@ unreachable, which keeps a flaky network from looking like a shell bug.
   while the search box has text, and starts the title again when clicked.
   One more check opens the panel, verifies the default 60 fps cap, switches to
   30 and 15 fps and samples the emulated pump rate (about 30 and 15 per second),
-  then returns to display-refresh (uncapped) mode and checks that the choice was
-  persisted.
+  then returns to display-refresh (uncapped) mode. It finishes by picking 30 fps,
+  leaving, reloading the page and starting the same title: the game record keeps
+  the cap, the select shows it again and the pump rate follows it.
   Another enables Save on exit, leaves the game, reopens the title and checks
   the panel's read-only auto-save row shows its date/frame count, loads it on
   purpose, clears it, and verifies the record no longer carries the snapshot.
