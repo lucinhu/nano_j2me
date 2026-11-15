@@ -661,3 +661,39 @@ not be able to strand a pending state request (candidate: skip pacing while a
 request is queued, or bounded clock assistance in the pacer wait, gated like
 the round-27 experiment).
 
+## Update, 2026-11-15 (round 34b): r22 released after the paused-state fix
+
+The r22 package was held earlier in this round because the concurrent 30 fps
+default stranded pause-time save/load requests. The fix (`14752c9`) adds
+`nj_port.state_request_pending`: the libretro port sets it while a state
+request waits for the frontend, and `frame_pace()`/`frame_pace_wait()` skip
+pacing meanwhile, so the runtime reaches the next frame boundary and serves
+the request. Only frames during which a request is already queued are
+affected; normal playback and the frame-rate cap are unchanged.
+
+The package was rebuilt cleanly from `14752c9` and validated under heavy
+concurrent load (full CTest running in parallel with a 10-job corpus probe):
+
+- mock frontend matrix 20/20;
+- real RetroArch LoopDemo 120 frames PASS (core log markers verified);
+- Windows x86_64 under Wine 4/4;
+- whole-corpus rendering probe: 372/373, the only failure being the
+  documented slow `毁灭战士3_10598` loader, with no paused-state failure
+  (before the fix the same run produced 98-120 paused-state failures);
+- full CTest: 181/181 in 332.23 s.
+
+Canonical `build/libretro-dist/` (rebuilt from `14752c9`):
+
+| target | size (bytes) | SHA-256 |
+| --- | --- | --- |
+| linux-x86_64 | 3827480 | `fb14d1caa77324da5873f752e05385de5fb6b390edae5bbb700594cbb63c365c` |
+| linux-aarch64 | 3309664 | `b8f89a528198a2ee6a49d99d4414d5531fc9e1786ae09d705ec701cea4fb89b9` |
+| linux-armv7 | 3017748 | `3b98467d953a97286de58d20cfa47fa28f1a44f643fb5aaab7afdbcfb0071a98` |
+| android-arm64 | 3539256 | `5dd5bce780ff4d30621b37028f152b2d1ebfe2b20d327db0eae1813e333b3a12` |
+| android-armv7 | 2727236 | `dd876d8e5b50d136d8ad1cfe09b4245501aa9cda6a547349b4b67a6318f6b252` |
+| android-x86_64 | 3585488 | `5fc4123b1082556e8632a3797458034ce4ddb7eb3521a60a563d361d3e4002ec` |
+| windows-i686 | 3437568 | `9694297d3148e9297cd1a3022fcb4655e72de7410d0e7c3cc71c733629382c58` |
+| windows-x86_64 | 3214336 | `52a7d92059b9705156c3100385284a367308ee33c8eb426c57540abcea0e235e` |
+
+`.info` unchanged (`c0f30aea…`). The older r21 round-34 note above remains as
+history; this r22 section supersedes it for the package identity.
