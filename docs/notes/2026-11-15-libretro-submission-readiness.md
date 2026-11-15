@@ -354,3 +354,22 @@ Re-validation at revision `88b4e5d`:
 * This closes the gap between "mock frontend" and "real frontend" evidence:
   content loading, MIDlet start, frame delivery and a clean shutdown all work
   through RetroArch itself for real J2ME titles, not only for the fixture JARs.
+
+## Update, 2026-11-15 (bundle validator and full suite)
+
+* Added `tools/check_libretro_submission_bundle.sh`: one offline command that
+  re-checks the whole local submission bundle — source/bundle/release-tree
+  `.info` byte-identity, the `libretro-super` patch adding exactly that file,
+  the five files touched by the `libretro/docs` patch and the library page's
+  front matter, plus optional clean-clone apply and `mkdocs build` via
+  `--apply-clones --mkdocs`. It is registered as the
+  `check_libretro_submission_bundle` CTest case and needs no network when run
+  without clone arguments.
+* Full local suite after adding that test: **184/184 passed in 339.51 s**
+  (`/tmp/r23-ctest3.log`). Two earlier runs overlapped a concurrent session's
+  in-progress interpreter edits and showed transient compile failures in
+  `check_threaded_dispatch` / `no_statics`; they cleared once that working tree
+  settled, and the final clean run passed all 184.
+* The bundle validator itself reports 41 passed, 0 failed when pointed at clean
+  `libretro-super` (`fb15e63`) and `libretro/docs` (`d83b34b`) clones with
+  `--apply-clones --mkdocs /var/tmp/mkvenv/bin/mkdocs`.

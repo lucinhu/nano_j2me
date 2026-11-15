@@ -123,7 +123,7 @@ change as recorded in the hash table).
   and the six black-frame failures found earlier are gone; details in
   `docs/notes/2026-11-15-libretro-black-frames.md` and
   `docs/notes/2026-11-15-libretro-save-while-paused.md`. The full local CTest
-  suite passed **183/183 in 348.03 s** at this revision. Seven M3G titles were
+  suite passed **184/184 in 339.51 s** at this revision (the new `check_libretro_submission_bundle` case validates this offline bundle). Seven M3G titles were
   checked through the mock frontend at the real-time cadence
   (`--pace-us 16666`): 浴火银河2完整版, 蓝牙真3D格斗, 急速狂飙完美破解版,
   浴火银河2瓦尔基里, 极品飞车16：亡命狂飙, 3D激爆拳击 and 3D跳台滑雪2011 all
