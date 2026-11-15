@@ -69,10 +69,14 @@ Outputs go to `build/libretro-dist/<target>/`, with a library and its metadata.
 Use `--no-strip` to retain symbols. `all` selects the script's supported targets
 and requires all of their toolchains.
 
-The eight candidates currently in `build/libretro-dist/` are the r23 package
-rebuilt on 2026-11-15 from revision `d2ed8d8` (which adds the `SYSTEM_RAM`
-cheat-search window on top of the r22 real-time pacing and the M3G
-Gouraud-textured span fast path; see `docs/PERFORMANCE.md`), so they include the load-lifecycle fix, the
+The eight candidates currently in `build/libretro-dist/` are the r25 package
+rebuilt on 2026-11-16 from revision `43219e6`. r25 adds the malformed-bytecode
+array-operand ownership guards and the GIF canvas pixel budget from
+`a296ce8`, publishes the `SYSTEM_RAM` memory map and cheat-search window from
+r24, and moves MIDlet construction onto the VM thread (`a2abdee`) with the
+blocked-constructor watchdog tuning from `68bffb9`; on top of that it includes
+the r22 real-time pacing and the M3G Gouraud-textured span fast path (see
+`docs/PERFORMANCE.md`), so they include the load-lifecycle fix, the
 monitor and repaint-blocking fixes, the CLI/manual-state boundary work, the
 input-bitmask/rumble support and the `nano_j2me_screen`/`nano_j2me_locale`
 options, bounded load/save state clock assistance including the paused

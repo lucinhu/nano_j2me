@@ -893,3 +893,45 @@ tooling commits; no core sources changed since the r24 package):
   real RetroArch 1.22.2 load/run/exit check (120 frames).
 
 The r24 hash table above remains the canonical release artifact table.
+
+## Update, 2026-11-16 (round 52b): r25 package
+
+r25 replaces r24 as the canonical package in `build/libretro-dist/`. It is
+built from revision `43219e6` (the only later commit, `dd91bfc`, is
+documentation/tooling only, so the binaries match the core sources). It adds:
+
+* the malformed-bytecode hardening from `a296ce8` (array-operand ownership
+  guards that turn corrupt operand-stack references into
+  `java/lang/VerifyError`, plus the GIF canvas pixel budget from the long fuzz
+  campaign), and
+* the async constructor/load path from `a2abdee` and `68bffb9` (a MIDlet
+  loading screen can no longer block `retro_load_game()`, and a constructor
+  that runs the whole game loop is waited out instead of killed), and the
+  `SYSTEM_RAM` memory map/cheat-search window from r24.
+
+| target | size | sha256 |
+|--------|------|--------|
+| linux-x86_64 | 3,843,912 | `117a992ff2195d63e64a58a034f1e38dfbab5124d80057e4e2d4527a9a89cce4` |
+| linux-aarch64 | 3,324,104 | `4e62066a4f0d2fa151e4f44c4b2d6d7f95d3bc5ad24ab345043f389374014917` |
+| linux-armv7 | 3,031,988 | `707c413d5f40e2457941ebd165a1d2de21cf848a1b50933edaa150e7e975ed23` |
+| android-arm64 | 3,556,856 | `5c9aed7e98dca2b82201171aca184c737d3b27360639d90cd2faf9f8a7f19400` |
+| android-armv7 | 2,744,772 | `6da97d9d6fa914f9af1a5c36b2b0d9d1b96336685cc7aade9088b0a3b25ca5a8` |
+| android-x86_64 | 3,597,168 | `a17d45e3787d4b8c375af0d584dc55aebe92e653da5533e8ea130a2ef1e15c64` |
+| windows-i686 | 3,451,392 | `3dffa1b0875716ce23093e7386657ab57d2eb30b41ad750b604ebb2c8de19c19` |
+| windows-x86_64 | 3,226,624 | `4704da8b51dfdcf1ea2334b8c945e611aa719797ef450ab58af0a1efa97bb1a2` |
+
+`.info` is unchanged: `740df7353c181bd76955f04a64508c4c1d1994509c1b4290b3b420b04da424e1`.
+
+Validation on r25: mock frontend matrix **20/20**; real RetroArch 1.22.2
+LoopDemo 120 frames PASS; Windows x86_64 under Wine **4/4**; whole-corpus
+rendering probe **371 titles: 370 passed, 1 known limitation (the documented
+slow `毁灭战士3_10598` loader), 0 failed**; libretro state-corpus probe
+**50/50 round trips** at the 60 Hz cadence a frontend uses; full serial CTest
+on the same tree **189/189 in 349.38 s**.
+
+One documented behaviour change: a frontend that requests a state *before the
+asynchronous MIDlet construction finishes* can no longer be trusted with that
+state. Real frontends call `retro_run()` at 60 Hz and are unaffected, and the
+state probe now paces frames for that reason; the note
+`docs/notes/2026-11-15-libretro-async-load-early-state.md` records the
+reproduction and the recommended `load_ready` gate for the load/state path.

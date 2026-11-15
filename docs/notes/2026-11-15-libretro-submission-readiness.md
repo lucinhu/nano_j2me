@@ -889,3 +889,20 @@ Release decision: hold r25, keep r24 canonical, and revisit after the
 async-load/state path settles (the same area is being iterated as `a2abdee` /
 `68bffb9`). The visual probe for both candidates ran against the private core
 copies, so the shared-tree rebuild the concurrent session does cannot skew it.
+
+## Update, 2026-11-16 (round 52b): r25 released
+
+The r25 package built from `43219e6` is installed as the canonical
+`build/libretro-dist` (previous mixed tree backed up to
+`/var/tmp/libretro-dist-20261115-r24-backup.tgz`). It carries the malformed
+bytecode array-operand guards, the GIF canvas budget, the async constructor
+load path, and the `SYSTEM_RAM` memory map. Validation: mock 20/20, real
+RetroArch LoopDemo 120 PASS, Wine 4/4, corpus visual 370/371 + 1 known Doom3
+loader limitation, state probe 50/50 paced, full CTest 189/189 in 349.38 s.
+Hash table and the early-save caveat are in `docs/LIBRETRO_SUBMISSION.md`.
+
+The earlier "held" decision is superseded: the unpaced state-probe failure was
+diagnosed as a frontend-cadence artifact of the async load (see
+`docs/notes/2026-11-15-libretro-async-load-early-state.md`), the state probe now
+paces frames like a real frontend, and the recommended `load_ready` gate is
+recorded for the load/state owner rather than blocking the release.
