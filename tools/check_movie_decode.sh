@@ -31,12 +31,16 @@ STATUS=$?
 
 ALL=$(cat "$OUT" "$ERR")
 printf '%s\n' "$ALL" | grep -q 'media: mpeg4-part2 movie 64x48' \
-    || { printf '%s\n' "$ALL" | tail -20 >&2; fail "movie was not parsed"; }
+    || { printf '%s\n' "$ALL" | tail -20 >&2; fail "MPEG-4 Part 2 movie was not parsed"; }
+printf '%s\n' "$ALL" | grep -q 'media: h263 movie 128x96' \
+    || { printf '%s\n' "$ALL" | tail -20 >&2; fail "H.263 movie was not parsed"; }
 printf '%s\n' "$ALL" | grep -q 'VIDEO started' \
-    || { printf '%s\n' "$ALL" | tail -20 >&2; fail "Player did not start"; }
+    || { printf '%s\n' "$ALL" | tail -20 >&2; fail "MPEG-4 Player did not start"; }
+printf '%s\n' "$ALL" | grep -q 'VIDEO2 started' \
+    || { printf '%s\n' "$ALL" | tail -20 >&2; fail "H.263 Player did not start"; }
 printf '%s\n' "$ALL" | grep -q 'VIDEO failed' \
     && { printf '%s\n' "$ALL" | tail -20 >&2; fail "Java video path failed"; }
 printf '%s\n' "$ALL" | grep -q 'media: started Player kind=2' \
     || fail "video Player did not get a video track"
 
-echo "PASS: MPEG-4 Part 2 video decoded and presented through VideoControl"
+echo "PASS: MPEG-4 Part 2 and H.263 video decoded and presented through VideoControl"

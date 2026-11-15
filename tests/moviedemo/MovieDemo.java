@@ -1,5 +1,8 @@
-// MIT. Movie fixture: decode an MPEG-4 Part 2 video track from a 3gp resource
-// and show it through VideoControl's direct-video overlay on a Canvas.
+// MIT. Movie fixture: decode the two video tracks the runtime supports from
+// 3gp resources and show each through VideoControl's direct-video overlay.
+//
+//   res/movie.3gp       MPEG-4 Part 2 (mp4v), 64x48, 6 frames
+//   res/movie_h263.3gp  H.263 (s263), 128x96, 6 frames
 //
 // The point of the fixture is that it exercises the whole MMAPI video path
 // from Java: Manager.createPlayer(InputStream, "video/3gpp"), realize,
@@ -36,23 +39,23 @@ public class MovieDemo extends MIDlet implements Runnable {
         new Thread(this).start();
     }
 
-    public void run() {
+    private void play(String resource, String tag) throws Exception {
         Player p = null;
         try {
-            p = Manager.createPlayer(getClass().getResourceAsStream("/res/movie.3gp"),
+            p = Manager.createPlayer(getClass().getResourceAsStream(resource),
                                      "video/3gpp");
             p.realize();
             p.prefetch();
             VideoControl vc = (VideoControl) p.getControl("VideoControl");
             if (vc == null) {
-                System.out.println("VIDEO nocontrol");
+                System.out.println(tag + " nocontrol");
                 return;
             }
             vc.initDisplayMode(VideoControl.USE_DIRECT_VIDEO, canvas);
             vc.setDisplayLocation(4, 4);
             vc.setVisible(true);
             p.start();
-            System.out.println("VIDEO started duration=" + p.getDuration());
+            System.out.println(tag + " started duration=" + p.getDuration());
             /* The headless port runs frames as fast as --fps allows; sleeping
              * here lets the overlay present a few video samples before we
              * stop.  The shell check only needs the start plus the core's
@@ -62,14 +65,22 @@ public class MovieDemo extends MIDlet implements Runnable {
             }
             vc.setVisible(false);
             p.stop();
-            System.out.println("VIDEO state=" + p.getState());
-        } catch (Throwable t) {
-            System.out.println("VIDEO failed=" + t);
+            System.out.println(tag + " state=" + p.getState());
         } finally {
             if (p != null) {
                 try { p.deallocate(); } catch (Throwable t) { }
                 try { p.close(); } catch (Throwable t) { }
             }
+        }
+    }
+
+    public void run() {
+        try {
+            play("/res/movie.3gp", "VIDEO");
+            play("/res/movie_h263.3gp", "VIDEO2");
+        } catch (Throwable t) {
+            System.out.println("VIDEO failed=" + t);
+        } finally {
             notifyDestroyed();
         }
     }
