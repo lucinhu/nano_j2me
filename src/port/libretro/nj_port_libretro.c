@@ -261,9 +261,12 @@ static int lr_thread_equal(lr_thread_id a, lr_thread_id b) { return pthread_equa
  * and the frontend cannot tick it while it is blocked in retro_serialize().
  * While a save is pending the worker may therefore advance the clock by at
  * most this many virtual frames (~5 s at 60 Hz); the snapshot is then taken
- * at the next frame boundary.  A load replaces the whole VM, so its clock
- * advance is not bounded by this budget. */
-#define LR_STATE_CLOCK_MAX_FRAMES 300u
+ * at the next frame boundary.  Both kinds are bounded: an unbounded load
+ * assist lets a frame that spins on its own loop run the virtual clock
+ * arbitrarily far ahead.  A load restores the pre-request clock when it is
+ * refused or times out, because its clock advance was only a means to reach
+ * the serve point. */
+#define LR_STATE_CLOCK_MAX_FRAMES 1200u
 /* Snapshot envelope: explicit little-endian fields, CRC over header + payload.
  * The VM's snapshot format still enforces its own architecture/ABI checks. */
 #define LR_REQ_LOAD 2
@@ -430,7 +433,10 @@ typedef struct nj_lr {
     nj_size        req_size;
     nj_u4          jar_crc;
     nj_size        state_bound;   /* retro_serialize_size() answer          */
-    unsigned       clock_budget;  /* frames a pending SAVE may clock-assist */
+    unsigned       clock_budget;  /* frames a pending request may clock-assist */
+    uint64_t       pre_clock;     /* virtual frame count before a pending LOAD */
+    uint64_t       req_start_ms;  /* real time the pending request was queued */
+    unsigned long long req_start_frames; /* presented frames when it was queued */
 
     /* ---- paths ---- */
     char save_dir[1024];
@@ -2205,6 +2211,24 @@ static nj_u4 lr_port_millis(void *ud)
     if (!s) return 0;
 
     lr_mutex_lock(&s->lock);
+    /* A paused frontend cannot tick the virtual clock, so a title that polls
+     * System.currentTimeMillis() in a busy loop would never finish its frame
+     * and a pending state request would time out.  Give that poll the same
+     * clock assistance the idle path gives. */
+    /* Assist only what cannot finish on its own: a paint that runs on top of
+     * the frame (its waiters are woken at frame boundaries, so it needs the
+     * clock to get there), or a frame that has stopped advancing presented
+     * frames.  A healthy frame reaches the boundary without help and must not
+     * have its clock accelerated under it. */
+    if (s->phase == LR_PHASE_RUN && s->req_kind != LR_REQ_NONE &&
+        s->clock_budget > 0u && s->vm &&
+        (nj_vm_in_paint(s->vm) ||
+         (nj_vm_frames(s->vm) == s->req_start_frames &&
+          lr_real_ms() >= s->req_start_ms + 100u))) {
+        s->clock_budget--;
+        s->vclock_frames++;
+        lr_cond_broadcast(&s->cond);
+    }
     switch (s->phase) {
     case LR_PHASE_RUN:  now = lr_virtual_ms(s); break;
     case LR_PHASE_LOAD: now = s->load_ms;       break;
@@ -2266,12 +2290,10 @@ static void lr_idle(void *ud)
         s->load_ms += 1;
     } else if (s->phase == LR_PHASE_RUN) {
         unsigned long long target = lr_virtual_ms(s) + 1;
-        /* A pending request blocks the frontend: advance the clock a bounded
-         * amount so a frame that busy-waits on the virtual clock can reach
-         * its boundary and the request gets served (LR_STATE_CLOCK_MAX_FRAMES).
-         * Both kinds are bounded: an unbounded load assist lets a frame that
-         * spins on its own loop run the virtual clock arbitrarily far ahead,
-         * which is not something a paused frontend should do. */
+        /* A pending request blocks the frontend: advance the clock so a
+         * frame that busy-waits on the virtual clock can reach its boundary
+         * and the request gets served.  The advance is bounded; a load
+         * restores the old clock when it is refused or times out. */
         if (s->req_kind != LR_REQ_NONE && s->clock_budget > 0u) {
             s->clock_budget--;
             s->vclock_frames++;
@@ -2608,6 +2630,7 @@ static void lr_serve_state_request(nj_lr *s)
     s->req_blob = blob;
     s->req_size = size;
     s->req_rc = rc;
+    if (kind == LR_REQ_LOAD && rc != NJ_OK) s->vclock_frames = s->pre_clock;
     s->req_kind = LR_REQ_NONE;
     s->req_busy = 0;
     s->req_done = 1;
@@ -2645,6 +2668,9 @@ static int lr_request_state(nj_lr *s, int kind, const void *input,
     s->req_done = 0;
     s->req_busy = 0;
     s->clock_budget = LR_STATE_CLOCK_MAX_FRAMES;
+    s->pre_clock = s->vclock_frames;
+    s->req_start_ms = lr_real_ms();
+    s->req_start_frames = s->vm ? nj_vm_frames(s->vm) : 0u;
     s->req_blob = copy;
     s->req_size = input_size;
     lr_cond_broadcast(&s->cond);
@@ -2662,6 +2688,7 @@ static int lr_request_state(nj_lr *s, int kind, const void *input,
     free(s->req_blob);
     s->req_blob = NULL;
     s->req_size = 0;
+    if (kind == LR_REQ_LOAD && rc != NJ_OK) s->vclock_frames = s->pre_clock;
     s->req_kind = LR_REQ_NONE;
     s->req_done = 0;
     lr_mutex_unlock(&s->lock);
@@ -2717,12 +2744,11 @@ static int lr_frame_hook(nj_vm *vm, void *ud)
      * cannot drive retro_run(), so a MIDlet parked in a blocking native that
      * waits for virtual time (a splash screen sleeping a few seconds, for
      * example) would keep the VM thread inside its frame forever and the
-     * request would time out.  A pending LOAD replaces the whole VM, so its
-     * clock may advance freely.  A pending SAVE may advance at most
-     * LR_STATE_CLOCK_MAX_FRAMES virtual frames: the snapshot then reflects
-     * that much additional game time, which is the documented trade-off for
-     * saving while the frontend is paused.  A LOAD is bounded the same way so
-     * a spinning frame cannot advance the clock without limit.
+     * request would time out.  The advance is bounded by
+     * LR_STATE_CLOCK_MAX_FRAMES so a spinning frame cannot run the clock
+     * arbitrarily far ahead; a load restores the pre-request clock when it is
+     * refused or times out.  For a save the snapshot reflects up to that much
+     * additional game time, the documented trade-off for saving while paused.
      */
     lr_mutex_lock(&s->lock);
     if (s->req_kind != LR_REQ_NONE && s->clock_budget > 0u) {

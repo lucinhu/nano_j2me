@@ -594,6 +594,13 @@ static nj_status arena_walk(nj_vm *vm, nj_obj_fn fn, void *ud, nj_u4 *out_count)
 /* ------------------------------------------------------------------ */
 /* nj_vm_can_save                                                      */
 /* ------------------------------------------------------------------ */
+int nj_vm_in_paint(const nj_vm *vm_c)
+{
+    const nj_vm *vm = vm_c;
+
+    return vm ? (int)vm->in_paint : 0;
+}
+
 int nj_vm_can_save(const nj_vm *vm_c)
 {
     /* Read-only inspection; the helpers that take nj_vm* do not modify it. */

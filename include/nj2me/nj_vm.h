@@ -495,6 +495,8 @@ int nj_vm_verbose(const nj_vm *vm);
  * instead of a FILE, for an embedder that hands the blob to a frontend.
  */
 int  nj_vm_can_save(const nj_vm *vm);
+/* Non-zero while a paint callback is running on the worker's C stack. */
+int  nj_vm_in_paint(const nj_vm *vm);
 int  nj_vm_save(nj_vm *vm, FILE *f);
 int  nj_vm_load(nj_vm *vm, FILE *f);
 int  nj_vm_save_file(nj_vm *vm, const char *path);

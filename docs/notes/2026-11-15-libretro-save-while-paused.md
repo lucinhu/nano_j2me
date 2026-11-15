@@ -127,3 +127,50 @@ limitation in `docs/LIBRETRO.md`: saving while paused can be refused for such
 a title, while saving during normal play (frontend at a frame boundary) works.
 The 50-title visual probe therefore reports 49 passed, 1 refused, 0 visual
 failures.
+
+## Update, 2026-11-15 (round 18): the busy-poll class
+
+The "nested paint" shape above was only half of the story. A second gdb
+`SIGSTOP` capture, taken 1.5 s after a load request was queued, showed the
+worker inside
+
+```
+nj_invoke_native -> sys_currentTimeMillis (src/core/nj_system.c:23)
+                 -> nj_now_ms -> lr_port_millis
+```
+
+i.e. the title was not waiting in the frame loop or in a native sleep: it was
+polling `System.currentTimeMillis()` in a busy `while` loop inside its own
+frame. That poll never calls the port `idle` entry point, so the two clock
+assist paths (`lr_idle`, `lr_frame_hook`) never ran, the virtual clock stayed
+frozen at the value of the last `retro_run()`, and the queued request timed out
+with `-8` after four seconds. The earlier "nested paint" capture is the same
+class seen through a different window: a paint running on top of the frame and
+waiting for the clock.
+
+The port now also advances the clock inside `lr_port_millis()` itself while a
+request is pending, but only when the frame cannot finish on its own:
+
+* a paint callback is on the stack (`nj_vm_in_paint()`, new public accessor), or
+* the presented-frame counter has not moved for 100 ms (`nj_vm_frames()` and
+  the `req_start_*` fields recorded when the request is queued).
+
+A healthy frame reaches the boundary without help and is never accelerated;
+that condition matters because accelerating a frame whose game logic is driven
+by the wall clock (the football managers) made the game allocate far more than
+it expected and hit `OutOfMemoryError`. The budget is 1200 virtual frames
+(~20 s at 60 Hz); a load restores the pre-request clock when it is refused or
+times out, since its clock advance was only a way to reach the serve point.
+
+Verified with the mock frontend (`--frames 300 --pace-us 16667`):
+
+```
+PASS 空战1944_10321          PASS 迈阿密之夜_9566       PASS 都市赛车6火线追击_2230
+PASS 火影忍者汉化版_10735     PASS 明星制造梦工厂_11048   PASS 午夜台球圣诞中文版_8677
+PASS 跑跑卡丁车-经典中秋版_2117 PASS 魂斗罗_5652          PASS 电子宠物蛋_11972
+PASS 僵尸危机2_4349          PASS 足球经理2010汉化版_4756  PASS 冠军足球经理2010汉化版_5198
+```
+
+The remaining documented limitation is a save/load requested while the worker
+is inside a long-running native or M3G load that cannot reach a boundary within
+the budget; normal play and paused saves that reach a boundary are unaffected.
