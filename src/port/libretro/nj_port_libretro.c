@@ -2764,6 +2764,7 @@ static int lr_request_state(nj_lr *s, int kind, const void *input,
     s->pre_clock = s->vclock_frames;
     s->req_start_ms = lr_real_ms();
     s->req_start_frames = s->vm ? nj_vm_frames(s->vm) : 0u;
+    s->port.state_request_pending = 1;   /* do not pace while we wait */
     s->req_blob = copy;
     s->req_size = input_size;
     lr_cond_broadcast(&s->cond);
@@ -2784,6 +2785,7 @@ static int lr_request_state(nj_lr *s, int kind, const void *input,
     if (kind == LR_REQ_LOAD && rc != NJ_OK) s->vclock_frames = s->pre_clock;
     s->req_kind = LR_REQ_NONE;
     s->req_done = 0;
+    s->port.state_request_pending = 0;
     lr_mutex_unlock(&s->lock);
     if (rc != NJ_OK) lr_log(s, RETRO_LOG_WARN,
                            "save-state request refused (%d); the game continues", rc);
@@ -3282,7 +3284,7 @@ RETRO_API void retro_init(void)
     s->phase = LR_PHASE_STOP;
     s->out_w = 240;
     s->out_h = 320;
-    lr_log(s, RETRO_LOG_INFO, "nano_j2me %s libretro core (pacing rev 3: realtime clock + 60 Hz VM gate)", NJ_VERSION_STRING);
+    lr_log(s, RETRO_LOG_INFO, "nano_j2me %s libretro core (pacing rev 4: realtime clock + configurable frame limit)", NJ_VERSION_STRING);
 }
 
 RETRO_API void retro_deinit(void)
