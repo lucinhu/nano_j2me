@@ -134,8 +134,10 @@ static void nj_prof_dump(void)
     fprintf(stderr, "PROF samples=%u\n", nj_prof_n);
 }
 #else
-#define nj_prof_start() ((void)0)
-#define nj_prof_dump() ((void)0)
+/* Function-like macros cannot be passed to atexit(); use real no-ops so the
+   CLI also builds on architectures the profiler does not support (armv7 etc). */
+static void nj_prof_start(void) {}
+static void nj_prof_dump(void) {}
 #endif
 
 #if defined(_WIN32)
