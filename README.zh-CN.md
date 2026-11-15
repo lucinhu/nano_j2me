@@ -147,7 +147,11 @@ build/nj2me --prop microedition.platform=Nokia6230/05.50 game.jar
 
 同一个运行时可以用 Emscripten 编译为 WebAssembly。在线演示由
 [web-demo 工作流](.github/workflows/web-demo.yml) 发布在
-<https://lucinhu.github.io/nano_j2me/>：没有服务器端模拟，也不用
+<https://lucinhu.github.io/nano_j2me/>：
+
+[![Web demo](https://github.com/lucinhu/nano_j2me/actions/workflows/web-demo.yml/badge.svg)](https://github.com/lucinhu/nano_j2me/actions/workflows/web-demo.yml)
+
+没有服务器端模拟，也不用
 pthreads：解释器由 `requestAnimationFrame` 每帧驱动一次，通过虚拟时钟前进，因此
 任意静态文件服务器就够用，导入的游戏也永远不会离开浏览器。
 

@@ -155,7 +155,9 @@ server-side emulation and no pthreads: the interpreter is driven one frame per
 `requestAnimationFrame` through a virtual clock, so any static file host is
 enough, and imported games never leave the browser. A live demo is published
 at <https://lucinhu.github.io/nano_j2me/> by
-[`.github/workflows/web-demo.yml`](.github/workflows/web-demo.yml).
+[`.github/workflows/web-demo.yml`](.github/workflows/web-demo.yml)
+
+[![Web demo](https://github.com/lucinhu/nano_j2me/actions/workflows/web-demo.yml/badge.svg)](https://github.com/lucinhu/nano_j2me/actions/workflows/web-demo.yml)
 
 ```sh
 tools/emsdk_setup.sh                    # once: installs the SDK into .local-tools/

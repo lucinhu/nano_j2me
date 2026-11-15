@@ -207,10 +207,12 @@ tools/check_web.sh --node --corpus             # 另有 --browser（Playwright F
 | `.local-tools/debug-runs/gfx-full-20261113/linux/nj2me` | 4019296 | `c46c21c315e9252b0f99e1844f34a8894813d27d8e1638bc21e3c0a2284712ec` |
 | `.local-tools/debug-runs/gfx-full-20261113/android-legacy/nj2me-legacy.apk` | 694718 | `0352c5fe4764747d910b98bf6cdd430bdf537e113beca1f82d92d784247139d7` |
 | `build/web/js/nj2me.js` | 93928 | `c6f2de60e08048d5519e4d98a98ecdb1801fec60e4f4e098ad5011c843aa7bf8` |
-| `build/web/js/nj2me.wasm` | 2145235 | `5b5794eed73e8ab65238e0759b8f94b35a5ce19096cb7983980ba4d2d63b1e6b` |
+| `build/web/js/nj2me.wasm` | 2145920 | `cd049b3f4327619ce890d4519cc6cf440567051d38e080df2ce04f36a7d31b82` |
 
 以上产物均由同一份当前源码构建（含 2026-11-14 的 journal 批处理、持久
-GPU 会话与 2026-11-15 的自动选择改动）。legacy APK 也已用恢复的旧工具链重建：
+GPU 会话与 2026-11-15 的自动选择改动）；Web 产物从当前提交的干净 worktree
+重建（`git worktree add --detach` + `tools/build_web.sh`，两次构建字节一致），
+与 GitHub Pages 线上部署的 `nj2me.wasm` 大小相同。legacy APK 也已用恢复的旧工具链重建：
 NDK r10e 解压到 `.local-tools/android-legacy/android-ndk-r10e`，API 5 平台包解压到
 `.local-tools/android-legacy/sdk5/android-2.0_r01-linux/android.jar`（脚本内置回退路径），
 `tools/build_android_legacy.sh` 直接可用。重建产物的静态检查：versionName
@@ -244,6 +246,7 @@ Web 产物也在提交前重新构建并重新跑过 `tools/check_web.sh --all` 
 - AMR/编解码报告：`.local-tools/debug-runs/gfx-full-20261113/amr/`、`.local-tools/debug-runs/gfx-full-20261113/codec-audit/`
 - 网页版：`.local-tools/debug-runs/web-final-all/`（20 轮收尾最终 `--all`：node 36/36、语料 47/47、浏览器 42/42、48 s）、
   `.local-tools/debug-runs/web-final-perf-smoke/`（最终 `--perf` 9/9 与 `--smoke` 7/7：game15 4689 fps、bubblet 2861、slimevolley 5581、1942空战 5520）、
+  `.local-tools/debug-runs/web-head-all/`（当前 HEAD 干净构建产物的 `--all`：node/corpus/browser 全 PASS、58 s）、
   `.local-tools/debug-runs/web-live-all/`（`--live` 线上演示 7/7、8 s：站点 200、wasm 引擎启动、hello.jar 导入、画布 240x320、帧号 74→134）、
   `.local-tools/debug-runs/web-live-demo/`（线上演示首次手工验证：`live-check.json` + `live-game.png`）、
   `.local-tools/debug-runs/web-final-sweep/`（最终 403 标题全语料审计：392 ok / 8 black / 1 fatal / 1 start / 1 probe、0 timeout、117 s，`sweep-403.jsonl` + `sweep-summary.txt`）、
