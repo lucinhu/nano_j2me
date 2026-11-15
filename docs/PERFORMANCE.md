@@ -3665,3 +3665,57 @@ CPU/power only, needs a device), M3G raster, and the M3G-side field caching
 above.  The reusable recipe (system `perf` under adb root, SurfaceFlinger
 latency dumps, `display.xml` `frameCap=0`, keyevent navigation) is in
 `docs/notes/2026-11-03-android-headroom.md`.
+
+## M3G software-raster profile and span fast-path attempts, 2026-11-15
+
+The software M3G rasteriser is still the dominant cost of a 3D title on the
+headless CLI.  Profiling `毁灭战士3_10598.jar` (20 000 frames, `--fps 0`,
+240x320, heap 16) with a `-pg` CLI build (`/var/tmp/nj2me-prof-build`) gave a
+26.16 s sample: `sw_span` 60% (237 591 794 calls), `m3g_clear` 16% (39 762
+calls, 105 us each), `sw_tri_band` 12% (40 636 764 calls), `nj_region_draw`
+6%, then `jr_fetch`/`jr_lit` below 2%.  Temporary span counters showed
+60 000 000 spans covering 604 130 720 pixels: average span 10.07 px.
+The path mix there was flat textured ARGB8888 43.5% and the **general
+Gouraud loop 49%**.
+
+That general class on this title is fully specified: Gouraud shading,
+textured, NEAREST filter, REPEAT wrapping, MODULATE, alpha blend mode 64,
+fog off, `awrite=1`, `athresh=0`, ARGB8888 surface.  It runs the fully
+general loop (sprite test, gouraud interpolation, texture and filter
+dispatch, fog branch, texfunc branch) with three float divisions per pixel
+(`1/pg`, `ph/pg`, `pk/pg`).  Measured value of the existing flat fast paths:
+building with `-DNJ_M3G_FAST_PATHS=0` costs 35.13/35.42 s user CPU vs
+28.74/28.80 s normally, i.e. the current fast paths are worth ~18% of this
+title's CPU; extending them to the Gouraud-textured class is the largest
+single lever left.
+
+Three attempts were measured with `/var/tmp/nj2me-base-build` (clean
+Release CLI) and pinned-core `time` runs (A/A noise ~0.7% on this workload):
+
+1. Splitting the per-row `m3g_span` into triangle-invariant base + row
+   state (base filled once in `sw_tri_band`, four span functions taking
+   `(base, row)`): 28.61 s median vs 28.77 s baseline, i.e. -0.6%, inside the
+   noise band.  Not kept.
+2. Skipping the redundant `1.0f/pg` reciprocal in the general loop when it is
+   not needed (REPEAT-wrapped, unfogged spans divide s and t directly) and
+   guarding the `sw_fog_d` call: reproducible regression to 32.78-32.97 s
+   (+14%), cause not identified (likely code layout/branch effects).  Not
+   kept.
+3. A dedicated `sw_span_gouraud_texargb()` for the class above, copying the
+   general loop's arithmetic (gouraud interpolation, `sw_near_texel`,
+   MODULATE multiply, alpha test, depth write, blend-or-write) with every
+   state test hoisted into `sw_tri_band`: **27.29-27.37 s user CPU vs
+   28.78-28.91 s baseline (-5.1%)**, but frame dumps diverged from the
+   baseline build on `毁灭战士3_10598.jar` frames 150-240 (10 461 of 230 400
+   bytes per frame, sum abs difference 125 548) while two other 3D titles
+   matched byte for byte.  Not kept: a 5% win is not worth a pixel drift that
+   is not yet understood.
+
+Next step for this path: a bit-exact reproduction of the general loop's
+rounding for the Gouraud class (the divergence is most likely in the
+modulation/alpha sequence or in a per-triangle state the general loop
+re-reads) plus a frame-dump equality test for the corpus 3D titles; only then
+should the ~5% be taken.  The rejected patches and builds were kept only in ephemeral `/tmp` and
+`/var/tmp` paths (`nj_lib_m3g.c.opt*`, `nj2me-{prof,base,opt,nofast}-build`);
+the profiling recipe is repeatable with any `-pg` CLI build and a
+`--dump-frames` comparison for parity.
