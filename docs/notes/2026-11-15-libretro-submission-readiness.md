@@ -327,3 +327,17 @@ Re-validation at revision `88b4e5d`:
   tree backed up to `/var/tmp/libretro-dist-20261115-r16-backup.tgz`).
 * Commit: `011247e` "fix(libretro): answer device properties and retry
   generic-handset load" (plus this documentation refresh).
+
+## Update, 2026-11-15 (600-frame corpus probe)
+
+* Re-ran the whole-corpus rendering probe at **600 frames per title** (10 s of
+  real-time cadence at 60 Hz, up from the 300-frame/5 s default) against the
+  r17 core, 10 jobs: **373 titles → 372 passed, 1 failed**. The single failure
+  is still `毁灭战士3_10598.jar` (`rc=-1`, the very slow M3G loader that cannot
+  finish inside the 240 s probe watchdog); nothing new failed at the longer
+  horizon, so the rendering and serialize round-trip checks are stable through
+  10 s of play in every other sweep-ok title.
+* Evidence: `.local-tools/debug-runs/goal16-libretro-corpus/full-600f.log`
+  and the refreshed `visual.jsonl` (373 rows).
+* No source change in this step; it is evidence for the submission materials
+  only.

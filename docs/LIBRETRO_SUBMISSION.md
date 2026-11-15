@@ -109,10 +109,11 @@ change as recorded in the hash table).
   (`tools/check_libretro_states.py`, 50 titles, 120 frames) reports
   **50/50 save/restore round trips**. The whole-corpus rendering probe on the
   r17 core (`tools/check_libretro_corpus_visual.py`, 373 sweep-ok titles, 300
-  frames, real-time cadence) reported **372 passed, 1 failed**; the single
-  remaining failure is not visual: one very slow 3D loader (毁灭战士3_10598,
-  which renders its loading sequence 190 times and cannot finish within the
-  sampling watchdog). The two titles that refused the generic handset
+  frames, real-time cadence) reported **372 passed, 1 failed**, and a re-run at
+  **600 frames** (10 s of play per title) reported the same **372/373**; the
+  single remaining failure is not visual: one very slow 3D loader
+  (毁灭战士3_10598, which renders its loading sequence 190 times and cannot
+  finish within the sampling watchdog). The two titles that refused the generic handset
   (`bubblet.jar`, `1945空战英雄_6105.jar`) now load through the device-property
   answers and the one-time `nokia6230` retry. The paused-save/serving class
   and the six black-frame failures found earlier are gone; details in

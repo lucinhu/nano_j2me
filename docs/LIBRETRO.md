@@ -457,7 +457,8 @@ geometry pass the matching frontend expectation. Both are sampling tools, not
 CI gates. The corpus visual probe (`check_libretro_corpus_visual.py`) runs every
 sweep-ok title through the mock frontend and requires a non-black animated
 frame, so it catches "loads but paints nothing" regressions that the CLI sweep
-cannot see. At the time of writing it reports 372/373. The single remaining
+cannot see. At the time of writing it reports 372/373 at both the default
+300-frame (5 s) horizon and a 600-frame (10 s) re-run. The single remaining
 failure is one very slow 3D loader (see below) that cannot finish within the
 sampling watchdog; the two titles that need the `nokia6230` profile now load
 through the device-property answers and the handset retry.
