@@ -193,7 +193,10 @@ before their MIDlet starts (the corpus's `1945空战英雄_6105.jar` throws
 When a load fails while the option is still `generic`, the core retries the
 load once with the `nokia6230` profile, logs both attempts, and keeps that
 profile for the rest of the session (including `retro_reset`). Selecting a
-device profile explicitly disables the retry.
+device profile explicitly disables the retry. The default itself stays
+`generic`: a full-corpus experiment with `nokia6230` as the default lost four
+titles and gained none (`docs/notes/2026-11-15-device-default-experiment.md`),
+so the retry is deliberately limited to content that failed to load.
 
 Binding values are `NONE`, `FIRE`, `UP`, `DOWN`, `LEFT`, `RIGHT`, `0`–`9`,
 `STAR`, `POUND`, `SOFT_LEFT`, `SOFT_RIGHT`, `CLEAR`, `GAME_A`–`GAME_D`, `VOLUP`,
