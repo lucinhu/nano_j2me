@@ -1643,6 +1643,16 @@ nj_add_test(test_clip tests/test_clip.c)
       WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} TIMEOUT 300)
   endif()
 
+  # ...and with the mutation aimed at any class in the JAR (`all`), because a
+  # damaged inner class or canvas is as realistic as a damaged MIDlet.
+  if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tools/fuzz_classfile.py)
+    add_test(NAME fuzz_classfile_allclass
+             COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/tools/fuzz_classfile.py
+                     $<TARGET_FILE:nj2me-cli> 60 2 all)
+    set_tests_properties(fuzz_classfile_allclass PROPERTIES
+      WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} TIMEOUT 300)
+  endif()
+
   # Every nj_field_lookup() must name a field its class declares.  A lookup
   # that asks for the wrong descriptor answers NULL, and the native built on
   # it then silently does nothing - which is how a Light came to be

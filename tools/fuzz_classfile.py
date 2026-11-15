@@ -27,6 +27,12 @@ kinds below now come from an actual walk of the constant pool and the method
 attributes, so 'methodcount', 'fieldcount', 'exc_handler' and 'super_self'
 mutate what they claim to mutate.
 
+A SIXTH point: only the MIDlet's own class used to be mutated, but a damaged
+JAR can carry a broken inner class or canvas just as easily.  The optional
+fourth argument `all` mutates a random class from the JAR instead (the MIDlet's
+class included); 300 two-locus cases per fixture are clean on the current
+build and a small gate exercises the mode.
+
 A FIFTH point: coverage used to be single-locus (one mutation per case, and
 only in the MIDlet's own class).  The optional third argument now applies
 several mutations to the same class, which is the corruption shape a damaged
@@ -68,6 +74,7 @@ SRC = pick_source()
 BIN = sys.argv[1] if len(sys.argv) > 1 else './build/nj2me'
 N   = int(sys.argv[2]) if len(sys.argv) > 2 else 60
 N_MUT = int(sys.argv[3]) if len(sys.argv) > 3 else 1
+TARGET_ALL = len(sys.argv) > 4 and sys.argv[4] == 'all'
 PER = 6
 random.seed(20261012)
 
@@ -79,7 +86,7 @@ line = [l for l in mf.splitlines() if l.startswith('MIDlet-1:')][0]
 cls_name = line.split(',')[-1].strip().replace('.', '/') + '.class'
 base = d[cls_name]
 print('mutating', cls_name, len(base), 'bytes,', N, 'cases,', N_MUT,
-      'mutations/case')
+      'mutations/case,', 'all-class' if TARGET_ALL else 'midlet-only')
 
 #
 # Class-file layout walker.  The structural mutation kinds need real offsets,
@@ -172,6 +179,27 @@ def class_layout(m):
 
 LAYOUT = class_layout(base)
 
+# Target classes: the MIDlet by default, or any class in the JAR with `all`.
+CLASSES = [n for n, _ in entries
+           if n.endswith('.class') and not n.startswith('META-INF/')]
+LAYOUTS = {cls_name: LAYOUT}
+
+def layout_of(name):
+    if name not in LAYOUTS:
+        LAYOUTS[name] = class_layout(d[name])
+    return LAYOUTS[name]
+
+BASE_KINDS = ['truncate','byte','cpcount','methodcount','cp_tag','attrlen','u2',
+              'fieldcount','tail']
+
+def kinds_for(lay):
+    ks = list(BASE_KINDS)
+    if lay is not None:
+        ks.insert(3, 'super_self')
+        if any(ent for (_cl, ent) in lay['exceptions']):
+            ks.insert(4, 'exc_handler')
+    return ks
+
 def build(over):
     p = tempfile.mktemp(suffix='.jar')
     with zipfile.ZipFile(p, 'w', zipfile.ZIP_DEFLATED) as z:
@@ -179,14 +207,8 @@ def build(over):
             z.writestr(n, over.get(n, data))
     return p
 
-# Keep the per-kind first pass (i < len(KINDS) gives every kind one case) but
-# only offer the structural kinds when the fixture could actually be walked.
-KINDS = ['truncate','byte','cpcount','methodcount','cp_tag','attrlen','u2',
-         'fieldcount','tail']
-if LAYOUT is not None:
-    KINDS.insert(3, 'super_self')
-    if any(ent for (_cl, ent) in LAYOUT['exceptions']):
-        KINDS.insert(4, 'exc_handler')
+# kinds are chosen per case by kinds_for(), so a mutated class other than the
+# MIDlet can be walked for its own structural offsets.
 
 def mutate_on(m, kind):
     if kind == 'truncate':
@@ -275,10 +297,15 @@ print('control: unmutated fixture took %.2fs, so a case is a hang after %.1fs'
 
 hangs, crashed, ok = [], [], 0
 for i in range(N):
-    kinds = [KINDS[i % len(KINDS)] if i < len(KINDS) else random.choice(KINDS)]
+    target = random.choice(CLASSES) if TARGET_ALL else cls_name
+    base = d[target]
+    LAYOUT = layout_of(target)
+    case_kinds = kinds_for(LAYOUT)
+    kinds = [case_kinds[i % len(case_kinds)] if i < len(case_kinds)
+             else random.choice(case_kinds)]
     while len(kinds) < N_MUT:
-        kinds.append(random.choice(KINDS))
-    jar = build({cls_name: (mutate_multi(kinds) if N_MUT > 1 else mutate(kinds[0]))})
+        kinds.append(random.choice(case_kinds))
+    jar = build({target: (mutate_multi(kinds) if N_MUT > 1 else mutate(kinds[0]))})
     try:
         # --run-frames is ESSENTIAL and its absence produced a completely wrong
         # result the first time: nj_midp_run loops until the MIDlet exits, so a

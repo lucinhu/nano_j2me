@@ -211,7 +211,28 @@ Evidence and gate:
   (`python3 tools/fuzz_classfile.py <cli> 60 2`, TIMEOUT 300) runs next to the
   single-locus `fuzz_classfile` smoke test; both pass. The suite is now
   185 tests.
-- Remaining gaps: corruption spread across several classes of a JAR (only the
-  MIDlet's own class is mutated), and bytecode that is structurally valid but
-  semantically malformed (there is no verifier; the runtime relies on
-  per-instruction checks).
+- Remaining gaps: bytecode that is structurally valid but semantically
+  malformed (there is no verifier; the runtime relies on per-instruction
+  checks), and corruption spread across *several* classes in the same run (each
+  case mutates one class, chosen at random).
+
+### All-class targets (`all`)
+
+A fourth argument `all` aims the mutations at a random class from the JAR
+instead of the MIDlet: a damaged inner class or canvas is as realistic as a
+damaged MIDlet.  The kinds are chosen per case from the target class's own
+layout (structural kinds only when that class can be walked), and the `base`
+buffer is re-pointed to the chosen class before each case.
+
+Evidence:
+
+- `keysdemo.jar` (inner pad class + MIDlet), two-locus, 300 cases:
+  **clean 300, crashed 0, HUNG 0**.
+- `gamedemo.jar` (four classes including two anonymous inner classes),
+  two-locus, 300 cases: **clean 300, crashed 0, HUNG 0**.
+- New ctest gate `fuzz_classfile_allclass` (`python3 tools/fuzz_classfile.py
+  <cli> 60 2 all`, TIMEOUT 300); the three fuzz gates run in ~0.5 s together.
+  The suite is now 186 tests and the full serial run is **186/186 passed in
+  338.68 s** (`/tmp/r45-ctest.log`).
+- Remaining gap after this: one class per case (a JAR with two independently
+  damaged classes in one run is not simulated).
