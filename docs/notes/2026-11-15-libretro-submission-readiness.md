@@ -529,3 +529,46 @@ reproducible; Linux/Android hashes changed only because the core code changed.
 Validated: mock frontend 20/20, corpus rendering probe 372/373 (unchanged),
 RetroArch LoopDemo PASS, Wine 4/4, and a clean-worktree CTest of **181/181 in
 364.63 s**.
+
+## Update, 2026-11-15 (round 34): canonical r21 rebuild and r22 hold
+
+The M3G opaque-clear change (`6f61472`) is in the source tree and measured
+(README performance note: -1.3% CPU on the profiled title, deterministic
+prefix byte-identical, rendering tests 37/37), but it is **not packaged yet**.
+Packaging at HEAD exposed an interaction with the concurrent frame-rate
+change: with the new default 30 fps cap, pause-time save/load requests can
+time out while the MIDlet's frame pacer waits on a virtual clock that a
+paused frontend never advances. Evidence: the mock-frontend conformance suite
+failed the zero-frame `serialize_writes_state` check 3/3 under load (passes
+intermittently on a quiet host), and a whole-corpus rendering run on that
+package dropped to 275/373 with every failure being a paused-state serving
+check. The r21 source revision `a90831e` (before the 30 fps default) is
+unaffected: zero-frame conformance passes and the canonical package below is
+rebuilt from it.
+
+The canonical `build/libretro-dist/` was rebuilt cleanly from `a90831e` and
+revalidated: mock frontend matrix 20/20, RetroArch LoopDemo 120 frames PASS,
+Windows x86_64 under Wine 4/4, zero-frame save/load conformance PASS.
+Byte hashes:
+
+| linux-x86_64 | 3827480 | `8ad3bf7ac27e80752d92f3c3c9a846b4842b14ed2fdd3dd62ac12e4274f1bb9f` |
+| linux-aarch64 | 3308328 | `76965a0ccc945bd6e70ef1ef29e24ba3ea560cea5a82cb75cccdd16970717b07` |
+| linux-armv7 | 3016728 | `bfdc12d17d1a0555af0569b98173bad3c1a07b24218f6505510a8a8fdcc02726` |
+| android-arm64 | 3537360 | `56ff856b3479c8779a788d0380cf2b323ab1453d6c4924a08b1b9e1447543d7b` |
+| android-armv7 | 2726152 | `cbfcb14fa7cfd59b0f2ac339b768560332c2eae42c806db237ee0ee608e5d427` |
+| android-x86_64 | 3583512 | `bdda0f21705a8a7a7ddf4272ae4ff164c762f6b3b64282717abcb571ae83c126` |
+| windows-i686 | 3434496 | `03980172fa20cf754747831439f387d168a7e746333df8fc53e11bea576ef430` |
+| windows-x86_64 | 3213312 | `a450a4dab82aee289bd842392919bc026616f61af14143b92880bec8e45abf47` |
+
+Note on hashes: a local rebuild is not guaranteed bit-identical to an earlier
+local build of the same revision (toolchain and build-directory inputs differ),
+so the table above is the authoritative set for the package currently in
+`build/libretro-dist/`. Upstream libretro artifacts are produced by the
+project's own CI/buildbot from the submitted commit, not from these local
+files.
+
+The paused-state robustness issue is the next priority: the frame pacer must
+not be able to strand a pending state request (candidate: skip pacing while a
+request is queued, or bounded clock assistance in the pacer wait, gated like
+the round-27 experiment).
+
