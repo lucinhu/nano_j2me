@@ -11,6 +11,18 @@ verified to apply cleanly to `libretro/docs` master
 `d83b34b21b8a2c14db573aea66d876e343d316ca` and `libretro-super` master
 `fb15e630655375a50317be2a7953477ef9a5d12a`.
 
+Re-check the whole bundle offline (including clean-clone apply and a docs
+site build when you point it at scratch clones):
+
+```sh
+tools/check_libretro_submission_bundle.sh \
+  --super-clone /path/to/libretro-super --docs-clone /path/to/libretro-docs \
+  --apply-clones --mkdocs /path/to/mkdocs
+```
+
+It also runs without clones and is registered as the
+`check_libretro_submission_bundle` CTest case.
+
 ## 1. `libretro/libretro-super`
 
 Apply the prepared patch (adds exactly one file), or copy it by hand:

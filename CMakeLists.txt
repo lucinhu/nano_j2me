@@ -2174,6 +2174,20 @@ if(NJ_BUILD_TESTS AND NJ_BUILD_LIBRETRO AND UNIX
   endif()
 endif()
 
+# The prepared upstream submission bundle is checked without network access:
+# the .info copies must be byte-identical, the libretro-super patch must add
+# exactly that .info, the libretro/docs patch must touch the five expected
+# files, and (when build/libretro-dist exists) every target must carry the same
+# .info.  Clones are optional; see the script header for the clone-based
+# apply + mkdocs checks.
+if(UNIX AND EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_libretro_submission_bundle.sh)
+  add_test(NAME check_libretro_submission_bundle
+           COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_libretro_submission_bundle.sh)
+  set_tests_properties(check_libretro_submission_bundle PROPERTIES
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    TIMEOUT 120)
+endif()
+
 message(STATUS "nano_j2me ${PROJECT_VERSION}: "
                "JPEG=${NJ_ENABLE_JPEG} PNG=${NJ_ENABLE_PNG} "
                "pixfmt=${NJ_PIXFMT} tests=${NJ_BUILD_TESTS}")

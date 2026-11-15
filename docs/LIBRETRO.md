@@ -422,6 +422,14 @@ RETROARCH=/path/to/retroarch tools/check_libretro_retroarch.sh \
   build/libretro-check/libretro/nano_j2me_libretro.so \
   tests/fixtures/alphademo.jar 600
 tools/check_no_statics.sh
+# Offline validation of the prepared upstream submission bundle.  Without the
+# clone arguments it checks the .info identity, both patches and the release
+# tree; with them it resets the scratch clones, applies the patches and (with
+# --mkdocs) builds the documentation site.
+tools/check_libretro_submission_bundle.sh
+tools/check_libretro_submission_bundle.sh \
+  --super-clone /path/to/libretro-super --docs-clone /path/to/libretro-docs \
+  --apply-clones --mkdocs /path/to/mkdocs
 # Wider sampling probes; both take the output directory of a sweep run.
 NJ_BIN="$PWD/build/libretro-check/nj2me" \
   python3 tools/check_corpus_deep.py .local-tools/debug-runs/<sweep> \
