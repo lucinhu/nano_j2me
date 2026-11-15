@@ -488,6 +488,15 @@ failure is one very slow 3D loader (see below) that cannot finish within the
 sampling watchdog; the two titles that need the `nokia6230` profile now load
 through the device-property answers and the handset retry.
 
+The probe tools copy the core to a private file before the run. The core is
+memory-mapped from disk, so a concurrent rebuild that rewrites
+`build/libretro-dist` on top of a running probe can fault the mapping: an
+8-job 600-frame run that reported eight `core raised a fatal signal` failures
+early on reproduced 372/373 with zero crashes once the core came from an
+immutable copy, and every "crashed" title also passed alone and under an
+8-way stress rerun. Treat "core crashed" from a shared-tree probe as suspect
+until it reproduces from a private core copy.
+
 ## Real-time pacing (2026-11-15)
 
 `retro_run` used to advance the virtual clock by one frame per call, so a

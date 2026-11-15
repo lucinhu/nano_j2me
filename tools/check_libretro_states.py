@@ -28,6 +28,7 @@ import json
 import os
 import random
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -76,6 +77,14 @@ def main(argv):
     if not os.path.isfile(core):
         print("core not found: %s" % core, file=sys.stderr)
         return 2
+
+    # mmap hazard: copy the core first, so a concurrent rebuild of the shared
+    # dist directory cannot fault a running probe.
+    iso_dir = tempfile.mkdtemp(prefix="lj-core-")
+    iso_core = os.path.join(iso_dir, os.path.basename(core))
+    shutil.copy2(core, iso_core)
+    os.chmod(iso_core, 0o500)
+    core = iso_core
 
     rows_path = os.path.join(args.rows, "rows.jsonl")
     rows = []

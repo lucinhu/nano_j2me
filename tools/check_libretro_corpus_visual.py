@@ -25,6 +25,7 @@ import argparse
 import json
 import os
 import random
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -106,6 +107,20 @@ def main():
     ap.add_argument("--timeout", type=int, default=240)
     ap.add_argument("--out", default=None)
     args = ap.parse_args()
+
+    # A running core is memory-mapped from disk; a concurrent rebuild that
+    # rewrites the same path can fault the mapping mid-run.  Probe from an
+    # private copy so the evidence cannot be invalidated by an external
+    # build landing on top of the shared dist directory.
+    global CORE
+    if CORE.is_file():
+        iso_dir = tempfile.mkdtemp(prefix="lj-core-")
+        iso = Path(iso_dir) / CORE.name
+        shutil.copy2(CORE, iso)
+        os.chmod(iso, 0o500)
+        print(f"[info] probing with an isolated copy of {CORE} at {iso}",
+              file=sys.stderr)
+        CORE = iso
 
     rows = load_rows(args.rows_dir)
     if not rows:
