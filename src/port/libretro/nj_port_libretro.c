@@ -407,7 +407,6 @@ typedef struct nj_lr {
     unsigned long long last_run_us;  /* previous retro_run() timestamp  */
     unsigned int audio_frac;         /* sub-sample audio accumulator    */
     unsigned int run_frames;         /* audio frames for this call      */
-    unsigned long long frame_due_us; /* next 60 Hz slot for the VM thread */
     unsigned long long vm_frames;    /* VM frames rendered (profiling)   */
     unsigned long long prof_last_ms; /* profiling log cadence            */
     unsigned long long load_ms;       /* virtual ms while loading        */
@@ -952,6 +951,15 @@ static const lr_opt_value lr_rotation_values[] = {
     { NULL, NULL }
 };
 
+static const lr_opt_value lr_fps_values[] = {
+    { "15",  "15 fps (old handset)"        },
+    { "20",  "20 fps (old handset)"        },
+    { "30",  "30 fps (J2ME ceiling)"       },
+    { "60",  "60 fps (modern)"             },
+    { "0",   "Unlimited"                   },
+    { NULL, NULL }
+};
+
 static const lr_opt_value lr_heap_values[] = {
     { "auto", "Auto (by RAM)" },
     { "16",   "16 MB"  },
@@ -1170,6 +1178,13 @@ static const lr_option_meta lr_options[] = {
       "Size of the Java heap a MIDlet gets. Auto is a sixteenth of the host's "
       "RAM, 32-128 MB. Needs a content reload.",
       "system", "auto", lr_heap_values },
+    { "nano_j2me_fps", "Frame rate limit",
+      "Caps how fast the MIDlet's frames are presented. Old J2ME handsets ran "
+      "most titles at 15-30 fps; 60 fps was rare. Unlimited lets every title "
+      "run as fast as it can, which makes frame-paced games play too fast. "
+      "Titles that pace themselves with Thread.sleep() are not slowed below "
+      "their own rate by a cap at or above it.",
+      "system", "30", lr_fps_values },
     { "nano_j2me_font", "Font (restart required)",
       "Auto tries nano_j2me/font.ttf or font.ttc in the frontend system directory, "
       "then common OS fonts. Unsupported/missing fonts use built-in bitmaps.",
@@ -2478,7 +2493,24 @@ static void lr_port_init(nj_lr *s)
      * port.idle; a snapshot request can interrupt that wait and finish the
      * frame without advancing time. The runtime's capped pacer would keep
      * polling its deadline while retro_serialize() has frozen the clock. */
-    s->port.fps_cap = 0;
+    /*
+     * Frame rate limit.  The MIDlet frame loop paces itself through
+     * frame_pace() in src/midp/nj_lib_midlet.c using this cap with absolute
+     * deadlines, exactly like the APK's display setting does; the virtual
+     * clock is driven by real time in retro_run, so the cap lands on real
+     * seconds.  Old J2ME handsets ran most titles at 15-30 fps, so the
+     * default is 30; "Unlimited" restores the old uncapped behaviour for
+     * titles that are known to pace themselves.
+     */
+    {
+        const char *fps = lr_option(s, "nano_j2me_fps", "30");
+        int cap = fps ? atoi(fps) : 30;
+        if (cap < 0) cap = 0;
+        if (cap > 240) cap = 240;
+        s->port.fps_cap = cap;
+        lr_log(s, RETRO_LOG_INFO, "frame rate limit: %d fps%s", cap,
+               cap == 0 ? " (unlimited)" : "");
+    }
     s->port.rms_dir = s->base_dir;
     s->port.fs_dir = s->fs_dir;
     /* FileConnection resolves sandbox URLs to host paths before these calls,
@@ -2785,7 +2817,6 @@ static void lr_run_frames(nj_lr *s)
 
 static int lr_frame_hook(nj_vm *vm, void *ud)
 {
-    unsigned long long posted_before;
     nj_lr *s = (nj_lr *)ud;
     int stop;
 
@@ -2801,7 +2832,6 @@ static int lr_frame_hook(nj_vm *vm, void *ud)
      * lr_run_frames() between two frames instead.
      */
     s->vm_frames++;
-    posted_before = s->posted;
     (void)nj_midp_frame(vm);
     /*
      * A frontend blocked inside retro_unserialize() or retro_serialize()
@@ -2822,40 +2852,6 @@ static int lr_frame_hook(nj_vm *vm, void *ud)
         lr_cond_broadcast(&s->cond);
     }
     lr_mutex_unlock(&s->lock);
-    if (s->posted == posted_before)
-        return 0;   /* pure native-call pump, no new frame: never throttle I/O */
-    /*
-     * Real-time frame gate.  The VM thread renders as fast as the MIDlet lets
-     * it; a title that does not sleep (or sleeps too little) would otherwise
-     * run above real time and produce audio faster than the frontend consumes
-     * it.  Cap the VM to one frame per 60 Hz slot measured on the monotonic
-     * clock so game time, audio production and frontend pacing agree.
-     */
-    {
-        int gate;
-        for (gate = 0; gate < 4000; gate++) {
-            uint64_t now, due;
-            lr_mutex_lock(&s->lock);
-            if (s->stop) { lr_mutex_unlock(&s->lock); return 1; }
-            if (s->phase != LR_PHASE_RUN) { lr_mutex_unlock(&s->lock); return 0; }
-            if (s->req_kind != LR_REQ_NONE) {
-                s->frame_due_us += 16667ull;
-                lr_mutex_unlock(&s->lock);
-                return 0;
-            }
-            now = lr_real_us();
-            if (s->frame_due_us == 0 || now > s->frame_due_us + 200000ull)
-                s->frame_due_us = now;
-            due = s->frame_due_us;
-            if (now >= due) {
-                s->frame_due_us = due + 16667ull;
-                lr_mutex_unlock(&s->lock);
-                return 0;
-            }
-            lr_mutex_unlock(&s->lock);
-            lr_real_sleep((nj_u4)((due - now + 999ull) / 1000ull));
-        }
-    }
     return 0;
 }
 
@@ -3042,7 +3038,6 @@ static void lr_unload(nj_lr *s)
     s->last_run_us = 0;
     s->audio_frac = 0;
     s->run_frames = 0;
-    s->frame_due_us = 0;
     s->load_ms = 0;
     s->event_rd = s->event_wr = 0;
     memset(s->key_down, 0, sizeof s->key_down);
@@ -3495,14 +3490,16 @@ RETRO_API void retro_run(void)
 
     if (getenv("NJ_LR_PROF")) {
         uint64_t rms = lr_real_ms();
-        if (rms - s->prof_last_ms >= 1000ull) {
+        if (rms - s->prof_last_ms >= 2000ull) {
             s->prof_last_ms = rms;
-            fprintf(stderr, "LRPROF real_ms=%llu vclock_ms=%llu calls=%llu vm_frames=%llu audio=%llu\n",
-                    (unsigned long long)rms,
-                    (unsigned long long)(s->vclock_us / 1000ull),
-                    (unsigned long long)s->vclock_frames,
-                    (unsigned long long)s->vm_frames,
-                    (unsigned long long)s->run_frames);
+            lr_log(s, RETRO_LOG_INFO,
+                   "pace real=%llu vclock=%llu calls=%llu vm_frames=%llu posted=%llu audio_batch=%llu",
+                   (unsigned long long)rms,
+                   (unsigned long long)(s->vclock_us / 1000ull),
+                   (unsigned long long)s->vclock_frames,
+                   (unsigned long long)s->vm_frames,
+                   (unsigned long long)s->posted,
+                   (unsigned long long)s->run_frames);
         }
     }
 
