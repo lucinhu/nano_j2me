@@ -900,6 +900,9 @@ if(NJ_BUILD_TESTS)
     COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_images_jar.sh
     COMMENT "JPEG/GIF decoder MIDlet fixture")
   add_custom_command(TARGET nj_fixtures POST_BUILD
+    COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_movie_jar.sh
+    COMMENT "MPEG-4 video Player MIDlet fixture")
+  add_custom_command(TARGET nj_fixtures POST_BUILD
     COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_fs_jar.sh
     COMMENT "JSR 75 MIDlet fixture")
   # Two real third-party titles, built into the FIXTURE directory as well as the
@@ -1298,6 +1301,18 @@ endif()
                      ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_lockdemo.sh
                      ${NJ_FIXTURES}/lockdemo.jar)
     set_tests_properties(check_lockdemo PROPERTIES TIMEOUT 180
+                         SKIP_RETURN_CODE 77)
+    # The video path is Java as well as C: Manager.createPlayer(..., "video/3gpp"),
+    # realize/prefetch, VideoControl.initDisplayMode(USE_DIRECT_VIDEO, canvas)
+    # and the frame-boundary overlay.  check_movie_decode.sh asserts the movie
+    # was parsed and the Player started, so a decoder or VideoControl
+    # regression fails here instead of only in a corpus sweep.
+    add_test(NAME check_movie_decode
+             COMMAND ${CMAKE_COMMAND} -E env
+                     NJ_BIN=$<TARGET_FILE:nj2me-cli>
+                     ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_movie_decode.sh
+                     ${NJ_FIXTURES}/moviedemo.jar)
+    set_tests_properties(check_movie_decode PROPERTIES TIMEOUT 120
                          SKIP_RETURN_CODE 77)
     # A java.util.Timer task runs on a thread that reaches it through a native,
     # so a task that parks leaves a native frame at the top of that thread's

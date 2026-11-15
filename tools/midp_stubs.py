@@ -869,6 +869,22 @@ CLASSES = {
         "methods": ["int setLevel(int)", "int getLevel()",
                     "void setMute(boolean)", "boolean isMuted()"],
     },
+    # VideoControl: the runtime renders into the MIDlet's own Canvas
+    # (USE_DIRECT_VIDEO); USE_GUI_PRIMITIVE is refused because there is no
+    # host GUI toolkit to hand back a component.  The stub carries the
+    # reference signatures so a fixture compiles to the same descriptors the
+    # runtime registers.
+    "javax/microedition/media/control/VideoControl": {
+        "interface": True,
+        "extends": "javax.microedition.media.Control",
+        "constants": {"USE_GUI_PRIMITIVE": "0", "USE_DIRECT_VIDEO": "1"},
+        "methods": ["java.lang.Object initDisplayMode(int, java.lang.Object)",
+                    "void setDisplayLocation(int, int)",
+                    "void setVisible(boolean)",
+                    "int getDisplayWidth()", "int getDisplayHeight()",
+                    "int getSourceWidth()", "int getSourceHeight()",
+                    "int getDisplayX()", "int getDisplayY()"],
+    },
     # MIDIControl is the one control that changes a song while it plays.  The
     # stub carries the reference signatures, and the runtime registers the
     # same names with the same descriptors (getProgram twice, because the

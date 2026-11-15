@@ -57,12 +57,13 @@ TARGETS = [
     ('gamedemo.jar', 'res/tiles.png'),
     ('imagesdemo.jar', 'res/sample.jpg'),
     ('imagesdemo.jar', 'res/sample.gif'),
+    ('moviedemo.jar', 'res/movie.3gp'),
 ]
 
 # Frames to run: the audio fixture exercises playback, the MIDI fixture needs
 # a moment before it opens the player.
 FRAMES = {'audiodemo.jar': 240, 'mididemo.jar': 240, 'gamedemo.jar': 120,
-          'imagesdemo.jar': 60}
+          'imagesdemo.jar': 60, 'moviedemo.jar': 120}
 
 
 def pick():
