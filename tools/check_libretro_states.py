@@ -13,9 +13,14 @@ snapshot is visible per title.  The harness is built from
 tests/test_libretro_frontend.c; `--harness` or NJ_LIBRETRO_HARNESS points at it,
 and `--core` at a libretro core built from this tree.
 
+Frames are paced at 60 Hz by default (`--pace-us 16666`) because that is how a
+frontend drives the core.  An unpaced probe can deliver the whole frame budget
+before an asynchronous MIDlet construction finishes, and a state requested
+from that half-loaded VM is not a state a real frontend would ever take.
+
 Usage:
     tools/check_libretro_states.py <rows dir> [--count N] [--frames N] [--seed N]
-                                   [--harness PATH] [--core PATH]
+                                   [--pace-us N] [--harness PATH] [--core PATH]
 
 Rows come from tools/sweep_compat.py; the sample is deterministic for a seed.
 Only rows classified as ok with a painted frame are sampled.  The tool writes
@@ -62,6 +67,8 @@ def main(argv):
     ap.add_argument("--count", type=int, default=10)
     ap.add_argument("--frames", type=int, default=120)
     ap.add_argument("--seed", type=int, default=3)
+    ap.add_argument("--pace-us", type=int, default=16666,
+                    help="frame pacing in microseconds (0 disables pacing)")
     ap.add_argument("--harness", default=os.environ.get("NJ_LIBRETRO_HARNESS"))
     ap.add_argument("--core", default=os.environ.get("NJ_LIBRETRO_CORE"))
     args = ap.parse_args(argv)
@@ -110,6 +117,8 @@ def main(argv):
         with tempfile.TemporaryDirectory() as save_dir:
             cmd = [harness, "--core", core, "--jar", path,
                    "--frames", str(args.frames), "--save-dir", save_dir]
+            if args.pace_us > 0:
+                cmd += ["--pace-us", str(args.pace_us)]
             try:
                 p = subprocess.run(cmd, capture_output=True, text=True,
                                    timeout=300)

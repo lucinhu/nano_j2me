@@ -94,3 +94,37 @@ patching that code mid-flight.
 * Follow-up for the async-load owner: either finish construction/font
   resolution before frames are published, or make the post-refusal path keep
   the live VM intact so a refused restore can never shut a session down.
+
+## Refined diagnosis (same day, after deeper probing)
+
+The failure is **not font-specific** and is not about a stale font identity:
+
+* It reproduces with `--set nano_j2me_font=builtin` (no host font data pinned at all).
+* It is a **frontend cadence** artifact of the async load: at
+  `--frames 60 --pace-us 16666` (a real 60 Hz cadence) the whole 45-check run
+  passes; at `--frames 60` with the harness default `--pace-us 0` it fails.
+  Same for `--pace-us 33333`. `--frames 300`/`600` pass even unpaced because by
+  then construction has certainly finished.
+* Instrumented `lr_apply_state()` (temporary, private build) shows the second
+  restore never reaches the envelope checks; instead, right after the first
+  successful restore the VM log shows
+  `thrown: java/lang/OutOfMemoryError at java/lang/Object.getClass()...`
+  followed by `core requested SHUTDOWN`. The state that was saved a moment
+  earlier came from a VM whose MIDlet construction/`startApp()` had not
+  completed (the `a2abdee` load path returns after a fixed 250 ms construction
+  grace, and an unpaced frontend delivers 60 frames in milliseconds), so
+  restoring it later yields a VM that immediately fails.
+
+## Mitigation and recommendation
+
+* `tools/check_libretro_states.py` now paces frames at 60 Hz by default
+  (`--pace-us 16666`, `0` disables) for exactly this reason: a real frontend
+  calls `retro_run()` in real time, and the probe should model that. The
+  early-save scenario is then covered by the paced run instead of an artificial
+  unpaced burst.
+* Recommended port fix for the async-load owner: gate state requests on
+  `s->load_ready` (refuse both save and load while construction/`startApp()`
+  has not completed) in `lr_request_state()`/`lr_serve_state_request()`.
+  Then no frontend can persist a half-loaded VM state; a refused request is
+  already handled gracefully, while a bogus saved state silently corrupts the
+  next restore.
