@@ -3388,7 +3388,7 @@ RETRO_API void retro_init(void)
     s->phase = LR_PHASE_STOP;
     s->out_w = 240;
     s->out_h = 320;
-    lr_log(s, RETRO_LOG_INFO, "nano_j2me %s libretro core (pacing rev 6: realtime clock + frame limit + audio backpressure + fast-forward)", NJ_VERSION_STRING);
+    lr_log(s, RETRO_LOG_INFO, "nano_j2me %s libretro core (pacing rev 7: realtime clock + frame limit + audio backpressure + fast-forward + reflection)", NJ_VERSION_STRING);
 }
 
 RETRO_API void retro_deinit(void)

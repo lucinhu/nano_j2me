@@ -629,3 +629,17 @@ Verified end-to-end with the headless frontend (which provides a rumble
 callback): a probe that calls `Display.vibrate(600)` four times produces
 `MIDlet vibrate(600 ms)` followed by `rumble set on (weak, 0xFFFF)` and
 `rumble set off` at the end of each request.
+
+The Nokia path is reached through reflection (`Class.forName("com.nokia.mid.ui.DeviceControl")`
+then `getMethod("startVibra", int.class, long.class).invoke(...)`), so the core
+needs the CLDC 1.1 reflection subset: `Integer.TYPE`/`Long.TYPE`/... plus
+`Class.getMethod()` and `java.lang.reflect.Method.invoke()`. Those were added
+to the runtime on 2026-11-15 (see `tests/test_reflect.c`); before that the
+call failed with `NoSuchFieldError: java/lang/Integer.TYPE` and titles that
+only use the vendor API for vibration stayed silent. With the reflection
+subset in place the probe logs `VIBE nokia startVibra 800` and the frontend
+receives a fifth `RUMBLE effect=1 strength=65535` / `strength=0` pair.
+
+Reminder for Android: RetroArch only forwards rumble when its own
+`enable_device_vibration` setting is on (`retroarch.cfg`, default off), so a
+correct core can still stay silent until that switch is enabled.

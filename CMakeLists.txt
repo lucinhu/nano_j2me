@@ -897,6 +897,9 @@ if(NJ_BUILD_TESTS)
     COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_audio_jar.sh
     COMMENT "audio MIDlet fixture")
   add_custom_command(TARGET nj_fixtures POST_BUILD
+    COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_images_jar.sh
+    COMMENT "JPEG/GIF decoder MIDlet fixture")
+  add_custom_command(TARGET nj_fixtures POST_BUILD
     COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_fs_jar.sh
     COMMENT "JSR 75 MIDlet fixture")
   # Two real third-party titles, built into the FIXTURE directory as well as the
