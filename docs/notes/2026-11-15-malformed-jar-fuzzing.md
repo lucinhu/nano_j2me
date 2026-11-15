@@ -40,6 +40,8 @@ Against `/var/tmp/nj2me-goal13-build/nj2me`:
 
 - 300 cases, one mutation, seed 5 → **clean 300 / crashed 0 / HUNG 0**;
 - 300 cases, two mutations, seed 11 → **clean 300 / crashed 0 / HUNG 0**.
+- 800 cases, two mutations, seed 23 → **clean 800 / crashed 0 / HUNG 0**
+  (round 49).
 
 Logs: `.local-tools/debug-runs/fuzz-jar-r46.log` (two mutations) and
 `.local-tools/debug-runs/fuzz-jar-r46-single.log` (one mutation), both

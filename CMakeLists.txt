@@ -1664,6 +1664,16 @@ nj_add_test(test_clip tests/test_clip.c)
       WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} TIMEOUT 300)
   endif()
 
+  # Media decoders parse untrusted bytes too: a damaged AMR/WAV/MIDI resource
+  # must come back as an exception or silence, not a crash or a hang.
+  if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tools/fuzz_media.py)
+    add_test(NAME fuzz_media
+             COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/tools/fuzz_media.py
+                     $<TARGET_FILE:nj2me-cli> 60 2)
+    set_tests_properties(fuzz_media PROPERTIES
+      WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} TIMEOUT 300)
+  endif()
+
   # Every nj_field_lookup() must name a field its class declares.  A lookup
   # that asks for the wrong descriptor answers NULL, and the native built on
   # it then silently does nothing - which is how a Light came to be

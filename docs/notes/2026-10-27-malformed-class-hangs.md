@@ -232,6 +232,8 @@ Evidence:
   two-locus, 300 cases: **clean 300, crashed 0, HUNG 0**.
 - New ctest gate `fuzz_classfile_allclass` (`python3 tools/fuzz_classfile.py
   <cli> 60 2 all`, TIMEOUT 300); the three fuzz gates run in ~0.5 s together.
+  A longer 1000-case two-locus all-class run (seed 5) is also **clean 1000,
+  crashed 0, HUNG 0** (round 49).
   The suite is now 186 tests and the full serial run is **186/186 passed in
   338.68 s** (`/tmp/r45-ctest.log`).
 - Remaining gap after this: one class per case (a JAR with two independently
