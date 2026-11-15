@@ -173,6 +173,27 @@ Core Options v2 categories are provided, with a legacy variables fallback.
 | `nano_j2me_btn_select` | key names below | 0 | Select binding |
 | `nano_j2me_btn_start` | key names below | 5 | Start binding |
 
+### Device properties and the handset retry
+
+When no device profile is selected, the core answers the machine properties a
+title may probe before its MIDlet starts, exactly the way the headless, SDL2,
+Android and web ports do: `com.nokia.keyboard.type` is `None` (the frontend has
+no numeric keypad under the screen, so the game's own on-screen keypad is the
+right answer), `com.nokia.mid.ui.version` is `1.1`, and
+`microedition.platform` is `nano_j2me/libretro`. A title that calls
+`.equals()` on one of these without checking for `NULL` would otherwise die in
+its constructor (`bubblet.jar` in the corpus does exactly that); on a handset
+the property always exists, so answering it is the compatible behaviour. A
+device profile's own properties take precedence when one is selected.
+
+Some titles branch on `microedition.platform` and refuse the generic handset
+before their MIDlet starts (the corpus's `1945空战英雄_6105.jar` throws
+`IllegalAccessException` from `Class.newInstance` on its own MIDlet class).
+When a load fails while the option is still `generic`, the core retries the
+load once with the `nokia6230` profile, logs both attempts, and keeps that
+profile for the rest of the session (including `retro_reset`). Selecting a
+device profile explicitly disables the retry.
+
 Binding values are `NONE`, `FIRE`, `UP`, `DOWN`, `LEFT`, `RIGHT`, `0`–`9`,
 `STAR`, `POUND`, `SOFT_LEFT`, `SOFT_RIGHT`, `CLEAR`, `GAME_A`–`GAME_D`, `VOLUP`,
 `VOLDOWN` and `POWER`.
@@ -432,7 +453,7 @@ geometry pass the matching frontend expectation. Both are sampling tools, not
 CI gates. The corpus visual probe (`check_libretro_corpus_visual.py`) runs every
 sweep-ok title through the mock frontend and requires a non-black animated
 frame, so it catches "loads but paints nothing" regressions that the CLI sweep
-cannot see. At the time of writing it reports 370/373: the remaining three
-failures are two titles that need the documented
-`nano_j2me_device=nokia6230` profile and one very slow 3D loader (see below)
-that cannot finish within the sampling watchdog.
+cannot see. At the time of writing it reports 372/373. The single remaining
+failure is one very slow 3D loader (see below) that cannot finish within the
+sampling watchdog; the two titles that need the `nokia6230` profile now load
+through the device-property answers and the handset retry.

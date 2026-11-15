@@ -343,6 +343,7 @@ typedef struct nj_lr {
     size_t         jar_size;
     char           stem[128];
     int            loaded;
+    int            dev_retry; /* one load retried with the Nokia profile */
 
     /* ---- configuration read at load time ---- */
     const nj_device *device;
@@ -1391,6 +1392,13 @@ static void lr_read_config(nj_lr *s)
     v = lr_option(s, "nano_j2me_device", "generic");
     s->device = nj_device_find(v);
     if (!s->device) s->device = nj_device_default();
+    /* retro_load_game() retries a failed load with the Nokia profile when the
+     * content refused the generic handset; keep that profile for this session
+     * (including retro_reset, which re-reads the options). */
+    if (s->dev_retry) {
+        const nj_device *d = nj_device_find("nokia6230");
+        if (d) s->device = d;
+    }
 
     v = lr_option(s, "nano_j2me_rotation", "0");
     s->rotation = atoi(v);
@@ -2362,6 +2370,36 @@ static void lr_port_log(void *ud, int level, const char *msg)
 /* Port setup                                                         */
 /* ------------------------------------------------------------------ */
 
+/*
+ * Device properties, answered the way every other host port answers them.
+ *
+ * A title may probe these BEFORE its MIDlet starts and call .equals() on the
+ * result without checking for NULL (bubblet.jar in the corpus does exactly
+ * that: System.getProperty("com.nokia.keyboard.type").equals("OnekeyBack")).
+ * On a handset the property always exists, so answering NULL here turns a
+ * working title into a constructor NullPointerException.  A desktop-like
+ * frontend has no numeric keypad under the screen, so the game's own on-screen
+ * keypad is the right answer, matching the headless, SDL2, Android and web
+ * ports.
+ */
+static const char *lr_port_device_property(void *ud, const char *key)
+{
+    (void)ud;
+    if (!key) {
+        return NULL;
+    }
+    if (strcmp(key, "com.nokia.keyboard.type") == 0) {
+        return "None";              /* no physical keypad: the UI draws one */
+    }
+    if (strcmp(key, "com.nokia.mid.ui.version") == 0) {
+        return "1.1";
+    }
+    if (strcmp(key, "microedition.platform") == 0) {
+        return "nano_j2me/libretro";
+    }
+    return NULL;                    /* honestly unknown */
+}
+
 static void lr_port_init(nj_lr *s)
 {
     memset(&s->port, 0, sizeof s->port);
@@ -2397,6 +2435,7 @@ static void lr_port_init(nj_lr *s)
     s->port.input_poll = lr_input_poll;
     s->port.input_push = lr_input_push;
     s->port.log = lr_port_log;
+    s->port.device_property = lr_port_device_property;
     s->port.sleep_ms = lr_sleep_ms;
     s->port.idle = lr_idle;
     s->port.vibrate = lr_port_vibrate;
@@ -3393,7 +3432,29 @@ RETRO_API bool retro_load_game(const struct retro_game_info *info)
      * SET_SYSTEM_AV_INFO here initializes its drivers before normal startup
      * and can make Android EGL initialization fail on the second attempt.
      * That environment call is only valid inside retro_run(). */
-    return lr_load(info, 0);
+    if (lr_load(info, 0)) {
+        return true;
+    }
+    /* Some titles branch on microedition.platform and refuse the generic
+     * handset before their MIDlet starts (1945空战英雄 in the corpus throws
+     * IllegalAccessException from Class.newInstance on its own MIDlet class).
+     * Unless the user picked a device profile, retry once with the documented
+     * Nokia profile so the content is playable instead of unloadable. */
+    if (!s->dev_retry &&
+        strcmp(lr_option(s, "nano_j2me_device", "generic"), "generic") == 0) {
+        s->dev_retry = 1;
+        lr_log(s, RETRO_LOG_INFO,
+               "load failed with the generic handset; retrying with the "
+               "nokia6230 device profile");
+        if (lr_load(info, 0)) {
+            lr_log(s, RETRO_LOG_INFO,
+                   "loaded with the nokia6230 device profile; set "
+                   "nano_j2me_device=nokia6230 to select it explicitly");
+            return true;
+        }
+        s->dev_retry = 0;
+    }
+    return false;
 }
 
 RETRO_API void retro_unload_game(void)
