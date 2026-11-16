@@ -998,3 +998,21 @@ Release archive `nj2me-0.5.12-libretro-cores.zip` SHA-256
 `7467092702a939b7c0dc16c3d3a025fab5d8f41337c5eb48f59eb0d451d7d58b`;
 GitHub release `v0.5.12` (also ships the two APKs). PRs #2204/#1239 refreshed
 with the 0.5.12 `.info`; no merge claimed.
+
+## Update, 2026-11-16 (round 73): libretro multi-touch gate and state sample
+
+- New CTest `check_libretro_multitouch`: the mock frontend answers
+  `RETRO_DEVICE_ID_POINTER_COUNT=2` with independent per-index coordinates
+  (`--multitouch-check`) and the gate runs `tests/fixtures/multitouchdemo.jar`
+  through the real core; the fixture must print `MPT id=0` and `MPT id=1`
+  lines for both fingers while `CANVAS down` appears exactly once. 47 checks,
+  0 failed; full suite is now 194/194.
+- Paced libretro state probe on the shipped r31 Linux core (private copy,
+  SHA-256 `a5e7b8ec…`): 100 sampled titles, 120 frames, seed 41 → **99/100
+  round trips**. The single failure is the known `毁灭战士3_10598.jar` slow
+  loader (the 120-frame window ends before its 190-pass software-M3G loading
+  animation finishes, so a state request is refused by design) — no real
+  save/restore failure among the sampled titles.
+- The other three Galaxy on Fire 2 releases now render 3D in probes with the
+  same dismissal key script (`m3g` 119k–223k calls over 600 frames), see
+  `docs/notes/2026-11-16-corpus-keys-and-sweep.md`.
