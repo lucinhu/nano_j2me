@@ -354,6 +354,13 @@ static int g_multitouch_pressed;
 
 static void check_multitouch_input(void);
 
+/* Single-pointer tap position from a pressed@X,Y script entry (canvas px). */
+static int g_pointer_axis_x_px;
+static int g_pointer_axis_y_px;
+
+static int pointer_axis_x(int px);
+static int pointer_axis_y(int py);
+
 /* Frame:key script loaded by --keys (see the CLI's syntax). */
 #define MAX_KEY_EVENTS 1024
 #define KEY_EVENT_HOLD_FRAMES 2u
@@ -361,6 +368,8 @@ struct key_event
 {
    unsigned frame;
    unsigned joy;
+   int pointer;              /* 1 = pressed@X,Y entry (single pointer tap) */
+   int px, py;               /* tap position in MIDP canvas pixels */
 };
 static struct key_event g_key_events[MAX_KEY_EVENTS];
 static int g_key_event_count;
@@ -1255,10 +1264,11 @@ static int16_t RETRO_CALLCONV h_input_state(unsigned port, unsigned device,
          {
             case RETRO_DEVICE_ID_POINTER_X:
                /* Centered, "absolute" coordinates in the -32768..32767 range
-                * that the legacy pointer API uses. */
-               return 0;
+                * that the legacy pointer API uses.  A held pressed@X,Y script
+                * tap moves the pointer to that canvas position. */
+               return (int16_t)pointer_axis_x(g_pointer_axis_x_px);
             case RETRO_DEVICE_ID_POINTER_Y:
-               return 0;
+               return (int16_t)pointer_axis_y(g_pointer_axis_y_px);
             case RETRO_DEVICE_ID_POINTER_PRESSED:
                return g_pointer_pressed ? 1 : 0;
             case RETRO_DEVICE_ID_POINTER_COUNT:
@@ -1449,6 +1459,17 @@ static void release_all_keys(void)
  * default (A=FIRE, X=SOFT_LEFT, B=SOFT_RIGHT, arrows=arrows).  Keys without a
  * joypad default (digits, star, pound) are skipped: they are not needed by the
  * titles the script exists for. */
+/* Canvas-pixel tap position -> libretro's centered pointer axis. */
+static int pointer_axis_x(int px)
+{
+   return (int)(((long)px * 65534L) / 240L - 32767L);
+}
+
+static int pointer_axis_y(int py)
+{
+   return (int)(((long)py * 65534L) / 320L - 32767L);
+}
+
 static unsigned key_name_to_joypad(const char *name)
 {
    if (strcmp(name, "fire") == 0)
@@ -1505,6 +1526,26 @@ static int load_key_script(const char *path)
             continue;
          *colon = '\0';
          frame = (unsigned)strtoul(token, NULL, 10);
+         if (strncmp(colon + 1, "pressed@", 8) == 0)
+         {
+            int px = 0, py = 0;
+            if (sscanf(colon + 9, "%d,%d", &px, &py) == 2)
+            {
+               if (g_key_event_count < MAX_KEY_EVENTS)
+               {
+                  struct key_event *ev =
+                     &g_key_events[g_key_event_count++];
+                  memset(ev, 0, sizeof(*ev));
+                  ev->frame = frame;
+                  ev->pointer = 1;
+                  ev->px = px;
+                  ev->py = py;
+               }
+            }
+            else
+               ignored++;
+            continue;
+         }
          joy = key_name_to_joypad(colon + 1);
          if (joy == 0u)
          {
@@ -1513,6 +1554,8 @@ static int load_key_script(const char *path)
          }
          if (g_key_event_count < MAX_KEY_EVENTS)
          {
+            memset(&g_key_events[g_key_event_count], 0,
+                   sizeof(g_key_events[0]));
             g_key_events[g_key_event_count].frame = frame;
             g_key_events[g_key_event_count].joy = joy;
             g_key_event_count++;
@@ -1547,16 +1590,25 @@ static void input_apply(unsigned frame, unsigned total)
    {
       unsigned bits = 0u;
       int i;
+      int tap = 0;
       for (i = 0; i < g_key_event_count; i++)
       {
-         if (frame >= g_key_events[i].frame &&
-             frame < g_key_events[i].frame + KEY_EVENT_HOLD_FRAMES)
+         if (frame < g_key_events[i].frame ||
+             frame >= g_key_events[i].frame + KEY_EVENT_HOLD_FRAMES)
+            continue;
+         if (g_key_events[i].pointer)
+         {
+            tap = 1;
+            g_pointer_axis_x_px = g_key_events[i].px;
+            g_pointer_axis_y_px = g_key_events[i].py;
+         }
+         else
             bits |= g_key_events[i].joy;
       }
       if (bits != 0u)
          g.ses.pressed_frames++;
       g_pad_state = bits;
-      g_pointer_pressed = 0;
+      g_pointer_pressed = tap;
       return;
    }
 

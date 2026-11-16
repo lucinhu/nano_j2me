@@ -1026,3 +1026,20 @@ the arrows) before each `retro_run()`. New CTest `check_libretro_3d_keys` runs
 requires an animated, non-black M3G scene: **917 frames, non-black 76800/76800,
 183 distinct frames, audio nonzero 1.3M samples**, 47 checks 0 failed, 23.9 s.
 The gate skips when the gitignored corpus is absent.
+
+## Update, 2026-11-16 (round 75): pointer taps in key scripts, whole-corpus gameplay probe
+
+The mock frontend `--keys` script now also replays `pressed@X,Y` entries as
+real single-pointer events (canvas pixels converted to the centered libretro
+axis), so the corpus scripts that tap a loading/billing screen work through the
+core ABI. `tools/check_libretro_corpus_visual.py` automatically loads
+`tools/corpus_keys/<jar stem>.txt` when present, so menu-gated titles are judged
+on their gameplay screen instead of a static menu.
+
+600-frame whole-corpus probe against the r31 core
+(`.local-tools/debug-runs/libretro-visual-r75/visual.jsonl`, 10 workers,
+paced 60 Hz): **385 titles -> 384 passed, 1 known limitation
+(毁灭战士3_10598 slow loader), 0 failed**. This is the strongest libretro-side
+compatibility evidence so far: every title the CLI sweep marks `ok` also loads,
+paints an animated non-black frame through the real core, and survives the
+harness save-state round trips.

@@ -18,6 +18,10 @@ Usage:
                                         [--timeout 180] [--core PATH]
                                         [--harness PATH] [--out results.jsonl]
 
+Titles with a script in tools/corpus_keys/<jar stem>.txt are driven with
+that script (frame:key entries and pressed@X,Y pointer taps) so the probe
+reaches gameplay instead of a static menu.
+
 Environment: NJ_ROOT, NJ_LIBRETRO_HARNESS, NJ_LIBRETRO_CORE, NJ_JOBS.
 Exit code is 1 when any title fails.
 """
@@ -40,6 +44,11 @@ CORE = Path(os.environ.get(
     "NJ_LIBRETRO_CORE",
     ROOT / "build" / "libretro-dist" / "linux-x86_64" / "nano_j2me_libretro.so"))
 GAMES = ROOT / "tests" / "games"
+# Per-title key scripts curated by the corpus sweep (frame:key entries, and
+# pressed@X,Y pointer taps).  The mock frontend replays them as the matching
+# joypad buttons and pointer events before each retro_run(), which lets the
+# probe reach gameplay on titles that otherwise idle on a title/menu screen.
+KEYS_DIR = ROOT / "tools" / "corpus_keys"
 
 # Titles the mock harness cannot certify, with the reason recorded next to the
 # expectation.  These are reported as KNOWN instead of PASS/FAIL so a real
@@ -96,6 +105,9 @@ def run_one(row, frames, timeout):
            "--timeout", str(max(60, timeout)),
            "--visual-required", "--static-ok", "--min-nonblack", "8",
            "--save-dir", tempfile.mkdtemp(prefix="lj-vis-")]
+    keys = KEYS_DIR / (jar.stem + ".txt")
+    if keys.is_file():
+        cmd += ["--keys", str(keys)]
     try:
         cp = subprocess.run(cmd, capture_output=True, text=True,
                             timeout=timeout, cwd=str(ROOT))
