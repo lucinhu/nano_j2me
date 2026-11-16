@@ -3929,7 +3929,10 @@ corpus titles hang (`JBenchmark HD.jar`, `丧尸危机2-自由之翼BT版_997.ja
 backed out of the tree in the same day. The measurements and the mechanism analysis remain
 valid; a safe fix still has to separate "parked inside a C call" from "scheduler deadlock"
 without removing the app-done signal, or the pacer must be reworked to call the port idle
-hook instead of shrinking scheduler passes (see the note for the bisect table).
+hook instead of shrinking scheduler passes (see the note for the bisect table).  A
+round-62 minimal retry (skip empty main-thread passes + a 1 ms host nap) took the CPU
+from 9.87 s to 0.38 s but stretched the frame period to 40.8 ms, confirming that the
+sleep must be decided by the pacer from its own remaining budget.
 
 A frame-capped run was spending its entire inter-frame gap as CPU on titles that
 keep a scheduler thread alive.  `魔塔_8052`, `合金弹头4(完美汉化版)_4053`,

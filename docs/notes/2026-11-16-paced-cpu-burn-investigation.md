@@ -206,3 +206,31 @@ src/port/posix/nj_port_headless.c`) and the CPU burn stays documented as an
 open performance item.  A safe fix needs a real "C-stack owner is gone"
 signal (e.g. `in_c_call` plus a pump-generation counter that the pacer
 advances) rather than a blanket parked flag.
+
+## Round-62 retry: minimal variant and the remaining overshoot (2026-11-16)
+
+After the revert, one minimal variant was measured to separate the two causes
+of the round-61 failure (the early `in_c_call` scheduling block vs the
+main-thread accounting):
+
+- Change: skip an empty main-thread pass in `scheduler_step` (do not set
+  `ran` for it) and, in the `parked_ready && !have_earliest` idle branch
+  (headless only, new `nj_port.idle_wait` hook = `hl_sleep_ms`), nap 1 ms
+  after `port_idle()`.  No progress out-parameter, no
+  `nj_scheduler_run_until_idle` early return, no `in_c_call` block.
+- CPU: 魔塔_8052 300 frames @30 fps went from 9.87 s user to **0.38 s user** —
+  the burn is gone.
+- But the frame period became 40.8 ms (`wall 12.24 s`, ≈24.5 fps) instead of
+  33.3 ms: the 1 ms naps (plus the existing ≤5 ms `port_sleep` inside the
+  scheduler) overshoot the frame deadline.  Same symptom as the round-61
+  attempt.
+- The two round-61 casualties are NOT caused by the main-thread skip:
+  `JBenchmark HD.jar` finished 130 frames/10.0 s rc=0, `丧尸危机2-自由之翼BT版_997.jar`
+  622 frames/20.7 s rc=0, `check_timer_wait` passed.  The hangs came from the
+  early `in_c_call` block, which this variant does not have.
+
+Conclusion for the next attempt: the scheduler must not decide the nap
+length — it does not know the frame deadline.  The pacer knows `left`; the
+scheduler (or `nj_run_pending`) should only *report* "nothing runnable and no
+timer deadline", and the pacer should sleep exactly `min(left, its own idle
+granularity)` after such a report, never inside a scheduler pass.
