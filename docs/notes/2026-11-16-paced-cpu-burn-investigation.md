@@ -157,3 +157,20 @@ So the earlier "safe fix needs earliest deadline plumbing" conclusion is
 strengthened: the pacer must own the sleep, and `scheduler_step()` must
 never sleep past the caller's budget/wait.  Until both are true, any idle
 branch turns a 30 fps cap into ≈24.6 fps for those titles.
+
+## Resolution, round 61 (2026-11-16)
+
+The fix landed the same day: `scheduler_step()` now reports progress, a main
+thread with no Java frames is not counted as work, and
+`nj_scheduler_run_until_idle()` returns as soon as a pass makes no progress
+instead of spinning out the budget.  The pacer keeps ownership of the host
+sleep through a new optional `frame_wait` port hook (headless only; the
+libretro port's clock is advanced by the frontend, so it stays NULL and keeps
+the pass loop).  Sleeps inside a scheduler pass are clamped to the caller's
+remaining budget, which is what fixes the 24.6 fps overshoot.
+
+Measured: the four titles in the table above went from 9–10 s CPU per 300 paced
+frames to 0.05–0.11 s at the same 30.0 fps and 10.01 s wall time; see
+`docs/PERFORMANCE.md` for the before/after table.  Full CTest 192/192, real
+RetroArch and the libretro option matrix still pass, and the 404-title sweep
+is unchanged.

@@ -3921,3 +3921,62 @@ So the remaining `sw_span` cost is the specialised NEAREST texture loops
 themselves (perspective divide per pixel); squeezing them further would need
 fixed-point or approximate sampling, which risks the parity property the
 deterministic-prefix check enforces. Not attempted.
+
+## Paced-run CPU burn: an idle pass that never idles (round 61, 2026-11-16)
+
+A frame-capped run was spending its entire inter-frame gap as CPU on titles that
+keep a scheduler thread alive.  `魔塔_8052`, `合金弹头4(完美汉化版)_4053`,
+`火影忍者_11531` and `世嘉头文字D－宿命对决_1247` all reported `--fps 30`,
+wall 10.01 s, **CPU 9–10 s** for 300 frames, while the same titles uncapped
+used 0.03 s of CPU.
+
+gprof showed the time inside `scheduler_step` (160 M calls, 41%) reached through
+`nj_scheduler_run_until_idle` (33%) from the pacer's `nj_run_pending()` window,
+plus `hl_millis` at 18% (321 M calls).  Two independent mistakes kept that loop
+spinning:
+
+1. `scheduler_step()` counted the *main* thread as "ran" even when it had no
+   Java frames.  While the C runner drives a frame the main thread's stack is
+   empty, `nj_exec()` on an empty stack is a no-op, but `ran` stayed set, so the
+   idle/deadlock branches below never fired.
+2. `nj_scheduler_run_until_idle()` kept looping after a pass in which nothing
+   ran and nothing had a wake deadline.  On the headless port `idle()` is a
+   no-op, so "nothing to do" became a spin until the budget expired.  When it
+   did take the sleep branch it could also oversleep the caller's budget: a
+   50 ms sleeper inside a 4 ms pass produced `--fps 30` runs at 24.6 fps.
+
+The fix keeps the pacer in charge of time:
+
+* `scheduler_step(vm, sleep_cap_ms, &progress)` reports whether anything ran,
+  became runnable, or has a wake deadline.  A main thread with `nframes == 0`
+  is not counted as work.  Threads parked inside a nested C call keep their
+  wake-deadline accounting but are never counted as scheduler work or as
+  deadlock waiters (their pump resumes them).
+* `nj_scheduler_run_until_idle()` returns `NJ_ERR_TIMEOUT` as soon as a pass
+  makes no progress, and caps every `port_sleep()` at the caller's remaining
+  budget.
+* `nj_scheduler_frame()` restores `vm->cur` to the main thread on return.
+* A new optional port hook `frame_wait(ud, ms)` lets the pacer park the host
+  for at most the remaining gap; only ports with a real clock set it (headless),
+  while frontend-driven clocks (libretro) leave it NULL and keep the previous
+  pass loop.
+
+Result for 300 frames at `--fps 30`, heap 32 MB (wall and fps unchanged):
+
+| title | CPU before | CPU after |
+| --- | --- | --- |
+| 魔塔_8052 | 10.00 s | **0.07 s** |
+| 火影忍者_11531 | 9.01 s | **0.06 s** |
+| 合金弹头4(完美汉化版)_4053 | 10.01 s | **0.11 s** |
+| 世嘉头文字D－宿命对决_1247 | 10.00 s | **0.05 s** |
+| loopdemo (fixture) | 0.05 s | 0.05 s |
+
+All four still report 30.0 fps and 10.01 s wall time, i.e. the fix removed the
+burn without changing the pacing.  Uncapped runs are unchanged (bench.jar 2000
+frames 0.16 s CPU vs 0.17 s before; `毁灭战士3_10598` 3000 frames 4.28 s vs
+4.32 s), and a CPU-bound loader still gets the CPU it asks for (Minecraft PE at
+`--fps 30` uses 9.99 s for 1.43 B bytecodes, 30.0 fps, one paint).
+
+The deadlock-avoidance rules that this touched are documented in
+`docs/notes/2026-11-16-paced-cpu-burn-investigation.md`; the port hook contract
+is in `include/nj2me/nj_port.h` next to `sleep_ms`.

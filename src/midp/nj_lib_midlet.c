@@ -280,10 +280,21 @@ static void frame_pace_wait(nj_vm *vm, nj_s8 wait)
              * sleeps between chunks.  The budget only bounds how long one call
              * may spend before the frame's wall clock is checked again.
              */
+            nj_s8 t0 = nj_now_ms(vm);
             nj_status st = nj_run_pending(vm,
                 (nj_u4)(left > 4 ? 4 : (left > 1 ? left : 1)));
             if (st != NJ_OK && st != NJ_ERR_TIMEOUT) {
                 break;
+            }
+            /*
+             * An idle pass returns at once.  Only ports that can park the host
+             * take the nap; a frontend-driven clock must keep the old pass
+             * loop, where the frontend advances time between calls.
+             */
+            if (st == NJ_ERR_TIMEOUT && vm->port->frame_wait &&
+                nj_now_ms(vm) - t0 < 1) {
+                vm->port->frame_wait(vm->port->ud,
+                    (nj_u4)(left > 2 ? 2 : (left > 0 ? left : 1)));
             }
         } else if (vm->port->sleep_ms) {
             /* Nothing to run: park the host, waking at the frame boundary or

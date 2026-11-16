@@ -955,8 +955,15 @@ int nj_vm_monitor_notify(nj_vm *vm, nj_ref obj, int all)
 /* ------------------------------------------------------------------ */
 /* Scheduler                                                           */
 /* ------------------------------------------------------------------ */
-static nj_status scheduler_step(nj_vm *vm)
+static nj_status scheduler_step(nj_vm *vm, nj_u4 sleep_cap_ms, int *out_progress)
 {
+    /* Bound idle sleeps by the caller's remaining budget: the frame pacer
+     * asks for a 4 ms pass, and a 50 ms sleeper must not overshoot it. */
+    const nj_u4 sleep_cap = sleep_cap_ms;
+
+    if (out_progress != NULL) {
+        *out_progress = 0;
+    }
     nj_u2 i;
     int alive = 0;
     int waiting = 0;
@@ -988,6 +995,58 @@ static nj_status scheduler_step(nj_vm *vm)
             continue;
         }
         alive = 1;
+
+        /*
+         * A thread parked inside a nested C call is resumed by the pump that
+         * owns its C stack, so its sleep/wait state is progress, not a
+         * scheduler deadlock.  Keep the deadline accounting so the idle
+         * branch below still sleeps to the right time; a resumed RUNNING stack
+         * is parked_ready.
+         */
+        if (t->in_c_call) {
+            if (t->state == NJ_THREAD_SLEEPING) {
+                if (now >= t->wake_at_ms) {
+                    t->state = NJ_THREAD_RUNNING;
+                } else {
+                    if (!have_earliest || t->wake_at_ms < earliest) {
+                        earliest = t->wake_at_ms;
+                        have_earliest = 1;
+                    }
+                    continue;
+                }
+            } else if (t->state == NJ_THREAD_WAITING) {
+                if (t->wait_kind == NJ_WAIT_OBJECT) {
+                    if (!t->wait_ready && t->wait_deadline != 0 &&
+                        now >= t->wait_deadline) {
+                        t->wait_ready = 1u;
+                        t->wait_deadline = 0;
+                    }
+                    if (!(t->wait_ready && mon_try_reacquire(vm, t))) {
+                        parked_ready = 1;
+                        continue;
+                    }
+                } else if (t->wait_deadline != 0 && now >= t->wait_deadline) {
+                    t->state = NJ_THREAD_RUNNING;
+                    t->wait_monitor = NULL;
+                    t->wait_kind = NJ_WAIT_NONE;
+                    t->wait_deadline = 0;
+                } else {
+                    if (t->wait_deadline != 0 &&
+                        (!have_earliest || t->wait_deadline < earliest)) {
+                        earliest = t->wait_deadline;
+                        have_earliest = 1;
+                    }
+                    continue;
+                }
+            } else if (t->state == NJ_THREAD_BLOCKED) {
+                parked_ready = 1;
+                continue;
+            }
+            if (t->state == NJ_THREAD_RUNNING) {
+                parked_ready = 1;
+            }
+            continue;
+        }
 
         if (t->state == NJ_THREAD_SLEEPING) {
             if (now >= t->wake_at_ms) {
@@ -1086,8 +1145,14 @@ static nj_status scheduler_step(nj_vm *vm)
          * reach here: the main thread and natives parked in a C call are
          * filtered above.
          */
-        if (t->nframes == 0u && !t->is_main) {
-            t->state = NJ_THREAD_DEAD;
+        if (t->nframes == 0u) {
+            /* Nothing to run: a worker has finished its run(), and the main
+             * thread has no Java frames while the C runner drives the frame.
+             * Counting the empty pass as "ran" hid the idle branches below
+             * and spun a core flat out on the headless port. */
+            if (!t->is_main) {
+                t->state = NJ_THREAD_DEAD;
+            }
             continue;
         }
         ran = 1;
@@ -1131,6 +1196,9 @@ static nj_status scheduler_step(nj_vm *vm)
         }
     }
 
+    if (out_progress != NULL) {
+        *out_progress = (ran != 0) || (parked_ready != 0) || (have_earliest != 0);
+    }
     if (!alive) {
         return NJ_ERR_HALT;
     }
@@ -1154,11 +1222,17 @@ static nj_status scheduler_step(nj_vm *vm)
              */
             nj_s8 delta = earliest - now;
             if (delta > 0) {
+                if (sleep_cap != 0u && (nj_s8)sleep_cap < delta) {
+                    delta = (nj_s8)sleep_cap;
+                }
                 port_sleep(vm, (nj_u4)(delta > 5 ? 5 : delta));
             }
         } else if (have_earliest) {
             nj_s8 delta = earliest - now;
             if (delta > 0) {
+                if (sleep_cap != 0u && (nj_s8)sleep_cap < delta) {
+                    delta = (nj_s8)sleep_cap;
+                }
                 port_sleep(vm, (nj_u4)(delta > 50 ? 50 : delta));
             }
         } else if (waiting > 0 && !frame_waiting) {
@@ -1186,7 +1260,8 @@ static nj_status scheduler_step(nj_vm *vm)
 nj_status nj_scheduler_step(nj_vm *vm)
 {
     nj_thread *main_thread = nj_thread_main(vm);
-    nj_status st = scheduler_step(vm);
+    int progress = 0;
+    nj_status st = scheduler_step(vm, 0u, &progress);
 
     /*
      * scheduler_step points vm->cur at each thread it runs, which is right
@@ -1217,7 +1292,11 @@ nj_status nj_scheduler_frame(nj_vm *vm, nj_u4 budget_ms)
     do {
         nj_u2 i;
         int runnable = 0;
-        st = nj_scheduler_step(vm);
+        {
+            nj_s8 left = (nj_s8)budget_ms - (nj_now_ms(vm) - start);
+            int progress = 0;
+            st = scheduler_step(vm, left > 0 ? (nj_u4)left : 1u, &progress);
+        }
         if (st != NJ_OK || !vm->running || vm->painted_in_frame ||
             ++rounds >= 256u ||
             nj_now_ms(vm) - start >= (nj_s8)budget_ms) {
@@ -1233,6 +1312,13 @@ nj_status nj_scheduler_frame(nj_vm *vm, nj_u4 budget_ms)
         }
         if (!runnable) break;
     } while (1);
+    /* The caller is C on the main thread again; see nj_scheduler_step(). */
+    if (vm != NULL) {
+        nj_thread *host = nj_thread_main(vm);
+        if (host != NULL) {
+            vm->cur = host;
+        }
+    }
     return st;
 }
 
@@ -1271,15 +1357,34 @@ nj_status nj_scheduler_run_until_idle(nj_vm *vm, nj_u4 budget_ms)
     nj_s8 start = nj_now_ms(vm);
 
     for (;;) {
-        nj_status st = nj_scheduler_step(vm);
-        if (st == NJ_ERR_HALT) {
-            return NJ_OK;
+        nj_s8 left;
+        nj_u4 cap;
+        nj_status st;
+
+        if (budget_ms != 0u) {
+            left = (nj_s8)budget_ms - (nj_now_ms(vm) - start);
+            if (left <= 0) {
+                return NJ_ERR_TIMEOUT;
+            }
+            cap = (nj_u4)left;
+        } else {
+            cap = 0u;       /* no budget: keep the historical caps */
         }
-        if (st != NJ_OK) {
-            return st;
-        }
-        if (budget_ms && (nj_now_ms(vm) - start) > (nj_s8)budget_ms) {
-            return NJ_ERR_TIMEOUT;
+        {
+            int progress = 0;
+            st = scheduler_step(vm, cap, &progress);
+            if (st == NJ_ERR_HALT) {
+                return NJ_OK;
+            }
+            if (st != NJ_OK) {
+                return st;
+            }
+            if (!progress) {
+                /* Nothing ran and nothing slept: the only thing that can
+                 * change is the frame pump, i.e. the caller.  Returning lets
+                 * the pacer park instead of spinning out the budget. */
+                return NJ_ERR_TIMEOUT;
+            }
         }
     }
 }
