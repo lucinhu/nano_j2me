@@ -45,6 +45,9 @@ STATS = re.compile(r"^stats: frames=(\d+) paints=(\d+)")
 
 ROW_PATH_KEYS = ("path", "jar", "file")
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from corpus_keymap import resolve as resolve_keys  # noqa: E402
+
 
 def run_one(row, args, keys, work):
     jar = Path(row["path"])
@@ -59,8 +62,9 @@ def run_one(row, args, keys, work):
         "--run-frames", str(args.frames), "--stats",
         "--rms-dir", str(rms),
     ]
-    if keys:
-        cmd += ["--keys", "@" + str(keys)]
+    row_keys = resolve_keys(jar.name, keys)
+    if row_keys:
+        cmd += ["--keys", "@" + str(row_keys)]
     cmd.append(str(jar))
     t0 = time.time()
     try:

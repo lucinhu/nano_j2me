@@ -1,7 +1,9 @@
 # Per-title key scripts for the corpus probes
 
-`tools/sweep_compat.py` replays one generic key script (`keys.txt`) for every
-title. Some titles need different input to reach representative content: a
+The corpus probes replay one generic key script (`keys.txt`) for every title:
+`tools/sweep_compat.py`, `tools/check_corpus_deep.py`,
+`tools/check_corpus_audio.py` and `tools/check_corpus_states.py` all honour
+`NJ_KEYS_DIR` through the shared `tools/corpus_keymap.py` helper. Some titles need different input to reach representative content: a
 first screen that waits for a key, a menu that needs a soft key, a prompt whose
 default button is "back". This directory lets one title get its own script.
 

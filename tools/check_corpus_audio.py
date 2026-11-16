@@ -37,6 +37,9 @@ BIN = os.environ.get("NJ_BIN", os.path.join(ROOT, "build", "nj2me"))
 SEARCH = [os.path.join(ROOT, "tests", "games")]
 AUDIO_EXTS = (".mid", ".mp3", ".amr", ".wav", ".imy", ".mld")
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from corpus_keymap import resolve as resolve_keys  # noqa: E402
+
 
 def find(name):
     for root in SEARCH + [d for d in
@@ -89,11 +92,12 @@ def main():
                 for x in args.require):
             continue
         seen += 1
+        row_keys = resolve_keys(os.path.basename(path), keys)
         with tempfile.TemporaryDirectory() as rms:
             cp = subprocess.run(
                 [BIN, "--port", "headless", "--size", "240x320", "--heap", "16",
                  "--fps", "30", "--run-frames", str(args.frames),
-                 "--keys", "@" + keys, "--rms-dir", rms, "--stats",
+                 "--keys", "@" + row_keys, "--rms-dir", rms, "--stats",
                  "--verbose", "3", path],
                 capture_output=True, text=True, timeout=120)
         out = (cp.stderr or "") + (cp.stdout or "")

@@ -20,7 +20,8 @@ OUT = os.sys.argv[1] if len(os.sys.argv) > 1 else os.path.join(
 # build/nj2me can be stale relative to HEAD (it was: the 2026-11 sweep used a
 # binary 20 commits behind); NJ_BIN lets the caller point at a fresh build.
 BIN = os.environ.get("NJ_BIN") or os.path.join(ROOT, "build", "nj2me")
-KEYS_DIR = os.environ.get("NJ_KEYS_DIR", "")
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from corpus_keymap import resolve as resolve_keys  # noqa: E402
 RUN = 600
 KEYS = ["30:fire", "55:soft1", "80:53", "110:pressed@120,160", "112:released@120,160",
         "140:left", "165:right", "190:48", "215:up", "240:down", "265:soft2", "290:5",
@@ -59,12 +60,9 @@ def one(job):
                 "profile": attrs.get("MicroEdition-Profile", ""),
                 "config": attrs.get("MicroEdition-Configuration", ""),
                 "apis": sorted(apis), "classes": nclass})
-    keys = os.path.join(OUT, "keys.txt")
-    if KEYS_DIR:
-        custom = os.path.join(KEYS_DIR, base[:-len(".jar")] + ".txt")
-        if os.path.exists(custom):
-            keys = custom
-            row["keys"] = os.path.basename(custom)
+    keys = resolve_keys(base, os.path.join(OUT, "keys.txt"))
+    if os.path.basename(os.path.dirname(keys)) == "corpus_keys":
+        row["keys"] = os.path.basename(keys)
     for heap in (16, 32):
         rms = os.path.join(OUT, "rms", base.replace(".jar", "") + "-" + str(heap))
         cmd = [BIN, "--port", "headless", "--size", "240x320",

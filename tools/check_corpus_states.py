@@ -38,6 +38,9 @@ import sys
 import tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from corpus_keymap import resolve as resolve_keys  # noqa: E402
 BIN = os.environ.get("NJ_BIN", os.path.join(ROOT, "build", "nj2me"))
 SEARCH = [os.path.join(ROOT, "tests", "games")]
 
@@ -73,9 +76,10 @@ def phases(binary, jar, frames, state_frame, state, keys, scratch):
     resume = common + ["--run-frames", str(frames - state_frame + 30),
                        "--load-state", state,
                        "--stats", jar]
-    if keys:
-        save[7:7] = ["--keys", "@" + keys]
-        resume[7:7] = ["--keys", "@" + keys]
+    row_keys = resolve_keys(os.path.basename(jar), keys)
+    if row_keys:
+        save[7:7] = ["--keys", "@" + row_keys]
+        resume[7:7] = ["--keys", "@" + row_keys]
 
     rc1, out1 = run(save, 300)
     if rc1 != 0:
