@@ -65,3 +65,27 @@ instead of the step-then-flat shapes above.
 100 per sample) keeps the option wired: it asserts four counter lines
 (100/200/300 periodic + the final one), the heap field, and that the last line
 is the final `frames=300` line.
+
+## Calibration: allocation churn is not a leak (2026-11-16, round 60)
+
+A long soak of `世界五子棋大奖赛_355.jar` (a cheap board game, `--fps 0`)
+showed a perfectly linear heap rise at first glance:
+
+| heap | frames | heap=used |
+| --- | --- | --- |
+| 16 MB | 20k / 40k / 60k | 5.74 / 10.98 / 16.23 MB |
+| 16 MB | 80k / 100k | **5.19** / 10.43 MB (GC dropped it) |
+| 64 MB | 20k / 40k / 60k / 80k / 100k | 5.76 / 11.02 / 16.25 / 21.47 / 26.72 MB |
+
+The slope is the same (≈268 bytes/frame) with both heap sizes, but the
+16 MB run hits the GC threshold at ~60k frames and falls back to 5.19 MB,
+then rises again — a sawtooth, i.e. the title allocates about 268 bytes of
+garbage per frame and the collector reclaims it.  With a 64 MB heap the
+collector simply has no reason to run in 100k frames, so the curve looks
+linear.  Neither run leaks (no OOM at 16 MB after 100k frames).
+
+Rule for reading `check_corpus_soak.py` output: a rising `heap=` is only
+evidence of a leak when it survives a GC (a drop followed by a slow rise
+is churn), so compare a small-heap long run with a large-heap run before
+raising a WARN to a defect.  The tool's default warn threshold (4 MB
+growth) is a flag to look, not a verdict.
