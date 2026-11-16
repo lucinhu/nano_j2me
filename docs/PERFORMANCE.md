@@ -3924,6 +3924,13 @@ deterministic-prefix check enforces. Not attempted.
 
 ## Paced-run CPU burn: an idle pass that never idles (round 61, 2026-11-16)
 
+**Status: reverted.** The implementation described below removed the burn but made two
+corpus titles hang (`JBenchmark HD.jar`, `丧尸危机2-自由之翼BT版_997.jar`); the code change was
+backed out of the tree in the same day. The measurements and the mechanism analysis remain
+valid; a safe fix still has to separate "parked inside a C call" from "scheduler deadlock"
+without removing the app-done signal, or the pacer must be reworked to call the port idle
+hook instead of shrinking scheduler passes (see the note for the bisect table).
+
 A frame-capped run was spending its entire inter-frame gap as CPU on titles that
 keep a scheduler thread alive.  `魔塔_8052`, `合金弹头4(完美汉化版)_4053`,
 `火影忍者_11531` and `世嘉头文字D－宿命对决_1247` all reported `--fps 30`,

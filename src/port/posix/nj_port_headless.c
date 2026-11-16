@@ -1231,7 +1231,6 @@ nj_status nj_port_headless_ex(nj_port *out, int width, int height,
     out->millis = hl_millis;
     out->now = nj_posix_now;
     out->sleep_ms = hl_sleep_ms;
-    out->frame_wait = hl_sleep_ms;
     out->idle = hl_idle;
     out->device_property = hl_device_property;
     out->code_alloc = hl_code_alloc;

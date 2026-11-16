@@ -174,3 +174,35 @@ frames to 0.05–0.11 s at the same 30.0 fps and 10.01 s wall time; see
 `docs/PERFORMANCE.md` for the before/after table.  Full CTest 192/192, real
 RetroArch and the libretro option matrix still pass, and the 404-title sweep
 is unchanged.
+
+## Resolution attempt reverted, round 61 (2026-11-16)
+
+The fix (main-thread empty-pass accounting + progress-aware
+`nj_scheduler_run_until_idle` + a budget-capped scheduler sleep + a
+headless `frame_wait` nap) did remove the burn: 魔塔/火影/合金弹头4/
+世嘉头文字D went from ~10 s CPU to 0.05–1.34 s at the same 30 fps, and
+bench/Doom3 numbers were unchanged.  But the 404-title sweep found two
+real regressions — `JBenchmark HD.jar` and `丧尸危机2-自由之翼BT版_997.jar`,
+both previously fine, now hung past the 90 s budget (the two other
+timeouts were pre-existing: `GT赛车2_36.jar` is a 130 s loader in both
+binaries, `时光樱花册－遗失之心_1009.jar` is 89.7→91.7 s, borderline slow).
+
+Bisect summary (JBenchmark HD, 600 frames):
+
+| variant | result |
+| --- | --- |
+| A: revert main-thread empty-pass accounting | still hangs |
+| B: disable `!progress` early return | still hangs |
+| C: drop the early `in_c_call` block | completes 198 frames, but `check_timer_wait` then fails and 丧尸 still hangs |
+| D: C + old `BLOCKED` accounting in the early block | completes timer_wait, JBenchmark hangs again |
+
+So the same knob that suppresses the false "all threads are waiting"
+verdict (needed by the timer test) also removes the app-done verdict
+JBenchmark relies on: a thread parked inside a C call is indistinguishable
+from a deadlocked one with the current thread-state vocabulary.  The code
+was reverted (`git checkout 70785c9^ -- include/nj2me/nj_port.h
+src/core/nj_thread.c src/midp/nj_lib_midlet.c
+src/port/posix/nj_port_headless.c`) and the CPU burn stays documented as an
+open performance item.  A safe fix needs a real "C-stack owner is gone"
+signal (e.g. `in_c_call` plus a pump-generation counter that the pacer
+advances) rather than a blanket parked flag.

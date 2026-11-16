@@ -323,13 +323,6 @@ typedef struct nj_port {
 
     void  (*sleep_ms)(void *ud, nj_u4 ms);
 
-    /*
-     * Park the host for at most `ms`, used by the frame pacer when the
-     * scheduler has nothing to run.  Ports whose clock is advanced by a
-     * frontend leave this NULL and keep the previous pass-loop behaviour.
-     */
-    void  (*frame_wait)(void *ud, nj_u4 ms);
-
     /* Logging.  level: 0=error 1=warn 2=info 3=debug */
     void  (*log)(void *ud, int level, const char *msg);
 
