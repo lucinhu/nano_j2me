@@ -4032,3 +4032,32 @@ frames 0.16 s CPU vs 0.17 s before; `毁灭战士3_10598` 3000 frames 4.28 s vs
 The deadlock-avoidance rules that this touched are documented in
 `docs/notes/2026-11-16-paced-cpu-burn-investigation.md`; the port hook contract
 is in `include/nj2me/nj_port.h` next to `sleep_ms`.
+
+## M3G span setup: hoist the triangle state out of the scanline loop (round 67, 2026-11-16)
+
+`sw_tri_band()` used to write all ~40 `m3g_span` fields on every scanline.
+The triangle-derived fields are constant for the whole triangle, so they are
+now written once before the band loop and only the per-row fields (bounds,
+interpolation seeds, row pointers) are refreshed per scanline.
+
+Measured on `毁灭战士3_10598.jar`, 20,000 frames at `--fps 0`, heap 32 MB,
+`taskset -c 5`, user CPU, three runs each:
+
+| build | runs (user s) | median |
+| --- | --- | --- |
+| before | 27.646 / 27.678 / 27.752 | 27.678 |
+| after | 27.556 / 27.563 / 27.552 | 27.556 |
+
+−0.44 %. The gain is small because this title's 3D workload is millions of
+*tiny* triangles (~40.6 M band calls for ~60.6 M spans: about 1.5 spans per
+call, i.e. most triangles occupy a single scanline), where the per-band field
+writes are a minor share of the ~74 ns per band. The change is exact: frames
+10–130 of the deterministic Doom3 prefix are byte-identical before and after,
+and the m3g/gfx/paint/render test subset is 34/34 green.
+
+Also tried and **not kept**: giving the headless port a `parallel_for` raster
+worker. The parallel path only engages for triangles with area ≥ 8192 px² and
+≥ 16 rows; a gdb breakpoint on the worker showed it was never reached while
+loading that title, and the 20,000-frame CPU did not move. Reverted rather
+than ship an unexercised thread path; a future parallel raster would need a
+large-triangle workload (real 3D gameplay, not loader animations) to measure.

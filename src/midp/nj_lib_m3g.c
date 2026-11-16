@@ -12801,6 +12801,48 @@ static nj_u4 sw_tri_band(m3g_sw *sw, const float xy[6], const float inv[3],
     }
     depth_constant = dxz == 0.0 && dyz == 0.0;
     constant_key = depth_constant ? sw_depth_key(zrow, depth_clamp) : 0;
+    /* Everything the span loops read that is a property of the triangle,
+       not of the scanline, is written once here.  The band loop below then
+       refreshes only the per-row state (bounds, interpolation seeds, row
+       pointers), which keeps the exact values and their order unchanged. */
+    span.sw = sw;
+    span.format = format;
+    span.bpp = bpp;
+    span.gouraud = gouraud;
+    span.alpha_ramp = alpha_ramp;
+    span.tex_near = tex_near;
+    span.st_outer = st_outer;
+    span.has_tex = has_tex;
+    span.depth_constant = depth_constant;
+    span.depth_clamp = depth_clamp;
+    span.dtest = dtest;
+    span.dwrite = dwrite;
+    span.flat = flat;
+    span.constant_key = constant_key;
+    span.z = z;
+    span.x0 = x0;
+    span.y0 = y0;
+    span.x1 = x1;
+    span.y1 = y1;
+    span.x2 = x2;
+    span.y2 = y2;
+    span.area = area;
+    span.ia = ia;
+    span.dxg = dxg;
+    span.dxh = dxh;
+    span.dxk = dxk;
+    span.dxr = dxr;
+    span.dxgc = dxgc;
+    span.dxb = dxb;
+    span.dxa = dxa;
+    span.dxz = dxz;
+#if NJ_M3G_FAST_PATHS
+    span.flat_opaque = flat_opaque;
+    span.flat_tex565 = flat_tex565;
+    span.flat_texargb = flat_texargb;
+    span.gouraud_texargb = gouraud_texargb;
+    span.fog_state = fog_state;
+#endif
     /* Keep the serial accumulator order in both bands. Jumping directly to
      * the second band's first row changes floating-point rounding at shared
      * edges and depth ties. Only pixel work is skipped before the midpoint. */
@@ -12890,34 +12932,13 @@ static nj_u4 sw_tri_band(m3g_sw *sw, const float xy[6], const float inv[3],
             ra += dxa * skip;
             o = (nj_size)py * (nj_size)sw->surf->width + (nj_size)xl;
             drow = dst + (nj_size)py * (nj_size)sw->surf->stride + (nj_size)xl * bpp;
-            span.sw = sw;
-            span.format = format;
-            span.bpp = bpp;
-            span.gouraud = gouraud;
-            span.alpha_ramp = alpha_ramp;
-            span.tex_near = tex_near;
-            span.st_outer = st_outer;
-            span.has_tex = has_tex;
-            span.depth_constant = depth_constant;
-            span.depth_clamp = depth_clamp;
-            span.dtest = dtest;
-            span.dwrite = dwrite;
+            /* Per-row state only: the rest was written once before the
+             * band loop. */
             span.xl = xl;
             span.xr = xr;
             span.py = py;
-            span.flat = flat;
-            span.constant_key = constant_key;
-            span.z = z;
             span.o = o;
             span.drow = drow;
-            span.x0 = x0;
-            span.y0 = y0;
-            span.x1 = x1;
-            span.y1 = y1;
-            span.x2 = x2;
-            span.y2 = y2;
-            span.area = area;
-            span.ia = ia;
             span.pg = pg;
             span.ph = ph;
             span.pk = pk;
@@ -12925,22 +12946,7 @@ static nj_u4 sw_tri_band(m3g_sw *sw, const float xy[6], const float inv[3],
             span.rgc = rgc;
             span.rbc = rbc;
             span.ra = ra;
-            span.dxg = dxg;
-            span.dxh = dxh;
-            span.dxk = dxk;
-            span.dxr = dxr;
-            span.dxgc = dxgc;
-            span.dxb = dxb;
-            span.dxa = dxa;
             span.pz = pz;
-            span.dxz = dxz;
-#if NJ_M3G_FAST_PATHS
-            span.flat_opaque = flat_opaque;
-            span.flat_tex565 = flat_tex565;
-            span.flat_texargb = flat_texargb;
-            span.gouraud_texargb = gouraud_texargb;
-            span.fog_state = fog_state;
-#endif
 #if NJ_ENABLE_GFX_ACCEL
             if (sw->collect) {
                 m3g_raster_collect *c = sw->collect;
