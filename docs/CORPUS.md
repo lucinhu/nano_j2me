@@ -206,3 +206,22 @@ reached by pointer taps on title-specific coordinates (or they wait on a timer l
 Turning a frozen candidate into evidence needs either a per-title script or a reference comparison;
 this is now the documented rule, and the tool can take that script without being edited.
 
+
+### A carrier billing page is not a frozen frame (round 66)
+
+`终极雷电_4125.jar` looked like a menu that ignored input: a fire key at frame 10 did nothing,
+while the same key at frame 100 (after the title menu had settled) opened a **carrier billing
+dialog** — "游戏支付 / 您将选择北京全天通公司提供的游戏风云榜业务 / 信息费1元/条 … 确认 / 返回".
+The title's content sits behind that SMS subscription page, so a probe that presses fire either
+stays on the title menu or lands on the payment page; 1800 frames then paint the same screen and
+no audio Player is ever created.
+
+The rule for adjudication is the one above: a frozen or silent row is a statement about the input
+recipe until a per-title script or a reference comparison says otherwise.  The SMS page is a
+game-side gate (there is no SIM and no Wireless Messaging counterpart on the emulator side to
+complete it), not a rendering, input or audio defect.  The same reasoning applies to the other
+menu-bound rows in the audio sample: `侠盗飞车_6246` and `机甲风暴_7888` sit on their title menus
+in the sampled window.
+
+Reading the screenshot is what settled it, so keep `--dump-frames` + `--dump-every` in the probe
+recipe when a row is about to be called broken.
