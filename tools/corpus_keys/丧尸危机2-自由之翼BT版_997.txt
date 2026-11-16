@@ -1,0 +1,3 @@
+# Carrier-billing / dialogue screens need a pointer tap; the generic
+# recipe is deliberately pointer-free so it stops tapping quit buttons.
+30:fire,60:fire,90:pressed@120,160,120:pressed@100,120,150:pressed@120,160

@@ -23,11 +23,14 @@ BIN = os.environ.get("NJ_BIN") or os.path.join(ROOT, "build", "nj2me")
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from corpus_keymap import resolve as resolve_keys  # noqa: E402
 RUN = 600
-KEYS = ["30:fire", "55:soft1", "80:53", "110:pressed@120,160", "112:released@120,160",
-        "140:left", "165:right", "190:48", "215:up", "240:down", "265:soft2", "290:5",
-        "320:fire", "345:pressed@60,300", "347:released@60,300", "375:star",
-        "400:6", "430:fire", "470:soft1", "510:pressed@180,300", "512:released@180,300",
-        "545:fire", "575:left"]
+# Generic input recipe.  No pointer taps: several titles treat an arbitrary
+# tap on the canvas as "select the button under the finger", and a tap at a
+# soft-key/exit coordinate made 16 titles quit early in the round-71 probe
+# (see docs/notes/2026-11-16-generic-input-recipe.md).  Titles that need a
+# tap or a title-specific key get a script in tools/corpus_keys/ instead.
+KEYS = ["30:fire", "55:soft1", "80:53", "140:left", "165:right", "190:48",
+        "215:up", "240:down", "290:5", "320:fire", "375:star", "400:6",
+        "430:fire", "470:soft1", "545:fire", "575:left"]
 
 def manifest(path):
     try:
