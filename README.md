@@ -4,7 +4,7 @@
 
 [![latest release](https://img.shields.io/github/v/release/lucinhu/nano_j2me?sort=semver&label=release&color=blue)](https://github.com/lucinhu/nano_j2me/releases/latest)
 [![licence](https://img.shields.io/badge/licence-MIT-blue)](LICENSE)
-[![tests](https://img.shields.io/badge/ctest-190%20passing-brightgreen)](docs/VERIFICATION.md)
+[![tests](https://img.shields.io/badge/ctest-194%20passing-brightgreen)](docs/VERIFICATION.md)
 [![sanitized](https://img.shields.io/badge/sanitized-ASan%20%2B%20UBSan%20%2B%20LSan-brightgreen)](tools/run_sanitized_tests.sh)
 [![C99](https://img.shields.io/badge/C99-no%20dependencies-informational)](#design-commitments)
 
@@ -23,10 +23,14 @@ browser — the same runtime everywhere, with one small `nj_port` per platform.
 - **No dependencies.** `cc` and CMake are enough. No C++, no JVM, no libc
   requirement for freestanding builds, no zlib/libpng/libjpeg — DEFLATE, PNG,
   JPEG, GIF, WAV, AMR-NB, MP3, MIDI, H.263 and MPEG-4 Part 2 are in-tree.
+- **Every finger.** The Android APK, the libretro core and the headless runner
+  deliver multi-touch: titles using the Nokia `MultipointTouch` API see the
+  whole hand, while the MIDP `Canvas` pointer stays with the first finger —
+  proven end to end through the libretro ABI (`check_libretro_multitouch`).
 - **Small and embeddable.** Everything OS-specific is one `nj_port` implementation
   (about ten callbacks). The runtime keeps zero mutable global state; several VMs
   can coexist in one process, and `nj_vm_destroy()` returns the bytes it released.
-- **Verifiable.** 190 registered tests pass under `ctest`; 398 of the 400 real-game
+- **Verifiable.** 194 registered tests pass under `ctest`; 398 of the 400 real-game
   corpus titles run; every claim below is checked by a test, a gate or a
   recorded playback.
 

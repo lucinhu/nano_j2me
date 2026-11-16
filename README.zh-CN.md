@@ -4,7 +4,7 @@
 
 [![最新版本](https://img.shields.io/github/v/release/lucinhu/nano_j2me?sort=semver&label=release&color=blue)](https://github.com/lucinhu/nano_j2me/releases/latest)
 [![许可证](https://img.shields.io/badge/licence-MIT-blue)](LICENSE)
-[![测试](https://img.shields.io/badge/ctest-190%20passing-brightgreen)](docs/VERIFICATION.md)
+[![测试](https://img.shields.io/badge/ctest-194%20passing-brightgreen)](docs/VERIFICATION.md)
 [![sanitized](https://img.shields.io/badge/sanitized-ASan%20%2B%20UBSan%20%2B%20LSan-brightgreen)](tools/run_sanitized_tests.sh)
 [![C99](https://img.shields.io/badge/C99-no%20dependencies-informational)](#设计承诺)
 
@@ -23,10 +23,14 @@
 - **零依赖。** 有 `cc` 和 CMake 就够了。不需要 C++、不需要 JVM、裸机端不需要
   libc，也不需要 zlib/libpng/libjpeg——DEFLATE、PNG、JPEG、GIF、WAV、AMR-NB、
   MP3、MIDI、H.263 和 MPEG-4 Part 2 全部在树内实现。
+- **每根手指。** Android APK、libretro 内核和 headless 运行器都支持多点触摸：
+  使用 Nokia `MultipointTouch` API 的游戏能看到整只手，同时 MIDP `Canvas` 的
+  指针仍只归第一根手指——并通过 libretro ABI 做了端到端验证
+  （`check_libretro_multitouch`）。
 - **小而可嵌入。** 所有与操作系统相关的代码只是 `nj_port` 的一份实现（约十个
   回调）。运行时不保存任何可写全局状态；同一进程可以共存多个 VM，
   `nj_vm_destroy()` 会返回它释放的字节数。
-- **可验证。** `ctest` 里 190 个测试全部通过；400 个真实游戏的兼容性语料中 398 个
+- **可验证。** `ctest` 里 194 个测试全部通过；400 个真实游戏的兼容性语料中 398 个
   可运行；下面每一条说法都有测试、检查脚本或可回放的记录作为依据。
 
 ## 截图
