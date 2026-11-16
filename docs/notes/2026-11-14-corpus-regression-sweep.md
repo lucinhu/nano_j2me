@@ -205,3 +205,28 @@ per-title keys) into `.local-tools/debug-runs/compat-20261116-r54b`:
 `冰淇淋少女成长日记_7307.jar` no longer throws
 `IllegalMonitorStateException` (0 occurrences, was one per frame) but still
 ends itself at frame 290 — that exit is game-side and predates the fix.
+
+## Round 62 revalidation, 2026-11-16 (after the pacer revert)
+
+The round-61 sweep (`compat-20261116-r61`) was taken with the pacer change
+that was later reverted, so it is not a valid baseline (`370 ok / 25
+title-exit / 4 timeout / ...`).  After the revert commit `230d4f5`, a fresh
+full sweep with the reverted CLI:
+
+- `NJ_BIN=/var/tmp/nj2me-goal13-build/nj2me tools/sweep_compat.py .local-tools/debug-runs/compat-20261116-r62`
+  (10 workers, 600 frames @30 fps, per-title keys and RMS)
+- Result: **404 rows = 371 ok / 27 title-exit / 3 title-exception / 2 no-frame /
+  0 timeout / 1 bad-jar** — the four r61 timeouts are gone (0 timeouts).
+- Diff vs `compat-20261116-r54b` (372/27/2/2/0/1): one row changed,
+  `大富翁中国之旅_11873.jar` ok → title-exception (1 uncaught
+  `java/lang/StackOverflowError`, 407 paints vs the usual ~283–314).
+  Adjudicated a parallel-load / key-timing flake on a game-side recursion:
+  three standalone re-runs with the same sweep keys are deterministic
+  `rc=0`, 600 frames, ~282–309 paints, 0 uncaught.  Not a regression.
+- The two r61 regression casualties stay fixed: `JBenchmark HD.jar`
+  (139 frames rc=0) and `丧尸危机2-自由之翼BT版_997.jar` (621 frames rc=0),
+  and the known-slow rows (`GT赛车2_36`: ~130 s loader, `时光樱花册`:
+  ~90 s) are back inside their usual band.
+
+Full test suite after the revert: **192/192 PASS in 337.83 s**
+(`/tmp/r61-ctest5.log`).
