@@ -1043,3 +1043,18 @@ paced 60 Hz): **385 titles -> 384 passed, 1 known limitation
 compatibility evidence so far: every title the CLI sweep marks `ok` also loads,
 paints an animated non-black frame through the real core, and survives the
 harness save-state round trips.
+
+## Update, 2026-11-16 (rounds 76-77): animation coverage in the whole-corpus probe
+
+`tools/check_libretro_corpus_visual.py` now records `distinct_frames` and
+`max_nonblack` per title, so "passes" can be split into animated gameplay and
+static screens (board games, lobbies, emulator menus, title screens waiting for
+input). 600-frame (10 s virtual at 60 Hz) probe on the r31 core
+(`.local-tools/debug-runs/libretro-visual-r76/visual.jsonl`): 385 titles ->
+384 passed, 1 known limitation, 0 failed; **348 animated, 37 static**.
+Re-running the 37 static titles at 1800 frames (30 s virtual) animated just one
+more (`空战1944_10321`, distinct=8 — slow loader/movie), leaving 36 genuinely
+static screens; the probe keeps `--static-ok` so they are not failures, and the
+headless CLI (complete key set incl. digits/star/pointer) stays the
+authoritative compatibility oracle. Harness `--keys` also maps digits `0`/`5`
+to the core options Select/Start. Full CTest 195/195 (382.23 s).

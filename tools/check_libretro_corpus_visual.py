@@ -29,6 +29,7 @@ import argparse
 import json
 import os
 import random
+import re
 import shutil
 import subprocess
 import sys
@@ -120,9 +121,20 @@ def run_one(row, frames, timeout):
              if line.strip().startswith("FAIL")]
     ok = rc == 0 and not fails
     known = (not ok) and (jar.name in KNOWN_LIMITATIONS)
+    # Animation statistics help find titles that still sit on a static screen
+    # (a menu awaiting input) even though the probe passes with --static-ok.
+    distinct = 0
+    m = re.search(r"distinct_frame_hashes=(\d+)", log)
+    if m:
+        distinct = int(m.group(1))
+    nonblack = 0
+    m = re.search(r"max non-black pixels=(\d+)", log)
+    if m:
+        nonblack = int(m.group(1))
     return {"title": jar.name, "ok": ok, "known": known,
             "known_reason": KNOWN_LIMITATIONS.get(jar.name, ""),
             "rc": rc, "fails": fails[:3],
+            "distinct_frames": distinct, "max_nonblack": nonblack,
             "log": log[-1200:] if not ok else ""}
 
 

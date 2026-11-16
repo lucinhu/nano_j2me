@@ -545,7 +545,12 @@ non-black M3G scene (917 frames, 183 distinct frames); it skips when the
 gitignored `tests/games` corpus is absent. The corpus visual probe
 (`tools/check_libretro_corpus_visual.py`) also loads
 `tools/corpus_keys/<jar stem>.txt` automatically when it exists, so menu-gated
-titles are judged on their gameplay screen instead of a static menu. A real RetroArch smoke
+titles are judged on their gameplay screen instead of a static menu; it records
+the distinct-frame count and max non-black pixels per title so probe output can
+distinguish "animated gameplay" from "a static screen that still passes with
+`--static-ok`". `--keys` maps fire/soft1/soft2/arrows plus digits `0`/`5`
+(core options Select/Start) and `pressed@X,Y` taps; the headless CLI keeps the
+complete key set and stays authoritative. A real RetroArch smoke
 check also tests frontend integration. A watchdog-bounded boot is weaker evidence
 than a clean `run ended` and exit 0; record which occurred. Cross-build/export
 checks alone do not establish device runtime compatibility.

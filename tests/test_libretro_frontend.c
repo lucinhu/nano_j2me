@@ -1455,10 +1455,11 @@ static void release_all_keys(void)
          press_key(code, false);
 }
 
-/* Maps the CLI corpu key names to the joypad buttons the core binds by
- * default (A=FIRE, X=SOFT_LEFT, B=SOFT_RIGHT, arrows=arrows).  Keys without a
- * joypad default (digits, star, pound) are skipped: they are not needed by the
- * titles the script exists for. */
+/* Maps the CLI corpus key names to the joypad buttons the core binds by
+ * default (A=FIRE, X=SOFT_LEFT, B=SOFT_RIGHT, arrows=arrows, Select=0,
+ * Start=5).  Keys without a joypad default (digits 1-4/6-9, star, pound) are
+ * skipped; corpus scripts for those titles still get the mapped keys, and the
+ * headless CLI (which has the complete key set) remains authoritative. */
 /* Canvas-pixel tap position -> libretro's centered pointer axis. */
 static int pointer_axis_x(int px)
 {
@@ -1486,6 +1487,10 @@ static unsigned key_name_to_joypad(const char *name)
       return 1u << RETRO_DEVICE_ID_JOYPAD_UP;
    if (strcmp(name, "down") == 0)
       return 1u << RETRO_DEVICE_ID_JOYPAD_DOWN;
+   if (strcmp(name, "0") == 0)
+      return 1u << RETRO_DEVICE_ID_JOYPAD_SELECT;
+   if (strcmp(name, "5") == 0)
+      return 1u << RETRO_DEVICE_ID_JOYPAD_START;
    return 0u;
 }
 
@@ -2367,7 +2372,8 @@ static void usage(FILE *out, const char *argv0)
            "  --input-bitmask    advertise RETRO_ENVIRONMENT_GET_INPUT_BITMASKS "
            "and require\n"
            "                     the core to use the joypad mask query\n"
-           "  --keys PATH        frame:key script (fire/soft1/soft2/arrows); "
+           "  --keys PATH        frame:key script (fire/soft1/soft2/arrows/0/5, "
+           "pressed@X,Y taps); "
            "drives\n"
            "                     the matching joypad buttons before each "
            "retro_run\n"
