@@ -1046,15 +1046,17 @@ harness save-state round trips.
 
 ## Update, 2026-11-16 (rounds 76-77): animation coverage in the whole-corpus probe
 
-`tools/check_libretro_corpus_visual.py` now records `distinct_frames` and
-`max_nonblack` per title, so "passes" can be split into animated gameplay and
-static screens (board games, lobbies, emulator menus, title screens waiting for
-input). 600-frame (10 s virtual at 60 Hz) probe on the r31 core
-(`.local-tools/debug-runs/libretro-visual-r76/visual.jsonl`): 385 titles ->
-384 passed, 1 known limitation, 0 failed; **348 animated, 37 static**.
-Re-running the 37 static titles at 1800 frames (30 s virtual) animated just one
-more (`空战1944_10321`, distinct=8 — slow loader/movie), leaving 36 genuinely
-static screens; the probe keeps `--static-ok` so they are not failures, and the
-headless CLI (complete key set incl. digits/star/pointer) stays the
-authoritative compatibility oracle. Harness `--keys` also maps digits `0`/`5`
-to the core options Select/Start. Full CTest 195/195 (382.23 s).
+`tools/check_libretro_corpus_visual.py` records `distinct_frames` and
+`max_nonblack` per title and, since round 78, feeds every title a key script:
+the per-title `tools/corpus_keys/<jar stem>.txt` when present, otherwise the
+sweep's generic `keys.txt`. 600-frame (10 s virtual at 60 Hz) probe on the r31
+core (`.local-tools/debug-runs/libretro-visual-r78/visual.jsonl`): 385 titles ->
+383 passed, 2 known limitations, 0 failed; **381 animated, 4 static** (up from
+348 animated when the probe ran with no input at all; the generic recipe alone
+turned 33 previously frozen screens into animated gameplay). The 4 remaining
+static titles are slow-loader/dialog screens; two are catalogued known
+limitations for the state round trip when the title sits inside a long blocking
+load (`毁灭战士3_10598`, `台球传奇_87`). The headless CLI (complete key set
+incl. digits/star/pointer) stays the authoritative compatibility oracle.
+Harness `--keys` also maps digits `0`/`5` to the core options Select/Start.
+Full CTest 195/195 (382.23 s).

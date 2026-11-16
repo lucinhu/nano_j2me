@@ -19,8 +19,9 @@ Usage:
                                         [--harness PATH] [--out results.jsonl]
 
 Titles with a script in tools/corpus_keys/<jar stem>.txt are driven with
-that script (frame:key entries and pressed@X,Y pointer taps) so the probe
-reaches gameplay instead of a static menu.
+that script (frame:key entries and pressed@X,Y pointer taps); the rest fall
+back to the sweep's generic keys.txt, so the probe presses something instead
+of running every title with no input at all.
 
 Environment: NJ_ROOT, NJ_LIBRETRO_HARNESS, NJ_LIBRETRO_CORE, NJ_JOBS.
 Exit code is 1 when any title fails.
@@ -50,6 +51,10 @@ GAMES = ROOT / "tests" / "games"
 # joypad buttons and pointer events before each retro_run(), which lets the
 # probe reach gameplay on titles that otherwise idle on a title/menu screen.
 KEYS_DIR = ROOT / "tools" / "corpus_keys"
+# Generic fallback: the sweep's own key recipe (rows dir keys.txt).  Without it
+# every title would run with no input at all, so dialog/menu/title screens stay
+# frozen at frame one and a static frame tells us nothing about compat.
+DEFAULT_KEYS = None
 
 # Titles the mock harness cannot certify, with the reason recorded next to the
 # expectation.  These are reported as KNOWN instead of PASS/FAIL so a real
@@ -60,6 +65,12 @@ KNOWN_LIMITATIONS = {
         "render thread and joins it), so startApp() never runs and the VM is "
         "never at a frame boundary the core could serialize; the game loads, "
         "renders and accepts input, but save states are unavailable"
+    ),
+    "台球传奇_87.jar": (
+        "with the generic key script the title can be inside a multi-second "
+        "blocking load when the harness asks for the state round trip, so the "
+        "load request times out (the running game continues and manual saves "
+        "elsewhere work); visuals and emulation are unaffected"
     ),
 }
 
@@ -107,7 +118,9 @@ def run_one(row, frames, timeout):
            "--visual-required", "--static-ok", "--min-nonblack", "8",
            "--save-dir", tempfile.mkdtemp(prefix="lj-vis-")]
     keys = KEYS_DIR / (jar.stem + ".txt")
-    if keys.is_file():
+    if not keys.is_file():
+        keys = DEFAULT_KEYS
+    if keys is not None:
         cmd += ["--keys", str(keys)]
     try:
         cp = subprocess.run(cmd, capture_output=True, text=True,
@@ -160,6 +173,11 @@ def main():
         print(f"[info] probing with an isolated copy of {CORE} at {iso}",
               file=sys.stderr)
         CORE = iso
+
+    global DEFAULT_KEYS
+    default_keys = Path(args.rows_dir) / "keys.txt"
+    if default_keys.is_file():
+        DEFAULT_KEYS = default_keys
 
     rows = load_rows(args.rows_dir)
     if not rows:

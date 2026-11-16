@@ -543,8 +543,9 @@ pointer. `check_libretro_3d_keys` uses the harness `--keys` script to press the
 corpus key sequence for `浴火银河2完整版_7689.jar` and requires an animated,
 non-black M3G scene (917 frames, 183 distinct frames); it skips when the
 gitignored `tests/games` corpus is absent. The corpus visual probe
-(`tools/check_libretro_corpus_visual.py`) also loads
-`tools/corpus_keys/<jar stem>.txt` automatically when it exists, so menu-gated
+(`tools/check_libretro_corpus_visual.py`) loads the title's
+`tools/corpus_keys/<jar stem>.txt` when it exists and otherwise falls back to
+the sweep's generic `keys.txt`, so every title receives input and menu-gated
 titles are judged on their gameplay screen instead of a static menu; it records
 the distinct-frame count and max non-black pixels per title so probe output can
 distinguish "animated gameplay" from "a static screen that still passes with
