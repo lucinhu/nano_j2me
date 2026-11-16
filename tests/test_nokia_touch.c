@@ -100,19 +100,32 @@ int main(void)
     OK(call_int(vm, "getX", 0) == 0, "a pointer starts at x = 0");
     OK(call_int(vm, "getY", 0) == 0, "a pointer starts at y = 0");
 
-    nj_nokia_mpt_pointer(vm, 12, 34, NJ_POINTER_DOWN);
+    nj_nokia_mpt_pointer(vm, 0, 12, 34, NJ_POINTER_DOWN);
     OK(call_int(vm, "getState", 0) == 0, "a press is reported as pressed");
     OK(call_int(vm, "getX", 0) == 12, "getX() reports the pressed x");
     OK(call_int(vm, "getY", 0) == 34, "getY() reports the pressed y");
 
-    nj_nokia_mpt_pointer(vm, 15, 40, NJ_POINTER_MOVE);
+    nj_nokia_mpt_pointer(vm, 0, 15, 40, NJ_POINTER_MOVE);
     OK(call_int(vm, "getState", 0) == 1, "a drag is reported as dragged");
     OK(call_int(vm, "getX", 0) == 15, "getX() follows the drag");
 
-    nj_nokia_mpt_pointer(vm, 15, 40, NJ_POINTER_UP);
+    nj_nokia_mpt_pointer(vm, 0, 15, 40, NJ_POINTER_UP);
     OK(call_int(vm, "getState", 0) == 2, "a release is reported as released");
+
+    /* A second finger keeps its own coordinates and state. */
+    nj_nokia_mpt_pointer(vm, 1, 80, 90, NJ_POINTER_DOWN);
+    OK(call_int(vm, "getState", 1) == 0, "the second finger is reported pressed");
+    OK(call_int(vm, "getX", 1) == 80, "the second finger keeps its own x");
+    OK(call_int(vm, "getY", 1) == 90, "the second finger keeps its own y");
+    OK(call_int(vm, "getState", 0) == 2, "the first finger is still released");
+    nj_nokia_mpt_pointer(vm, 1, 80, 90, NJ_POINTER_UP);
+    OK(call_int(vm, "getState", 1) == 2, "the second finger is reported released");
+
     OK(call_int(vm, "getState", -1) == 0, "a negative pointer id is answered");
-    OK(call_int(vm, "getState", 99) == 0, "an id beyond the table is answered");
+    nj_nokia_mpt_pointer(vm, 99, 5, 6, NJ_POINTER_DOWN);
+    OK(call_int(vm, "getState", 3) == 0, "an id beyond the table is clamped");
+    OK(call_int(vm, "getX", 3) == 5, "the clamped id keeps the coordinates");
+    nj_nokia_mpt_pointer(vm, 99, 5, 6, NJ_POINTER_UP);
 
     /* Registering and removing a listener must not need a Java implementation
      * here; the listener itself is checked by the title. */

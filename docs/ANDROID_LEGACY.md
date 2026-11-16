@@ -62,7 +62,11 @@ uses API 5 framework widgets, software `Canvas`/RGB565 display, and streaming
 `AudioTrack`. It avoids `ANativeWindow`, OpenSL ES, AAudio and recent Android UI
 APIs. Fonts and image decoding use API 5-compatible Android implementations.
 The current multi-pointer input APIs are available from API 5; newer convenience
-methods such as `MotionEvent.getActionIndex()` are not used.
+methods such as `MotionEvent.getActionIndex()` are not used. Every
+`MotionEvent` pointer is forwarded to the runtime with its pointer id, so both
+the on-screen keypad and J2ME titles that use the Nokia `MultipointTouch`
+listener see the whole hand; the first finger keeps owning the MIDP `Canvas`
+pointer (see `docs/notes/2026-11-16-multitouch-support.md`).
 
 The lightweight launcher does not include the standard edition's floating,
 editable keypad layouts. Native Android platform media/network bridges that

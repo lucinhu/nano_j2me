@@ -528,9 +528,15 @@ nj_status nj_midp_frame(nj_vm *vm)
             case NJ_EV_KEY_DOWN:     (void)nj_midp_key_char(vm, ev.key, 1, ev.key_char); break;
             case NJ_EV_KEY_UP:       (void)nj_midp_key_char(vm, ev.key, 0, ev.key_char); break;
             case NJ_EV_KEY_REPEAT:   (void)nj_midp_key_repeat(vm, ev.key); break;
-            case NJ_EV_POINTER_DOWN: (void)nj_midp_pointer(vm, ev.x, ev.y, NJ_POINTER_DOWN); break;
-            case NJ_EV_POINTER_UP:   (void)nj_midp_pointer(vm, ev.x, ev.y, NJ_POINTER_UP);   break;
-            case NJ_EV_POINTER_MOVE: (void)nj_midp_pointer(vm, ev.x, ev.y, NJ_POINTER_MOVE); break;
+            case NJ_EV_POINTER_DOWN:
+                (void)nj_midp_pointer_multi(vm, ev.id, ev.x, ev.y, NJ_POINTER_DOWN);
+                break;
+            case NJ_EV_POINTER_UP:
+                (void)nj_midp_pointer_multi(vm, ev.id, ev.x, ev.y, NJ_POINTER_UP);
+                break;
+            case NJ_EV_POINTER_MOVE:
+                (void)nj_midp_pointer_multi(vm, ev.id, ev.x, ev.y, NJ_POINTER_MOVE);
+                break;
             case NJ_EV_TEXT_INPUT:
             case NJ_EV_TEXT_EDIT:
             case NJ_EV_TEXT_REPLACE:

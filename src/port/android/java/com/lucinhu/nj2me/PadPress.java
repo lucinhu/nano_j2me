@@ -16,6 +16,11 @@ package com.lucinhu.nj2me;
  *   <li>A finger that slides off the keycap releases it, and a finger that
  *       slides onto a neighbour releases the old key and presses the new one.
  *       The MIDlet sees exactly the key that is under the finger.</li>
+ *   <li>A finger on empty screen is reported to the game as a pointer.  Every
+ *       such finger is reported with its own id, because a MIDlet that uses the
+ *       Nokia MultipointTouch listener draws its own controls and needs the
+ *       whole hand; the runtime keeps the MIDP single-pointer API on the first
+ *       finger down.</li>
  *   <li>A finger that slides from empty screen onto a keycap presses it, and
  *       the game's pointer is released at that moment - one finger is either
  *       steering the game or working the pad, never both at once.</li>
@@ -57,9 +62,12 @@ final class PadPress {
     private final float[] lastY = new float[MAX_POINTERS];
     private int count;
 
-    /* The one pointer the game owns.  A MIDlet sees a single pointer, and the
-     * pad must not hand it two. */
+    /* The finger that owns the MIDP pointer (the runtime's single-pointer
+     * API), plus one flag per finger saying whether the game has been told
+     * about it.  Extra fingers on empty screen are reported too, with their own
+     * ids, for MultipointTouch titles. */
     private int gameId = -1;
+    private final int[] sent = new int[MAX_POINTERS];
 
     PadPress(PadConfig cfg, Sink sink) {
         this.cfg = cfg;
@@ -87,8 +95,9 @@ final class PadPress {
         }
         if (gameId < 0) {
             gameId = id;
-            touch(id, 0, nx, ny);
         }
+        sent[indexOf(id)] = 1;
+        touch(id, 0, nx, ny);
         return false;
     }
 
@@ -109,20 +118,19 @@ final class PadPress {
             }
             return;
         }
-        if (id == gameId) {
-            if (k != null) {
-                /* Slid from the game's picture onto a key: the game gives the
-                 * pointer up, because from here the finger is steering the pad. */
+        if (k != null) {
+            /* Slid from the game's picture onto a key: the game gives the
+             * pointer up, because from here the finger is steering the pad. */
+            if (sent[at] != 0) {
                 touch(id, 2, nx, ny);
-                gameId = -1;
-                pressCode(id, k.code, k.code2, nx, ny);
-            } else {
-                touch(id, 1, nx, ny);
+                sent[at] = 0;
             }
-        } else if (k != null) {
-            /* A second finger, one the game never saw: it can still work the
-             * pad without disturbing the pointer the game is following. */
+            if (id == gameId) {
+                gameId = -1;
+            }
             pressCode(id, k.code, k.code2, nx, ny);
+        } else if (sent[at] != 0) {
+            touch(id, 1, nx, ny);
         }
     }
 
@@ -135,9 +143,12 @@ final class PadPress {
         remember(at, nx, ny);
         if (codes[at] != 0) {
             releaseCode(at);
-        } else if (id == gameId) {
+        } else if (sent[at] != 0) {
             touch(id, 2, nx, ny);
-            gameId = -1;
+            sent[at] = 0;
+            if (id == gameId) {
+                gameId = -1;
+            }
         }
         release(at);
     }
@@ -170,15 +181,25 @@ final class PadPress {
                 }
             }
         }
-        if (gameId >= 0) {
-            touch(gameId, 2, 0f, 0f);
-            gameId = -1;
+        for (int i = 0; i < count; i++) {
+            if (sent[i] != 0) {
+                touch(ids[i], 2, lastX[i], lastY[i]);
+                sent[i] = 0;
+            }
         }
+        gameId = -1;
         count = 0;
     }
 
-    /** Drop the game's pointer without telling anyone: the view mode changed. */
+    /**
+     * Drop the game's pointers without telling anyone: the view mode changed
+     * and the fingers now pan/zoom the picture.  They must not reappear as
+     * phantom taps when they move or lift later.
+     */
     void forgetGame() {
+        for (int i = 0; i < count; i++) {
+            sent[i] = 0;
+        }
         gameId = -1;
     }
 
@@ -283,6 +304,7 @@ final class PadPress {
         ids[count] = id;
         codes[count] = code;
         codes2[count] = 0;
+        sent[count] = 0;
         lastX[count] = nx;
         lastY[count] = ny;
         count++;
@@ -299,6 +321,7 @@ final class PadPress {
             ids[i] = ids[i + 1];
             codes[i] = codes[i + 1];
             codes2[i] = codes2[i + 1];
+            sent[i] = sent[i + 1];
             lastX[i] = lastX[i + 1];
             lastY[i] = lastY[i + 1];
         }

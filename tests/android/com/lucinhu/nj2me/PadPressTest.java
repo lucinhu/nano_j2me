@@ -175,12 +175,31 @@ public final class PadPressTest {
         p.up(9, NX_DOWN, NY);
         Check.eq("moving and lifting an unknown finger does nothing", r.take(), "[]");
 
+        Check.section("two fingers on the picture are two pointers");
+        p = new PadPress(cfg(), r);
+        p.down(1, NX_EMPTY, 0.30f);
+        p.down(2, NX_EMPTY + 0.10f, 0.30f);
+        Check.eq("both fingers go to the game", r.take(), "[t1.0, t2.0]");
+        p.move(1, NX_EMPTY - 0.05f, 0.30f);
+        Check.eq("the first keeps moving under its own id", r.take(), "[t1.1]");
+        p.move(2, NX_EMPTY + 0.10f, 0.34f);
+        Check.eq("and the second under its own", r.take(), "[t2.1]");
+        p.up(2, NX_EMPTY + 0.10f, 0.34f);
+        Check.eq("lifting one ends only its pointer", r.take(), "[t2.2]");
+
         Check.section("more fingers than a handset has");
         p = new PadPress(cfg(), r);
         for (int i = 0; i < 40; i++) {
             p.down(i, NX_EMPTY, 0.30f + i * 0.001f);
         }
-        Check.eq("only a handset's worth of fingers are followed", r.take(), "[t0.0]");
+        StringBuilder flood = new StringBuilder("[");
+        for (int i = 0; i < 16; i++) {
+            if (i > 0) { flood.append(", "); }
+            flood.append("t").append(i).append(".0");
+        }
+        flood.append("]");
+        Check.eq("a handset's worth of fingers are followed",
+                 r.take(), flood.toString());
         Check.isTrue("nothing is held", p.heldCount() == 0);
         p.cancel();
         r.take();

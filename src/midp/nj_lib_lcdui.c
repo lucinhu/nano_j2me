@@ -5524,10 +5524,75 @@ int nj_midp_pointer(nj_vm *vm, int x, int y, int kind)
 
     if (vm) {
         vm->in_callback++;
+        /* The single-pointer entry points (tests, desktop mouse) feed the
+         * Nokia listener as finger 0 so a touchscreen title still sees them. */
+        nj_nokia_mpt_pointer(vm, 0, x, y, kind);
     }
     r = nj_midp_pointer_inner(vm, x, y, kind);
     if (vm) {
         vm->in_callback--;
+    }
+    return r;
+}
+
+/*
+ * Multi-touch entry point.
+ *
+ * Every finger updates the Nokia MultipointTouch listener, because that API
+ * reports the whole hand.  The Canvas pointer callbacks stay single-pointer:
+ * the first finger down owns them, extra fingers neither press nor drag them,
+ * and the owner is released only when that finger lifts.  That matches what a
+ * handset with the Nokia API did (its touch UI drove the listener and the
+ * Canvas callbacks were not called for every finger).
+ */
+int nj_midp_pointer_multi(nj_vm *vm, int id, int x, int y, int kind)
+{
+    nj_ref d;
+    int owner;
+    int cx = x, cy = y;
+    int primary;
+    int r;
+
+    if (!vm) {
+        return 0;
+    }
+    owner = (int)vm->ptr_owner_plus1 - 1;
+    d = nj_midp_current(vm);
+    if (!d) {
+        return 0;
+    }
+    if (isa(vm, d, NJ_C_CANVAS)) {
+        int cw = fget(vm, d, NJ_C_CANVAS, F_C_WIDTH, D_INT);
+        int ch = fget(vm, d, NJ_C_CANVAS, F_C_HEIGHT, D_INT);
+        nj_surface *s = nj_midp_screen(vm);
+
+        if (s && cw > 0 && ch > 0 && (cw != s->width || ch != s->height)) {
+            cx = x * cw / s->width;
+            cy = y * ch / s->height;
+        }
+    }
+    if (id >= 0) {
+        nj_nokia_mpt_pointer(vm, id, cx, cy, kind);
+    }
+    if (kind == NJ_POINTER_DOWN) {
+        if (owner < 0) {
+            owner = id;
+        }
+        primary = (owner == id);
+    } else {
+        primary = (owner == id);
+    }
+    if (primary && id >= 0 && id < 255) {
+        vm->ptr_owner_plus1 = (nj_u1)(owner + 1);
+    }
+    if (!primary) {
+        return 1;   /* the listener consumed it; Canvas was not the owner */
+    }
+    vm->in_callback++;
+    r = nj_midp_pointer_inner(vm, x, y, kind);
+    vm->in_callback--;
+    if (kind == NJ_POINTER_UP && owner == id) {
+        vm->ptr_owner_plus1 = 0;
     }
     return r;
 }
@@ -5709,9 +5774,9 @@ static int nj_midp_pointer_inner(nj_vm *vm, int x, int y, int kind)
             nj_clear_exception(vm);
             return 1;
         }
-        /* A title built for a touchscreen drives its own UI from the Nokia
-         * listener; it de-registers the Canvas callbacks when it registers. */
-        nj_nokia_mpt_pointer(vm, cx, cy, kind);
+        /* Multi-touch titles drive their own UI from the Nokia listener;
+         * that feed happens in nj_midp_pointer_multi()/nj_midp_pointer(), one
+         * event per finger, before this single-pointer dispatch. */
         (void)canvas_call(vm, d, method, 2, a);
         if (vm->exception) {
             return 1;   /* the MIDlet's exception is the caller's to handle */

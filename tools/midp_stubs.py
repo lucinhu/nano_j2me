@@ -1037,7 +1037,19 @@ CLASSES = {
         "methods": ["void pointersChanged(int[])"],
     },
     "com/nokia/mid/ui/multipointtouch/MultipointTouch": {
-        "methods": ["public static void setMultipointTouchListener(com.nokia.mid.ui.multipointtouch.MultipointTouchListener)",
+        # The singleton API current Nokia SDKs document (getInstance() plus an
+        # instance listener that receives the changed pointer ids) and the older
+        # static setters.  Both are stubbed because MIDlets in the wild use
+        # either, and the runtime implements both forms.
+        "constants": {"POINTER_PRESSED": "0", "POINTER_DRAGGED": "1",
+                      "POINTER_RELEASED": "2"},
+        "methods": ["public static com.nokia.mid.ui.multipointtouch.MultipointTouch getInstance()",
+                    "public void addMultipointTouchListener(com.nokia.mid.ui.multipointtouch.MultipointTouchListener)",
+                    "public void removeMultipointTouchListener(com.nokia.mid.ui.multipointtouch.MultipointTouchListener)",
+                    "public int getState(int)",
+                    "public int getX(int)",
+                    "public int getY(int)",
+                    "public static void setMultipointTouchListener(com.nokia.mid.ui.multipointtouch.MultipointTouchListener)",
                     "public static void setMultipointTouchListener(com.nokia.mid.ui.multipointtouch.MultipointTouchListener, int)"],
     },
     # The Nokia Series 40 file picker.  A UI service rather than an API the

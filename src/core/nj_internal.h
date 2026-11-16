@@ -824,6 +824,11 @@ struct nj_vm {
      * the frame is deferred to the next loop turn.  repaint() therefore
      * delivers the frame itself when this is non-zero; see c_paint_now(). */
     nj_u1         in_callback;
+    /* The finger that owns the MIDP Canvas pointer, plus one (zero means no
+     * owner yet).  Multi-touch keeps the listener fed for every finger while
+     * Canvas callbacks stay with this one, so the owner belongs to the VM
+     * instance and not to a translation-unit static. */
+    nj_u1         ptr_owner_plus1;
     nj_u4         frames_presented;
     /* Deadline of the next display frame, in microseconds on the MIDlet's
      * clock.  The pacer aims at this absolute instant instead of granting

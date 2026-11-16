@@ -431,7 +431,8 @@ typedef struct android_state {
 
     /* observations, for nj_port_android_stats() */
     int   key_events, ptr_events;
-    int   ptr_id;              /* finger that owns the MIDP pointer, or -1 */
+    /* Pointers are forwarded with their MotionEvent id; the runtime decides
+     * which one owns the MIDP single-pointer API. */
 
     /* set_paths() copies these; where the MIDlet may write */
     char  rms_dir[512];
@@ -1814,20 +1815,12 @@ void nj_port_android_touch(nj_port *port, int pointer_id, int phase, float x,
 
     pthread_mutex_lock(&s->lock);
     /*
-     * One finger owns the MIDP pointer.  A second finger on the keypad must not
-     * be able to wrench the pointer the first one is dragging, and MIDP has no
-     * way to express two - so the extra fingers are simply not the pointer.
+     * Every finger is forwarded with its MotionEvent pointer id.  The runtime
+     * keeps MIDP's single-pointer API on the first finger down (a second thumb
+     * cannot wrench the pointer the first one is dragging) and hands the whole
+     * hand to the Nokia MultipointTouch listener, which is what a touchscreen
+     * MIDlet like Minecraft PE drives its own controls with.
      */
-    if (phase == NJ_ANDROID_TOUCH_DOWN) {
-        if (s->ptr_id >= 0 && s->ptr_id != pointer_id) {
-            pthread_mutex_unlock(&s->lock);
-            return;
-        }
-        s->ptr_id = pointer_id;
-    } else if (s->ptr_id != pointer_id) {
-        pthread_mutex_unlock(&s->lock);
-        return;
-    }
 
     /*
      * Undo exactly what display_present() did: the source origin (non-zero when
@@ -1845,9 +1838,6 @@ void nj_port_android_touch(nj_port *port, int pointer_id, int phase, float x,
     if (lx > s->width - 1)  { lx = s->width - 1; }
     if (ly > s->height - 1) { ly = s->height - 1; }
 
-    if (phase == NJ_ANDROID_TOUCH_UP || phase == NJ_ANDROID_TOUCH_CANCEL) {
-        s->ptr_id = -1;
-    }
     pthread_mutex_unlock(&s->lock);
 
     memset(&ev, 0, sizeof(ev));
@@ -1856,6 +1846,12 @@ void nj_port_android_touch(nj_port *port, int pointer_id, int phase, float x,
     case NJ_ANDROID_TOUCH_MOVE: ev.type = NJ_EV_POINTER_MOVE; break;
     default:                    ev.type = NJ_EV_POINTER_UP;   break;
     }
+    if (pointer_id < 0) {
+        pointer_id = 0;
+    } else if (pointer_id > 9) {
+        pointer_id = 9;
+    }
+    ev.id = (nj_u1)pointer_id;
     ev.x = (nj_s2)lx;
     ev.y = (nj_s2)ly;
     s->ptr_events++;
@@ -4868,7 +4864,7 @@ nj_status nj_port_android_ex(nj_port *out, int screen_w, int screen_h)
      * screen it accepts instead of a 1080x2400 phone. */
     s->width = (screen_w > 0) ? screen_w : NJ_SCREEN_WIDTH;
     s->height = (screen_h > 0) ? screen_h : NJ_SCREEN_HEIGHT;
-    s->ptr_id = -1;
+
     s->view_mode = NJ_VIEW_INT;
     s->view_scale = 1.0f;
     s->view_zoom = 1.0f;

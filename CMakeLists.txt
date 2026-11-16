@@ -856,6 +856,7 @@ if(NJ_BUILD_TESTS)
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_keychardemo_jar.sh
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_savedgfx_jar.sh
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_flushdemo_jar.sh
+      COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_multitouch_jar.sh
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_nokiademo_jar.sh
       WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
       COMMENT "keysdemo.jar, blockdemo.jar (input-effect fixtures)")
@@ -1313,6 +1314,17 @@ endif()
                      ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_movie_decode.sh
                      ${NJ_FIXTURES}/moviedemo.jar)
     set_tests_properties(check_movie_decode PROPERTIES TIMEOUT 120
+                         SKIP_RETURN_CODE 77)
+    # The Nokia multipoint-touch listener must see every finger with its own
+    # id while the MIDP Canvas pointer API stays on the first finger down.
+    # check_multitouch.sh drives two fingers through the key script and
+    # asserts both the listener callbacks and the Canvas ownership.
+    add_test(NAME check_multitouch
+             COMMAND ${CMAKE_COMMAND} -E env
+                     NJ_BIN=$<TARGET_FILE:nj2me-cli>
+                     ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_multitouch.sh
+                     ${NJ_FIXTURES}/multitouchdemo.jar)
+    set_tests_properties(check_multitouch PROPERTIES TIMEOUT 120
                          SKIP_RETURN_CODE 77)
     # A java.util.Timer task runs on a thread that reaches it through a native,
     # so a task that parks leaves a native frame at the top of that thread's

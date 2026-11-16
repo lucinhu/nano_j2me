@@ -142,10 +142,17 @@ buttons have configurable bindings.
 | Select | 0 |
 | Start | 5 |
 | Pointer / mouse | canvas pointer events, transformed through rotation |
+| Multi-touch | every finger reported by the frontend, Nokia `MultipointTouch` listener |
 
 The keyboard callback accepts `0`–`9` and numeric keypad digits, `*` and `#`,
 Enter/Space for FIRE, arrows, Backspace for SOFT_RIGHT, Tab for SOFT_LEFT and
 Escape for CLEAR. RetroArch hotkeys or focus settings can intercept these keys.
+
+The core follows `RETRO_DEVICE_ID_POINTER_COUNT` and reports every finger the
+frontend sends (up to eight). Finger id 0 stays the MIDP `Canvas` pointer; the
+other ids are visible to titles that use the Nokia `MultipointTouch` listener
+(see `docs/notes/2026-11-16-multitouch-support.md`). Frontends that only report
+a mouse (count 0/1) behave exactly as before.
 
 The core negotiates `RETRO_ENVIRONMENT_GET_INPUT_BITMASKS` during
 `retro_set_environment()`. When the frontend accepts, each poll reads

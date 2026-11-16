@@ -332,6 +332,10 @@ typedef struct key_script {
     /* 0 for an ordinary tap, else NJ_KEY_SCRIPT_EDGE_DOWN / _UP.  An explicit
      * edge is never auto-released: the script says when the key comes up. */
     nj_u1 edge[NJ_KEY_SCRIPT_MAX];
+    /* Which finger a pointer entry belongs to: 0 unless the entry used the
+     * `pressed#1@X,Y` form.  Lets a script hold two fingers down at once, which
+     * is what a MultipointTouch title needs to be tested. */
+    nj_u1 ptr_id[NJ_KEY_SCRIPT_MAX];
     nj_s2 px[NJ_KEY_SCRIPT_MAX];
     nj_s2 py[NJ_KEY_SCRIPT_MAX];
     int   n;
@@ -512,7 +516,7 @@ static int key_script_parse(const char *spec, key_script *ks)
          * because a pointer entry's two coordinates are comma-separated and
          * stopping at the first one would truncate it to `pressed@40`. */
         while (p[len] && p[len] != ' ' && p[len] != '\t' &&
-               p[len] != '\n' && p[len] != '\r' && p[len] != '#') {
+               p[len] != '\n' && p[len] != '\r') {
             len++;
         }
         {
@@ -522,8 +526,28 @@ static int key_script_parse(const char *spec, key_script *ks)
                 if (p[i] == '@') { at = i; break; }
             }
             if (at > 0) {
-                int kind = ptr_kind_from_name(p, at);
+                /* `pressed#1@X,Y` names the finger; the name scan above keeps
+                 * the '#' so the split happens here, before the lookup. */
+                int base = at;
+                int id = 0;
+                int kind;
                 int x = 0, y = 0, j = at + 1;
+                int h;
+                for (h = 0; h < at; h++) {
+                    if (p[h] == '#') {
+                        int d = h + 1;
+                        base = h;
+                        while (d < at && p[d] >= '0' && p[d] <= '9') {
+                            id = id * 10 + (p[d] - '0');
+                            d++;
+                        }
+                        if (d != at || id > 9) {
+                            return -1;
+                        }
+                        break;
+                    }
+                }
+                kind = ptr_kind_from_name(p, base);
                 if (kind < 0) {
                     return -1;
                 }
@@ -543,6 +567,7 @@ static int key_script_parse(const char *spec, key_script *ks)
                     return -1;
                 }
                 ks->ptr_kind[ks->n] = (nj_u1)kind;
+                ks->ptr_id[ks->n] = (nj_u1)id;
                 ks->edge[ks->n] = 0;
                 ks->px[ks->n] = (nj_s2)x;
                 ks->py[ks->n] = (nj_s2)y;
@@ -594,6 +619,7 @@ static int key_script_parse(const char *spec, key_script *ks)
                     return -1;
                 }
                 ks->ptr_kind[ks->n] = 0;
+                ks->ptr_id[ks->n] = 0;
                 ks->edge[ks->n] = (nj_u1)edge;
                 ks->key[ks->n] = key;
             }
@@ -645,6 +671,7 @@ static void key_script_tick(const nj_port *port, key_script *ks, nj_u8 frame)
              * `released` would send two ups.
              */
             ev.type = ks->ptr_kind[i];
+            ev.id = ks->ptr_id[i];
             ev.x = ks->px[i];
             ev.y = ks->py[i];
             ks->next_down++;

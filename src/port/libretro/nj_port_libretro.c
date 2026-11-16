@@ -83,6 +83,13 @@
 /* ------------------------------------------------------------------ */
 /* Platform layer: threads, clocks, directories                       */
 /*                                                                    */
+/*
+ * Frontends cap touches around ten; libretro documents indices, not a
+ * limit.  Eight is more than any handset the corpus expects, and keeping
+ * the table fixed means no allocation on an input callback.
+ */
+#define LR_MAX_POINTERS 8
+
 /* The runtime is C99 and so is this file; both pthreads and Win32    */
 /* threads have a small enough surface to wrap here.  Everything else */
 /* in the core is platform-neutral.                                   */
@@ -432,8 +439,11 @@ typedef struct nj_lr {
     nj_event events[LR_EVENT_QUEUE];
     size_t   event_rd, event_wr;
     unsigned char key_down[NJ_KEY_COUNT];
-    int      ptr_down;
-    int      ptr_x, ptr_y;
+    /* One entry per finger the frontend reports through RETRO_DEVICE_POINTER.
+     * The runtime turns each into its own event id, so a MultipointTouch title
+     * sees the whole hand instead of a single averaged point. */
+    unsigned char ptr_down[LR_MAX_POINTERS];
+    nj_s2     ptr_x[LR_MAX_POINTERS], ptr_y[LR_MAX_POINTERS];
 
     /* ---- audio ---- */
     int16_t *pcm_ring;   /* resampled 44.1 kHz stereo frames */
@@ -2062,6 +2072,24 @@ static int lr_push_event(nj_lr *s, nj_u1 type, nj_u1 key, int x, int y)
     return 1;
 }
 
+/* Pointer events carry which finger they came from; the generic pusher has no
+ * such field because keys never need one. */
+static int lr_push_pointer_event(nj_lr *s, nj_u1 type, nj_u1 id, int x, int y)
+{
+    size_t next = (s->event_wr + 1) % LR_EVENT_QUEUE;
+    nj_event *ev;
+
+    if (next == s->event_rd) return 0;
+    ev = &s->events[s->event_wr];
+    memset(ev, 0, sizeof *ev);
+    ev->type = type;
+    ev->id = id;
+    ev->x = (nj_s2)x;
+    ev->y = (nj_s2)y;
+    s->event_wr = next;
+    return 1;
+}
+
 static void lr_push_event_locked(nj_lr *s, nj_u1 type, nj_u1 key, int x, int y)
 {
     lr_mutex_lock(&s->lock);
@@ -2217,35 +2245,56 @@ static void lr_read_joypad(nj_lr *s)
 
 static void lr_read_pointer(nj_lr *s)
 {
-    int px, py, pressed;
-    int lx = 0, ly = 0;
-    int was;
+    int count, i;
+    int down[LR_MAX_POINTERS], lx[LR_MAX_POINTERS], ly[LR_MAX_POINTERS];
 
     if (!s->input_cb) return;
 
-    px = s->input_cb(0, RETRO_DEVICE_POINTER, 0, RETRO_DEVICE_ID_POINTER_X);
-    py = s->input_cb(0, RETRO_DEVICE_POINTER, 0, RETRO_DEVICE_ID_POINTER_Y);
-    pressed = s->input_cb(0, RETRO_DEVICE_POINTER, 0,
-                          RETRO_DEVICE_ID_POINTER_PRESSED) != 0;
-
-    lr_pointer_map(s, px, py, &lx, &ly);
+    /*
+     * RETRO_DEVICE_ID_POINTER_COUNT is the number of touches the frontend is
+     * reporting right now; each index below it has its own X/Y/pressed.  A
+     * frontend that only emulates a mouse reports 0 or 1 and behaves exactly
+     * as before.
+     */
+    count = s->input_cb(0, RETRO_DEVICE_POINTER, 0,
+                        RETRO_DEVICE_ID_POINTER_COUNT);
+    if (count < 0) count = 0;
+    if (count > LR_MAX_POINTERS) count = LR_MAX_POINTERS;
+    for (i = 0; i < LR_MAX_POINTERS; i++) {
+        down[i] = 0;
+        lx[i] = ly[i] = 0;
+        if (i < count) {
+            int px = s->input_cb(0, RETRO_DEVICE_POINTER, (unsigned)i,
+                                 RETRO_DEVICE_ID_POINTER_X);
+            int py = s->input_cb(0, RETRO_DEVICE_POINTER, (unsigned)i,
+                                 RETRO_DEVICE_ID_POINTER_Y);
+            down[i] = s->input_cb(0, RETRO_DEVICE_POINTER, (unsigned)i,
+                                  RETRO_DEVICE_ID_POINTER_PRESSED) != 0;
+            lr_pointer_map(s, px, py, &lx[i], &ly[i]);
+        }
+    }
 
     lr_mutex_lock(&s->lock);
-    was = s->ptr_down;
-    if (pressed && !was) {
-        s->ptr_down = 1;
-        s->ptr_x = lx;
-        s->ptr_y = ly;
-        (void)lr_push_event(s, NJ_EV_POINTER_DOWN, 0, lx, ly);
-    } else if (pressed) {
-        if (lx != s->ptr_x || ly != s->ptr_y) {
-            s->ptr_x = lx;
-            s->ptr_y = ly;
-            (void)lr_push_event(s, NJ_EV_POINTER_MOVE, 0, lx, ly);
+    for (i = 0; i < LR_MAX_POINTERS; i++) {
+        int was = s->ptr_down[i];
+        if (down[i] && !was) {
+            s->ptr_down[i] = 1;
+            s->ptr_x[i] = (nj_s2)lx[i];
+            s->ptr_y[i] = (nj_s2)ly[i];
+            (void)lr_push_pointer_event(s, NJ_EV_POINTER_DOWN,
+                                        (nj_u1)i, lx[i], ly[i]);
+        } else if (down[i]) {
+            if (lx[i] != s->ptr_x[i] || ly[i] != s->ptr_y[i]) {
+                s->ptr_x[i] = (nj_s2)lx[i];
+                s->ptr_y[i] = (nj_s2)ly[i];
+                (void)lr_push_pointer_event(s, NJ_EV_POINTER_MOVE,
+                                            (nj_u1)i, lx[i], ly[i]);
+            }
+        } else if (was) {
+            s->ptr_down[i] = 0;
+            (void)lr_push_pointer_event(s, NJ_EV_POINTER_UP, (nj_u1)i,
+                                        s->ptr_x[i], s->ptr_y[i]);
         }
-    } else if (was) {
-        s->ptr_down = 0;
-        (void)lr_push_event(s, NJ_EV_POINTER_UP, 0, s->ptr_x, s->ptr_y);
     }
     lr_mutex_unlock(&s->lock);
 }
@@ -2957,7 +3006,7 @@ static int lr_apply_state(nj_lr *s, const nj_u1 *blob, nj_size size)
     s->src_base = 0;
     s->event_rd = s->event_wr = 0;
     memset(s->key_down, 0, sizeof s->key_down);
-    s->ptr_down = 0;
+    memset(s->ptr_down, 0, sizeof(s->ptr_down));
     lr_mutex_unlock(&s->lock);
     lr_log(s, RETRO_LOG_INFO, "resumed from a save state");
     return NJ_OK;
@@ -3393,7 +3442,7 @@ static void lr_unload(nj_lr *s)
     s->load_start_us = lr_real_us();
     s->event_rd = s->event_wr = 0;
     memset(s->key_down, 0, sizeof s->key_down);
-    s->ptr_down = 0;
+    memset(s->ptr_down, 0, sizeof(s->ptr_down));
     /* Nothing is left running that could serve a pending save request. */
     s->req_kind = LR_REQ_NONE;
     s->req_done = 0;

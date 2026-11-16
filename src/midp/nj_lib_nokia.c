@@ -223,12 +223,13 @@ NJFN(nokia_mpt_get_y)
 }
 
 /*
- * One pointer event, already in canvas coordinates.  Called from the MIDP
- * pointer dispatch, so the listener sees the same presses and drags a
- * touchscreen handset would have reported.  The record is updated even before
- * a listener registers, because getState()/getX()/getY() are readable then.
+ * One pointer event, already in canvas coordinates, for finger `id`.  Called
+ * once per finger by the MIDP dispatch, so the listener sees the same presses
+ * and drags a multitouch handset would have reported.  The per-pointer record
+ * is updated even before a listener registers, because getState()/getX()/getY()
+ * are readable then.
  */
-void nj_nokia_mpt_pointer(nj_vm *vm, int x, int y, int kind)
+void nj_nokia_mpt_pointer(nj_vm *vm, int id, int x, int y, int kind)
 {
     nj_ref inst, listener, a;
     nj_s4 *p;
@@ -236,8 +237,11 @@ void nj_nokia_mpt_pointer(nj_vm *vm, int x, int y, int kind)
     nj_u4 mark;
     nj_value arg[1];
 
-    if (!vm) {
+    if (!vm || id < 0) {
         return;
+    }
+    if (id >= MPT_MAX_POINTERS) {
+        id = MPT_MAX_POINTERS - 1;
     }
     inst = mpt_instance(vm);
     if (!inst) {
@@ -247,13 +251,15 @@ void nj_nokia_mpt_pointer(nj_vm *vm, int x, int y, int kind)
           : (kind == NJ_POINTER_MOVE) ? MPT_DRAGGED : MPT_RELEASED;
     a = mpt_array(vm, inst, "_nj_state");
     p = a ? (nj_s4 *)nj_array_data(a) : NULL;
-    if (p && a->length > 0u) { p[0] = state; }
+    if (p && a->length > (nj_u4)id) { p[id] = state; }
     a = mpt_array(vm, inst, "_nj_x");
     p = a ? (nj_s4 *)nj_array_data(a) : NULL;
-    if (p && a->length > 0u) { p[0] = (nj_s4)x; }
+    if (p && a->length > (nj_u4)id) { p[id] = (nj_s4)x; }
     a = mpt_array(vm, inst, "_nj_y");
     p = a ? (nj_s4 *)nj_array_data(a) : NULL;
-    if (p && a->length > 0u) { p[0] = (nj_s4)y; }
+    if (p && a->length > (nj_u4)id) { p[id] = (nj_s4)y; }
+    nj_logf(vm, 3, "nokia mpt: pointer %d state %d at %d,%d", id, (int)state,
+            x, y);
 
     listener = nj_field_read_ref(
         vm, inst, mpt_f(vm, "_nj_listener", "L" NJ_C_MPLISTEN ";", 0));
@@ -265,7 +271,7 @@ void nj_nokia_mpt_pointer(nj_vm *vm, int x, int y, int kind)
     nj_root(vm, listener);
     a = nj_root(vm, nj_array_new(vm, "I", 1u));
     if (a) {
-        ((nj_s4 *)nj_array_data(a))[0] = 0;   /* the reported pointer id */
+        ((nj_s4 *)nj_array_data(a))[0] = (nj_s4)id;
         arg[0].r = a;
         (void)nj_call(vm, listener, nj_ref_class_name(listener),
                       "pointersChanged", "([I)V", arg, NULL);

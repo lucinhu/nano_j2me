@@ -103,6 +103,12 @@ typedef enum nj_text_edit {
 typedef struct nj_event {
     nj_u1 type;   /* nj_event_type */
     nj_u1 key;    /* nj_key, for key/pointer events */
+    /* Pointer events only: which finger this is (0 for a mouse or the first
+     * finger).  The MIDP Canvas API is single-pointer, so the runtime lets
+     * only the first finger down drive pointerPressed/Dragged/Released; the
+     * Nokia MultipointTouch listener sees every id.  A port that cannot tell
+     * its fingers apart leaves this 0. */
+    nj_u1 id;
     nj_s2 x, y;   /* pointer coordinates in *device* pixels */
     /* NUL terminated; split longer commits at UTF-8 character boundaries. */
     char text[NJ_TEXT_INPUT_BYTES];
@@ -1091,10 +1097,10 @@ typedef enum nj_android_touch_phase {
  * display_present() and nothing outside the port knows the scale factor or the
  * black bars.  The caller passes what the MotionEvent said and the port
  * inverts its own transform, so a tap on a scaled-up sprite lands on that
- * sprite.  Only ONE finger drives the MIDP pointer (pointerPressed/Dragged/
- * Released is a single-pointer API); the first finger down owns it and the
- * rest are ignored until it lifts, which is what makes a second thumb on the
- * keypad harmless.
+ * sprite.  Every finger is forwarded with its MotionEvent pointer id: the
+ * runtime lets only the first finger down drive the MIDP pointer
+ * (pointerPressed/Dragged/Released is a single-pointer API), while titles that
+ * use the Nokia MultipointTouch listener receive all of them.
  */
 void      nj_port_android_touch(nj_port *port, int pointer_id, int phase,
                                 float x, float y);
