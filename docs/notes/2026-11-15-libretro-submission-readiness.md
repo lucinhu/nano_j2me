@@ -996,5 +996,5 @@ title-exception / 2 no-frame / 1 bad-jar.
 
 Release archive `nj2me-0.5.12-libretro-cores.zip` SHA-256
 `7467092702a939b7c0dc16c3d3a025fab5d8f41337c5eb48f59eb0d451d7d58b`;
-GitHub release `v0.5.12` (also ships the two APKs). PRs #2203/#1239 refreshed
+GitHub release `v0.5.12` (also ships the two APKs). PRs #2204/#1239 refreshed
 with the 0.5.12 `.info`; no merge claimed.

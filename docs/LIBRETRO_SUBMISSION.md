@@ -4,7 +4,7 @@ This is a **submission kit**, not an announcement of upstream acceptance.  The
 project repository is committed and pushed as part of routine work; on
 2026-11-16 the project author explicitly authorized upstream submission and the
 two prepared pull requests were opened from forks:
-[`libretro/libretro-super#2203`](https://github.com/libretro/libretro-super/pull/2203)
+[`libretro/libretro-super#2204`](https://github.com/libretro/libretro-super/pull/2204)
 and [`libretro/docs#1239`](https://github.com/libretro/docs/pull/1239).  No
 merge or acceptance is claimed. Runtime code is MIT licensed, built-in
 AMR numeric data are separately Apache-2.0, and bundled font data are SIL OFL
@@ -1002,7 +1002,8 @@ adjudicated); full serial CTest **189/189 PASS in 357.49 s**.
 `729cbcf21bf5c9db8ce669297d420ce3b599f77bb1ee120b9a62da4c39e4eafa`).
 
 **Upstream**: with the author's explicit authorization (2026-11-16) the two
-prepared pull requests were opened — `libretro/libretro-super#2203` and
+prepared pull requests were opened — `libretro/libretro-super#2204` (#2203 was
+superseded after the branch history was rebuilt with an upstream parent) and
 `libretro/docs#1239`. The remaining external steps are the upstream CI run and
 review; nothing is merged or accepted yet.
 
@@ -1014,7 +1015,7 @@ revision, which made the PR show as conflicting.  The fork branch
 `add-nano_j2me` was rebased onto that commit, the docs patch regenerated
 (`docs/libretro/upstream/libretro-docs-nano_j2me.patch`, still 5 files,
 +229 lines), `mkdocs build` re-run successfully (page 98,129 bytes), and the
-branch force-pushed.  `libretro/libretro-super#2203` remains mergeable against
+branch force-pushed.  `libretro/libretro-super#2204` remains mergeable against
 its unchanged baseline.
 
 ## Release 0.5.9 (r27), 2026-11-16 — state buffer bound fix

@@ -87,4 +87,4 @@ Android APKs (debug-signed, no game bundled):
 Ready-to-apply submission materials live in `docs/libretro/upstream/`
 (libretro-super `.info` patch, libretro/docs page patch, PR bodies). Two PRs
 are open against upstream and await review; no merge is claimed here:
-`libretro/libretro-super#2203` and `libretro/docs#1239`.
+`libretro/libretro-super#2204` and `libretro/docs#1239`.
