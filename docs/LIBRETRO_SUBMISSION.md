@@ -1051,3 +1051,42 @@ carries `nj2me-0.5.9-libretro-cores.zip` (SHA-256
 `a60e3cec993dda6e8aa833d1741ec73a76a8e5b3874a355bd518454be3f9a1a9`) and the
 checksums file. The two upstream PR branches were updated to the 0.5.9
 `.info`.
+
+## Update, 2026-11-16 (round 64): 0.5.11 release for the pacer-owned nap
+
+The frame pacer now owns the idle nap: the cooperative scheduler reports
+whether an idle pass did real (non-main-thread) work, returns early when it did
+not, and the pacer sleeps for a bounded slice of the remaining frame budget
+(`docs/PERFORMANCE.md`, `docs/notes/2026-11-16-paced-cpu-burn-investigation.md`).
+Paced 2D titles dropped from ~9-10 s of CPU per 10 s of wall time to 0.05-0.09 s
+at the same 30 fps, with no change to unpaced throughput, loader-heavy titles,
+the 404-title sweep distribution (372/27/2/2/0/1) or the libretro results.
+
+**Artifacts** built from clean tree `ca0e43d` with
+`tools/build_libretro_cores.sh --jobs 12 --out /var/tmp/nj2me-submission-dist-r30 all`
+(eight targets, 16 files each, `.info`
+`67048b11bdefad3448aab34b83d42fe32ec2a1d3bd149ac7b617e38356c46d0e`,
+`display_version = "0.5.11"`):
+
+| Target | Core size | SHA-256 |
+| --- | --- | --- |
+| linux-x86_64 | 3,843,912 | `e29593a0e59e56da252855047f65b3bdf331997db6e8168e5098c058bb6b01af` |
+| linux-aarch64 | 3,325,256 | `e2c90af45b7d4cf5e8fb145441da83dff30306bca5d9d54571879681f4cf162f` |
+| linux-armv7 | 3,032,868 | `fc3dc72a7357cd30c64378330ae5c2f76536b8064f9587961a77293a44ba3058` |
+| android-arm64 | 3,559,672 | `6de50818786605a493ae6e9a6d6790631b271a3e1cc66a397ebfd3d2f83ea054` |
+| android-armv7 | 2,747,076 | `35ee559ba38f98b25e338ed7123b7fd6e4ecbd7214537053e1ae20edd0e17cd1` |
+| android-x86_64 | 3,599,920 | `f17761e4003d36f0888df1be25c8432772e43e317b2fbbc09dbc66f4e27a8013` |
+| windows-i686 | 3,453,440 | `a8f4e1d84653a7fc4a2f8c5ac60b9b256b3ccc6df9c02496cc7638d8bffb05b1` |
+| windows-x86_64 | 3,228,160 | `e2c1d1196db39aec564d19d27a1bd35089fbe03efd2fbd1b7de62ee841c21652` |
+
+Validation: mock frontend matrix **20/20**; real RetroArch 1.22.2 loopdemo
+120 frames PASS; Windows x86_64 DLL under Wine 4/4 at 120 and 300 frames (the
+120-frame audiodemo audio check is Wine-timing sensitive: 6/7 passes, one lone
+flake on a loaded host); `MinecraftJ2ME_PE_0.6.1_V2.2.jar` state round trip
+45/45 (`serialize_size=157,593,664`); option matrix 88/88; libretro state probe
+12/12; full serial CTest **192/192**. Canonical copy installed in
+`build/libretro-dist/` (previous tree backed up at
+`/var/tmp/libretro-dist-20261116-pre-r30-backup.tgz`); GitHub release `v0.5.11`
+carries `nj2me-0.5.11-libretro-cores.zip` (SHA-256
+`86babcd96fc0e66203aa7516a714bada81dec995840d74c2f733397197f07992`) and the
+checksums file. The two upstream PR branches are updated to the 0.5.11 `.info`.

@@ -962,3 +962,19 @@ blob.
   `display_version = "0.5.9"`), canonical copy in `build/libretro-dist/`,
   GitHub release `v0.5.9` with the eight-core zip.
 - The two upstream PR branches were updated to the 0.5.9 `.info` file.
+
+## Update, 2026-11-16 (round 64): 0.5.11 package (r30) and validation
+
+0.5.11 ships the pacer-owned idle nap (paced runs no longer burn a CPU core;
+`docs/PERFORMANCE.md`). The r30 package was built from clean tree `ca0e43d`:
+`.info` `67048b11bdefad3448aab34b83d42fe32ec2a1d3bd149ac7b617e38356c46d0e`
+(`display_version = "0.5.11"`), eight targets installed as the canonical
+`build/libretro-dist/`. Validation: mock frontend 20/20; real RetroArch
+loopdemo 120 frames PASS; Wine 4/4 at 120 and 300 frames (one Wine-timing flake
+on the 120-frame audiodemo audio sample out of seven runs, 300 frames 3/3);
+Minecraft PE state round trip 45/45; option matrix 88/88; state probe 12/12;
+full CTest 192/192; corpus sweep 372 ok / 27 title-exit / 2 title-exception /
+2 no-frame / 0 timeout / 1 bad-jar. Release archive SHA-256
+`86babcd96fc0e66203aa7516a714bada81dec995840d74c2f733397197f07992`;
+GitHub release `v0.5.11`. PRs #2203/#1239 refreshed with the 0.5.11 `.info`;
+no merge claimed.
