@@ -48,7 +48,7 @@ The companion `libretro-super` `.info` PR is described in
 `docs/libretro/upstream/PR-libretro-super.md` in the core repository.
 
 Feature statements in the page are the behaviour implemented by the current
-core (0.5.12): M3G software 3D, MIDI/MP3/AMR/WAV/ADPCM media, MPEG-4 Part 2 and
+core (0.5.13): M3G software 3D, MIDI/MP3/AMR/WAV/ADPCM media, MPEG-4 Part 2 and
 H.263 video playback, manual save states, frontend rewind sizing guidance,
 cheat search over the exposed JVM arena (`SYSTEM_RAM` memory map). It makes no
 determinism/netplay/runahead claim, and states that the exposed memory is a

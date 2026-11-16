@@ -4,7 +4,7 @@
 
 [![最新版本](https://img.shields.io/github/v/release/lucinhu/nano_j2me?sort=semver&label=release&color=blue)](https://github.com/lucinhu/nano_j2me/releases/latest)
 [![许可证](https://img.shields.io/badge/licence-MIT-blue)](LICENSE)
-[![测试](https://img.shields.io/badge/ctest-194%20passing-brightgreen)](docs/VERIFICATION.md)
+[![测试](https://img.shields.io/badge/ctest-196%20passing-brightgreen)](docs/VERIFICATION.md)
 [![sanitized](https://img.shields.io/badge/sanitized-ASan%20%2B%20UBSan%20%2B%20LSan-brightgreen)](tools/run_sanitized_tests.sh)
 [![C99](https://img.shields.io/badge/C99-no%20dependencies-informational)](#设计承诺)
 
@@ -30,7 +30,8 @@
 - **小而可嵌入。** 所有与操作系统相关的代码只是 `nj_port` 的一份实现（约十个
   回调）。运行时不保存任何可写全局状态；同一进程可以共存多个 VM，
   `nj_vm_destroy()` 会返回它释放的字节数。
-- **可验证。** `ctest` 里 194 个测试全部通过；400 个真实游戏的兼容性语料中 398 个
+- **可作弊。** libretro 内核接受针对已暴露 Java arena 的 `<arena 偏移>:<十六进制字节>` 作弊码，并在每帧重新写入（偏移来自前端作弊搜索）；详见 [LIBRETRO.md](docs/LIBRETRO.md#cheats)。
+- **可验证。** `ctest` 里 196 个测试全部通过；400 个真实游戏的兼容性语料中 398 个
   可运行；下面每一条说法都有测试、检查脚本或可回放的记录作为依据。
 
 ## 截图

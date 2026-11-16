@@ -4,7 +4,7 @@
 
 [![latest release](https://img.shields.io/github/v/release/lucinhu/nano_j2me?sort=semver&label=release&color=blue)](https://github.com/lucinhu/nano_j2me/releases/latest)
 [![licence](https://img.shields.io/badge/licence-MIT-blue)](LICENSE)
-[![tests](https://img.shields.io/badge/ctest-194%20passing-brightgreen)](docs/VERIFICATION.md)
+[![tests](https://img.shields.io/badge/ctest-196%20passing-brightgreen)](docs/VERIFICATION.md)
 [![sanitized](https://img.shields.io/badge/sanitized-ASan%20%2B%20UBSan%20%2B%20LSan-brightgreen)](tools/run_sanitized_tests.sh)
 [![C99](https://img.shields.io/badge/C99-no%20dependencies-informational)](#design-commitments)
 
@@ -30,7 +30,8 @@ browser — the same runtime everywhere, with one small `nj_port` per platform.
 - **Small and embeddable.** Everything OS-specific is one `nj_port` implementation
   (about ten callbacks). The runtime keeps zero mutable global state; several VMs
   can coexist in one process, and `nj_vm_destroy()` returns the bytes it released.
-- **Verifiable.** 194 registered tests pass under `ctest`; 398 of the 400 real-game
+- **Cheatable.** The libretro core accepts `<arena offset>:<hex bytes>` cheat codes over the exposed Java arena and re-applies them every frame (frontend cheat search gives the offsets); see [LIBRETRO.md](docs/LIBRETRO.md#cheats).
+- **Verifiable.** 196 registered tests pass under `ctest`; 398 of the 400 real-game
   corpus titles run; every claim below is checked by a test, a gate or a
   recorded playback.
 

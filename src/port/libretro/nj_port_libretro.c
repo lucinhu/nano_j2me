@@ -392,6 +392,16 @@ typedef struct nj_lr {
     int                      rumble_warned;
     int                      vibe_fallback; /* logged the Android fallback */
 
+    /* ---- cheat codes (raw patches over the SYSTEM_RAM arena window) ---- */
+#define LR_MAX_CHEATS 32
+#define LR_CHEAT_MAX_BYTES 16
+    struct lr_cheat {
+        int           enabled;
+        size_t        offset;
+        unsigned char value[LR_CHEAT_MAX_BYTES];
+        unsigned      len;
+    } cheat[LR_MAX_CHEATS];
+
     /* ---- the runtime ---- */
     nj_port        port;
     nj_vm         *vm;
@@ -3021,6 +3031,83 @@ static int lr_apply_state(nj_lr *s, const nj_u1 *blob, nj_size size)
  * freshly created VM whose arena lives at a different address.  The frontend
  * copies what it needs; the descriptor storage stays valid in nj_lr.
  */
+/* ------------------------------------------------------------------ */
+/* Cheat codes                                                         */
+/* ------------------------------------------------------------------ */
+
+/* Format: "<offset>:<hex bytes>" (also accepts '@' or "0x" prefixes).
+ * The offset is a byte offset inside the arena window exposed as SYSTEM_RAM,
+ * and the bytes are written there at the start of every retro_run(), so a
+ * game cannot overwrite the value again.  A libretro cheat code is normally
+ * an address/value pair over a flat memory map; this core's address space is
+ * the Java heap, so the offset has to come from a frontend cheat search or
+ * from the user's own tooling. */
+static int lr_hex_digit(int c)
+{
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+static int lr_parse_cheat_code(const char *code, size_t *out_offset,
+                               unsigned char *out_bytes, unsigned *out_len)
+{
+    const char *p = code;
+    size_t offset = 0u;
+    unsigned len = 0u;
+    int nibble;
+
+    if (!p) return 0;
+    while (*p == ' ' || *p == '\t') p++;
+    if (*p == '@') p++;
+    if (p[0] == '0' && (p[1] == 'x' || p[1] == 'X')) p += 2;
+    nibble = lr_hex_digit((unsigned char)*p);
+    if (nibble < 0) return 0;
+    while ((nibble = lr_hex_digit((unsigned char)*p)) >= 0) {
+        offset = offset * 16u + (size_t)nibble;
+        p++;
+    }
+    while (*p == ' ' || *p == '\t') p++;
+    if (*p != ':' && *p != '=') return 0;
+    p++;
+    while (*p) {
+        int hi, lo;
+        while (*p == ' ' || *p == '\t') p++;
+        if (!*p) break;
+        hi = lr_hex_digit((unsigned char)p[0]);
+        lo = hi < 0 ? -1 : lr_hex_digit((unsigned char)p[1]);
+        if (hi < 0 || lo < 0) return 0;
+        if (len >= LR_CHEAT_MAX_BYTES) return 0;
+        out_bytes[len++] = (unsigned char)(hi * 16 + lo);
+        p += 2;
+    }
+    if (len == 0u) return 0;
+    *out_offset = offset;
+    *out_len = len;
+    return 1;
+}
+
+static void lr_apply_cheats(nj_lr *s)
+{
+    void *data = NULL;
+    nj_size size = 0;
+    int i;
+
+    lr_mutex_lock(&s->lock);
+    if (s->loaded && s->vm) nj_vm_memory_region(s->vm, &data, &size);
+    if (data != NULL && size != 0u) {
+        for (i = 0; i < LR_MAX_CHEATS; i++) {
+            const struct lr_cheat *c = &s->cheat[i];
+            if (!c->enabled || c->len == 0u) continue;
+            if (c->offset > (size_t)size ||
+                (size_t)c->len > (size_t)size - c->offset) continue;
+            memcpy((unsigned char *)data + c->offset, c->value, c->len);
+        }
+    }
+    lr_mutex_unlock(&s->lock);
+}
+
 static void lr_publish_memory_maps(nj_lr *s)
 {
     struct retro_memory_map map;
@@ -3814,6 +3901,7 @@ RETRO_API void retro_run(void)
     if (s->poll_cb) s->poll_cb();
     lr_read_joypad(s);
     if (s->pointer) lr_read_pointer(s);
+    lr_apply_cheats(s);
     lr_service_rumble(s);
 #if NJ_LIBRETRO_HW
     hw_active = lr_hw_begin(s);
@@ -4059,13 +4147,48 @@ RETRO_API bool retro_unserialize(const void *data, size_t size)
                             NULL, NULL) == NJ_OK;
 }
 
-RETRO_API void retro_cheat_reset(void) { }
+RETRO_API void retro_cheat_reset(void)
+{
+    nj_lr *s = core();
+    memset(s->cheat, 0, sizeof(s->cheat));
+}
 
 RETRO_API void retro_cheat_set(unsigned index, bool enabled, const char *code)
 {
-    (void)index;
-    (void)enabled;
-    (void)code;
+    nj_lr *s = core();
+    struct lr_cheat *c;
+    size_t offset = 0u;
+    unsigned char bytes[LR_CHEAT_MAX_BYTES];
+    unsigned len = 0u;
+
+    if (index >= LR_MAX_CHEATS) return;
+    c = &s->cheat[index];
+    if (!enabled) {
+        c->enabled = 0;
+        c->len = 0u;
+        return;
+    }
+    if (!lr_parse_cheat_code(code, &offset, bytes, &len)) {
+        if (s->log_cb) {
+            s->log_cb(RETRO_LOG_WARN,
+                      "[nano_j2me] ignoring cheat %u: expected "
+                      "<arena-offset>:<hex bytes>, got '%s'\n",
+                      index, code ? code : "(null)");
+        }
+        c->enabled = 0;
+        c->len = 0u;
+        return;
+    }
+    c->offset = offset;
+    c->len = len;
+    memcpy(c->value, bytes, len);
+    c->enabled = 1;
+    if (s->log_cb) {
+        s->log_cb(RETRO_LOG_INFO,
+                  "[nano_j2me] cheat %u enabled: arena offset 0x%zx, "
+                  "%u byte(s), re-applied every frame\n",
+                  index, offset, len);
+    }
 }
 
 /*

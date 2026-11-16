@@ -103,6 +103,7 @@ struct config
    int audio_required;
    int input_check;
    int multitouch_check;
+   int cheat_check;
    int expect_load_fail;
    int cycle;
    int rotation_expect_set;
@@ -131,7 +132,7 @@ struct config
 
 static struct config cfg = {
    "", "", "", 180u, 0u, 0, 0, 0, 0, 0, 0, 0u, 0, 0, 1u, 30, 0, 0, 0, 0u,
-   0u, "", "", ""
+   0u, 0, "", "", ""
 };
 
 /* ------------------------------------------------------------------ */
@@ -1497,7 +1498,7 @@ static unsigned key_name_to_joypad(const char *name)
 static int load_key_script(const char *path)
 {
    FILE *f;
-   char token[64];
+   char field[96];
    unsigned ignored = 0;
    int c;
 
@@ -1508,62 +1509,100 @@ static int load_key_script(const char *path)
    for (;;)
    {
       size_t n = 0;
+      char *field_end;
       while ((c = fgetc(f)) != EOF &&
-             (c == ',' || c == ' ' || c == '\t' || c == '\r' ||
-              c == '\n'))
+             (c == ' ' || c == '\t' || c == '\r' || c == '\n'))
          ;
       if (c == EOF)
          break;
       do
       {
-         if (n + 1 < sizeof(token))
-            token[n++] = (char)c;
-      } while ((c = fgetc(f)) != EOF && c != ',' && c != ' ' &&
-               c != '\t' && c != '\r' && c != '\n');
-      token[n] = '\0';
-      if (strncmp(token, "keys:", 5) == 0) /* keys.txt marker line */
+         if (n + 1 < sizeof(field))
+            field[n++] = (char)c;
+      } while ((c = fgetc(f)) != EOF && c != ' ' && c != '\t' &&
+               c != '\r' && c != '\n');
+      field[n] = '\0';
+      field_end = field + n;
+      if (strncmp(field, "keys:", 5) == 0) /* keys.txt marker line */
          continue;
+      /*
+       * A field is either "frame:key[,frame:key...]" or a single
+       * "frame:pressed@X,Y" pointer tap. A pointer tap carries a comma
+       * between its two coordinates, so only split on commas when the
+       * field is not a pointer tap.
+       */
+      /*
+       * Find entry boundaries: a comma starts the next entry only when it
+       * is followed by a number and a colon ("...,120:fire"). The comma in
+       * a pointer tap's coordinates ("pressed@40,50") is followed by a
+       * number but no colon, so it stays inside the entry.
+       */
       {
-         char *colon = strchr(token, ':');
-         unsigned frame;
-         unsigned joy;
-         if (!colon)
-            continue;
-         *colon = '\0';
-         frame = (unsigned)strtoul(token, NULL, 10);
-         if (strncmp(colon + 1, "pressed@", 8) == 0)
+         char *entry = field;
+         for (;;)
          {
-            int px = 0, py = 0;
-            if (sscanf(colon + 9, "%d,%d", &px, &py) == 2)
+            char *comma = entry;
+            char *stop = NULL;
+            char *colon;
+            unsigned frame;
+            while ((comma = strchr(comma, ',')) != NULL)
             {
-               if (g_key_event_count < MAX_KEY_EVENTS)
+               char *q = comma + 1;
+               while (*q >= '0' && *q <= '9')
+                  q++;
+               if (*q == ':')
                {
-                  struct key_event *ev =
-                     &g_key_events[g_key_event_count++];
-                  memset(ev, 0, sizeof(*ev));
-                  ev->frame = frame;
-                  ev->pointer = 1;
-                  ev->px = px;
-                  ev->py = py;
+                  stop = comma;
+                  break;
                }
+               comma++;
+            }
+            if (stop)
+               *stop = '\0';
+            colon = strchr(entry, ':');
+            if (!colon)
+            {
+               ignored++;
             }
             else
-               ignored++;
-            continue;
-         }
-         joy = key_name_to_joypad(colon + 1);
-         if (joy == 0u)
-         {
-            ignored++;
-            continue;
-         }
-         if (g_key_event_count < MAX_KEY_EVENTS)
-         {
-            memset(&g_key_events[g_key_event_count], 0,
-                   sizeof(g_key_events[0]));
-            g_key_events[g_key_event_count].frame = frame;
-            g_key_events[g_key_event_count].joy = joy;
-            g_key_event_count++;
+            {
+               *colon = '\0';
+               frame = (unsigned)strtoul(entry, NULL, 10);
+               if (strncmp(colon + 1, "pressed@", 8) == 0)
+               {
+                  int px = 0, py = 0;
+                  if (sscanf(colon + 1, "pressed@%d,%d", &px, &py) == 2 &&
+                      g_key_event_count < MAX_KEY_EVENTS)
+                  {
+                     struct key_event *ev =
+                        &g_key_events[g_key_event_count++];
+                     memset(ev, 0, sizeof(*ev));
+                     ev->frame = frame;
+                     ev->pointer = 1;
+                     ev->px = px;
+                     ev->py = py;
+                  }
+                  else
+                     ignored++;
+               }
+               else
+               {
+                  unsigned joy = key_name_to_joypad(colon + 1);
+                  if (joy == 0u)
+                     ignored++;
+                  else if (g_key_event_count < MAX_KEY_EVENTS)
+                  {
+                     memset(&g_key_events[g_key_event_count], 0,
+                            sizeof(g_key_events[0]));
+                     g_key_events[g_key_event_count].frame = frame;
+                     g_key_events[g_key_event_count].joy = joy;
+                     g_key_event_count++;
+                  }
+               }
+            }
+            if (!stop)
+               break;
+            entry = stop + 1;
          }
       }
    }
@@ -2235,6 +2274,63 @@ static void check_memory_window(void)
 
 /* After a state restore the VM (and its arena) may have been replaced; the
  * frontend's cached memory map must be refreshed to the new arena. */
+/* --cheat-check: retro_cheat_set() must patch the SYSTEM_RAM window and
+ * re-apply the written bytes at the start of every frame (a game overwriting
+ * the value must not defeat an enabled cheat), while a disabled or malformed
+ * code must leave the window alone.  The patch targets the reserved-but-unused
+ * tail of the arena so no live object can be damaged. */
+static void check_cheat(void)
+{
+   void *data = api.get_memory_data(RETRO_MEMORY_SYSTEM_RAM);
+   size_t size = api.get_memory_size(RETRO_MEMORY_SYSTEM_RAM);
+   unsigned char *ram = (unsigned char *)data;
+   size_t offset;
+   char code[64];
+
+   if (!api.cheat_set || !api.cheat_reset || ram == NULL || size < 64u)
+   {
+      check("cheat_api_available", 0,
+            "retro_cheat_set/reset missing or SYSTEM_RAM unavailable");
+      return;
+   }
+   check("cheat_api_available", 1, "retro_cheat_set/reset exported");
+
+   offset = size - 32u;
+   ram[offset] = 0x00;
+   snprintf(code, sizeof(code), "%zx:A5", offset);
+   api.cheat_set(0, true, code);
+   run_frames(1);
+   check("cheat_applied", ram[offset] == 0xA5,
+         "arena[0x%zx]=0x%02x after cheat code A5, expected 0xA5",
+         offset, (unsigned)ram[offset]);
+
+   ram[offset] = 0x00; /* simulate the game overwriting the value */
+   run_frames(1);
+   check("cheat_reapplied", ram[offset] == 0xA5,
+         "enabled cheat must be re-applied every frame; arena[0x%zx]=0x%02x",
+         offset, (unsigned)ram[offset]);
+
+   api.cheat_set(0, false, NULL); /* disabled: no more writes */
+   ram[offset] = 0x11;
+   run_frames(1);
+   check("cheat_disabled", ram[offset] == 0x11,
+         "disabled cheat must not overwrite; arena[0x%zx]=0x%02x",
+         offset, (unsigned)ram[offset]);
+
+   api.cheat_set(0, true, "not-a-cheat"); /* malformed: ignored */
+   run_frames(1);
+   check("cheat_rejects_garbage", ram[offset] == 0x11,
+         "malformed code must not patch; arena[0x%zx]=0x%02x", offset,
+         (unsigned)ram[offset]);
+
+   api.cheat_reset();
+   ram[offset] = 0x22;
+   run_frames(1);
+   check("cheat_reset_clears", ram[offset] == 0x22,
+         "retro_cheat_reset() must stop writes; arena[0x%zx]=0x%02x", offset,
+         (unsigned)ram[offset]);
+}
+
 static void check_memory_map_after_restore(void)
 {
    void *data = api.get_memory_data(RETRO_MEMORY_SYSTEM_RAM);
@@ -2319,6 +2415,9 @@ static int run_game_cycle(int cycle)
        * republished for the new arena. */
       check_memory_map_after_restore();
    }
+
+   if (cfg.cheat_check)
+      check_cheat();
 
    api.unload_game();
    check_session(cycle);
@@ -2502,6 +2601,8 @@ static int parse_args(int argc, char **argv)
          cfg.input_check = 1;
       else if (strcmp(arg, "--multitouch-check") == 0)
          cfg.multitouch_check = 1;
+      else if (strcmp(arg, "--cheat-check") == 0)
+         cfg.cheat_check = 1;
       else if (strcmp(arg, "--input-bitmask") == 0)
       {
          cfg.input_check = 1;
@@ -2736,6 +2837,7 @@ int main(int argc, char **argv)
           cfg.visual_required ? "yes" : "no",
           cfg.expect_load_fail ? "yes" : "no",
           cfg.multitouch_check ? "yes" : "no");
+   note("cheat check: %s", cfg.cheat_check ? "yes" : "no");
    if (g_override_count > 0)
    {
       int i;

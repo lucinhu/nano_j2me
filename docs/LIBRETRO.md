@@ -401,10 +401,11 @@ JAR `MIDlet-1` is the entry point; JAD redirects and suite selection are not
 implemented. Network hooks are absent in this core: online scores, HTTP/socket
 services and downloadable content are unavailable. Bluetooth and sensors are
 not provided by this adapter; vibration is forwarded to the frontend when a
-rumble interface is available (see Rumble above). Code-based cheats, disc
-control and achievements are not implemented; the Java arena is exposed as
-`RETRO_MEMORY_SYSTEM_RAM` so a frontend's own cheat search can scan and patch
-it (see Cheats below). The core uses one process-wide instance and loads one
+rumble interface is available (see Rumble above). Cheats are supported in a
+core-specific form over the exposed Java arena (see Cheats below); disc
+control, netplay, runahead and achievements are not implemented. The arena is
+also exposed as `RETRO_MEMORY_SYSTEM_RAM` so a frontend's own cheat search can
+scan and patch it. The core uses one process-wide instance and loads one
 game at a time. Compatibility and
 performance vary by title, handset assumptions and host CPU.
 
@@ -441,11 +442,13 @@ worse than refusing it.
   stable input-to-frame mapping. The same nondeterminism, the multi-megabyte
   state and the single process-wide VM make lockstep/rollback synchronization
   infeasible in this design. Not advertised.
-- **Code-based cheats** — `retro_cheat_set()`/`retro_cheat_reset()` stay
-  no-ops: a libretro cheat code is a (address, value) pair over a flat memory
-  map, and a managed heap has no object or field addresses a code format could
-  describe. No cheat database is shipped. This does not stop a frontend's
-  search-and-write workflow, which operates on the exposed arena instead.
+- **Third-party cheat formats** — Game Genie/GameShark/Action Replay style
+  codes assume a flat address space with fixed addresses; the J2ME runtime's
+  address space is a managed object heap, so none of those formats can be
+  decoded. The core instead supports one documented form (`<arena offset>:<hex
+  bytes>`, see Cheats) fed by an offset from a frontend cheat search, and it
+  ships no cheat database. This does not stop a frontend's search-and-write
+  workflow either.
 - **Exposed memory** — the Java arena is a single non-moving allocation
   (objects are never relocated), so `retro_get_memory_data(SYSTEM_RAM)`
   returns its base and `retro_get_memory_size(SYSTEM_RAM)` the heap budget
@@ -466,6 +469,43 @@ worse than refusing it.
   execution and content identification. None of the three holds here, so
   achievements are absent rather than silently broken. No achievements
   interface is advertised.
+
+## Cheats
+
+The core exports `retro_cheat_set()`/`retro_cheat_reset()` and advertises
+`cheats = "true"` in its metadata. A libretro cheat code is normally an
+address/value pair over a flat address space, and a J2ME runtime has none:
+values live in managed Java objects whose addresses a code format cannot know.
+The cheat form is therefore core-specific and addresses the exposed arena
+window directly:
+
+```
+<arena offset>:<hex bytes>
+```
+
+- `<arena offset>` is a hexadecimal byte offset into the
+  `RETRO_MEMORY_SYSTEM_RAM` window (frontend cheat search returns such offsets,
+  and the search itself works on the same window). `@` is accepted as a prefix
+  and `<offset> = <bytes>` also works.
+- `<hex bytes>` is one to 16 bytes written at that offset, e.g.
+  `1A2B0:05` or `7ff000:0000FFFF`.
+- The bytes are re-applied at the start of every `retro_run()`, so a game that
+  writes the old value back does not cancel the cheat. Disabling the cheat
+  (frontend passes `enabled = false`) or `retro_cheat_reset()` stops the
+  writes.
+- Malformed codes are ignored with a warning in the core log.
+
+A cheat patch can corrupt any object in the arena (the window is raw and
+unsynchronised, see Exposed memory), so the offset must come from a deliberate
+cheat search, never from a guessed address. Cheats are a local convenience
+feature: the VM heap is not a save file, a restore replaces the arena, and a
+cheat applies to whatever object currently occupies the offset. No cheat
+database is shipped.
+
+The CTest gate `check_libretro_cheat` exercises the API end to end: it
+enables a patch near the unused tail of the arena, verifies the write, verifies
+it is re-applied after the game overwrites the byte, and verifies
+disabling/reset stop it.
 
 ## Maintainer verification
 
@@ -567,10 +607,13 @@ geometry pass the matching frontend expectation. Both are sampling tools, not
 CI gates. The corpus visual probe (`check_libretro_corpus_visual.py`) runs every
 sweep-ok title through the mock frontend and requires a non-black animated
 frame, so it catches "loads but paints nothing" regressions that the CLI sweep
-cannot see. At the time of writing it reports 372/373 at both the default
-300-frame (5 s) horizon and a 600-frame (10 s) re-run. The single remaining
-failure is one very slow 3D loader (see below) that cannot finish within the
-sampling watchdog; the two titles that need the `nokia6230` profile now load
+cannot see. At the time of writing, with the curated-or-generic key scripts
+above, it reports 385 titles -> 382 ok rows and 3 documented known limitations,
+0 unexplained failures, and 380 animated / 5 static rows (the static screens
+and the slow loader are classified in
+`docs/notes/2026-11-17-static-title-classification.md`; the two load-timeout
+limitations and the `毁灭战士3_10598` slow loader are listed in the probe's
+`KNOWN_LIMITATIONS`). The two titles that need the `nokia6230` profile load
 through the device-property answers and the handset retry.
 
 The probe tools copy the core to a private file before the run. The core is

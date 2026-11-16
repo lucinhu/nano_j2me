@@ -72,6 +72,12 @@ KNOWN_LIMITATIONS = {
         "load request times out (the running game continues and manual saves "
         "elsewhere work); visuals and emulation are unaffected"
     ),
+    "德州扑克2_3884.jar": (
+        "same class as 台球传奇_87: driven past the menu by the generic key "
+        "script it sits in a long blocking load when the state round trip is "
+        "requested, so the load times out; without the key script and at "
+        "shorter frame counts all state checks pass and the game keeps running"
+    ),
 }
 
 PRINT_LOCK = threading.Lock()

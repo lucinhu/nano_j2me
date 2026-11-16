@@ -17,7 +17,7 @@
 #  built and is what the tests use).
 # =====================================================================
 cmake_minimum_required(VERSION 3.16)
-project(nano_j2me VERSION 0.5.12 LANGUAGES C)
+project(nano_j2me VERSION 0.5.13 LANGUAGES C)
 
 set(CMAKE_C_STANDARD 99)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -2272,6 +2272,19 @@ if(NJ_BUILD_TESTS AND NJ_BUILD_LIBRETRO AND UNIX
                    --frames 90
                    --multitouch-check)
   set_tests_properties(check_libretro_multitouch PROPERTIES
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    TIMEOUT 120)
+
+  # retro_cheat_set() patches the SYSTEM_RAM arena window and re-applies the
+  # bytes every frame; disabled/malformed codes must not touch memory.
+  add_test(NAME check_libretro_cheat
+           COMMAND $<TARGET_FILE:test_libretro_frontend>
+                   --core $<TARGET_FILE:nano_j2me_libretro>
+                   --jar ${NJ_FIXTURES}/loopdemo.jar
+                   --frames 20
+                   --pace-us 16667
+                   --cheat-check)
+  set_tests_properties(check_libretro_cheat PROPERTIES
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
     TIMEOUT 120)
 
