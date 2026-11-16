@@ -978,3 +978,23 @@ full CTest 192/192; corpus sweep 372 ok / 27 title-exit / 2 title-exception /
 `86babcd96fc0e66203aa7516a714bada81dec995840d74c2f733397197f07992`;
 GitHub release `v0.5.11`. PRs #2203/#1239 refreshed with the 0.5.11 `.info`;
 no merge claimed.
+
+## Update, 2026-11-16 (round 71): 0.5.12 release with multi-touch
+
+The r31 package from tree `21a79f7` (multi-touch `12d3fa4` + 0.5.12 metadata)
+is installed as `build/libretro-dist/`. `.info` SHA-256
+`288a1aa423b16e46f4f397d9b86959b31bd6e01a45af22b71216d2d70850db73`
+(`display_version = "0.5.12"`); the libretro-super patch was regenerated with
+`git apply --check` against `fb15e63`.
+
+Validation: mock frontend matrix 20/20 on the Linux core; option matrix 66/66
+(6 titles x 11 profiles); real RetroArch 1.22.2 loopdemo 120 frames PASS;
+Windows x86_64 under Wine 4/4 at 300 frames; Android APKs built at 0.5.12
+(`nj2me.apk` 3,275,114 B, `nj2me-legacy.apk` 701,372 B); full CTest 193/193 at
+the multi-touch tree; 404-title corpus sweep 387 ok / 12 title-exit / 2
+title-exception / 2 no-frame / 1 bad-jar.
+
+Release archive `nj2me-0.5.12-libretro-cores.zip` SHA-256
+`7467092702a939b7c0dc16c3d3a025fab5d8f41337c5eb48f59eb0d451d7d58b`;
+GitHub release `v0.5.12` (also ships the two APKs). PRs #2203/#1239 refreshed
+with the 0.5.12 `.info`; no merge claimed.

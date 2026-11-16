@@ -69,12 +69,17 @@ Outputs go to `build/libretro-dist/<target>/`, with a library and its metadata.
 Use `--no-strip` to retain symbols. `all` selects the script's supported targets
 and requires all of their toolchains.
 
-The eight candidates currently in `build/libretro-dist/` are the r30 package
-(the 0.5.11 release) built on 2026-11-16 from revision `ca0e43d`. r30 ships the
-pacer-owned idle nap, so a paced run no longer burns a CPU core while it waits
-for the next frame (`docs/PERFORMANCE.md`, "Paced-run CPU burn: the pacer owns
-the nap"); the 0.5.10 release in between added Android Vibrator-based rumble
-through JNI and the 64-bit APK work. Before that, r27 fixes the
+The eight candidates currently in `build/libretro-dist/` are the r31 package
+(the 0.5.12 release) built on 2026-11-16 from revision `21a79f7`. r31 ships the
+multi-touch input path: the core follows `RETRO_DEVICE_ID_POINTER_COUNT`,
+reports every finger the frontend sends with its own event id, and keeps the
+MIDP `Canvas` pointer with the first finger
+(`docs/notes/2026-11-16-multitouch-support.md`); the same release ships
+multi-touch through the Android APKs. r30 added the pacer-owned idle nap, so a
+paced run no longer burns a CPU core while it waits for the next frame
+(`docs/PERFORMANCE.md`, "Paced-run CPU burn: the pacer owns the nap"); the
+0.5.10 release in between added Android Vibrator-based rumble through JNI and
+the 64-bit APK work. Before that, r27 fixes the
 save-state buffer bound for object-dense titles
 (`docs/notes/2026-11-16-state-buffer-bound.md`) and bumps the metadata to
 0.5.9; before it, r26 added the version bump, the monitor acquisition for

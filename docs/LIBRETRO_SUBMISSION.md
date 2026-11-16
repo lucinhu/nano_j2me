@@ -1090,3 +1090,28 @@ flake on a loaded host); `MinecraftJ2ME_PE_0.6.1_V2.2.jar` state round trip
 carries `nj2me-0.5.11-libretro-cores.zip` (SHA-256
 `86babcd96fc0e66203aa7516a714bada81dec995840d74c2f733397197f07992`) and the
 checksums file. The two upstream PR branches are updated to the 0.5.11 `.info`.
+
+## Update, 2026-11-16 (round 71): 0.5.12 release with multi-touch
+
+Tree `21a79f7` (multi-touch commit `12d3fa4` plus 0.5.12 metadata). `.info`
+SHA-256 `288a1aa423b16e46f4f397d9b86959b31bd6e01a45af22b71216d2d70850db73`,
+`display_version = "0.5.12"`; the libretro-super patch applies to `fb15e63`.
+
+| target | size (bytes) | SHA-256 |
+|--------|--------------|---------|
+| linux-x86_64 | 3,843,912 | `a5e7b8ecaa1a2351dbc6ec970145f3c5cad2008d58b9bd1c28df1e2eb8108e8c` |
+| linux-aarch64 | 3,326,360 | `abe1f9bdc605b6ad269d4c93f1e23df2aec0db141644523343f61be226d02406` |
+| linux-armv7 | 3,034,308 | `d5a4d96964db1f4c08cf084afa2745cb301319253a06f270b56d1bf77b826724` |
+| android-arm64 | 3,560,824 | `5ad0e5eb698af213f96b59c29f911938761fdf3652d9b142cdb04b87b3507a01` |
+| android-armv7 | 2,747,844 | `29d207de0487a1d4e765cf7942fd1d858d552a2ff53bc788253ea7dd8a30d607` |
+| android-x86_64 | 3,601,040 | `f265550868f15bea1c5aae7744d138c2612295229d226fd15b0e29e301e7393d` |
+| windows-i686 | 3,454,976 | `b8a7a488ceb86ef94f32d84683afc6a3eb418d549bdc8af171e7563cb5d95423` |
+| windows-x86_64 | 3,230,208 | `86a925c4a3241c8c1a8cc8513da451842409151612673799c9279512df6bd835` |
+
+Validation: mock matrix 20/20; option matrix 66/66; real RetroArch loopdemo
+120 frames PASS; Wine 4/4 at 300 frames; full CTest 193/193; corpus sweep
+387 ok / 12 title-exit / 2 title-exception / 2 no-frame / 1 bad-jar. Release
+archive SHA-256 `7467092702a939b7c0dc16c3d3a025fab5d8f41337c5eb48f59eb0d451d7d58b`;
+GitHub release `v0.5.12` also ships `nj2me.apk` (3,275,114 B) and
+`nj2me-legacy.apk` (701,372 B). Both PRs remain open and mergeable; no merge
+claimed.

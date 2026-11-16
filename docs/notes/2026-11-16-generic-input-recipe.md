@@ -62,8 +62,10 @@ presses through a game-side gate, it just avoids tapping unknown buttons.
 ## Result
 
 Full sweep with the pointer-free recipe + the two per-title scripts
-(`.local-tools/debug-runs/compat-20261116-r71b`): distribution recorded in the
-round-71 report. The round-70 comparison was 371 ok / 28 title-exit; the first
+(`.local-tools/debug-runs/compat-20261116-r71b`): **387 ok / 12 title-exit /
+2 title-exception / 2 no-frame / 1 bad-jar, no timeout** — up from 371 ok /
+28 title-exit in round 70, with every remaining title-exit row adjudicated
+game-side or probe-gated. The round-70 comparison was 371 ok / 28 title-exit; the first
 r71 run already moved 15 rows title-exit → ok
 (`CS反恐精英(蓝牙对战)`, `JBenchmark`, `JBenchmark2`, `JBenchmark3D`,
 `PC正版-使命召唤5`, `hello`, `maze`, `史前部落`, `学姐的秘密`,
