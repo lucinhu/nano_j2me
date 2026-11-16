@@ -624,16 +624,36 @@ fast-forward does not advance at all. A second probe driven by
 
 ## Vibration (2026-11-15)
 
-MIDlet vibration already reaches the frontend: `Display.vibrate()` and the
-Nokia `DeviceComtrol.startVibra()`/`startVibra` paths call the port `vibrate`
-hook, which records the request, and `retro_run()` forwards it through
+MIDlet vibration reaches the frontend: `Display.vibrate()` and the Nokia
+`DeviceControl.startVibra()`/`startVibra` paths call the port `vibrate` hook,
+which records the request, and `retro_run()` forwards it through
 `RETRO_ENVIRONMENT_GET_RUMBLE_INTERFACE` as `RETRO_RUMBLE_WEAK` (full strength
-while active, 0 when the requested duration ends). RetroArch's Android build
-implements the interface with the phone's `Vibrator`, so a game that vibrates
-on a handset vibrates in RetroArch too. The port logs `MIDlet vibrate(N ms)`,
-`rumble set on/off`, and `frontend has no rumble interface` (at most a few
-times) so a missing frontend implementation is visible in the log instead of
-being silent.
+while active, 0 when the requested duration ends). The port logs
+`MIDlet vibrate(N ms)`, `rumble set on/off`, and `frontend has no rumble
+interface` (at most a few times) so a missing frontend implementation is
+visible in the log instead of being silent.
+
+### Android frontends without a rumble interface
+
+RetroArch 1.19.1 on Android does not answer
+`RETRO_ENVIRONMENT_GET_RUMBLE_INTERFACE` (its `enable_device_vibration`
+setting only drives the frontend's own haptics), so the rumble callback is
+`NULL` there and a core that relies on it never buzzes. Since 0.5.10 the core
+falls back to the Android `Vibrator` service through JNI when the frontend has
+no rumble interface: it resolves `JNI_GetCreatedJavaVMs`, attaches the calling
+thread, calls `ActivityThread.currentApplication()`, obtains
+`getSystemService("vibrator")` and unwraps the `VibratorManager` that Android
+12+ returns into its default `Vibrator`, then calls `vibrate(ms)`/`cancel()`.
+The fallback only engages when the libretro rumble callback is missing; a
+frontend that provides the interface keeps the libretro path. Log lines:
+`using the Android vibrator directly` on first use, and
+`no rumble interface and no Android vibrator (step N)` when the fallback
+itself is unavailable (N = 1 resolve the JavaVM, 2 create it, 3 find
+`ActivityThread`, 4 obtain the Application, 5 obtain the vibrator service,
+6 obtain `Vibrator.vibrate`). Verified in RetroArch 1.19.1 on a Xiaomi
+23049RAD8C (Android 15): a game calling `Display.vibrate(500)` produces
+`MIDlet vibrate(500 ms)` followed by `rumble set on (android vibrator)` and
+the phone buzzes; `3D拉力赛-进化汉化版.jar` was the test title.
 
 Verified end-to-end with the headless frontend (which provides a rumble
 callback): a probe that calls `Display.vibrate(600)` four times produces

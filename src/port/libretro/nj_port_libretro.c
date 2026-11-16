@@ -57,6 +57,14 @@
 #  include <unistd.h>
 #endif
 
+#if defined(__ANDROID__)
+/* The Android vibrator fallback needs the process JavaVM and the JNI calls
+ * that reach ActivityThread; dlfcn resolves JNI_GetCreatedJavaVMs lazily so a
+ * frontend that never loads the JNI helpers is still fine. */
+#  include <dlfcn.h>
+#  include <jni.h>
+#endif
+
 #include "libretro.h"
 #include "nj2me/nj.h"
 #include "nj2me/nj_inflate.h"
@@ -375,6 +383,7 @@ typedef struct nj_lr {
     int                      rumble_logs;   /* diagnostic: logged requests */
     uint64_t                 rumble_deadline_ms;
     int                      rumble_warned;
+    int                      vibe_fallback; /* logged the Android fallback */
 
     /* ---- the runtime ---- */
     nj_port        port;
@@ -1323,7 +1332,7 @@ static void lr_register_environment(nj_lr *s)
         } else {
             s->rumble_cb = NULL;
             lr_log(s, RETRO_LOG_INFO,
-                   "frontend has no rumble interface; vibration requests are ignored");
+                   "frontend has no rumble interface");
         }
     }
 
@@ -2242,6 +2251,145 @@ static void lr_read_pointer(nj_lr *s)
 }
 
 /* ------------------------------------------------------------------ */
+/* Android vibrator fallback                                          */
+/* ------------------------------------------------------------------ */
+/*
+ * RetroArch 1.19.1 on Android does not answer
+ * RETRO_ENVIRONMENT_GET_RUMBLE_INTERFACE, so a core that relies on the
+ * libretro rumble callback never buzzes even with "enable_device_vibration"
+ * on.  The core runs inside the frontend process, so fall back to the Android
+ * Vibrator service through JNI:
+ *   ActivityThread.currentApplication().getSystemService("vibrator")
+ * Only used when the frontend provides no rumble interface; a frontend that
+ * does keeps the libretro path.
+ */
+#if defined(__ANDROID__)
+typedef struct lr_android_vibe {
+    int       tried;
+    int       ready;
+    JavaVM   *vm;
+    jobject   vibrator;
+    jmethodID vibrate;
+    jmethodID cancel;
+} lr_android_vibe;
+
+static lr_android_vibe lr_vibe;
+static int lr_vibe_step; /* last init step, for the one-time log */
+
+static JNIEnv *lr_vibe_env(void)
+{
+    JNIEnv *env = NULL;
+
+    if (!lr_vibe.vm) return NULL;
+    if ((*lr_vibe.vm)->GetEnv(lr_vibe.vm, (void **)&env, JNI_VERSION_1_6) == JNI_OK)
+        return env;
+    if ((*lr_vibe.vm)->AttachCurrentThread(lr_vibe.vm, (void **)&env, NULL) != JNI_OK)
+        return NULL;
+    return env;
+}
+
+static int lr_vibe_init(void)
+{
+    typedef jint (*lr_get_vms_fn)(JavaVM **, jsize, jsize *);
+    lr_get_vms_fn get_vms;
+    JNIEnv *env;
+    jclass activity_thread, context;
+    jmethodID current_app, get_service;
+    jobject app, vib;
+    jstring name;
+    jclass vib_class;
+    jsize count = 0;
+
+    if (lr_vibe.tried) return lr_vibe.ready;
+    lr_vibe.tried = 1;
+
+    lr_vibe_step = 1;
+    get_vms = (lr_get_vms_fn)dlsym(RTLD_DEFAULT, "JNI_GetCreatedJavaVMs");
+    if (!get_vms) {
+        void *lib = dlopen("libnativehelper.so", RTLD_NOW);
+        if (!lib) lib = dlopen("libart.so", RTLD_NOW);
+        if (lib) get_vms = (lr_get_vms_fn)dlsym(lib, "JNI_GetCreatedJavaVMs");
+    }
+    if (!get_vms) return 0;
+    lr_vibe_step = 2;
+    if (get_vms(&lr_vibe.vm, 1, &count) != JNI_OK || count < 1) {
+        lr_vibe.vm = NULL;
+        return 0;
+    }
+
+    env = lr_vibe_env();
+    if (!env) { lr_vibe.vm = NULL; return 0; }
+
+    lr_vibe_step = 3;
+    activity_thread = (*env)->FindClass(env, "android/app/ActivityThread");
+    if (!activity_thread) goto fail;
+    current_app = (*env)->GetStaticMethodID(env, activity_thread,
+                                            "currentApplication",
+                                            "()Landroid/app/Application;");
+    if (!current_app) goto fail;
+    lr_vibe_step = 4;
+    app = (*env)->CallStaticObjectMethod(env, activity_thread, current_app);
+    if (!app) goto fail;
+    context = (*env)->GetObjectClass(env, app);
+    get_service = (*env)->GetMethodID(env, context, "getSystemService",
+                                      "(Ljava/lang/String;)Ljava/lang/Object;");
+    if (!get_service) goto fail;
+    name = (*env)->NewStringUTF(env, "vibrator");
+    if (!name) goto fail;
+    lr_vibe_step = 5;
+    vib = (*env)->CallObjectMethod(env, app, get_service, name);
+    if (!vib) goto fail;
+    /* Android 12+ returns a VibratorManager from getSystemService("vibrator");
+     * unwrap it to the default Vibrator so one code path works on every
+     * version. */
+    {
+        jclass manager = (*env)->FindClass(env, "android/os/VibratorManager");
+        if (manager && (*env)->IsInstanceOf(env, vib, manager)) {
+            jmethodID get_default = (*env)->GetMethodID(
+                env, manager, "getDefaultVibrator", "()Landroid/os/Vibrator;");
+            if (get_default) {
+                jobject inner = (*env)->CallObjectMethod(env, vib, get_default);
+                if (inner) vib = inner;
+            }
+        }
+    }
+    lr_vibe_step = 6;
+    vib_class = (*env)->GetObjectClass(env, vib);
+    lr_vibe.vibrate = (*env)->GetMethodID(env, vib_class, "vibrate", "(J)V");
+    if (!lr_vibe.vibrate) goto fail;
+    lr_vibe.cancel = (*env)->GetMethodID(env, vib_class, "cancel", "()V");
+    lr_vibe.vibrator = (*env)->NewGlobalRef(env, vib);
+    if (!lr_vibe.vibrator) goto fail;
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    lr_vibe.ready = 1;
+    return 1;
+
+fail:
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    return 0;
+}
+
+static void lr_vibe_android(int on, int ms)
+{
+    JNIEnv *env;
+
+    if (!lr_vibe.ready) return;
+    env = lr_vibe_env();
+    if (!env) return;
+    if (on)
+        (*env)->CallVoidMethod(env, lr_vibe.vibrator, lr_vibe.vibrate,
+                               (jlong)ms);
+    else if (lr_vibe.cancel)
+        (*env)->CallVoidMethod(env, lr_vibe.vibrator, lr_vibe.cancel);
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+}
+#else
+static int lr_vibe_step;
+static int lr_vibe_init(void) { return 0; }
+static void lr_vibe_android(int on, int ms) { (void)on; (void)ms; }
+#endif
+
+/* ------------------------------------------------------------------ */
 /* Rumble: the VM asks on its own thread, the frontend is called here  */
 /* ------------------------------------------------------------------ */
 /*
@@ -2272,22 +2420,52 @@ static void lr_port_vibrate(void *ud, int ms)
  * N ms" and cannot address a second motor.  Strength is full while active. */
 static void lr_service_rumble(nj_lr *s)
 {
+    uint64_t now;
+    uint64_t left;
     int want;
 
-    if (!s->rumble_cb) return;
+    if (!s->rumble_cb) {
+        if (!lr_vibe_init()) {
+            if (!s->vibe_fallback) {
+                s->vibe_fallback = 1;
+                lr_log(s, RETRO_LOG_INFO,
+                       "no rumble interface and no Android vibrator (step %d); "
+                       "vibration requests are ignored",
+                       lr_vibe_step);
+            }
+            return;
+        }
+        if (!s->vibe_fallback) {
+            s->vibe_fallback = 1;
+            lr_log(s, RETRO_LOG_INFO,
+                   "frontend has no rumble interface; using the Android "
+                   "vibrator directly");
+        }
+    }
 
+    now = lr_real_ms();
     lr_mutex_lock(&s->lock);
-    if (s->rumble_active && lr_real_ms() >= s->rumble_deadline_ms) {
+    if (s->rumble_active && now >= s->rumble_deadline_ms) {
         s->rumble_active = 0;
     }
     want = s->rumble_active;
+    left = s->rumble_deadline_ms > now ? s->rumble_deadline_ms - now : 0;
     lr_mutex_unlock(&s->lock);
 
     if (want == s->rumble_sent) return;
     if (s->rumble_logs < 16) {
         s->rumble_logs++;
-        lr_log(s, RETRO_LOG_INFO, "rumble set %s",
-               want ? "on (weak, 0xFFFF)" : "off");
+        if (s->rumble_cb)
+            lr_log(s, RETRO_LOG_INFO, "rumble set %s",
+                   want ? "on (weak, 0xFFFF)" : "off");
+        else
+            lr_log(s, RETRO_LOG_INFO, "rumble set %s",
+                   want ? "on (android vibrator)" : "off");
+    }
+    if (!s->rumble_cb) {
+        lr_vibe_android(want, want ? (int)(left ? left : 1u) : 0);
+        s->rumble_sent = want;
+        return;
     }
     if (!s->rumble_cb(0, RETRO_RUMBLE_WEAK,
                       (uint16_t)(want ? 0xFFFFu : 0u)) &&
@@ -2304,6 +2482,8 @@ static void lr_rumble_release(nj_lr *s)
 {
     if (s->rumble_cb && s->rumble_sent) {
         (void)s->rumble_cb(0, RETRO_RUMBLE_WEAK, 0);
+    } else if (!s->rumble_cb && s->rumble_sent) {
+        lr_vibe_android(0, 0);
     }
     s->rumble_sent = 0;
     s->rumble_active = 0;
