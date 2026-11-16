@@ -74,3 +74,24 @@ Before the script these rows stayed on the same static selection screen and
 reported `m3g=0`, which made the 3D coverage in short probes look much worse
 than it is. The three copies are the same six-line script
 (`30:fire,60:fire,90:soft1,120:fire,150:soft2,180:fire`).
+
+## Round-73 sweep (post multi-touch)
+
+Full 404-title sweep with the same curated keys and the multi-touch CLI
+(`.local-tools/debug-runs/compat-20261116-r73`, 10 workers):
+
+**385 ok / 13 title-exit / 3 title-exception / 2 no-frame / 1 bad-jar**, no
+timeouts. Compared with r71b by file name the verdict changed for exactly two
+rows, both known flakes rather than regressions:
+
+* `JBenchmark3D.jar` ok -> title-exception: one uncaught
+  `java.lang.ArithmeticException` at the end of a 600-frame run under the
+  10-worker load; three standalone repeats are clean (600 frames, no
+  exception, heap ~15.4 MB of the 16 MB sweep budget). The JBenchmark family
+  has always been sensitive to the heap/load window.
+* `美男狂想曲_3876.jar` ok -> title-exit: the title's own `notifyDestroyed()`
+  branch fires at 58 frames on some runs (same flake documented in earlier
+  rounds; six repeats previously gave both outcomes with the same binary).
+
+Everything else matches r71b, including the carrier-billing/menu rows and the
+games that end themselves by design.
