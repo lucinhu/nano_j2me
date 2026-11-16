@@ -57,6 +57,11 @@ second one start.
 * `tools/check_libretro_frontend.sh` matrix and a real RetroArch 1.22.2
   loopdemo run pass with the rebuilt core (single-pointer legacy path
   unchanged); the option matrix is 88/88.
+* CTest `check_libretro_multitouch`: the harness (`--multitouch-check`) reports
+  `RETRO_DEVICE_ID_POINTER_COUNT=2` with independent per-index coordinates
+  through the real libretro ABI; the fixture prints `MPT id=0` and `MPT id=1`
+  lines for both fingers while `CANVAS down` appears exactly once (the first
+  finger owns MIDP). 47 checks, 0 failed.
 * Android Java tests (including the new two-finger `PadPressTest` case) pass
   through `tools/check_android_java.sh`.
 

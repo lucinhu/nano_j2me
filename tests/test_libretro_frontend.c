@@ -102,6 +102,7 @@ struct config
    unsigned pace_us;
    int audio_required;
    int input_check;
+   int multitouch_check;
    int expect_load_fail;
    int cycle;
    int rotation_expect_set;
@@ -124,8 +125,8 @@ struct config
 };
 
 static struct config cfg = {
-   "", "", "", 180u, 0u, 0, 0, 0, 0, 0, 0u, 0, 0, 1u, 30, 0, 0, 0, 0u, 0u,
-   "", ""
+   "", "", "", 180u, 0u, 0, 0, 0, 0, 0, 0, 0u, 0, 0, 1u, 30, 0, 0, 0, 0u,
+   0u, "", ""
 };
 
 /* ------------------------------------------------------------------ */
@@ -228,6 +229,11 @@ struct env_state
 
    /* Observations made from the fixture's own log lines. */
    unsigned long long keychar_lines;
+   /* Every finger the runtime reports must reach the Java listener and
+    * the MIDP Canvas must still be owned by the first one. */
+   unsigned long long mpt_finger0_lines;
+   unsigned long long mpt_finger1_lines;
+   unsigned long long canvas_down_lines;
    char locale_seen[32];
    char canvas_seen[32];
    int feature_lines;
@@ -336,6 +342,12 @@ static struct
 /* Input state driven by the harness. */
 static unsigned g_pad_state;
 static int g_pointer_pressed;
+/* --multitouch-check drives two independent fingers; the legacy single
+ * pointer fields stay unused in that mode. */
+static int g_multitouch_count;
+static int g_multitouch_pressed;
+
+static void check_multitouch_input(void);
 static unsigned char g_key_down[RETROK_LAST + 1];
 
 /* ------------------------------------------------------------------ */
@@ -971,6 +983,12 @@ static void RETRO_CALLCONV h_log(enum retro_log_level level,
     * re-parsing the whole log after the fact. */
    if (strstr(buffer, "KEYCHAR code="))
       g.env.keychar_lines++;
+   if (strstr(buffer, "MPT id=0 state="))
+      g.env.mpt_finger0_lines++;
+   if (strstr(buffer, "MPT id=1 state="))
+      g.env.mpt_finger1_lines++;
+   if (strstr(buffer, "CANVAS down "))
+      g.env.canvas_down_lines++;
    if (level >= RETRO_LOG_WARN && strstr(buffer, "rumble"))
       g.env.rumble_error_lines++;
    {
@@ -1164,7 +1182,6 @@ static int16_t RETRO_CALLCONV h_input_state(unsigned port, unsigned device,
 {
    struct session_stats *s = &g.ses;
 
-   (void)index;
    s->input_state_calls++;
    if (port != 0)
       return 0;
@@ -1195,6 +1212,29 @@ static int16_t RETRO_CALLCONV h_input_state(unsigned port, unsigned device,
 
       case RETRO_DEVICE_POINTER:
          s->input_pointer_queries++;
+         if (g_multitouch_count > 0)
+         {
+            /* Two fingers, each on its own index, spread across the screen.
+             * The core must read RETRO_DEVICE_ID_POINTER_COUNT and poll every
+             * index; pressing only one would leave the second finger unseen. */
+            int pressed = g_multitouch_pressed &&
+                          (int)index < g_multitouch_count;
+            switch (id)
+            {
+               case RETRO_DEVICE_ID_POINTER_X:
+                  return (int16_t)(-16000 + (int)index * 12000);
+               case RETRO_DEVICE_ID_POINTER_Y:
+                  return (int16_t)(-8000 + (int)index * 8000);
+               case RETRO_DEVICE_ID_POINTER_PRESSED:
+                  return pressed ? 1 : 0;
+               case RETRO_DEVICE_ID_POINTER_COUNT:
+                  return (int16_t)g_multitouch_count;
+               case RETRO_DEVICE_ID_POINTER_IS_OFFSCREEN:
+                  return 0;
+               default:
+                  return 0;
+            }
+         }
          switch (id)
          {
             case RETRO_DEVICE_ID_POINTER_X:
@@ -1405,6 +1445,17 @@ static void input_apply(unsigned frame, unsigned total)
       RETROK_2,      RETROK_9
    };
    unsigned start, k, slot;
+
+   if (cfg.multitouch_check)
+   {
+      /* Hold two fingers for a few frames so the listener sees press events,
+       * then release both so the runtime also exercises the up path. */
+      g_multitouch_count = 2;
+      g_multitouch_pressed = (frame >= 20u && frame < 60u) ? 1 : 0;
+      g_pad_state = 0;
+      g_pointer_pressed = 0;
+      return;
+   }
 
    if (!cfg.input_check)
       return;
@@ -1796,6 +1847,9 @@ static void check_session(int cycle)
          note("core did not register input descriptors (cosmetic only)");
    }
 
+   if (cfg.multitouch_check)
+      check_multitouch_input();
+
    if (cfg.expect_keychars > 0)
       check("keychar_exactly_once",
             g.env.keychar_lines == (unsigned long long)cfg.expect_keychars,
@@ -2022,6 +2076,23 @@ static void check_memory_map_after_restore(void)
          "memory map must be republished after a state restore");
 }
 
+/* --multitouch-check: the fixture prints one MPT line per changed pointer and
+ * one CANVAS line per MIDP pointer event.  Both finger ids must appear in the
+ * listener, while the Canvas pointer must still belong to exactly one of them. */
+static void check_multitouch_input(void)
+{
+   check("multitouch_listener_both_fingers",
+         g.env.mpt_finger0_lines > 0 && g.env.mpt_finger1_lines > 0,
+         "fixture saw MPT id=0 lines=%llu, MPT id=1 lines=%llu "
+         "(the core must poll every pointer index, not only index 0)",
+         g.env.mpt_finger0_lines, g.env.mpt_finger1_lines);
+   check("multitouch_canvas_single_owner",
+         g.env.canvas_down_lines == 1,
+         "CANVAS down lines=%llu expected exactly 1: the MIDP Canvas pointer "
+         "belongs to the first finger only",
+         g.env.canvas_down_lines);
+}
+
 /* Runs load -> frames -> (serialize roundtrip) -> unload -> checks.
  * Returns 1 on success, 0 when load_game() failed (game was not loaded). */
 static int run_game_cycle(int cycle)
@@ -2130,6 +2201,11 @@ static void usage(FILE *out, const char *argv0)
            "  --input-bitmask    advertise RETRO_ENVIRONMENT_GET_INPUT_BITMASKS "
            "and require\n"
            "                     the core to use the joypad mask query\n"
+           "  --multitouch-check drive two independent fingers (pointer count 2)"
+           " and\n"
+           "                     require the fixture to see both ids, with a "
+           "single\n"
+           "                     MIDP Canvas pointer owner\n"
            "  --expect-keychars N require exactly N KEYCHAR lines from the "
            "fixture\n"
            "                     (implies a sparse 8-press input schedule)\n"
@@ -2241,6 +2317,8 @@ static int parse_args(int argc, char **argv)
          cfg.audio_required = 1;
       else if (strcmp(arg, "--input-check") == 0)
          cfg.input_check = 1;
+      else if (strcmp(arg, "--multitouch-check") == 0)
+         cfg.multitouch_check = 1;
       else if (strcmp(arg, "--input-bitmask") == 0)
       {
          cfg.input_check = 1;
@@ -2462,11 +2540,13 @@ int main(int argc, char **argv)
    printf("[info] jar=%s\n", g.jar_abs);
    printf("[info] save_dir=%s\n", g.save_dir);
    printf("[info] frames_per_cycle=%u pace_us=%u cycles=%s input_check=%s "
-          "audio_required=%s visual_required=%s expect_load_fail=%s\n",
+          "audio_required=%s visual_required=%s expect_load_fail=%s "
+          "multitouch_check=%s\n",
           cfg.frames, cfg.pace_us, cfg.cycle ? "yes" : "no",
           cfg.input_check ? "yes" : "no", cfg.audio_required ? "yes" : "no",
           cfg.visual_required ? "yes" : "no",
-          cfg.expect_load_fail ? "yes" : "no");
+          cfg.expect_load_fail ? "yes" : "no",
+          cfg.multitouch_check ? "yes" : "no");
    if (g_override_count > 0)
    {
       int i;

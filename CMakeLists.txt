@@ -2260,6 +2260,20 @@ if(NJ_BUILD_TESTS AND NJ_BUILD_LIBRETRO AND UNIX
       WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
       TIMEOUT 300)
   endif()
+
+  # Two-finger conformance through the real core ABI: the harness reports
+  # RETRO_DEVICE_ID_POINTER_COUNT=2 with independent per-index coordinates, and
+  # the fixture (tests/multitouchdemo) must see both ids reach the Java
+  # listener while the MIDP Canvas pointer stays with the first finger.
+  add_test(NAME check_libretro_multitouch
+           COMMAND $<TARGET_FILE:test_libretro_frontend>
+                   --core $<TARGET_FILE:nano_j2me_libretro>
+                   --jar ${NJ_FIXTURES}/multitouchdemo.jar
+                   --frames 90
+                   --multitouch-check)
+  set_tests_properties(check_libretro_multitouch PROPERTIES
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    TIMEOUT 120)
 endif()
 
 # The prepared upstream submission bundle is checked without network access:

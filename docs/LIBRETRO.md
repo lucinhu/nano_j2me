@@ -534,7 +534,12 @@ Use an existing redistributable fixture path for the final RetroArch command
 (the script's default JAR can also be used by omitting the JAR argument). The
 mock frontend checks real ABI loading, options/geometry, animated frames, audio,
 input bitmasks (accepted and rejected), locale, the four screen sizes,
-vibration, repeated load/unload and save/load cases. A real RetroArch smoke
+vibration, repeated load/unload and save/load cases. The CTest gate
+`check_libretro_multitouch` drives two independent fingers (pointer count 2,
+per-index coordinates) through the real core with
+`tests/fixtures/multitouchdemo.jar` and requires both ids to reach the Java
+MultipointTouch listener while only the first finger owns the MIDP Canvas
+pointer. A real RetroArch smoke
 check also tests frontend integration. A watchdog-bounded boot is weaker evidence
 than a clean `run ended` and exit 0; record which occurred. Cross-build/export
 checks alone do not establish device runtime compatibility.
