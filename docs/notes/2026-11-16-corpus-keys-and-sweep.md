@@ -56,3 +56,21 @@ fixture families, game-side billing/auth gates, the 愤怒的小鸟 heap case, t
 The `docs/COMPATIBILITY_MATRIX.md` table was built from the October 969-title
 corpus at `2606d63`; it is a historical document, not the current 404-title
 sweep, and was not regenerated here.
+
+## Round 73: the 3D Galaxy on Fire 2 family
+
+The Music On / Music Off dismissal script that unblocks
+`浴火银河2完整版_7689.jar` works for the other three Galaxy on Fire 2
+releases as well; all four now render the 3D scene in a 600-frame probe:
+
+| title | `m3g` calls | `tris` | colours |
+| --- | --- | --- | --- |
+| 浴火银河2完整版_7689 | 174,831 (600 f) | 1,189,565 | 948 |
+| 浴火银河2瓦尔基里_3093 | 195,751 | 1,031,050 | — |
+| 浴火银河2汉化版_6950 | 119,117 | 830,593 | — |
+| 浴火银河2瓦尔基里(汉化)_3067 | 222,743 | 1,023,267 | — |
+
+Before the script these rows stayed on the same static selection screen and
+reported `m3g=0`, which made the 3D coverage in short probes look much worse
+than it is. The three copies are the same six-line script
+(`30:fire,60:fire,90:soft1,120:fire,150:soft2,180:fire`).

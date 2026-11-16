@@ -1,0 +1,1 @@
+30:fire,60:fire,90:soft1,120:fire,150:soft2,180:fire
