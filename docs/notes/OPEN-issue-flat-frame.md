@@ -1,5 +1,10 @@
 # "flat frame" is two different failures, and one of them is not the game's fault
 
+> Status audit (2026-11-16): the cases in this file have been resolved one by
+> one (menu prompt waiting for a key, uncapped harness starvation, field
+> resolution, paint-target fixes); see
+> `docs/notes/2026-11-16-open-issue-audit.md`. Keep the historical analysis.
+
 `tools/run_game_corpus.sh` reports
 
     FAIL (flat frame: the game is not drawing)

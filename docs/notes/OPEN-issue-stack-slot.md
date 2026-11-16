@@ -1,5 +1,10 @@
 # OPEN: one extra operand slot after an `invokespecial` of a Java constructor
 
+> Status audit (2026-11-16): this headline item and the other entries below no
+> longer reproduce on the current tree; see
+> `docs/notes/2026-11-16-open-issue-audit.md`. This file is kept as the
+> historical incident log, not as a live bug list.
+
 Status: **unfixed**, evidence collected, reproduction one command away.
 
 ## Symptom

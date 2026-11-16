@@ -1,5 +1,10 @@
 # M3G rendering investigation: Rally race and wheel textures restored
 
+> Status audit (2026-11-16): the rendering item is resolved and the remaining
+> timer failure is game-side; see
+> `docs/notes/2026-11-16-open-issue-audit.md` for the current status of all
+> OPEN-issue files.
+
 Current status: Rally renders its race and original wheel textures. The full
 CTest suite passes 79/79; the 395-title compatibility corpus remains 393 passed
 and 2 failed (the same baseline failures). Earlier sections preserve the
