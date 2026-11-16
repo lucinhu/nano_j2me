@@ -2274,6 +2274,19 @@ if(NJ_BUILD_TESTS AND NJ_BUILD_LIBRETRO AND UNIX
   set_tests_properties(check_libretro_multitouch PROPERTIES
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
     TIMEOUT 120)
+
+  # A real 3D title driven past its menu by the corpus key script: the core
+  # must present an animated, non-black M3G scene.  Skips (77) when the
+  # gitignored tests/games corpus is absent.
+  add_test(NAME check_libretro_3d_keys
+           COMMAND ${CMAKE_COMMAND} -E env
+                   HARNESS=$<TARGET_FILE:test_libretro_frontend>
+                   CORE=$<TARGET_FILE:nano_j2me_libretro>
+                   ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_libretro_3d_keys.sh)
+  set_tests_properties(check_libretro_3d_keys PROPERTIES
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    TIMEOUT 240
+    SKIP_RETURN_CODE 77)
 endif()
 
 # The prepared upstream submission bundle is checked without network access:

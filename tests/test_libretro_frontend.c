@@ -122,11 +122,16 @@ struct config
    unsigned screen_expect_h;
    char expect_locale[32];
    char expect_canvas[32];
+
+   /* Optional frame:key script (same syntax as the CLI runner).  The harness
+    * turns the named J2ME keys into joypad bits so a libretro probe can reach
+    * gameplay instead of stopping on a title menu. */
+   char keys_path[PATH_MAX];
 };
 
 static struct config cfg = {
    "", "", "", 180u, 0u, 0, 0, 0, 0, 0, 0, 0u, 0, 0, 1u, 30, 0, 0, 0, 0u,
-   0u, "", ""
+   0u, "", "", ""
 };
 
 /* ------------------------------------------------------------------ */
@@ -348,6 +353,17 @@ static int g_multitouch_count;
 static int g_multitouch_pressed;
 
 static void check_multitouch_input(void);
+
+/* Frame:key script loaded by --keys (see the CLI's syntax). */
+#define MAX_KEY_EVENTS 1024
+#define KEY_EVENT_HOLD_FRAMES 2u
+struct key_event
+{
+   unsigned frame;
+   unsigned joy;
+};
+static struct key_event g_key_events[MAX_KEY_EVENTS];
+static int g_key_event_count;
 static unsigned char g_key_down[RETROK_LAST + 1];
 
 /* ------------------------------------------------------------------ */
@@ -1429,6 +1445,87 @@ static void release_all_keys(void)
          press_key(code, false);
 }
 
+/* Maps the CLI corpu key names to the joypad buttons the core binds by
+ * default (A=FIRE, X=SOFT_LEFT, B=SOFT_RIGHT, arrows=arrows).  Keys without a
+ * joypad default (digits, star, pound) are skipped: they are not needed by the
+ * titles the script exists for. */
+static unsigned key_name_to_joypad(const char *name)
+{
+   if (strcmp(name, "fire") == 0)
+      return 1u << RETRO_DEVICE_ID_JOYPAD_A;
+   if (strcmp(name, "soft1") == 0)
+      return 1u << RETRO_DEVICE_ID_JOYPAD_X;
+   if (strcmp(name, "soft2") == 0)
+      return 1u << RETRO_DEVICE_ID_JOYPAD_B;
+   if (strcmp(name, "left") == 0)
+      return 1u << RETRO_DEVICE_ID_JOYPAD_LEFT;
+   if (strcmp(name, "right") == 0)
+      return 1u << RETRO_DEVICE_ID_JOYPAD_RIGHT;
+   if (strcmp(name, "up") == 0)
+      return 1u << RETRO_DEVICE_ID_JOYPAD_UP;
+   if (strcmp(name, "down") == 0)
+      return 1u << RETRO_DEVICE_ID_JOYPAD_DOWN;
+   return 0u;
+}
+
+static int load_key_script(const char *path)
+{
+   FILE *f;
+   char token[64];
+   unsigned ignored = 0;
+   int c;
+
+   f = fopen(path, "r");
+   if (!f)
+      return 0;
+   g_key_event_count = 0;
+   for (;;)
+   {
+      size_t n = 0;
+      while ((c = fgetc(f)) != EOF &&
+             (c == ',' || c == ' ' || c == '\t' || c == '\r' ||
+              c == '\n'))
+         ;
+      if (c == EOF)
+         break;
+      do
+      {
+         if (n + 1 < sizeof(token))
+            token[n++] = (char)c;
+      } while ((c = fgetc(f)) != EOF && c != ',' && c != ' ' &&
+               c != '\t' && c != '\r' && c != '\n');
+      token[n] = '\0';
+      if (strncmp(token, "keys:", 5) == 0) /* keys.txt marker line */
+         continue;
+      {
+         char *colon = strchr(token, ':');
+         unsigned frame;
+         unsigned joy;
+         if (!colon)
+            continue;
+         *colon = '\0';
+         frame = (unsigned)strtoul(token, NULL, 10);
+         joy = key_name_to_joypad(colon + 1);
+         if (joy == 0u)
+         {
+            ignored++;
+            continue;
+         }
+         if (g_key_event_count < MAX_KEY_EVENTS)
+         {
+            g_key_events[g_key_event_count].frame = frame;
+            g_key_events[g_key_event_count].joy = joy;
+            g_key_event_count++;
+         }
+      }
+   }
+   fclose(f);
+   if (ignored > 0)
+      note("key script: %d entr(ies) use keys without a default joypad "
+           "binding and were skipped", (int)ignored);
+   return g_key_event_count > 0;
+}
+
 /* Input schedule used by --input-check.  The state is applied before each
  * retro_run() so the core polls it from inside the run like RetroArch does. */
 static void input_apply(unsigned frame, unsigned total)
@@ -1445,6 +1542,23 @@ static void input_apply(unsigned frame, unsigned total)
       RETROK_2,      RETROK_9
    };
    unsigned start, k, slot;
+
+   if (g_key_event_count > 0)
+   {
+      unsigned bits = 0u;
+      int i;
+      for (i = 0; i < g_key_event_count; i++)
+      {
+         if (frame >= g_key_events[i].frame &&
+             frame < g_key_events[i].frame + KEY_EVENT_HOLD_FRAMES)
+            bits |= g_key_events[i].joy;
+      }
+      if (bits != 0u)
+         g.ses.pressed_frames++;
+      g_pad_state = bits;
+      g_pointer_pressed = 0;
+      return;
+   }
 
    if (cfg.multitouch_check)
    {
@@ -2201,6 +2315,10 @@ static void usage(FILE *out, const char *argv0)
            "  --input-bitmask    advertise RETRO_ENVIRONMENT_GET_INPUT_BITMASKS "
            "and require\n"
            "                     the core to use the joypad mask query\n"
+           "  --keys PATH        frame:key script (fire/soft1/soft2/arrows); "
+           "drives\n"
+           "                     the matching joypad buttons before each "
+           "retro_run\n"
            "  --multitouch-check drive two independent fingers (pointer count 2)"
            " and\n"
            "                     require the fixture to see both ids, with a "
@@ -2315,6 +2433,13 @@ static int parse_args(int argc, char **argv)
          cfg.pace_us = 0;
       else if (strcmp(arg, "--audio-required") == 0)
          cfg.audio_required = 1;
+      else if (strcmp(arg, "--keys") == 0 && i + 1 < argc)
+      {
+         const char *path = argv[++i];
+         if (path[0] == '@')
+            path++;
+         snprintf(cfg.keys_path, sizeof(cfg.keys_path), "%s", path);
+      }
       else if (strcmp(arg, "--input-check") == 0)
          cfg.input_check = 1;
       else if (strcmp(arg, "--multitouch-check") == 0)
@@ -2512,6 +2637,12 @@ int main(int argc, char **argv)
 
    if (!parse_args(argc, argv))
       return 2;
+   if (cfg.keys_path[0] && !load_key_script(cfg.keys_path))
+   {
+      fprintf(stderr, "error: --keys '%s' has no usable frame:key entries\n",
+              cfg.keys_path);
+      return 2;
+   }
 
    /* Negotiation happens in retro_set_environment(), before retro_init(). */
    g.env.bitmask_supported = cfg.input_bitmask;

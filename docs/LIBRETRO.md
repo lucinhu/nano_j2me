@@ -539,7 +539,10 @@ vibration, repeated load/unload and save/load cases. The CTest gate
 per-index coordinates) through the real core with
 `tests/fixtures/multitouchdemo.jar` and requires both ids to reach the Java
 MultipointTouch listener while only the first finger owns the MIDP Canvas
-pointer. A real RetroArch smoke
+pointer. `check_libretro_3d_keys` uses the harness `--keys` script to press the
+corpus key sequence for `浴火银河2完整版_7689.jar` and requires an animated,
+non-black M3G scene (917 frames, 183 distinct frames); it skips when the
+gitignored `tests/games` corpus is absent. A real RetroArch smoke
 check also tests frontend integration. A watchdog-bounded boot is weaker evidence
 than a clean `run ended` and exit 0; record which occurred. Cross-build/export
 checks alone do not establish device runtime compatibility.

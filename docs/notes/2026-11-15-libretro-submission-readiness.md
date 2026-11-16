@@ -1016,3 +1016,13 @@ with the 0.5.12 `.info`; no merge claimed.
 - The other three Galaxy on Fire 2 releases now render 3D in probes with the
   same dismissal key script (`m3g` 119k–223k calls over 600 frames), see
   `docs/notes/2026-11-16-corpus-keys-and-sweep.md`.
+
+## Update, 2026-11-16 (round 74): key scripts reach 3D gameplay through the core
+
+The mock frontend gained `--keys PATH`, which replays the corpus `frame:key`
+script as the matching joypad buttons (A=FIRE, X=SOFT_LEFT, B=SOFT_RIGHT and
+the arrows) before each `retro_run()`. New CTest `check_libretro_3d_keys` runs
+`浴火银河2完整版_7689.jar` through the real core with its dismissal script and
+requires an animated, non-black M3G scene: **917 frames, non-black 76800/76800,
+183 distinct frames, audio nonzero 1.3M samples**, 47 checks 0 failed, 23.9 s.
+The gate skips when the gitignored corpus is absent.
