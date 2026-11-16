@@ -108,3 +108,52 @@ nj2me --port headless --size 240x320 --heap 32 --fps 0 \
 
 `--stats` reports `time=` and `fps=`; compare with `ru_utime + ru_stime`
 from `getrusage(RUSAGE_CHILDREN)`.
+
+## Addendum, same round: the two-title slowdown is cap-independent
+
+After the first write-up, two more experiments narrowed the mechanism (all
+reverted; tree stays at `97fe1f7`):
+
+1. **Main-thread skip alone.**  Only the `scheduler_step()` change (do not
+   count a main thread with no Java frames as "ran") was applied, no host
+   nap, no progress early-return, no sleep cap.  Measured on the same CLI:
+
+   | title | wall | CPU | fps |
+   | --- | --- | --- | --- |
+   | 魔塔_8052 | 12.22 s | 0.37 s | **24.6** |
+   | 火影忍者_11531 | 12.89 s | 0.05 s | **23.3** |
+   | 合金弹头4(完美汉化版)_4053 | 49 s CPU 5.01 s | 5.01 s | 30.0 |
+
+   So the CPU win (×20–×200) and the fps loss (30 → 24.6/23.3) both come
+   from that single change: letting `scheduler_step()` reach its idle
+   branches changes how the frame pace is spent, not just how much CPU it
+   burns.
+
+2. **Budget-capped scheduler sleep.**  Passed the remaining call budget
+   into `scheduler_step()` and capped its two internal `port_sleep()`
+   deltas by it (so a 50 ms sleeper cannot oversleep a 4 ms pass), on top
+   of the main-thread skip.  Result unchanged: 魔塔 24.5 fps CPU 0.38 s,
+   火影 23.2 fps CPU 0.05 s, 合金弹头4 30.0 fps but CPU still 4.98 s.
+
+3. **The pacer's wall time is not the wait it thinks it is.**  One trace
+   of `frame_pace_wait()` (instrumented only, no semantic change) showed
+   `wait=33` but **`spent=54 ms` with `iters=1`**: the single
+   `nj_run_pending(4 ms)` call inside it took 54 ms even with the sleep
+   cap in place.  So something inside the first scheduler pass sleeps a
+   whole 50 ms (the value `have_earliest` caps at), and the pacer's own
+   deadline cannot be honoured.  At `--fps 60` the same title also lands
+   at 24.6 fps, i.e. the frame period is determined by that 50 ms sleep
+   whenever the scheduler reaches the idle branch, not by the requested
+   cap (uncapped runs are 30.0 fps / 33 ms).
+
+   That explains the two-title symptom precisely: the cap is not being
+   applied because the inter-frame sleep overshoots it.  The remaining
+   question is _which_ sleeper has a 50 ms deadline and why
+   `port_sleep()` waits the full 50 ms instead of the pass budget; that
+   is the next thing to instrument (log `earliest`, `now` and the delta
+   in every `port_sleep()` call, plus the requesting thread).
+
+So the earlier "safe fix needs earliest deadline plumbing" conclusion is
+strengthened: the pacer must own the sleep, and `scheduler_step()` must
+never sleep past the caller's budget/wait.  Until both are true, any idle
+branch turns a 30 fps cap into ≈24.6 fps for those titles.
