@@ -225,3 +225,30 @@ in the sampled window.
 
 Reading the screenshot is what settled it, so keep `--dump-frames` + `--dump-every` in the probe
 recipe when a row is about to be called broken.
+
+### Per-title key scripts in the sweep (round 69)
+
+The rule above ("a frozen row is about the input recipe until a per-title script
+says otherwise") now has tooling: `tools/sweep_compat.py` honours the
+`NJ_KEYS_DIR` environment variable, a directory of per-title key scripts named
+after the JAR (`浴火银河2完整版_7689.jar` -> `浴火银河2完整版_7689.txt`, same
+syntax as `--keys`).  The curated files live in `tools/corpus_keys/` with a
+README that documents the format, the naming rule and the curation rules: only
+add a script when the generic recipe cannot reach representative content and the
+script was verified from a frame dump.  A row that used a curated script carries
+an extra `"keys": "<file name>"` field, so a reader can tell a verdict with
+title-specific input from a generic one.
+
+The first two scripts are the ones this document already discusses:
+
+* `浴火银河2完整版_7689` — the title opens on a static "Music On / Music Off"
+  screen; the script (fire/fire/soft1/fire/soft2/fire at frames 30..180)
+  dismisses it and the same 600-frame probe then records `m3g=174,831`,
+  `tris=1,189,565` instead of the previous `m3g=0` frozen menu.
+* `终极雷电_4125` — fire at frames 10 and 100 keeps the run on the title menu
+  and then on the carrier billing page, documenting the gate from round 66
+  instead of leaving the row at a black menu.
+
+Neither script changes a verdict by pressing through a game-side gate: the SMS
+page stays a gate, and the sweep reports it as `ok` with the billing screen
+painted, exactly like the round-66 adjudication.

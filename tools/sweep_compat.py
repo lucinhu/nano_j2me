@@ -6,6 +6,10 @@ Usage: tools/sweep_compat.py [output directory]
 Writes rows.jsonl there, one JSON object per JAR; tools/make_compat_matrix.py
 turns that into docs/COMPATIBILITY_MATRIX.md.  Titles that cannot start on the
 generic handset are retried once with --device nokia6230.
+
+Set NJ_KEYS_DIR to a directory of per-title key scripts: a file named
+"<jar name without .jar>.txt" replaces the generic keys.txt for that title
+(see tools/corpus_keys/README.md for the format and the curation rules).
 """
 import json, os, re, subprocess, sys, zipfile
 from concurrent.futures import ProcessPoolExecutor
@@ -16,6 +20,7 @@ OUT = os.sys.argv[1] if len(os.sys.argv) > 1 else os.path.join(
 # build/nj2me can be stale relative to HEAD (it was: the 2026-11 sweep used a
 # binary 20 commits behind); NJ_BIN lets the caller point at a fresh build.
 BIN = os.environ.get("NJ_BIN") or os.path.join(ROOT, "build", "nj2me")
+KEYS_DIR = os.environ.get("NJ_KEYS_DIR", "")
 RUN = 600
 KEYS = ["30:fire", "55:soft1", "80:53", "110:pressed@120,160", "112:released@120,160",
         "140:left", "165:right", "190:48", "215:up", "240:down", "265:soft2", "290:5",
@@ -55,6 +60,11 @@ def one(job):
                 "config": attrs.get("MicroEdition-Configuration", ""),
                 "apis": sorted(apis), "classes": nclass})
     keys = os.path.join(OUT, "keys.txt")
+    if KEYS_DIR:
+        custom = os.path.join(KEYS_DIR, base[:-len(".jar")] + ".txt")
+        if os.path.exists(custom):
+            keys = custom
+            row["keys"] = os.path.basename(custom)
     for heap in (16, 32):
         rms = os.path.join(OUT, "rms", base.replace(".jar", "") + "-" + str(heap))
         cmd = [BIN, "--port", "headless", "--size", "240x320",
