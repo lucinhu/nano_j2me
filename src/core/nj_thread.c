@@ -955,12 +955,13 @@ int nj_vm_monitor_notify(nj_vm *vm, nj_ref obj, int all)
 /* ------------------------------------------------------------------ */
 /* Scheduler                                                           */
 /* ------------------------------------------------------------------ */
-static nj_status scheduler_step(nj_vm *vm)
+static nj_status scheduler_step(nj_vm *vm, int *out_real_work)
 {
     nj_u2 i;
     int alive = 0;
     int waiting = 0;
     int ran = 0;
+    int real_work = 0;
     /*
      * A thread woken while parked inside a nested C call is runnable but must
      * not be entered from here: its C stack belongs to the pump that will
@@ -1091,6 +1092,14 @@ static nj_status scheduler_step(nj_vm *vm)
             continue;
         }
         ran = 1;
+        if (!t->is_main) {
+            /* An empty main-thread pass is not work: the C runner owns the
+             * frame and nj_exec() on an empty stack returns immediately.
+             * Callers that spend idle time (the frame pacer) need to know
+             * the difference between "a MIDlet thread made progress" and
+             * "only the empty main pass was walked". */
+            real_work = 1;
+        }
         vm->cur = t;
         st = nj_exec(vm, t, 0);
 
@@ -1131,6 +1140,9 @@ static nj_status scheduler_step(nj_vm *vm)
         }
     }
 
+    if (out_real_work != NULL) {
+        *out_real_work = real_work;
+    }
     if (!alive) {
         return NJ_ERR_HALT;
     }
@@ -1186,7 +1198,7 @@ static nj_status scheduler_step(nj_vm *vm)
 nj_status nj_scheduler_step(nj_vm *vm)
 {
     nj_thread *main_thread = nj_thread_main(vm);
-    nj_status st = scheduler_step(vm);
+    nj_status st = scheduler_step(vm, NULL);
 
     /*
      * scheduler_step points vm->cur at each thread it runs, which is right
@@ -1271,7 +1283,8 @@ nj_status nj_scheduler_run_until_idle(nj_vm *vm, nj_u4 budget_ms)
     nj_s8 start = nj_now_ms(vm);
 
     for (;;) {
-        nj_status st = nj_scheduler_step(vm);
+        int real_work = 0;
+        nj_status st = scheduler_step(vm, &real_work);
         if (st == NJ_ERR_HALT) {
             return NJ_OK;
         }
@@ -1279,6 +1292,16 @@ nj_status nj_scheduler_run_until_idle(nj_vm *vm, nj_u4 budget_ms)
             return st;
         }
         if (budget_ms && (nj_now_ms(vm) - start) > (nj_s8)budget_ms) {
+            return NJ_ERR_TIMEOUT;
+        }
+        /*
+         * No MIDlet thread moved.  Spinning in this call until the budget
+         * expires is what made a capped run burn a core: an empty main-thread
+         * pass counted as work, so the idle branches never ran.  Return early
+         * instead and let the caller - the frame pacer - sleep against its own
+         * frame deadline, which this function cannot know.
+         */
+        if (!real_work) {
             return NJ_ERR_TIMEOUT;
         }
     }

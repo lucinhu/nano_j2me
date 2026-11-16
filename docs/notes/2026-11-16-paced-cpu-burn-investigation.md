@@ -234,3 +234,18 @@ length — it does not know the frame deadline.  The pacer knows `left`; the
 scheduler (or `nj_run_pending`) should only *report* "nothing runnable and no
 timer deadline", and the pacer should sleep exactly `min(left, its own idle
 granularity)` after such a report, never inside a scheduler pass.
+
+## Resolution, round 63 (2026-11-16)
+
+Implemented the design above: `scheduler_step()` reports real (MIDlet-thread)
+progress, `nj_scheduler_run_until_idle()` stops as soon as a pass makes no
+such progress, and `frame_pace_wait()` turns that fast `NJ_ERR_TIMEOUT` into
+`min(left, 2 ms)` of `port->sleep_ms` - the pacer, not the scheduler decides
+the nap length, so it can never overshoot the frame deadline.
+
+Results: 魔塔/火影/合金弹头4/世嘉头文字D all 30 fps with 0.05-0.09 s CPU
+(previously ~9-10 s); JBenchmark HD and 丧尸危机2 (the round-61 hangs) exit 0;
+`check_timer_wait`/`test_save`/`test_lifecycle` pass; loader and unpaced
+numbers unchanged; libretro option matrix 88/88, real RetroArch PASS, state
+probe 12/12; 404-title sweep identical to baseline (372 ok, 0 timeout);
+CTest 192/192.

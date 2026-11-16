@@ -3922,6 +3922,48 @@ themselves (perspective divide per pixel); squeezing them further would need
 fixed-point or approximate sampling, which risks the parity property the
 deterministic-prefix check enforces. Not attempted.
 
+## Paced-run CPU burn: the pacer owns the nap (round 63, 2026-11-16)
+
+**Status: fixed.**  The earlier attempts failed because the scheduler decided
+how long to sleep, and a scheduler pass has no idea where the next frame
+deadline is: any host sleep inside it overran a 30 fps period by several
+milliseconds.  The change now separates the two concerns:
+
+- `scheduler_step()` reports (via an out-parameter) whether any **MIDlet**
+  thread made progress.  An empty main-thread pass - the C runner owns the
+  frame, so `nj_exec()` on an empty stack is a no-op - no longer counts.
+  The pass accounting itself is unchanged, so nothing that used to run
+  stops running.
+- `nj_scheduler_run_until_idle()` returns `NJ_ERR_TIMEOUT` immediately when
+  a pass made no MIDlet progress instead of spinning out the caller's
+  budget.
+- `frame_pace_wait()` sees that fast `TIMEOUT` (`< 1 ms` since the call) and
+  naps `min(left, 2 ms)` through `port->sleep_ms`, so the sleep is bounded by
+  the pacer's own remaining frame budget and cannot overshoot.
+
+Measured (300 frames, `--fps 30`, heap 32, user+sys CPU):
+
+| title | before | after | fps |
+| --- | --- | --- | --- |
+| 魔塔_8052 | 9.87 s | **0.09 s** | 30.1 |
+| 火影忍者_11531 | ~9.0 s | **0.07 s** | 30.1 |
+| 合金弹头4(完美汉化版)_4053 | ~10.0 s | **0.08 s** | 30.0 |
+| 世嘉头文字D－宿命对决_1247 | ~10.0 s | **0.05 s** | 30.0 |
+| loopdemo / bench / Doom3 (uncapped) | - | unchanged | - |
+
+Correctness checks: `JBenchmark HD.jar` (139 frames) and
+`丧尸危机2-自由之翼BT版_997.jar` (600 frames) - the two titles the round-61
+attempt hung - both exit 0; `check_timer_wait`, `test_save`, `test_lifecycle`
+pass; loader timing unchanged (Minecraft PE at 30 fps still executes 1.41 B
+bytecodes in 10 s); libretro option matrix 88/88, real RetroArch PASS, state
+probe 12/12; full 404-title sweep **372 ok / 27 title-exit / 2
+title-exception / 2 no-frame / 0 timeout / 1 bad-jar** (identical to the
+pre-change baseline), full CTest 192/192.
+
+The loaders' "sleep between chunks" behaviour is preserved: when a worker
+thread is runnable it makes progress (`real_work`), so the pacer keeps
+executing it; the nap only happens when nothing at all can run.
+
 ## Paced-run CPU burn: an idle pass that never idles (round 61, 2026-11-16)
 
 **Status: reverted.** The implementation described below removed the burn but made two

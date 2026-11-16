@@ -280,10 +280,23 @@ static void frame_pace_wait(nj_vm *vm, nj_s8 wait)
              * sleeps between chunks.  The budget only bounds how long one call
              * may spend before the frame's wall clock is checked again.
              */
+            nj_s8 pending_start = nj_now_ms(vm);
             nj_status st = nj_run_pending(vm,
                 (nj_u4)(left > 4 ? 4 : (left > 1 ? left : 1)));
             if (st != NJ_OK && st != NJ_ERR_TIMEOUT) {
                 break;
+            }
+            /*
+             * Nothing ran: hand the remaining time to the host instead of
+             * calling straight back in.  The scheduler returns at once when an
+             * empty main-thread pass is all it can find, and this loop would
+             * otherwise spin a core flat out for every capped frame.  The nap
+             * is bounded by `left`, so it cannot overshoot the frame deadline.
+             */
+            if (st == NJ_ERR_TIMEOUT && nj_now_ms(vm) - pending_start < 1 &&
+                vm->port->sleep_ms != NULL) {
+                nj_s8 nap = left > 2 ? 2 : (left > 0 ? left : 1);
+                vm->port->sleep_ms(vm->port->ud, (nj_u4)nap);
             }
         } else if (vm->port->sleep_ms) {
             /* Nothing to run: park the host, waking at the frame boundary or
