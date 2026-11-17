@@ -1060,3 +1060,23 @@ load (`毁灭战士3_10598`, `台球传奇_87`). The headless CLI (complete key 
 incl. digits/star/pointer) stays the authoritative compatibility oracle.
 Harness `--keys` also maps digits `0`/`5` to the core options Select/Start.
 Full CTest 195/195 (382.23 s).
+
+## Update, 2026-11-17 (round 81): cheat codes and the 0.5.13 package
+
+- The core now implements `retro_cheat_set()`/`retro_cheat_reset()` with one
+  documented form, `<arena offset>:<hex bytes>`, re-applied at the start of
+  every `retro_run()` over the SYSTEM_RAM arena window; `.info` advertises
+  `cheats = "true"`. New CTest gate `check_libretro_cheat` proves apply,
+  per-frame re-apply after a simulated overwrite, disable, malformed code and
+  reset (`docs/notes/2026-11-17-libretro-cheat-codes.md`).
+- The mock frontend's `--keys` parser no longer splits `pressed@X,Y` on the
+  comma, so curated pointer scripts actually reach the core; the whole-corpus
+  visual probe now reports 385 titles -> 382 ok + 3 documented known
+  limitations, 0 unexplained failures, 380 animated / 5 static
+  (`docs/notes/2026-11-17-harness-pointer-keys.md`,
+  `docs/notes/2026-11-17-static-title-classification.md`).
+- Metadata and the r32 package are 0.5.13 (`.info` SHA-256
+  `cd52e1a0f260aeb818a51c1af7f09dcd62ab85db7595b0b88753a41f77131530`); the
+  libretro-super and libretro-docs patches were refreshed and both upstream PRs
+  (#2204, #1239) now carry the 0.5.13 content. Validation: mock 20/20, real
+  RetroArch PASS, Wine 4/4, bundle 32/32, full CTest 196/196.

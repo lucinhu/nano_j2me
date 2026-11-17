@@ -24,14 +24,15 @@ index 89026d6d..0e7d8b59 100644
  | [Neko Project II](../library/nekop2.md) | NEC PC-98              | An emulator for NEC's PC-9801 (aka PC-98) personal computer platform, ported to libretro |
 diff --git a/docs/library/nano_j2me.md b/docs/library/nano_j2me.md
 new file mode 100644
-index 00000000..b06792b0
+index 00000000..60a082fb
 --- /dev/null
 +++ b/docs/library/nano_j2me.md
-@@ -0,0 +1,219 @@
+@@ -0,0 +1,231 @@
 +---
 +title: "nano_j2me – Mobile J2ME core for RetroArch"
-+description: "RetroArch nano_j2me core (Mobile J2ME): core options, controls, save states and limits. Native C99 J2ME runtime loading .jar files directly, no external Java runtime."
++description: "Native C99 J2ME runtime for libretro: M3G software 3D, MIDI/MP3/AMR/WAV/ADPCM audio, MPEG-4 Part 2 and H.263 video, manual save states, cheat search and multi-touch."
 +---
++
 +# Mobile - J2ME (nano_j2me)
 +
 +## Background
@@ -82,7 +83,7 @@ index 00000000..b06792b0
 +| Keyboard | Yes, handset keypad callback |
 +| Pointer | Yes, touch/mouse canvas input |
 +| Hardware rendering | No; software RGB565 |
-+| Cheats / achievements / disc control | No code-based cheats; the arena is exposed for frontend cheat search (below) |
++| Cheats / achievements / disc control | Arena-offset cheat codes (below); no achievements or disc control |
 +| libretro save RAM / exposed memory | No SAVE_RAM; SYSTEM_RAM exposes the JVM arena as a memory map |
 +| Network / Bluetooth / sensors / rumble | Not provided by this adapter |
 +
@@ -118,10 +119,21 @@ index 00000000..b06792b0
 +re-published after a save state is loaded, because a load replaces the arena.
 +
 +Writes into the window are raw and unsynchronised: they are a debugging tool,
-+not a save channel, and a wrong write can corrupt the running program. There is
-+no database of core-level cheat codes; code-based cheats (`retro_cheat_set`)
-+remain unimplemented, and the frontend's own search-and-write UI is the intended
-+way to use the window.
++not a save channel, and a wrong write can corrupt the running program.
++
++### Cheat codes
++
++The core implements `retro_cheat_set()`/`retro_cheat_reset()` for one
++core-specific code form, `<arena offset>:<hex bytes>`, where the offset is a
++byte offset into the exposed `SYSTEM_RAM` window (frontend `+0x` style
++addresses are not used; cheat offsets are arena-relative). The bytes are re-applied at the start of every
++`retro_run()`, so a game writing the old value back does not cancel the cheat;
++disabling the entry or `retro_cheat_reset()` stops the writes, and malformed
++codes are ignored with a warning. The intended workflow is the frontend's
++cheat search over the same window: search for a value, patch it once to learn
++the offset, then store a cheat entry with that offset. No cheat database and
++no Game Genie/GameShark/Action Replay decoding is provided because the arena is
++a managed Java heap rather than a flat address space.
 +
 +## Directories
 +

@@ -49,7 +49,7 @@ The ready-to-post title, patch commands, body text and checklist are in
 ## 2. `libretro/libretro/docs`
 
 Apply the prepared patch, which adds the page and every index update in one
-diff (5 files, +229 lines):
+diff (5 files, +241 lines):
 
 ```
 git apply libretro-docs-nano_j2me.patch

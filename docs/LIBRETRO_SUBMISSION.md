@@ -1116,3 +1116,22 @@ archive SHA-256 `7467092702a939b7c0dc16c3d3a025fab5d8f41337c5eb48f59eb0d451d7d58
 GitHub release `v0.5.12` also ships `nj2me.apk` (3,275,114 B) and
 `nj2me-legacy.apk` (701,372 B). Both PRs remain open and mergeable; no merge
 claimed.
+
+## Update, 2026-11-17 (round 81): 0.5.13 with cheat codes
+
+The libretro core now implements `retro_cheat_set()`/`retro_cheat_reset()` in
+one documented core-specific form, `<arena offset>:<hex bytes>`, re-applied at
+the start of every `retro_run()` over the `SYSTEM_RAM` arena window; `.info`
+sets `cheats = "true"`, and the mock frontend also parses `pressed@X,Y` entries
+in its key scripts (the old parser split on every comma and dropped the tap).
+Metadata is 0.5.13, `.info` SHA-256
+`cd52e1a0f260aeb818a51c1af7f09dcd62ab85db7595b0b88753a41f77131530`; the r32
+package is installed in `build/libretro-dist` and an eleven-target release
+bundle is published with tag `v0.5.13`.
+
+Validation on the r32 package: mock matrix 20/20; real RetroArch 1.22.2
+LoopDemo 120 frames PASS; Windows x86_64 under Wine 300 frames 4/4; CTest
+`check_libretro_cheat` PASS (apply, per-frame re-apply, disable, malformed,
+reset); submission-bundle validator 32/32; full CTest 196/196 at the release
+tree. The upstream PRs (libretro/libretro-super#2204 and libretro/docs#1239)
+now carry the 0.5.13 `.info`; no merge or acceptance is claimed.

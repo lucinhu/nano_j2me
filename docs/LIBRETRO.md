@@ -69,8 +69,11 @@ Outputs go to `build/libretro-dist/<target>/`, with a library and its metadata.
 Use `--no-strip` to retain symbols. `all` selects the script's supported targets
 and requires all of their toolchains.
 
-The eight candidates currently in `build/libretro-dist/` are the r31 package
-(the 0.5.12 release) built on 2026-11-16 from revision `21a79f7`. r31 ships the
+The eight candidates currently in `build/libretro-dist/` are the r32 package
+(the 0.5.13 release) built on 2026-11-17 from revision `31c2206`. r32 adds the
+arena-offset cheat codes documented under [Cheats](#cheats) and the corrected
+mock-frontend pointer-key parsing
+(`docs/notes/2026-11-17-harness-pointer-keys.md`). r31 shipped the
 multi-touch input path: the core follows `RETRO_DEVICE_ID_POINTER_COUNT`,
 reports every finger the frontend sends with its own event id, and keeps the
 MIDP `Canvas` pointer with the first finger
