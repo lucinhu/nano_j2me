@@ -1080,3 +1080,25 @@ Full CTest 195/195 (382.23 s).
   libretro-super and libretro-docs patches were refreshed and both upstream PRs
   (#2204, #1239) now carry the 0.5.13 content. Validation: mock 20/20, real
   RetroArch PASS, Wine 4/4, bundle 32/32, full CTest 196/196.
+
+## Update, 2026-11-17 (round 85): 0.5.13 rehearsal against current upstream
+
+- `libretro/docs` master is still `177c669990b659e7cfd00add4564b85c2a692179`,
+  so the docs patch (5 files, +241 lines) is rebased at the current master; a
+  clean clone + patch builds with `mkdocs` (page 99,546 bytes, only the
+  git-date plugin warning for the new file).
+- `libretro-super` master moved to
+  `1b988c491e31f1cc768572f3d68f45e69d194e5b`; the one-file `.info` patch still
+  applies there. The fork PR branch was rebuilt on that commit
+  (`5bbf1e7`, parent = current master) and PR #2204 was reopened — it is now
+  OPEN/MERGEABLE with the current base. `tools/check_libretro_submission_bundle.sh`
+  now records the new upstream baselines; with `--apply-clones --mkdocs` it
+  reports **41 passed, 0 failed**.
+- The exact upstream CI template command shapes were simulated again on the
+  0.5.13 tree (`tools/simulate_ci_builds.sh --out /var/tmp/ci-sim-r32`):
+  **3/3 contracts pass** — linux `nano_j2me_libretro.so` 3,995,448 B, windows
+  `nano_j2me_libretro.dll` 3,562,524 B, android `nano_j2me_libretro.so`
+  11,670,424 B (template renames to `_android.so`).
+- Both upstream PRs remain ready: libretro/libretro-super#2204
+  (head `5bbf1e7`, OPEN/MERGEABLE) and libretro/docs#1239 (head `05577de5`,
+  OPEN/MERGEABLE). No merge or acceptance is claimed.

@@ -15,7 +15,7 @@ update the fork branch and regenerate the patch from it.
 Prepared 2026-11-15. The exact-index patches below were generated against and
 verified to apply cleanly to `libretro/docs` master
 `177c669990b659e7cfd00add4564b85c2a692179` (rebased 2026-11-16; the first revision of the PR was against `d83b34b2`) and `libretro-super` master
-`fb15e630655375a50317be2a7953477ef9a5d12a`.
+`1b988c491e31f1cc768572f3d68f45e69d194e5b` (rebased 2026-11-17; the patch also applied to the earlier `fb15e63`).
 
 Re-check the whole bundle offline (including clean-clone apply and a docs
 site build when you point it at scratch clones):

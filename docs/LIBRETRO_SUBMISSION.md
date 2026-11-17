@@ -21,7 +21,7 @@ steps below before publication.
 | Buildbot configuration | [root GitLab CI](../.gitlab-ci.yml) | core repository root; integration with libretro infrastructure requires maintainers |
 | Library page draft | [nano_j2me library page](libretro/nano_j2me.md) | `libretro/docs`, `docs/library/nano_j2me.md` plus navigation/index updates |
 | Copy-ready upstream bundle | [docs/libretro/upstream/](libretro/upstream/README.md) | exact `.info` and documentation-page copies plus index-update checklist for the two PRs |
-| `libretro-super` patch | [libretro-super-nano_j2me-info.patch](libretro/upstream/libretro-super-nano_j2me-info.patch) | one-file diff adding `dist/info/nano_j2me_libretro.info`; verified against `libretro-super` master `fb15e63` |
+| `libretro-super` patch | [libretro-super-nano_j2me-info.patch](libretro/upstream/libretro-super-nano_j2me-info.patch) | one-file diff adding `dist/info/nano_j2me_libretro.info`; verified against `libretro-super` master `1b988c49` (and the earlier `fb15e63`) |
 | `libretro/docs` patch | [libretro-docs-nano_j2me.patch](libretro/upstream/libretro-docs-nano_j2me.patch) | 5-file diff: library page with upstream front matter, `mkdocs.yml` nav, `core-list.md`, `licenses.md`, `see-also.md`; verified against `libretro/docs` master `d83b34b`, `mkdocs build` passes |
 | Ready-to-post PR: `libretro-super` | [PR-libretro-super.md](libretro/upstream/PR-libretro-super.md) | title, patch commands, body and checklist for the `.info` PR |
 | Ready-to-post PR: `libretro/docs` | [PR-libretro-docs.md](libretro/upstream/PR-libretro-docs.md) | title, patch commands, body and checklist for the library-page PR |
