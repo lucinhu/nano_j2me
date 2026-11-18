@@ -5256,6 +5256,7 @@ typedef struct android_app {
     nj_port    port;
     nj_run_opts opts;
     char       jar_path[512];
+    char       cheat_path[640];
     pthread_t  thread;
     int        running;
     int        started;
@@ -5334,12 +5335,70 @@ Java_com_lucinhu_nj2me_GameActivity_nativeGraphicsInfo(JNIEnv *env, jclass cls,
     return result;
 }
 
+/*
+ * Cheat codes are plain text, so the APK takes them from a file next to the
+ * game rather than a UI: <jar dir>/cheats/<name>.txt, then the app files dir
+ * and the RMS dir of the same layout (people push the file with adb or a file
+ * manager on the app-specific storage).  The format is the runtime's
+ * "<arena offset>:<hex bytes>", one code per line; the runner re-applies the
+ * table at every frame.  Missing file simply means "no cheats".
+ */
+static void android_resolve_cheat_file(android_app *a, android_state *s)
+{
+    char dir[512];
+    char stem[256];
+    char path[1024];
+    const char *jar = a->jar_path;
+    const char *slash;
+    const char *base;
+    const char *dot;
+    size_t stem_len;
+    size_t dir_len;
+    int i;
+    static const char *const subdirs[] = {"cheats", "files/cheats", "rms/cheats"};
+
+    if (jar == NULL || jar[0] == '\0') return;
+    slash = strrchr(jar, '/');
+    base = slash ? slash + 1 : jar;
+    if (base[0] == '\0') return;
+    dot = strrchr(base, '.');
+    stem_len = (dot != NULL && dot > base) ? (size_t)(dot - base) : strlen(base);
+    if (stem_len == 0u || stem_len >= sizeof stem) return;
+    memcpy(stem, base, stem_len);
+    stem[stem_len] = '\0';
+    if (slash != NULL) {
+        dir_len = (size_t)(slash - jar);
+        if (dir_len == 0u || dir_len >= sizeof dir) return;
+        memcpy(dir, jar, dir_len);
+        dir[dir_len] = '\0';
+        for (i = 0; i < (int)(sizeof subdirs / sizeof subdirs[0]); i++) {
+            snprintf(path, sizeof path, "%s/%s/%s.txt", dir, subdirs[i], stem);
+            if (access(path, R_OK) == 0) {
+                snprintf(a->cheat_path, sizeof a->cheat_path, "%s", path);
+                a->opts.cheat_file = a->cheat_path;
+                __android_log_print(ANDROID_LOG_INFO, "nj2me",
+                                    "cheats: %s", path);
+                return;
+            }
+        }
+    }
+    if (s != NULL && s->fs_dir[0] != '\0') {
+        snprintf(path, sizeof path, "%s/cheats/%s.txt", s->fs_dir, stem);
+        if (access(path, R_OK) == 0) {
+            snprintf(a->cheat_path, sizeof a->cheat_path, "%s", path);
+            a->opts.cheat_file = a->cheat_path;
+            __android_log_print(ANDROID_LOG_INFO, "nj2me", "cheats: %s", path);
+        }
+    }
+}
+
 static void *android_main_thread(void *arg)
 {
     android_app *a = (android_app *)arg;
     android_state *s = AS(a->port.ud);
 
     a->opts.jar_path = a->jar_path;
+    android_resolve_cheat_file(a, s);
     /*
      * Hand the runtime the platform's glyphs.  Set here rather than in
      * nativeCreate because the faces live in this run's state: two Activities

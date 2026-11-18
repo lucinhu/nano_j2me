@@ -54,5 +54,8 @@ hex bytes. Same format everywhere.
   writes and can corrupt objects if the offset is not from a deliberate search.
 - A state restore replaces the arena, so codes apply to whatever object
   currently occupies the offset.
-- The Android APK has no cheat UI yet; reading `cheats/<stem>.txt` next to the
-  JAR is the planned follow-up.
+- The Android APK has no cheat UI; instead it reads a text file next to the
+  game: `<jar dir>/cheats/<stem>.txt`, then `<files dir>/cheats/<stem>.txt` and
+  `<rms dir>/cheats/<stem>.txt` (same format, one code per line). Push the file
+  with adb or a file manager on the app-specific storage; a missing file means
+  no cheats. The lookup runs on the run thread before `nj_run()`.
