@@ -1128,3 +1128,13 @@ Full CTest 195/195 (382.23 s).
   the embedded port list.
 - Release `v0.5.14` published with the r33 zip and both APKs; upstream super
   PR branch refreshed with the 0.5.14 `.info` (no merge claimed).
+
+## Round 90: rehearsal on the 0.5.14 tree (2026-11-19)
+
+`tools/check_libretro_submission_bundle.sh` is 32/32 on the tree; with clean
+`libretro-super`/`libretro/docs` clones at the recorded baselines plus real
+`mkdocs` it is 41/41.  A fresh `--depth 1` clone of origin/main at `6a478a4`
+satisfies all three upstream CI template build contracts, and the Linux core
+built inside that clone passes the mock matrix 20/20 and a real RetroArch
+LoopDemo run.  Details and hashes are in `docs/LIBRETRO_SUBMISSION.md`
+("Round-90 end-to-end rehearsal").

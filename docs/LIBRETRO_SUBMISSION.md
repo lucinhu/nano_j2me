@@ -1156,3 +1156,27 @@ Upstream: the `libretro-super` branch was rebuilt on the current master with
 the 0.5.14 `.info`; the docs page already documents the cheat format and needs
 no version change. Both pull requests stay open; no merge or acceptance is
 claimed.
+
+## Round-90 end-to-end rehearsal (2026-11-19)
+
+Re-ran the whole rehearsal on the 0.5.14 tree (`6a478a4`) so the "ready to
+submit" evidence stays current:
+
+- `tools/check_libretro_submission_bundle.sh` → **32 passed, 0 failed**.
+- The same check with a clean `libretro-super` / `libretro/docs` clone pair
+  reset to the recorded upstream baselines (`1b988c49…`, `177c6699…`), both
+  patches applied and the docs site built with real `mkdocs` →
+  **41 passed, 0 failed**.
+- Fresh `git clone --depth 1` of origin/main at `6a478a4`:
+  `tools/simulate_ci_builds.sh --jobs 8` satisfied **all three upstream CI
+  template contracts** (linux `.so` 3,999,920 B; windows `.dll` 3,565,867 B;
+  android `.so` 11,700,936 B after the template rename to
+  `nano_j2me_libretro_android.so`).
+- In that clone, `tools/build_libretro_cores.sh linux-x86_64` produced a core
+  (3,848,056 B, sha256 `5f6ac53b059a288215d1fd780252659bd4bd48f904e223ec8fce826ad3b0874c`)
+  that passed the mock conformance matrix **20/20** and real RetroArch 1.22.2
+  LoopDemo for 120 frames.  Clone-built binaries differ from the release r33
+  hashes by design (different build directory/flags); the rehearsal verifies
+  behaviour, not byte identity.
+- Conclusion: the kit still builds and applies from a pristine checkout, and
+  no local state blocks the external submission steps.
