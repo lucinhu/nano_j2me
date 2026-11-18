@@ -69,9 +69,12 @@ Outputs go to `build/libretro-dist/<target>/`, with a library and its metadata.
 Use `--no-strip` to retain symbols. `all` selects the script's supported targets
 and requires all of their toolchains.
 
-The eight candidates currently in `build/libretro-dist/` are the r32 package
-(the 0.5.13 release) built on 2026-11-17 from revision `31c2206`. r32 adds the
-arena-offset cheat codes documented under [Cheats](#cheats) and the corrected
+The eight candidates currently in `build/libretro-dist/` are the r33 package
+(the 0.5.14 release) built on 2026-11-19 from revision `51c892c`. r33 moves the
+cheat engine into the runtime so the libretro core, the headless CLI
+(`--cheat`/`--cheat-file`) and the Android build share one table
+(`docs/notes/2026-11-19-core-cheat-engine.md`). r32 added the arena-offset
+cheat codes documented under [Cheats](#cheats) and the corrected
 mock-frontend pointer-key parsing
 (`docs/notes/2026-11-17-harness-pointer-keys.md`). r31 shipped the
 multi-touch input path: the core follows `RETRO_DEVICE_ID_POINTER_COUNT`,

@@ -1115,3 +1115,16 @@ Full CTest 195/195 (382.23 s).
 - This confirms the 600-frame numbers' state/crash profile is not an artefact
   of the shorter run; the 1,800-frame sweep is the load-timeout and
   leak/hang check used for the release evidence.
+
+## Update, 2026-11-19 (round 87): 0.5.14 cheat engine and r33 package
+
+- Cheat engine moved into the runtime (`src/core/nj_cheat.c`), shared by the
+  libretro core, the headless CLI and the Android build; `tests/test_cheat.c`
+  (33 checks) runs as CTest `test_cheat`; `check_libretro_cheat` still passes.
+- Metadata bumped to 0.5.14 (`.info` SHA-256 `497b24a6…`); r33 package built
+  from `51c892c` and installed as canonical; mock 20/20, real RetroArch PASS,
+  Wine 4/4 at 300 frames, option matrix 66/66, states 12/12, full CTest
+  197/197 PASS, `check_port_sources` green after adding the new core file to
+  the embedded port list.
+- Release `v0.5.14` published with the r33 zip and both APKs; upstream super
+  PR branch refreshed with the 0.5.14 `.info` (no merge claimed).

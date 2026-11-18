@@ -1135,3 +1135,24 @@ LoopDemo 120 frames PASS; Windows x86_64 under Wine 300 frames 4/4; CTest
 reset); submission-bundle validator 32/32; full CTest 196/196 at the release
 tree. The upstream PRs (libretro/libretro-super#2204 and libretro/docs#1239)
 now carry the 0.5.13 `.info`; no merge or acceptance is claimed.
+
+## Update, 2026-11-19 (round 87): 0.5.14 with the shared cheat engine
+
+The runtime now owns the cheat engine (`src/core/nj_cheat.c`): the libretro
+port, the headless CLI (`--cheat`, `--cheat-file`) and the Android build share
+one per-VM table, and the APK reads `<jar dir>/cheats/<stem>.txt` (plus the
+files/RMS dirs) at start. Metadata is 0.5.14, `.info` SHA-256
+`497b24a6eff931e6cf109ba1f582d8a5c4c477b906ee5b99326cbcdb50ab2fd8`.
+
+The r33 package was built from a clean worktree at revision `51c892c`
+(eight targets) and installed as the canonical `build/libretro-dist`. Core
+hashes are listed in `docs/RELEASE_0.5.14.md`. Validation: mock matrix 20/20,
+real RetroArch LoopDemo 120 frames PASS, Windows x86_64 Wine 4/4 at 300
+frames, option matrix 66/66, state round trips 12/12, full serial CTest
+197/197. Both APKs were rebuilt at 0.5.14 and published with the release
+bundle (tag `v0.5.14`).
+
+Upstream: the `libretro-super` branch was rebuilt on the current master with
+the 0.5.14 `.info`; the docs page already documents the cheat format and needs
+no version change. Both pull requests stay open; no merge or acceptance is
+claimed.
