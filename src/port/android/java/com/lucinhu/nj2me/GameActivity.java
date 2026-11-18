@@ -28,6 +28,12 @@ import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.EditText;
+import android.graphics.Typeface;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.InputStreamReader;
+import java.io.OutputStreamWriter;
 import android.text.Editable;
 import android.text.TextWatcher;
 import android.text.InputType;
@@ -299,6 +305,13 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
      */
     private static native void nativeSetRestore(long handle, String path);
     private static native int nativeSaveState(long handle, String path);
+
+    /*
+     * Cheat list.  The panel writes the game's cheat file and asks the run
+     * thread to clear, re-read and re-apply it at the next frame boundary; the
+     * answer is the number of parsed codes (negative = reload failed).
+     */
+    private static native int nativeCheatReload(long handle, String path);
 
     private static native void nativeQuit(long handle);
 
@@ -1370,6 +1383,13 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
         final TextView graphicsDetails = Md3.supporting(this, "");
         graphicsPanelStatus = graphicsDetails;
         updateGraphicsPanel(readGraphicsInfo());
+        final File cheatFile = cheatFileFor(jarName);
+        final boolean cheatFileExists = cheatFile.isFile();
+        LinearLayout cheatRow = Md3.row(this, Md3.IC_CHECK, "作弊码",
+                cheatFileExists
+                        ? "已启用 " + cheatFile.getName() + "：点开可以编辑并立即重新加载"
+                        : "点开编辑这个游戏的作弊码文件（每行一条，例如 1A2B0:05）",
+                false, null);
         final int frameCap = Settings.frameCap(this);
         LinearLayout fpsRow = Md3.row(this, Md3.IC_PLAY,
                 "帧率上限：" + Settings.frameCapText(frameCap),
@@ -1399,6 +1419,8 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
         box.addView(Md3.divider(this));
         box.addView(graphicsRow);
         box.addView(graphicsDetails, Md3.gap(this, 6));
+        box.addView(Md3.divider(this));
+        box.addView(cheatRow);
         box.addView(Md3.divider(this));
         box.addView(menuRow);
         box.addView(Md3.divider(this));
@@ -1430,6 +1452,13 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
                 }
             });
         }
+        cheatRow.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                dlg.dismiss();
+                cheatDialog(cheatFile);
+            }
+        });
         adjust.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
@@ -1587,6 +1616,109 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
             toast("已保存进度，下次在游戏卡片里选「恢复进度」");
         } else {
             toast("这次没能保存（错误 " + rc + "）");
+        }
+    }
+
+    /**
+     * The cheat file for this game: `<jar dir>/cheats/<jar stem>.txt`, the
+     * first path the port resolves at startup, so what the player edits here is
+     * what the next launch reads and what the live reload below re-reads.  The
+     * format is the runtime's arena-offset cheat: one code per line, '#' starts
+     * a comment line.
+     */
+    private File cheatFileFor(String jar) {
+        String stem = jar == null || jar.length() == 0 ? "game" : jar;
+        if (stem.regionMatches(true, stem.length() - 4, ".jar", 0, 4)) {
+            stem = stem.substring(0, stem.length() - 4);
+        }
+        /*
+         * Next to the jar in its "cheats" folder: that is the first place the
+         * port looks for a cheat file, so what the editor saves is what the
+         * next launch reads, and a file pushed with adb to the same folder is
+         * picked up by this row too.
+         */
+        return new File(new File(JarStore.dir(this), "cheats"), stem + ".txt");
+    }
+
+    /**
+     * Edit the game's cheat list.  Saving writes the file and asks the running
+     * VM to reload it: the same "arena offset : hex bytes" lines the libretro
+     * core and the CLI accept (see docs/notes/2026-11-19-android-cheat-editor.md).
+     */
+    private void cheatDialog(final File file) {
+        final EditText input = new EditText(this);
+        input.setGravity(Gravity.TOP | Gravity.START);
+        input.setTypeface(Typeface.MONOSPACE);
+        input.setHint("每行一条：<竞技场偏移>:<十六进制字节>\n例如 1A2B0:05\n# 以 # 开头是注释");
+        input.setMinLines(6);
+        StringBuilder sb = new StringBuilder();
+        if (file.isFile()) {
+            try {
+                InputStreamReader r = new InputStreamReader(
+                        new FileInputStream(file), "UTF-8");
+                try {
+                    char[] buf = new char[1024];
+                    int n;
+                    while ((n = r.read(buf)) > 0) {
+                        sb.append(buf, 0, n);
+                    }
+                } finally {
+                    r.close();
+                }
+            } catch (java.io.IOException e) {
+                sb.append("# 读取失败: ").append(e.getMessage()).append('\n');
+            }
+        }
+        input.setText(sb.toString());
+        new AlertDialog.Builder(this)
+                .setTitle("作弊码 · " + jarTitle)
+                .setView(Md3.scroller(this, input))
+                .setPositiveButton("保存并重新加载",
+                        new android.content.DialogInterface.OnClickListener() {
+                            @Override
+                            public void onClick(android.content.DialogInterface d,
+                                                int which) {
+                                saveCheats(file, input.getText().toString());
+                            }
+                        })
+                .setNeutralButton("清空",
+                        new android.content.DialogInterface.OnClickListener() {
+                            @Override
+                            public void onClick(android.content.DialogInterface d,
+                                                int which) {
+                                saveCheats(file, "");
+                            }
+                        })
+                .setNegativeButton("取消", null)
+                .show();
+    }
+
+    private void saveCheats(File file, String text) {
+        File parent = file.getParentFile();
+        if (parent != null && !parent.isDirectory() && !parent.mkdirs()) {
+            toast("建不了作弊码目录");
+            return;
+        }
+        try {
+            OutputStreamWriter w = new OutputStreamWriter(
+                    new FileOutputStream(file), "UTF-8");
+            try {
+                w.write(text);
+            } finally {
+                w.close();
+            }
+        } catch (java.io.IOException e) {
+            toast("写不了作弊码文件：" + e.getMessage());
+            return;
+        }
+        int n;
+        synchronized (lock) {
+            n = handle != 0 ? nativeCheatReload(handle, file.getPath()) : -1;
+        }
+        if (n >= 0) {
+            toast(n == 0 ? "作弊码已清空" : "已重新加载 " + n + " 条作弊码");
+        } else {
+            toast("文件已保存，但这次没能重新加载");
         }
     }
 

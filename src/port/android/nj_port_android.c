@@ -421,6 +421,18 @@ typedef struct android_state {
     char  restore_path[512];
     int   restore;
 
+    /*
+     * Cheat-list reload.  Same handshake as the save: the UI thread writes the
+     * path of the file the player just edited and asks for a reload; the run
+     * thread clears the table, reads that file and re-applies the patches at
+     * the top of a frame.  cheat_count/cheat_done are the answer, so the toast
+     * says "reloaded N" instead of "asked N".
+     */
+    char  cheat_path[512];
+    int   cheat_req;
+    int   cheat_done;
+    int   cheat_count;
+
     nj_event queue[256];
     int   qh, qt;
     nj_u2 *ime_polled_text; /* released by the next input_poll */
@@ -1621,6 +1633,36 @@ static int android_input_poll(void *ud, nj_event *ev)
             s->save_done = 1;
             pthread_mutex_unlock(&s->lock);
         }
+    } else {
+        pthread_mutex_unlock(&s->lock);
+    }
+    /*
+     * A cheat list the player just edited.  Same frame-boundary rule: clear,
+     * read the file they saved, re-apply, then answer with the number of codes
+     * that survived the parser.  No file means "cleared" (0), which is also
+     * what an empty editor buffer should do.
+     */
+    pthread_mutex_lock(&s->lock);
+    if (s->cheat_req) {
+        char path[512];
+        int n = 0;
+        s->cheat_req = 0;
+        snprintf(path, sizeof(path), "%s", s->cheat_path);
+        pthread_mutex_unlock(&s->lock);
+        if (s->vm) {
+            nj_vm_cheat_clear(s->vm);
+            n = nj_vm_cheat_load(s->vm, path);
+            if (n < 0) {
+                n = 0;
+            }
+            nj_vm_apply_cheats(s->vm);
+        }
+        __android_log_print(ANDROID_LOG_INFO, "nj2me",
+                            "cheats: reload from %s -> %d code(s)", path, n);
+        pthread_mutex_lock(&s->lock);
+        s->cheat_count = n;
+        s->cheat_done = 1;
+        pthread_mutex_unlock(&s->lock);
     } else {
         pthread_mutex_unlock(&s->lock);
     }
@@ -5388,6 +5430,29 @@ static void android_resolve_cheat_file(android_app *a, android_state *s)
             snprintf(a->cheat_path, sizeof a->cheat_path, "%s", path);
             a->opts.cheat_file = a->cheat_path;
             __android_log_print(ANDROID_LOG_INFO, "nj2me", "cheats: %s", path);
+            return;
+        }
+    }
+    /*
+     * The in-app editor keeps its file in the app's own files directory (it
+     * started there before the editor wrote next to the jar); users may also
+     * push one with adb into that folder.  s->fs_dir is "<files>/fs", so the
+     * fallback is the parent of that.
+     */
+    if (s != NULL && s->fs_dir[0] != '\0') {
+        char files_dir[512];
+        char *end;
+        snprintf(files_dir, sizeof files_dir, "%s", s->fs_dir);
+        end = strrchr(files_dir, '/');
+        if (end != NULL && end != files_dir) {
+            *end = '\0';
+            snprintf(path, sizeof path, "%s/cheats/%s.txt", files_dir, stem);
+            if (access(path, R_OK) == 0) {
+                snprintf(a->cheat_path, sizeof a->cheat_path, "%s", path);
+                a->opts.cheat_file = a->cheat_path;
+                __android_log_print(ANDROID_LOG_INFO, "nj2me",
+                                    "cheats: %s", path);
+            }
         }
     }
 }
@@ -6339,6 +6404,53 @@ Java_com_lucinhu_nj2me_GameActivity_nativeSaveState(JNIEnv *env, jobject thiz,
             s->save_done = 0;
             pthread_mutex_unlock(&s->lock);
             return rc;
+        }
+        pthread_mutex_unlock(&s->lock);
+        usleep(5000);
+        waited += 5;
+    }
+    return NJ_ERR_STATE;
+}
+
+/*
+ * The player's cheat list.  The in-game panel writes the file first, then asks
+ * here: this clears the table, reads the file they just saved and re-applies
+ * the patches at the next frame boundary.  Bounded wait like the save, for the
+ * same reason - "reloaded 3 codes" has to be true, not requested.
+ */
+JNIEXPORT jint JNICALL
+Java_com_lucinhu_nj2me_GameActivity_nativeCheatReload(JNIEnv *env, jobject thiz,
+                                                      jlong handle, jstring path)
+{
+    android_app *a = (android_app *)(intptr_t)handle;
+    android_state *s;
+    char pathbuf[512];
+    int waited = 0;
+    (void)thiz;
+    if (!a || !(s = AS(a->port.ud))) {
+        return NJ_ERR_STATE;
+    }
+    if (!android_jstr(env, path, pathbuf, sizeof(pathbuf))) {
+        return NJ_ERR_STATE;
+    }
+    pthread_mutex_lock(&s->lock);
+    if (s->cheat_req) {
+        pthread_mutex_unlock(&s->lock);
+        return NJ_ERR_STATE;      /* one reload at a time */
+    }
+    snprintf(s->cheat_path, sizeof(s->cheat_path), "%s", pathbuf);
+    s->cheat_done = 0;
+    s->cheat_req = 1;
+    pthread_mutex_unlock(&s->lock);
+
+    while (waited < 4000) {
+        int n;
+        pthread_mutex_lock(&s->lock);
+        if (s->cheat_done) {
+            n = s->cheat_count;
+            s->cheat_done = 0;
+            pthread_mutex_unlock(&s->lock);
+            return n;
         }
         pthread_mutex_unlock(&s->lock);
         usleep(5000);
