@@ -4061,3 +4061,35 @@ worker. The parallel path only engages for triangles with area ≥ 8192 px² and
 loading that title, and the 20,000-frame CPU did not move. Reverted rather
 than ship an unexercised thread path; a future parallel raster would need a
 large-triangle workload (real 3D gameplay, not loader animations) to measure.
+
+## M3G span dispatch: the general-path locals were already free (round 89, 2026-11-19)
+
+`sw_span()` loads the ~45 fields the general (slow) span loop needs and *then*
+dispatches to the specialised flat/Gouraud textured fast paths.  The round-88
+profile showed `sw_span` at 18.7 % on real 3D gameplay (36.6 M calls in 600
+frames), so the hypothesis was that every fast-path span first pays for ~45
+dead local loads.
+
+The experiment moved the four fast-path tests to the top of `sw_span()`
+(immediately after `m3g_sw *sw = p->sw;`), deleted the now-unused fast-flag
+declarations, and removed the second dispatch chain so the general loop was
+unconditional.  Output was exact — frames 10–120 of the deterministic Doom3
+prefix byte-identical; a reference run of the same build also diverged only at
+frames 130/140, which is the known run-order boundary.
+
+Measured (same method as the round-67 table: `taskset -c 5`, user CPU):
+
+| build | Doom3 runs (s) | median | Galaxy on Fire 2 600 frames @30 fps (s) | median |
+| --- | --- | --- | --- | --- |
+| before | 27.719 / 28.214 / 28.215 / 28.064 / 27.793 | 28.064 | 3.918 / 3.651 / 3.670 | 3.670 |
+| after | 27.789 / 27.890 / 27.922 / 27.854 / 27.779 | 27.854 | 3.731 / 3.424 / 3.706 | 3.706 |
+
+−0.75 % on the loader animation and +1.0 % on real gameplay — inside the
+run-to-run spread, i.e. no gain.  GCC already sinks the general-path
+initialisers: every fast path `return`s before using them and the general loop
+is never reached in these workloads, so the loads were dead code that never
+executed.  The change is reverted rather than ship unmeasurable churn.  Lesson
+kept: on this rasteriser the compiler has already done the local-elimination
+that a hand restructure could do — profile-guided changes to `sw_span()` need
+to touch the per-span work itself, not its setup (see also the rejected fill
+and parallelism experiments above).
