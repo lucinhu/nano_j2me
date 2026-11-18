@@ -1102,3 +1102,16 @@ Full CTest 195/195 (382.23 s).
 - Both upstream PRs remain ready: libretro/libretro-super#2204
   (head `5bbf1e7`, OPEN/MERGEABLE) and libretro/docs#1239 (head `05577de5`,
   OPEN/MERGEABLE). No merge or acceptance is claimed.
+
+## Update, 2026-11-17 (round 86): longer corpus run on the 0.5.13 core
+
+- The whole-corpus libretro visual probe was re-run at 1,800 frames (30 s of
+  virtual time) with 10 workers on the r32 linux core
+  (`.local-tools/debug-runs/libretro-visual-r86`): 372 rows -> **370 ok + 2
+  documented known limitations, 0 unexplained failures**. Only 3 rows stayed
+  static (the carrier-SMS dialog, the 3D pool attract/menu and the music
+  prompt), median 76 distinct frames per title, and no new crash or state
+  refusal appeared at the longer length.
+- This confirms the 600-frame numbers' state/crash profile is not an artefact
+  of the shorter run; the 1,800-frame sweep is the load-timeout and
+  leak/hang check used for the release evidence.

@@ -616,7 +616,12 @@ above, it reports 385 titles -> 382 ok rows and 3 documented known limitations,
 and the slow loader are classified in
 `docs/notes/2026-11-17-static-title-classification.md`; the two load-timeout
 limitations and the `毁灭战士3_10598` slow loader are listed in the probe's
-`KNOWN_LIMITATIONS`). The two titles that need the `nokia6230` profile load
+`KNOWN_LIMITATIONS`). A longer 1,800-frame (30 s virtual) run of the same
+probe on the 0.5.13 package reports 372 titles -> 370 ok rows and the same two
+known limitations, 0 unexplained failures, 3 static rows (the carrier-SMS
+dialog, the pool attract/menu screen and the music prompt) and a median of 76
+distinct frames per title, so the long-run state and crash behaviour matches
+the 600-frame numbers. The two titles that need the `nokia6230` profile load
 through the device-property answers and the handset retry.
 
 The probe tools copy the core to a private file before the run. The core is
