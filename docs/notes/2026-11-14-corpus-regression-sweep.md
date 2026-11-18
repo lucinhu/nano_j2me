@@ -230,3 +230,20 @@ full sweep with the reverted CLI:
 
 Full test suite after the revert: **192/192 PASS in 337.83 s**
 (`/tmp/r61-ctest5.log`).
+
+## Round-88 revalidation on 0.5.14, 2026-11-19
+
+The 0.5.14 release (shared cheat engine, Android cheat files) does not change
+the headless runtime path for titles without cheats, but the engine sits in
+`nj_midp_frame()`, so the corpus was re-run with the release CLI:
+
+```
+NJ_BIN=<headless CLI at 4ca20ca> NJ_KEYS_DIR=$PWD/tools/corpus_keys \
+  tools/sweep_compat.py .local-tools/debug-runs/compat-20261119-r88
+```
+
+Result: **404 rows = 387 ok / 12 title-exit / 2 title-exception / 2 no-frame /
+1 bad-jar, no timeout**. The verdict set is identical to the round-73 sweep
+(0 changes), so the cheat-engine refactor, the metadata bump and the Android
+change are compat-neutral. This is the current best distribution and the one
+0.5.14 ships with.
