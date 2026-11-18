@@ -887,6 +887,17 @@ typedef struct nj_run_opts {
      * built-in faces alone; nj_run() says so rather than running silently in
      * the wrong typeface.
      */
+    /*
+     * Cheat codes: arena-offset patches re-applied at the start of every
+     * frame.  `cheat_file` names a text file with one code per line ('#'
+     * comment lines allowed); `cheat_codes` holds codes given on the command
+     * line (up to 16).  Format: `<arena offset>:<hex bytes>`, see
+     * nj_vm_cheat_add() in nj_vm.h.  Debugging tool: raw writes into the
+     * Java arena can corrupt the running program.
+     */
+    const char *cheat_file;
+    const char *const *cheat_codes;
+    int         cheat_count;
     const char *font_path;
 
     /*

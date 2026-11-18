@@ -1003,6 +1003,42 @@ int nj_run(const nj_port *port_in, const nj_run_opts *opts)
          * too, not just the ones after the frame loop starts. */
         nj_vm_set_verbose(vm, opts->verbose);
     }
+
+    /*
+     * Cheat codes, installed before the MIDlet starts so its constructor already
+     * sees patched state.  The engine re-applies them at every frame boundary;
+     * a bad code is reported and skipped rather than failing the run.
+     */
+    if (vm && (opts->cheat_file || opts->cheat_count > 0)) {
+        int added = 0;
+        int i;
+        if (opts->cheat_file) {
+            int n = nj_vm_cheat_load(vm, opts->cheat_file);
+            if (n < 0) {
+                if (port.log) port.log(port.user, 0,
+                                       "--cheat-file: cannot read the cheat file");
+            } else {
+                added += n;
+            }
+        }
+        for (i = 0; i < opts->cheat_count; i++) {
+            int slot = nj_vm_cheat_add(vm, opts->cheat_codes[i]);
+            if (slot < 0) {
+                if (port.log) port.log(port.user, 0,
+                                       "--cheat: malformed code, expected "
+                                       "\"<arena offset>:<hex bytes>\"");
+            } else {
+                added++;
+            }
+        }
+        if (port.log && added > 0) {
+            char msg[96];
+            snprintf(msg, sizeof(msg),
+                     "applied %d cheat code(s), re-applied at every frame",
+                     added);
+            port.log(port.user, 1, msg);
+        }
+    }
     /*
      * Let the display keep being drawn while a Java thread sleeps.
      *

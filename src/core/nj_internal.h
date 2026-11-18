@@ -436,8 +436,34 @@ enum {
     NJ_HF_COUNT
 };
 
+#define NJ_CHEAT_MAX_CODES  32
+#define NJ_CHEAT_MAX_BYTES  16
+
+/* One arena-offset cheat patch: offset in bytes, value to write, length. */
+typedef struct nj_cheat_patch {
+    int           enabled;
+    nj_u4         offset;   /* byte offset into the arena window          */
+    unsigned char value[NJ_CHEAT_MAX_BYTES];
+    unsigned      len;      /* 1 .. NJ_CHEAT_MAX_BYTES                   */
+} nj_cheat_patch;
+
+/* The code list attached to a VM; applied at the start of every frame. */
+typedef struct nj_cheat_table {
+    int            count;
+    nj_cheat_patch patch[NJ_CHEAT_MAX_CODES];
+} nj_cheat_table;
+
 struct nj_vm {
     nj_heap heap;
+
+    /*
+     * Cheat codes: raw byte patches over the arena window a frontend sees as
+     * SYSTEM_RAM (offset + value), re-applied at the start of every frame.
+     * The table lives in the VM so the runner, the libretro port and the
+     * Android frontend all use the same parser and the same apply point.
+     * See nj_vm_cheat_add() in include/nj2me/nj_vm.h for the code format.
+     */
+    nj_cheat_table cheats;
 
     /* class table */
     nj_class  *class_head[NJ_CLASS_HASH];
@@ -1443,6 +1469,8 @@ nj_status  nj_scheduler_frame(nj_vm *vm, nj_u4 budget_ms);
 int         nj_scheduler_has_threads(nj_vm *vm);
 nj_status  nj_scheduler_run_until_idle(nj_vm *vm, nj_u4 budget_ms);
 /* Seed the virtual epoch once after setup; restores supply their own anchor. */
+/* Re-apply every enabled cheat patch over the VM's arena (nj_cheat.c). */
+void       nj_cheat_apply(nj_vm *vm);
 void       nj_clock_init(nj_vm *vm);
 nj_s8      nj_now_ms(nj_vm *vm);
 void       nj_vm_stop(nj_vm *vm, nj_s4 exit_code);

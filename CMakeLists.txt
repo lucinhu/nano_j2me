@@ -234,6 +234,7 @@ set(NJ_CLASS_CACHE_SLOTS 128 CACHE STRING "Entries in the nj_class_lookup() memo
 set(NJ_SOURCES
   # ---- virtual machine ----
   src/core/nj_heap.c
+  src/core/nj_cheat.c
   src/core/nj_string.c
   src/core/nj_class.c
   src/core/nj_native.c
@@ -1028,6 +1029,7 @@ if(NJ_BUILD_TESTS)
   # ---- the memory contract and the class library ----
   nj_add_test(test_lifecycle tests/test_lifecycle.c)
   nj_add_test(test_heap_bounds tests/test_heap_bounds.c)
+  nj_add_test(test_cheat tests/test_cheat.c)
   nj_add_test(test_heap_growth tests/test_heap_growth.c)
   nj_add_test(test_string_intern tests/test_string_intern.c)
   nj_add_test(test_util tests/test_util.c)

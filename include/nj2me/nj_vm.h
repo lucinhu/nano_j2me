@@ -557,6 +557,39 @@ nj_size nj_vm_blob_max(const nj_vm *vm);
 int     nj_vm_memory_region(nj_vm *vm, void **out_data, nj_size *out_size);
 
 /*
+ * Cheat codes: raw byte patches over the arena window above.
+ *
+ * The runtime has no flat address space, so a cheat code is a byte offset
+ * into the exposed SYSTEM_RAM window followed by the bytes to write:
+ *
+ *     <arena-offset>:<hex bytes>        e.g.  @1A2B0:05   or  7ff000:0000FFFF
+ *
+ * An optional leading '@' and '0x' are accepted; the bytes may be separated
+ * by spaces.  Up to 16 bytes per code and 32 codes per VM.  Every enabled
+ * code is re-applied at the start of every frame, so a game that writes the
+ * old value back cannot cancel it.  This is a debugging tool: the window is
+ * raw memory and a wrong offset can corrupt the running program.
+ *
+ * nj_vm_cheat_add() returns the slot index (>= 0), or a negative nj_status
+ * when the code is malformed or the table is full.  nj_vm_cheat_load() reads
+ * one code per line from a text file ('#' starts a comment line) and returns
+ * the number of codes added, or a negative nj_status when the file cannot be
+ * opened.  nj_vm_cheat_disable() turns one slot off; nj_vm_cheat_clear()
+ * removes every code.
+ */
+int     nj_vm_cheat_add(nj_vm *vm, const char *code);
+int     nj_vm_cheat_load(nj_vm *vm, const char *path);
+int     nj_vm_cheat_disable(nj_vm *vm, int slot);
+void    nj_vm_cheat_clear(nj_vm *vm);
+
+/*
+ * Re-apply every enabled cheat code now (the frame start does this
+ * automatically; ports call it after a cheat list change so the next
+ * retro_run() observes the patch).  Cheap when no code is installed.
+ */
+void    nj_vm_apply_cheats(nj_vm *vm);
+
+/*
  * Diagnostic: describe where every live thread currently is.
  *
  * One line per thread (id, state, depth) followed by the innermost frames of

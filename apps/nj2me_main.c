@@ -194,6 +194,9 @@ static void usage(const char *argv0)
 "                        snapshotted; the run says so at the end.\n"
 "  --load-state <file>  resume a snapshot instead of starting the MIDlet\n"
 "  --keys <script>      replay key and pointer events at given frames\n"
+        "  --cheat <code>       arena-offset cheat code re-applied every frame\n"
+        "                       (format \"<offset>:<hex bytes>\", repeatable)\n"
+        "  --cheat-file <file>  read cheat codes, one per line (\"#\" comments)\n"
         "  --fs-dir <path>      root for file:// (JSR 75); no filesystem by default\n"
 "  --network            enable HTTP/HTTPS/TCP for the headless port\n"
 "  --stats              print bytecode and frame counters at the end\n"
@@ -316,6 +319,10 @@ typedef struct cli {
     int         run_frames;
     int         verbose;
     const char *keys;
+    const char *cheat_file;         /* --cheat-file: one code per line      */
+#define NJ_CLI_MAX_CHEATS 16
+    const char *cheat_codes[NJ_CLI_MAX_CHEATS];
+    int         cheat_count;        /* --cheat entries collected so far     */
     const char *font;
     const char *device_name;
     const char *save_state;
@@ -732,6 +739,15 @@ int main(int argc, char **argv)
             c.fs_dir = argv[++i];
         } else if (strcmp(a, "--keys") == 0 && i + 1 < argc) {
             c.keys = argv[++i];
+        } else if (strcmp(a, "--cheat") == 0 && i + 1 < argc) {
+            if (c.cheat_count >= NJ_CLI_MAX_CHEATS) {
+                fprintf(stderr, "too many --cheat entries (limit %d)\n",
+                        NJ_CLI_MAX_CHEATS);
+                return 2;
+            }
+            c.cheat_codes[c.cheat_count++] = argv[++i];
+        } else if (strcmp(a, "--cheat-file") == 0 && i + 1 < argc) {
+            c.cheat_file = argv[++i];
         } else if (strcmp(a, "--list-devices") == 0) {
             list_devices();
             return 0;
@@ -860,6 +876,9 @@ int main(int argc, char **argv)
     opts.run_frames = (nj_u4)(c.run_frames > 0 ? c.run_frames : 0);
     opts.verbose = c.verbose;
     opts.keys = c.keys;
+    opts.cheat_file = c.cheat_file;
+    opts.cheat_codes = c.cheat_count > 0 ? c.cheat_codes : NULL;
+    opts.cheat_count = c.cheat_count;
     opts.font_path = c.font;
     opts.props = nprops > 0 ? props : NULL;
     opts.nprops = nprops;

@@ -16,6 +16,7 @@ set(NJ_ROOT "${CMAKE_CURRENT_LIST_DIR}/../../../../..")
 idf_component_register(
     SRCS
         "${NJ_ROOT}/src/core/nj_heap.c"
+        "${NJ_ROOT}/src/core/nj_cheat.c"
         "${NJ_ROOT}/src/core/nj_string.c"
         "${NJ_ROOT}/src/core/nj_class.c"
         "${NJ_ROOT}/src/core/nj_native.c"

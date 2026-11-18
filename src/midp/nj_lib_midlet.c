@@ -519,6 +519,13 @@ nj_status nj_midp_frame(nj_vm *vm)
     frame_start = nj_now_ms(vm);
     vm->in_frame++;
 
+    /*
+     * Raw cheat patches are applied at the frame boundary, before the game
+     * reads its state: the table is per VM and the engine also serves the
+     * libretro port (retro_cheat_set) and the runner's --cheat-file.
+     */
+    if (vm->cheats.count > 0) nj_cheat_apply(vm);
+
     /* ---- input ---- */
     nj_midp_text_input_sync(vm);
     if (vm->port && vm->port->input_poll) {

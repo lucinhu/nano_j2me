@@ -498,6 +498,13 @@ window directly:
   writes.
 - Malformed codes are ignored with a warning in the core log.
 
+The parser and the per-frame re-apply live in the runtime
+(`src/core/nj_cheat.c`, `nj_vm_cheat_add/load/disable/clear`), so the same
+codes work outside the frontend too: the headless CLI accepts
+`--cheat "<arena offset>:<hex bytes>"` (repeatable) and `--cheat-file <path>`
+(one code per line, `#` comments allowed), and the libretro port, the runner
+and the Android build share one table per VM.
+
 A cheat patch can corrupt any object in the arena (the window is raw and
 unsynchronised, see Exposed memory), so the offset must come from a deliberate
 cheat search, never from a guessed address. Cheats are a local convenience
