@@ -41,7 +41,7 @@ nano_j2me_libretro.info  ->  dist/info/nano_j2me_libretro.info
 
 The copy in this directory is byte-identical to
 `src/port/libretro/nano_j2me_libretro.info`
-(SHA-256 `cd52e1a0f260aeb818a51c1af7f09dcd62ab85db7595b0b88753a41f77131530`, version 0.5.13).
+(SHA-256 `497b24a6eff931e6cf109ba1f582d8a5c4c477b906ee5b99326cbcdb50ab2fd8`, version 0.5.14).
 Suggested PR title: `Add nano_j2me core information for J2ME MIDlets`.
 The ready-to-post title, patch commands, body text and checklist are in
 [`PR-libretro-super.md`](PR-libretro-super.md).

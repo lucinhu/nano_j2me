@@ -45,7 +45,7 @@ Adds `dist/info/nano_j2me_libretro.info` for the nano_j2me core, a J2ME
   `libretro-infrastructure/ci-templates` `linux-cmake.yml`,
   `windows-cmake-mingw.yml` and `android-cmake.yml` with
   `CORENAME=nano_j2me`, `EXTRA_PATH=libretro`.
-- Current version 0.5.13; `savestate = "true"` (`basic`), `core_options` v2,
+- Current version 0.5.14; `savestate = "true"` (`basic`), `core_options` v2,
   `is_experimental = "true"`.
 
 Validation done before sending this PR (all offline, on the candidate tree):
