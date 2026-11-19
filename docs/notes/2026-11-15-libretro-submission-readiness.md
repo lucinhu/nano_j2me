@@ -1197,3 +1197,19 @@ details in `docs/LIBRETRO_SUBMISSION.md` ("Round-94 end-to-end rehearsal").
 - Upstream PRs #2204 (super, branch rebuilt on current master) and #1239
   (docs) remain OPEN/MERGEABLE with the 0.5.16 body; awaiting review, no merge
   claimed.
+
+## Update, 2026-11-19 (round 99): 0.5.16 submission rehearsal and r35 corpus probe
+
+- Fresh `git clone --depth 1` of origin/main at `de58803`: CI template
+  simulations **3/3** (linux 4,000,096 B, windows 3,567,227 B, android
+  11,707,944 B); clone-built Linux core passed mock **20/20** and real
+  RetroArch LoopDemo 120 frames.
+- Bundle check with fresh upstream clones (super `1b988c49`, docs `177c6699`)
+  plus `--apply-clones --mkdocs`: **41 passed, 0 failed**.
+- r35 whole-corpus libretro visual probe (300 frames, 6 jobs): 387 titles →
+  **383 passed, 3 known limitations, 1 failed**. The failure
+  (`杀鬼子-敌后武工队_2185`, save-state restore) passed 45/45 checks in three
+  standalone runs with a private core copy → parallel-load state flake, same
+  class as rounds 78/95, not a regression.
+- Both upstream PRs still OPEN/MERGEABLE with 0 comments / 0 reviews; no merge
+  claimed.

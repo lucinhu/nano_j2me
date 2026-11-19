@@ -1257,3 +1257,28 @@ Re-ran the whole rehearsal on the 0.5.15 release tree (`8b20d50`) so the
   (tag `v0.5.16`). Upstream PR bodies updated to 0.5.16; super branch rebuilt
   on the current master and force-pushed; both PRs remain OPEN/MERGEABLE and
   await review — no merge claimed.
+
+### Round-99 verification of the released 0.5.16 tree (2026-11-19)
+
+A fresh `git clone --depth 1` of origin/main at `de58803` (the 0.5.16 release
+commit) was used to re-run the whole submission pipeline from scratch:
+
+- `tools/simulate_ci_builds.sh --jobs 8` satisfied **all three upstream CI
+  template contracts** (linux `.so` 4,000,096 B; windows `.dll` 3,567,227 B;
+  android `.so` 11,707,944 B after the template rename).
+- In that clone (with `tests/fixtures` copied in), the CI-template-built Linux
+  core passed the mock conformance matrix **20/20** and real RetroArch 1.22.2
+  LoopDemo for 120 frames (**PASS**).
+- `tools/check_libretro_submission_bundle.sh --super-clone … --docs-clone …
+  --apply-clones --mkdocs …` with fresh baseline clones
+  (`libretro/libretro-super` `1b988c49…`, `libretro/docs` `177c6699…`):
+  **41 passed, 0 failed** (both patches apply and the docs site builds).
+- Whole-corpus libretro visual probe on the r35 core (300 frames, 6 parallel
+  jobs): 387 titles → **383 passed, 3 known limitations, 1 failed**. The
+  single failure, `杀鬼子-敌后武工队_2185` (a save-state restore check), passed
+  all 45 harness checks in three standalone runs with an immutable private core
+  copy (`/tmp/r99-core/core.so`), so it is the same load-sensitive state flake
+  documented for rounds 78/95 (six instances each holding a 128 MB arena), not
+  a regression.
+- Upstream PRs #2204 (super, `d933b05` with the 0.5.16 `.info`) and #1239
+  (docs) remain OPEN/MERGEABLE with 0 comments / 0 reviews; no merge claimed.
