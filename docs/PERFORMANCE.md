@@ -4093,3 +4093,32 @@ kept: on this rasteriser the compiler has already done the local-elimination
 that a hand restructure could do — profile-guided changes to `sw_span()` need
 to touch the per-span work itself, not its setup (see also the rejected fill
 and parallelism experiments above).
+
+## Two "slow" 2D titles are self-pacing spin waits, not raster work (round 95, 2026-11-19)
+
+A replay of the round-60 2D survey with the round-61 pacer in place again put
+`西伯利亚大反击_11466.jar` (7.99 ms/frame) and `格斗2011-拳王争霸_4253.jar`
+(7.62 ms/frame) at the top of the unpaced list.  A gprof run shows why this is
+not a renderer problem:
+
+| title (300 frames, `--fps 0`) | wall | paints | gfx calls | bytecodes | natives |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 西伯利亚大反击_11466 | 2.41 s (124.5 fps) | 300 | 2,400 | 108,413,191 | 5,419,626 |
+| 格斗2011-拳王争霸_4253 | 2.32 s (129.5 fps) | 38 | 3,154 | 181,547,656 | 51,607,412 |
+
+The hot native profile is `System.currentTimeMillis` + `Thread.yield`:
+23.5 M and 47.1 M `nj_invoke_native` calls respectively, `nj_frame_push` the
+same order, with `nj_interp_run` only ~48 % of sampled time.  `Thread.yield`
+is deliberately a no-op (`src/core/nj_lib_thread.c`: the scheduler picks the
+next runnable thread at the next quantum boundary), so a title that opens a
+`while (System.currentTimeMillis() - t0 < delay) Thread.yield();` loop spins
+at full interpreter speed until wall time advances.  The ~8 ms/frame is that
+title's own pacing wait (target ~125 fps), and the actual rendering is 8–11
+draw calls per frame — there is no raster hot spot to optimise.
+
+Rule for future 2D work: judge a title by paints and gfx calls per frame
+before trusting `ms/frame`.  Hundreds of paints with a flat gprof = real
+rendering to optimise; few paints plus huge `currentTimeMillis`/`yield`
+counts = the title is waiting for its own clock, and any speed-up has to come
+from the interpreter or the wait path (both risk timing semantics), not from
+`nj_region_draw` or the fonts.

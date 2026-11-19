@@ -273,3 +273,21 @@ Regression coverage:
 - `bench.jar` dispatch throughput is unchanged (62,513,694 bytecodes at
   419.55 M/s, same as the pre-guard binary on the same machine); the guard is
   two predictable loads per array access.
+
+## Round 95: extended campaigns on the 0.5.15 tree (2026-11-19)
+
+Re-ran the class-file campaigns with larger budgets against the release CLI
+(`/var/tmp/nj2me-goal13-build/nj2me`, `f18ed5c` + docs):
+
+```
+python3 tools/fuzz_classfile.py <cli> 3000 2 91          # MIDlet class only
+python3 tools/fuzz_classfile.py <cli> 3000 2 92 all      # any class in the JAR
+```
+
+Both finished **clean: 3000 cases, 0 crashed, 0 hung** (two mutations per
+case; two-locus coverage plus the optional all-class target mode).  Together
+with the round-44/45 runs this keeps the two known crash classes covered:
+multi-locus bytecode (the `ARRAY_HEAD` ownership guard) and damaged inner
+classes.  Still not covered: semantically invalid but structurally valid
+bytecode, and several damaged classes in one run (the all-class mode damages
+one selected class per case).

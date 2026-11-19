@@ -61,3 +61,15 @@ in 339.07 s** (`/tmp/r46-ctest.log`).
 - a real-world bad archive larger than the small fixtures (the reader's
   behaviour on huge entry counts is bounded by the same loops, but the fuzzed
   sizes here are tiny).
+
+## Round 95: extended campaign on the 0.5.15 tree (2026-11-19)
+
+```
+python3 tools/fuzz_jar.py <cli> 2000 2 93
+```
+
+**clean: 2000 cases, 0 crashed, 0 hung** (two mutations per case) against the
+release CLI.  Combined with the round-46 runs this is ~4600 clean container
+cases over the current loader; the remaining gaps are unchanged (several
+independent defects per case, targeted ZIP count/offset-field mutations, huge
+real archives).

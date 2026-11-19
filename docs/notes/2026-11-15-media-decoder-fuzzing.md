@@ -150,3 +150,15 @@ Evidence: `python3 tools/fuzz_media.py <cli> 1000 2 401` →
   stream with advanced prediction modes, or MPEG-4 with B-frames);
 - decoder state carried across `Player` lifetime (the fixture opens/closes one
   player per resource).
+
+## Round 95: extended multi-target campaign on the 0.5.15 tree (2026-11-19)
+
+```
+python3 tools/fuzz_media.py <cli> 3000 2 94 multi
+```
+
+Across all nine targets (AMR-NB, WAV PCM, IMA-ADPCM, SMF MIDI, two PNGs, JPEG,
+GIF, MPEG-4 Part 2, H.263) with two damaged entries per case: **clean 3000
+cases, 0 crashed, 0 hung**.  The remaining gaps are unchanged (video: H.263
+stream coverage was added in round 57 and is included here; cross-Player
+decoder state, and video containers other than 3GP/mp4v/s263).
