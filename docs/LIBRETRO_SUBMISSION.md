@@ -1319,6 +1319,8 @@ commit) was used to re-run the whole submission pipeline from scratch:
   `5876c9f162aa528d0186fca3fcc70d2015f61b637bc99422da84f82c6d122651`.
 - GitHub release: https://github.com/lucinhu/nano_j2me/releases/tag/v0.5.17
   (tag `v0.5.17`). Upstream PR bodies updated to 0.5.17; super branch rebuilt
-  on the current master (`1b988c49…`) with the 0.5.17 `.info` and
-  force-pushed; both PRs remain OPEN/MERGEABLE and await review — no merge
+  on the current master (`1b988c49…`) as commit `bf88d89` with the 0.5.17
+  `.info` (raw GitHub content confirms `display_version = "0.5.17"`) and
+  force-pushed; PR #2204 is OPEN/MERGEABLE at head `bf88d89`, PR #1239 at head
+  `5917f7d`; both await review with 0 comments / 0 reviews — no merge
   claimed.

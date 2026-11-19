@@ -1223,6 +1223,7 @@ details in `docs/LIBRETRO_SUBMISSION.md` ("Round-94 end-to-end rehearsal").
   bundle check 32/32, full serial CTest **197/197 in 347.29 s**.
 - APKs 517 (nj2me.apk 3,295,594 B; legacy 704,229 B); release zip
   11,347,105 B `5876c9f1…`.
-- Tag `v0.5.17` and GitHub release published with the four assets. PR #2204
-  branch rebuilt with the 0.5.17 `.info`; PR #1239 unchanged; both
-  OPEN/MERGEABLE with 0 comments / 0 reviews, no merge claimed.
+- Tag `v0.5.17` and GitHub release published with the four assets (draft and
+  prerelease both false). PR #2204 head rebuilt to `bf88d89` with the 0.5.17
+  `.info`; PR #1239 head `5917f7d`; both OPEN/MERGEABLE with 0 comments / 0
+  reviews, no merge claimed.
