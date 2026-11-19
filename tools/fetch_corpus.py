@@ -21,7 +21,8 @@ import zipfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 KNOWN = [os.path.join(ROOT, "tests", "games"), "/tmp/vault/Roms", "/tmp/vault2"]
-DEFAULT_ITEMS = ["NokiaJavaGames", "J2ME-games", "the-promise-funy"]
+DEFAULT_ITEMS = ["NokiaJavaGames", "J2ME-games", "the-promise-funy",
+                 "my-top-95-mobile-java-games"]
 MIN_BYTES = 20000
 
 
@@ -57,7 +58,28 @@ def main(argv):
             continue
         for entry in meta.get("files", []):
             name = entry.get("name", "")
+            if name.lower().endswith(".jar"):
+                url = "https://archive.org/download/%s/%s" % (
+                    ident, urllib.parse.quote(name))
+                try:
+                    blob = urllib.request.urlopen(url, timeout=120).read()
+                except Exception as exc:             # one bad file is not fatal
+                    print("skip", name, exc, flush=True)
+                    continue
+                if len(blob) < MIN_BYTES:
+                    continue
+                digest = hashlib.sha256(blob).hexdigest()
+                if digest in seen:
+                    continue
+                seen.add(digest)
+                base = os.path.basename(name).replace("/", "_")
+                with open(os.path.join(out, base), "wb") as fh:
+                    fh.write(blob)
+                added += 1
+                continue
             if not name.lower().endswith(".zip"):
+                if name.lower().endswith((".7z", ".rar")):
+                    print("skip (unsupported archive)", name, flush=True)
                 continue
             url = "https://archive.org/download/%s/%s" % (
                 ident, urllib.parse.quote(name))
