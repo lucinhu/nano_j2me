@@ -4169,3 +4169,39 @@ What that means for optimisation:
 - Do not read "19k draw calls per frame" as a renderer defect: check the
   clipped pixel count first.  A title that converts 200 screens per frame is
   doing redundant work on its side of the API.
+
+## SSE2 ARGB/565 row conversion: byte-exact but neutral, not kept (round 104, 2026-11-19)
+
+Round 103 left one lever open: the "ARGB8888 sprites onto a 16-bit screen"
+branch converts whole rows in `nj_565_row_from_argb()` and was ~1.5 billion
+pixels in the Minecraft loader.  The scalar loop converts two pixels per
+64-bit word; a four-pixels-per-vector SSE2 version (32-bit lane extraction,
+signed pack with a 0x8000 bias so the full 0..0xFFFF range survives, bias
+added back in the packed lanes, 8-byte store) was implemented behind
+`__SSE2__` + little-endian + `bpp == 2`, with the scalar pair loop kept as the
+tail.
+
+Correctness: byte-identical.  Eight fixtures that exercise the 2D blit paths
+(`imagesdemo`, `gamedemo`, `mididemo`, `alphademo`, `boxdemo`, `blockdemo`,
+`colordemo`, `clipdemo`) were dumped frame by frame with the pre-change
+binary and the new one — all 22 PPM dumps matched exactly.
+
+Performance: **not worth shipping**, and reverted:
+
+| workload | pre-change (median) | SSE2 row conversion (median) |
+| --- | ---: | ---: |
+| Minecraft PE, 300 frames @30 fps, heap 64 | 9.450 s CPU | 9.442 s CPU (−0.08 %, noise) |
+| 浴火银河2完整版, 600 frames @30 fps, heap 32 | 3.502 s CPU (5 runs) | 3.304 s CPU (5 runs, noisy, two runs slower) |
+| 浴火银河2完整版, 1200 frames @30 fps, heap 32 | 10.408 s CPU (3 runs) | 10.910 s CPU (**+4.8 %**, noise/regression) |
+
+Why it does not show up: the SIMD loop only feeds the *opaque whole-row*
+fast path (`rop == SET || nj_argb_row_opaque()`).  Minecraft's loading view
+paints translucent sprites, so its pixels go through the group loop's
+per-pixel path (`nj_blend565` per translucent pixel) and never reach that
+helper; 浴火银河2 spends most of its time elsewhere (M3G raster).  Optimising
+a conversion that the hot titles rarely execute is a neutral change, and the
+policy here is to measure, then drop neutral changes.
+
+Next lever if this path ever matters: the group loop's translucent blend is
+the per-pixel cost — a vectorised 565 blend (or a "row has one alpha value"
+shortcut) would have to be where the pixels are.
