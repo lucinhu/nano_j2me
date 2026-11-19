@@ -57,7 +57,8 @@ def manifest(path):
 
 def one(job):
     path, base = job
-    row = {"file": base, "size": os.path.getsize(path)}
+    row = {"file": base, "size": os.path.getsize(path),
+           "jar_path": os.path.abspath(path)}
     attrs, apis, nclass = manifest(path)
     row.update({"name": attrs.get("midlet-name", ""), "version": attrs.get("MIDlet-Version", ""),
                 "profile": attrs.get("MicroEdition-Profile", ""),

@@ -94,7 +94,7 @@ def load_rows(rows_dir):
             if row.get("verdict") != "ok" or int(row.get("paints") or 0) <= 0:
                 continue
             jar = None
-            for key in ("path", "jar", "file"):
+            for key in ("jar_path", "path", "jar", "file"):
                 value = row.get(key)
                 if not value:
                     continue
