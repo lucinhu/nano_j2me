@@ -51,7 +51,7 @@ def main(argv):
     for ident in items:
         try:
             meta = json.load(urllib.request.urlopen(
-                "https://archive.org/metadata/" + ident, timeout=120, timeout=60))
+                "https://archive.org/metadata/" + ident, timeout=60))
         except Exception as exc:                     # network: report and go on
             print("skip collection", ident, exc, flush=True)
             continue
