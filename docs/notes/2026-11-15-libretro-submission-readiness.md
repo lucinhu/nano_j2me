@@ -1138,3 +1138,14 @@ satisfies all three upstream CI template build contracts, and the Linux core
 built inside that clone passes the mock matrix 20/20 and a real RetroArch
 LoopDemo run.  Details and hashes are in `docs/LIBRETRO_SUBMISSION.md`
 ("Round-90 end-to-end rehearsal").
+
+## Round 93: 0.5.15 with the Android cheat editor (2026-11-19)
+
+Metadata bumped to 0.5.15 (`.info` SHA-256 `d9f10709…`) and r34 rebuilt from
+`f18ed5c`; the core is feature-identical to r33 and the release adds the
+Android in-game cheat editor (`docs/notes/2026-11-19-android-cheat-editor.md`).
+`.info` super patch regenerated cleanly against super master `1b988c49…`;
+bundle check 32/32 on the new canonical tree.  r34 validation: mock 20/20,
+RetroArch LoopDemo PASS, Wine 4/4, full CTest 197/197.  Release `v0.5.15`
+published with the r34 zip and both 0.5.15 APKs; details live in
+`docs/RELEASE_0.5.15.md`.

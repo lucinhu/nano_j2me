@@ -1180,3 +1180,18 @@ submit" evidence stays current:
   behaviour, not byte identity.
 - Conclusion: the kit still builds and applies from a pristine checkout, and
   no local state blocks the external submission steps.
+
+## Release 0.5.15 / r34 (2026-11-19)
+
+The metadata moves to 0.5.15 with the Android in-game cheat editor
+(`b98062c`, `docs/notes/2026-11-19-android-cheat-editor.md`); the core
+implementation is identical to r33.  `.info` SHA-256
+`d9f107094647cbbd206dbbc3148bfdf032d1341d18e53590939820ebef59f6c4`; tracked
+super patch regenerated against master `1b988c491e31f1cc768572f3d68f45e69d194e5b`
+(37 lines, one added file, `git apply --check` passes).
+
+r34 built from a clean worktree at `f18ed5c` (eight targets, installed as the
+canonical `build/libretro-dist`).  Hashes and validation: mock 20/20, real
+RetroArch LoopDemo 120 frames PASS, Wine 4/4 at 300 frames, bundle 32/32, full
+CTest 197/197 — see `docs/RELEASE_0.5.15.md`.
+
