@@ -1243,3 +1243,18 @@ details in `docs/LIBRETRO_SUBMISSION.md` ("Round-94 end-to-end rehearsal").
   same class as rounds 78/95/99, not a regression.
 - PRs #2204 (head `bf88d89`) and #1239 (head `5917f7d`) still
   OPEN/MERGEABLE with 0 comments / 0 reviews; no merge claimed.
+
+## Round-110 update, 2026-11-19
+
+- `docs/libretro/upstream/nano_j2me.md`: added the `Multi-touch` feature row and
+  `### Multi-touch` section (RETRO_DEVICE_ID_POINTER_COUNT per-pointer delivery
+  into the Nokia MultipointTouch API, up to 4 concurrent fingers; MIDP Canvas
+  single-owner unchanged; `nano_j2me_pointer` gate; no RetroPad synthesis).
+- Regenerated `libretro-docs-nano_j2me.patch` against docs master `177c6699`
+  (5 files, +252 lines); verified with `git apply --check` and `mkdocs build`.
+- Rebuilt the `lucinhu/docs` fork branch `add-nano_j2me` as `e34bae2` (parent
+  `177c6699`) and force-pushed; PR #1239 head updated. Both PR bodies (#2204 and
+  #1239) replaced with the clean posted text (no internal notes); the
+  `libretro-super` patch baseline is now `1b988c49`.
+- Validation: bundle check **32/32** plain and **41/41** with fresh clones +
+  mkdocs. Both PRs OPEN/MERGEABLE, 0 comments / 0 reviews; no merge claimed.

@@ -4,9 +4,9 @@ The project author authorized libretro upstream submission on 2026-11-16, and
 the prepared bundles were opened as pull requests from forks:
 
 * `libretro/libretro-super#2204` — `info: add nano_j2me (Mobile - J2ME)`
-  (branch `add-nano_j2me` in `lucinhu/libretro-super`, commit `4ec537f`)
+  (branch `add-nano_j2me` in `lucinhu/libretro-super`, commit `bf88d89`)
 * `libretro/docs#1239` — `docs: add nano_j2me (Mobile - J2ME)`
-  (branch `add-nano_j2me` in `lucinhu/docs`, commit `fc6c6c2`)
+  (branch `add-nano_j2me` in `lucinhu/docs`, commit `e34bae2`)
 
 The files in this directory remain the exact copies used for those PRs, plus
 the validation notes and the manual checklist. If upstream requests changes,
@@ -49,7 +49,7 @@ The ready-to-post title, patch commands, body text and checklist are in
 ## 2. `libretro/libretro/docs`
 
 Apply the prepared patch, which adds the page and every index update in one
-diff (5 files, +241 lines):
+diff (5 files, +252 lines):
 
 ```
 git apply libretro-docs-nano_j2me.patch

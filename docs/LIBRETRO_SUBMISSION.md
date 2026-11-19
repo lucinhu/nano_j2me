@@ -1351,3 +1351,31 @@ of origin/main at `084c29a` (the 0.5.17 release tree):
 - Upstream PRs #2204 (super, head `bf88d89` with the 0.5.17 `.info`) and #1239
   (docs, head `5917f7d`) remain OPEN/MERGEABLE with 0 comments / 0 reviews; no
   merge claimed.
+
+### Update, 2026-11-19 (round 110): multi-touch documented in the upstream page
+
+The public library page did not describe the multi-touch support added in 0.5.12,
+even though the core advertises per-pointer input and the APK/libretro paths use
+it. `docs/libretro/upstream/nano_j2me.md` now has:
+
+- a `Multi-touch` row in the features table;
+- a `### Multi-touch` section: `RETRO_DEVICE_ID_POINTER_COUNT` is read and every
+  active pointer is delivered with its own id/coordinates/state to the Nokia
+  `MultipointTouch` API (up to four concurrent fingers), while a plain MIDP
+  `Canvas` keeps a single pointer owner; `nano_j2me_pointer` gates all pointer
+  delivery and the pointer is never synthesised from the RetroPad.
+
+`docs/libretro/upstream/libretro-docs-nano_j2me.patch` was regenerated against
+`libretro/docs` master `177c6699…` (5 files, **+252 lines**), verified with
+`git apply --check` and a local `mkdocs build` (exit 0, page rendered). The
+`lucinhu/docs` fork branch was rebuilt on the same baseline as commit
+`e34bae2` (parent `177c6699`) and PR #1239's head moved to it. Both PR bodies
+(#2204, #1239) were replaced with the clean posted text - the earlier bodies
+still contained the internal "ready-to-post" notes - and the tracked
+`libretro-super` draft now states the current baseline `1b988c49…`.
+
+Re-verified offline: `tools/check_libretro_submission_bundle.sh` → **32 passed,
+0 failed**; with fresh baseline clones (`/var/tmp/lr110-super` and a
+`libretro/docs` clone at `177c6699`) plus `--apply-clones --mkdocs
+/var/tmp/mkvenv/bin/mkdocs` → **41 passed, 0 failed**. Both PRs remain
+OPEN/MERGEABLE with 0 comments / 0 reviews; no merge claimed.

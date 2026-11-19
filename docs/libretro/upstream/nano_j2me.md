@@ -51,7 +51,8 @@ runtime compatibility is not established by those checks. macOS is unverified.
 | Core options | Yes, v2 with legacy fallback; content reload required |
 | RetroPad | One controller |
 | Keyboard | Yes, handset keypad callback |
-| Pointer | Yes, touch/mouse canvas input |
+| Pointer | Yes, touch/mouse canvas input; multi-touch below |
+| Multi-touch | Yes: every frontend pointer becomes an independent finger for the Nokia MultipointTouch API (up to 4 concurrent); a plain MIDP `Canvas` still keeps a single pointer owner |
 | Hardware rendering | No; software RGB565 |
 | Cheats / achievements / disc control | Arena-offset cheat codes (below); no achievements or disc control |
 | libretro save RAM / exposed memory | No SAVE_RAM; SYSTEM_RAM exposes the JVM arena as a memory map |
@@ -200,6 +201,16 @@ The keyboard callback maps `0`–`9` and keypad digits, `*`/`#`, Enter/Space
 (FIRE), arrows, Backspace (SOFT_RIGHT), Tab (SOFT_LEFT) and Escape (CLEAR).
 Frontend hotkeys can intercept these keys. Pointer input maps touch/mouse
 coordinates and presses back through the selected presentation rotation.
+
+### Multi-touch
+
+The core reads `RETRO_DEVICE_ID_POINTER_COUNT` and delivers every active
+pointer with its own id, coordinates and press/release state. Games that use
+the Nokia Asha `MultipointTouch` API see each finger separately (the runtime
+supports four simultaneous fingers); a title that only draws through a MIDP
+`Canvas` still receives one pointer owner at a time, so single-pointer games
+are unaffected. Disable the `nano_j2me_pointer` option to stop pointer
+delivery entirely; the touch pointer is never synthesised from the RetroPad.
 
 ## Compatibility
 
