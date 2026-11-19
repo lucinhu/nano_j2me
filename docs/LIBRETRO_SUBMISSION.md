@@ -1423,3 +1423,16 @@ Core hashes: linux-x86_64 `da3093f0…`, linux-aarch64 `17461bfa…`, linux-armv
 android-x86_64 `8607eac5…`, windows-i686 `7ff8fa2c…`, windows-x86_64
 `c722d746…` (full table in `docs/RELEASE_0.5.18.md`).  Upstream PR branches were
 refreshed in round 112 and remain OPEN/MERGEABLE; no merge claimed.
+
+## Round-114 released-tree corpus probe, 2026-11-19 (0.5.18 / r37)
+
+Whole-corpus libretro visual probe of the released 0.5.18 linux core
+(rows `.local-tools/debug-runs/compat-20261119-r105`, out
+`.local-tools/debug-runs/r114-visual300`, 300 frames, 6 jobs):
+**384 titles: 381 passed, 3 known limitation(s), 0 failed** — the known
+limitations are the documented `毁灭战士3_10598` slow loader and the
+`台球传奇_87`/`德州扑克2_3884` load-state timeout while the title sits in a
+multi-second blocking phase.  Earlier 0.5.17 runs had one load-sensitive
+serialize flake under six parallel probes; this run had none.  Combined with
+the full CTest 198/198 and the round-113 artifact table this is the release
+quality evidence for the 0.5.18 submission material.

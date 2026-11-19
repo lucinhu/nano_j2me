@@ -4105,6 +4105,40 @@ is small but never negative.  This is the first change kept on the 2D blit path
 since round 103 established that the remaining Minecraft cost is game-side
 overdraw.
 
+## Corpus-wide CPU scan: self-pacing spins dominate the outliers (round 114, 2026-11-19)
+
+Added `tools/check_corpus_cpu.py` (scan every `ok` row with the frame cap
+disabled, measure child user+system CPU through `os.wait4`, sorted table + CSV)
+and scanned all **384 ok titles** (300 frames, heap 32 MB, 6 workers):
+
+```
+NJ_BIN=build/nj2me python3 tools/check_corpus_cpu.py ROWS_DIR \
+    --frames 300 --heap 32 --jobs 6 --out cpu.csv
+```
+
+| title | cpu | ms/frame | paints | gfx | note |
+| --- | --- | --- | --- | --- | --- |
+| 魂斗罗_5652 | 20.84 s | 69.5 | 300 | 5,520 | self-paces on wall clock (`currentTimeMillis`/yield) |
+| 僵尸危机2_4349 | 12.00 s | 40.0 | 300 | 11,277 | same pattern |
+| 生化惊悚2死亡寂静中文版_2607 | 5.84 s | 19.5 | 150 | 2,439 | same pattern |
+| 空战1944_10321 | 4.02 s | 13.4 | 50 | 487 | same pattern |
+| NBA职业篮球2010豪华版_7111 | 2.85 s | 9.5 | 224 | 24,754 | heavy game logic |
+| 科比职业篮球2008中文版_11136 | 2.45 s | 8.2 | 224 | 19,035 | heavy game logic |
+
+53 of 384 titles used more than 1 s of CPU; the 15 slowest are the two groups
+above (plus a long tail of ~8.0 ms/frame entries that all pace themselves at a
+frame-like interval).  No title surfaced a hidden raster/Blit hotspot: the
+profilers agree with round 95 — `gprof` on NBA basketball (300 frames @30 fps,
+9.28 s CPU, 988 M bytecodes, 217 M natives) is dominated by
+`nj_interp_run` (58 % self), but the *calls* are `nj_now_ms` 108.6 M,
+`sys_currentTimeMillis` 108.6 M, `hl_millis` 108.7 M and `thread_yield` 108.6 M
+— the game's own `while (now() < deadline) Thread.yield()` loop, not runtime
+overhead.  `thread_yield()` is intentionally a no-op
+(`src/core/nj_lib_thread.c`), so the loop's cost is the Java bytecode spin.
+
+Rule (extends round 95): look at paints/gfx and profile the call graph before
+treating "slow" as a runtime problem; a high CPU number at a capped frame rate
+usually means the title spent the frame spinning on the virtual clock.
 ## M3G span dispatch: the general-path locals were already free (round 89, 2026-11-19)
 
 `sw_span()` loads the ~45 fields the general (slow) span loop needs and *then*

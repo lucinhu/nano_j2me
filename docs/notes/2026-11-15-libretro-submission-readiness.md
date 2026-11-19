@@ -1282,3 +1282,14 @@ details in `docs/LIBRETRO_SUBMISSION.md` ("Round-94 end-to-end rehearsal").
 - Release assets: cores zip 11,351,007 B, APK 3,295,594 B, legacy 704,234 B
   (+SHA256SUMS).  Upstream PRs unchanged from round 112: #2204 head `772fcf8`,
   #1239 head `51ef4a9`, both OPEN/MERGEABLE; no merge claimed.
+
+## Round-114 update, 2026-11-19
+
+- Released-tree evidence for 0.5.18: whole-corpus libretro visual probe
+  **384 titles → 381 passed / 3 known limitations / 0 failed**.
+- New tracked tool `tools/check_corpus_cpu.py`: scans every `ok` row with the
+  frame cap disabled and reports child CPU; 384 titles scanned — 53 over 1 s,
+  top outliers are self-pacing spin loops (`currentTimeMillis`/`Thread.yield`,
+  NBA basketball shows 108 M calls each in 300 frames), not runtime overhead.
+  Documented in `docs/PERFORMANCE.md` (round 114 section) with the rule to
+  profile call graphs before labeling a title slow.
