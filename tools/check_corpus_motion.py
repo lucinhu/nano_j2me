@@ -9,6 +9,7 @@ is on its title screen" from "the emulator keeps painting a stale frame".
 
 Usage:
     tools/check_corpus_motion.py <rows dir> [--count N] [--frames N] [--seed N]
+                                [--jobs N]
 
 Titles are drawn from the rows the sweep already classifies as ok with paints;
 the sample is deterministic for a given seed.  Each frame is also checked for
@@ -27,6 +28,7 @@ import random
 import subprocess
 import sys
 import tempfile
+from concurrent.futures import ThreadPoolExecutor
 
 ROOT = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 # Same override as tools/sweep_compat.py: the corpus may run a binary built
@@ -73,6 +75,28 @@ def find(name):
     return None
 
 
+def probe(path, frames, keys, heap=16, device=None):
+    """Run one title and return (unique_dumps, non_black_ratio)."""
+    with tempfile.TemporaryDirectory() as out:
+        cmd = [BIN, "--port", "headless",
+               "--size", "240x320", "--heap", str(heap), "--fps", "30",
+               "--run-frames", str(frames), "--dump-frames", out,
+               "--dump-every", str(frames // 3),
+               "--keys", "@" + keys,
+               "--stats", path]
+        if device:
+            cmd[cmd.index("--stats"):cmd.index("--stats")] = ["--device", device]
+        subprocess.run(cmd, capture_output=True, timeout=180)
+        digests = set()
+        coverage = 0.0
+        for name in sorted(os.listdir(out)):
+            if name.endswith(".ppm"):
+                raw = open(os.path.join(out, name), "rb").read()
+                digests.add(hashlib.md5(raw).hexdigest())
+                coverage = max(coverage, non_black_ratio(raw))
+    return len(digests), coverage
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("rows")
@@ -84,6 +108,8 @@ def main():
                          "(3D sample)")
     ap.add_argument("--keys", default=None,
                     help="key script (default: <rows>/keys.txt)")
+    ap.add_argument("--jobs", type=int, default=1,
+                    help="run this many titles in parallel (default 1)")
     args = ap.parse_args()
 
     rows = [json.loads(l) for l in open(os.path.join(args.rows, "rows.jsonl"))]
@@ -94,30 +120,26 @@ def main():
     random.Random(args.seed).shuffle(ok)
 
     seen, moving, static = 0, 0, 0
-    for row in ok:
-        if seen >= args.count:
-            break
-        path = find(os.path.basename(row["file"]))
-        if path is None:
-            continue
+    jobs = [r for r in ok if find(os.path.basename(r["file"])) is not None]
+    jobs = jobs[:max(args.count, 0)]
+    keys = args.keys or os.path.join(args.rows, "keys.txt")
+    # Honor the recipe the sweep had to use for a title: a device retry also
+    # bumped the heap, and replaying with the generic profile would report a
+    # false freeze (1945空战英雄 never paints a frame without --device).
+    specs = [(find(os.path.basename(r["file"])),
+              int(r.get("heap") or 16), r.get("device")) for r in jobs]
+    paths = [s[0] for s in specs]
+    results = []
+    if args.jobs <= 1:
+        for spec in specs:
+            results.append(probe(spec[0], args.frames, keys, spec[1], spec[2]))
+    else:
+        with ThreadPoolExecutor(max_workers=args.jobs) as pool:
+            results = list(pool.map(
+                lambda spec: probe(spec[0], args.frames, keys, spec[1], spec[2]),
+                specs))
+    for path, (unique, coverage) in zip(paths, results):
         seen += 1
-        with tempfile.TemporaryDirectory() as out:
-            subprocess.run(
-                [BIN, "--port", "headless",
-                 "--size", "240x320", "--heap", "16", "--fps", "30",
-                 "--run-frames", str(args.frames), "--dump-frames", out,
-                 "--dump-every", str(args.frames // 3),
-                 "--keys", "@" + (args.keys or os.path.join(args.rows, "keys.txt")),
-                 "--stats", path],
-                capture_output=True, timeout=180)
-            digests = set()
-            coverage = 0.0
-            for name in sorted(os.listdir(out)):
-                if name.endswith(".ppm"):
-                    raw = open(os.path.join(out, name), "rb").read()
-                    digests.add(hashlib.md5(raw).hexdigest())
-                    coverage = max(coverage, non_black_ratio(raw))
-        unique = len(digests)
         if unique > 1:
             moving += 1
         else:

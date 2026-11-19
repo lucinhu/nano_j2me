@@ -320,3 +320,33 @@ Conclusion: every row checked shows the same failure class in both runtimes,
 strengthening the existing adjudications (the remaining non-`ok` rows are
 title-side: authorization/SMS menus, cracked self-exit, missing resources,
 insufficient heap, or intentionally malformed fixtures).
+
+## Full-corpus motion probe: 384 titles at 300 / 900 / 1500 frames (round 122, 2026-11-19)
+
+The earlier motion checks sampled 24 2D and 10 3D titles.  This round ran every
+`ok` row from the 0.5.18 sweep (`compat-20261119-r105`) through
+`tools/check_corpus_motion.py` with `--count 400 --frames 300 --jobs 8`
+(parallel jobs and the sweep's per-row `heap`/`device` recipe were added to the
+tool in this round; a device retry also bumps the heap, and replaying with the
+generic profile reports a false freeze).
+
+- 384 titles: **332 paint different frames, 52 paint one frame** at 300 frames.
+- Re-running the 52 static rows with `--frames 900` (dumps at 300/600/900):
+  **36 more animate** (they were on slow loading screens), 16 stay static.
+- Re-running those 16 with `--frames 1500` and the sweep's per-row recipe
+  (`--heap`/`--device`): **15 animate**; the remaining 13 are static menus /
+  title screens awaiting input (mine-sweeper menu, pool title, taxi title,
+  angry-birds OOM notice at 16 MB, Ferrari GT3 splash, …), and one
+  (`贪吃蛇经典版_4515.jar`) exits after 55 frames, which is the title's own
+  behaviour.  No stale/black-frame renderer defect surfaced.
+- The "black" flag is horizon-sensitive: several rows are pure black at frame
+  200 (loading) and 100 % lit by frame 400 (e.g. `世界足球2012中文版_1724`,
+  `魔兽塔防_12480`, `超级坦克大战2汉化版_531`), so a 300-frame sample reads
+  them as black screens when they are only slow loaders.  Judge with 900+
+  frames before calling a title black.
+- `1945空战英雄_6105.jar` needs the Nokia device profile: without
+  `--device nokia6230` the MIDlet constructor fails
+  (`cannot instantiate ExtendTorpedoMidlet: java/lang/IllegalAccessException`)
+  and the run paints nothing; with it the title animates.  This is a recipe
+  issue, not a loader defect — the sweep already retries such titles with that
+  profile and records `needs --device nokia6230` in the row.
