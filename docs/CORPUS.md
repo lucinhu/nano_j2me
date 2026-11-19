@@ -471,3 +471,29 @@ flagged `1945空战英雄_6105.jar` with `rc=1 frames=0`; the row records
 `"device": "nokia6230"` and "needs --device nokia6230", and the unmodified
 uniform run cannot start that title's constructor.  Replaying the row profile
 removes that false failure.
+
+## Round 126: external set re-fetched, 412-row sweep (2026-11-20)
+
+The round-11/12 out-of-tree vault (`/tmp/vault`, `/tmp/vault2`) is gone, so the
+published 969-row matrix can no longer be rebuilt from this machine as-is.
+Repairing the fetcher (previous section) and running it into `/tmp/vault4`
+recovered **eight Gameloft/retail titles** that are not in `tests/games`; a
+fresh sweep with those directories added
+(`NJ_SWEEP_DIRS=/tmp/vault4 NJ_KEYS_DIR=tools/corpus_keys`,
+`.local-tools/debug-runs/compat-20261120-r126`, 10 jobs, 0.5.18 CLI) reads:
+
+| rows | ok | title-exception | no-frame | title-exit | bad-jar | timeout |
+|---|---|---|---|---|---|---|
+| 412 | **407** | 1 | 2 | 1 | 1 | 0 |
+
+All eight newly fetched titles run 600 frames normally (284–601 paints):
+`Gameloft Brother In Arms Earned In Bloods 1.2.4`, `Gameloft Christmas Block
+Breaker`, `Gameloft Midnight Bowling`, `Gameloft.Mystery.Mansion.Pinball
+1.2.1-Retail`, `New York Nights v1.00`, `Nightmare Creatures`,
+`TotallySpies S60`, `gameloft.medieval.combat.v1.04.s60`.  The five non-ok rows
+are exactly the round-124 set (game-side NPE, two self-exits confirmed against
+the reference oracle, one genuine title exit, one truncated ZIP).
+
+`docs/COMPATIBILITY_MATRIX.md` is deliberately **not** regenerated: it is the
+0.5.18-era snapshot of the 969-title external sweep from 2026-10-25 and is the
+only remaining record of those rows while the vault archives are offline.
