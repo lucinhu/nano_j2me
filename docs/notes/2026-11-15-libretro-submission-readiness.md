@@ -1213,3 +1213,16 @@ details in `docs/LIBRETRO_SUBMISSION.md` ("Round-94 end-to-end rehearsal").
   class as rounds 78/95, not a regression.
 - Both upstream PRs still OPEN/MERGEABLE with 0 comments / 0 reviews; no merge
   claimed.
+
+## Update, 2026-11-19 (round 101): 0.5.17 / r36 release
+
+- Version bumped to 0.5.17 (commit `d6eef33`); `.info` SHA-256
+  `93c4862a…`, super patch regenerated from master `1b988c49…` and applies.
+- r36 built and installed as canonical `build/libretro-dist`; mock matrix
+  **20/20**, real RetroArch LoopDemo 120 frames PASS, Wine 4/4 at 300 frames,
+  bundle check 32/32, full serial CTest **197/197 in 347.29 s**.
+- APKs 517 (nj2me.apk 3,295,594 B; legacy 704,229 B); release zip
+  11,347,105 B `5876c9f1…`.
+- Tag `v0.5.17` and GitHub release published with the four assets. PR #2204
+  branch rebuilt with the 0.5.17 `.info`; PR #1239 unchanged; both
+  OPEN/MERGEABLE with 0 comments / 0 reviews, no merge claimed.

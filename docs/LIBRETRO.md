@@ -69,8 +69,11 @@ Outputs go to `build/libretro-dist/<target>/`, with a library and its metadata.
 Use `--no-strip` to retain symbols. `all` selects the script's supported targets
 and requires all of their toolchains.
 
-The eight candidates currently in `build/libretro-dist/` are the r35 package
-(the 0.5.16 release) built on 2026-11-19 from revision `64ad3cf`. r35 is the
+The eight candidates currently in `build/libretro-dist/` are the r36 package
+(the 0.5.17 release) built on 2026-11-19 from revision `d6eef33`. r36 adds
+live candidate values to the Android cheat search and keeps one cheat line per
+address (`docs/notes/2026-11-19-cheat-search.md`); the libretro core itself is
+unchanged from r35. r35 was the
 Android in-game cheat-editor + value-search release: the game panel's 作弊码
 row opens the title's cheat file, writes it and reloads the running VM's table
 at the next frame boundary, and its 搜索作弊数值 row scans the arena for a
