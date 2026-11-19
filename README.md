@@ -30,7 +30,7 @@ browser — the same runtime everywhere, with one small `nj_port` per platform.
 - **Small and embeddable.** Everything OS-specific is one `nj_port` implementation
   (about ten callbacks). The runtime keeps zero mutable global state; several VMs
   can coexist in one process, and `nj_vm_destroy()` returns the bytes it released.
-- **Cheatable.** The libretro core accepts `<arena offset>:<hex bytes>` cheat codes over the exposed Java arena and re-applies them every frame (frontend cheat search gives the offsets); the Android APK has the same engine with an editor in its in-game panel, and both read the same file format. See [the cheat note](docs/notes/2026-11-19-android-cheat-editor.md).
+- **Cheatable.** The libretro core accepts `<arena offset>:<hex bytes>` cheat codes over the exposed Java arena and re-applies them every frame (frontend cheat search gives the offsets); the Android APK has the same engine with an in-game panel that also **searches** for a value, narrows the candidate list and generates the code, and both read the same file format. See [the cheat note](docs/notes/2026-11-19-android-cheat-editor.md) and [the search note](docs/notes/2026-11-19-cheat-search.md).
 - **Verifiable.** 196 registered tests pass under `ctest`; 398 of the 400 real-game
   corpus titles run; every claim below is checked by a test, a gate or a
   recorded playback.

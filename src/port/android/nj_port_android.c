@@ -433,6 +433,24 @@ typedef struct android_state {
     int   cheat_done;
     int   cheat_count;
 
+    /*
+     * Cheat search.  The panel leaves a value (plus byte width) and, for a
+     * narrowing pass, the candidate list it kept from the previous scan; the
+     * run thread runs the scan over the arena at the top of a frame, when the
+     * VM is between frames, and publishes the matching offsets (the same
+     * absolute offsets cheat codes use).  cheat_search_done is the answer, so
+     * the panel shows real hits instead of "searching".
+     */
+    nj_u8 cheat_search_value;
+    int   cheat_search_width;
+    int   cheat_search_mode;      /* 0 = find, 1 = narrow */
+    nj_u4 cheat_search_in[512];
+    int   cheat_search_in_count;
+    nj_u4 cheat_search_offsets[512];
+    int   cheat_search_req;
+    int   cheat_search_done;
+    int   cheat_search_count;
+
     nj_event queue[256];
     int   qh, qt;
     nj_u2 *ime_polled_text; /* released by the next input_poll */
@@ -1662,6 +1680,56 @@ static int android_input_poll(void *ud, nj_event *ev)
         pthread_mutex_lock(&s->lock);
         s->cheat_count = n;
         s->cheat_done = 1;
+        pthread_mutex_unlock(&s->lock);
+    } else {
+        pthread_mutex_unlock(&s->lock);
+    }
+    /*
+     * A cheat search the panel just asked for.  Same frame-boundary rule: copy
+     * the request out under the lock, scan the arena (read-only, the VM is
+     * between frames), then publish the hits.  A "narrow" pass filters the
+     * candidate list the panel kept instead of rescanning every byte.
+     */
+    pthread_mutex_lock(&s->lock);
+    if (s->cheat_search_req) {
+        nj_u1 pat[8];
+        nj_u8 value = s->cheat_search_value;
+        int width = s->cheat_search_width;
+        int mode = s->cheat_search_mode;
+        int in_count = s->cheat_search_in_count;
+        nj_u4 in[512];
+        int n = 0, i;
+        s->cheat_search_req = 0;
+        if (width < 1 || width > 4) {
+            width = 0;
+        }
+        for (i = 0; i < width; i++) {
+            pat[i] = (nj_u1)(value >> (8 * i));
+        }
+        if (in_count < 0) {
+            in_count = 0;
+        } else if (in_count > (int)(sizeof(in) / sizeof(in[0]))) {
+            in_count = (int)(sizeof(in) / sizeof(in[0]));
+        }
+        memcpy(in, s->cheat_search_in, (size_t)in_count * sizeof(nj_u4));
+        pthread_mutex_unlock(&s->lock);
+        if (s->vm && width > 0) {
+            if (mode == 1 && in_count > 0) {
+                n = (int)nj_vm_cheat_filter(s->vm, in, (nj_u4)in_count, pat,
+                                            (nj_u2)width,
+                                            s->cheat_search_offsets);
+            } else {
+                n = (int)nj_vm_cheat_find(s->vm, pat, (nj_u2)width, 1u,
+                                          s->cheat_search_offsets, 512u);
+            }
+            __android_log_print(ANDROID_LOG_INFO, "nj2me",
+                                "cheats: search %s value=0x%llx/%d in=%d -> %d hit(s)",
+                                mode == 1 ? "narrow" : "find",
+                                (unsigned long long)value, width, in_count, n);
+        }
+        pthread_mutex_lock(&s->lock);
+        s->cheat_search_count = n;
+        s->cheat_search_done = 1;
         pthread_mutex_unlock(&s->lock);
     } else {
         pthread_mutex_unlock(&s->lock);
@@ -6451,6 +6519,146 @@ Java_com_lucinhu_nj2me_GameActivity_nativeCheatReload(JNIEnv *env, jobject thiz,
             s->cheat_done = 0;
             pthread_mutex_unlock(&s->lock);
             return n;
+        }
+        pthread_mutex_unlock(&s->lock);
+        usleep(5000);
+        waited += 5;
+    }
+    return NJ_ERR_STATE;
+}
+
+/*
+ * Cheat value search: the in-game panel asks for the arena offsets that hold a
+ * value the player can see (say gold = 120), then repeats with a new value to
+ * narrow the list, and writes the offset it picked as a cheat code.  The scan
+ * itself runs on the run thread at a frame boundary (see android_input_poll),
+ * so the UI thread only waits; out receives the offsets (up to its length) and
+ * the return value is the number of hits (negative on error).
+ */
+JNIEXPORT jint JNICALL
+Java_com_lucinhu_nj2me_GameActivity_nativeCheatSearch(JNIEnv *env, jobject thiz,
+                                                      jlong handle, jlong value,
+                                                      jint width, jlongArray out)
+{
+    android_app *a = (android_app *)(intptr_t)handle;
+    android_state *s;
+    jlong tmp[512];
+    jsize cap, copied;
+    int waited = 0, n;
+    (void)thiz;
+    if (!a || !(s = AS(a->port.ud)) || !out) {
+        return NJ_ERR_STATE;
+    }
+    if (width < 1 || width > 4) {
+        return NJ_ERR;
+    }
+    cap = (*env)->GetArrayLength(env, out);
+    if (cap > (jsize)(sizeof(tmp) / sizeof(tmp[0]))) {
+        cap = (jsize)(sizeof(tmp) / sizeof(tmp[0]));
+    }
+    pthread_mutex_lock(&s->lock);
+    s->cheat_search_value = (nj_u8)(nj_u4)value;
+    s->cheat_search_width = (int)width;
+    s->cheat_search_mode = 0;
+    s->cheat_search_in_count = 0;
+    s->cheat_search_count = 0;
+    s->cheat_search_done = 0;
+    s->cheat_search_req = 1;
+    pthread_mutex_unlock(&s->lock);
+    while (waited < 5000) {
+        pthread_mutex_lock(&s->lock);
+        if (s->cheat_search_done) {
+            n = s->cheat_search_count;
+            copied = n < (int)cap ? (jsize)n : cap;
+            {
+                jsize k;
+                for (k = 0; k < copied; k++) {
+                    tmp[k] = (jlong)s->cheat_search_offsets[k];
+                }
+            }
+            s->cheat_search_done = 0;
+            pthread_mutex_unlock(&s->lock);
+            if (copied > 0) {
+                (*env)->SetLongArrayRegion(env, out, 0, copied, tmp);
+            }
+            return (jint)n;
+        }
+        pthread_mutex_unlock(&s->lock);
+        usleep(5000);
+        waited += 5;
+    }
+    return NJ_ERR_STATE;
+}
+
+/*
+ * Narrow a candidate list: keep only offsets whose current bytes still decode
+ * to `value`.  Candidates come from the previous search, so a few passes
+ * normally leave exactly one hit.
+ */
+JNIEXPORT jint JNICALL
+Java_com_lucinhu_nj2me_GameActivity_nativeCheatNarrow(JNIEnv *env, jobject thiz,
+                                                      jlong handle,
+                                                      jlongArray candidates,
+                                                      jint count, jlong value,
+                                                      jint width, jlongArray out)
+{
+    android_app *a = (android_app *)(intptr_t)handle;
+    android_state *s;
+    jlong tmp[512];
+    jsize cap, copied;
+    int waited = 0, n;
+    (void)thiz;
+    if (!a || !(s = AS(a->port.ud)) || !candidates || !out) {
+        return NJ_ERR_STATE;
+    }
+    if (width < 1 || width > 4 || count < 0) {
+        return NJ_ERR;
+    }
+    cap = (*env)->GetArrayLength(env, out);
+    if (cap > (jsize)(sizeof(tmp) / sizeof(tmp[0]))) {
+        cap = (jsize)(sizeof(tmp) / sizeof(tmp[0]));
+    }
+    if (count > (int)cap) {
+        count = (int)cap;
+    }
+    if (count > (int)(sizeof(tmp) / sizeof(tmp[0]))) {
+        count = (int)(sizeof(tmp) / sizeof(tmp[0]));
+    }
+    if (count > 0) {
+        (*env)->GetLongArrayRegion(env, candidates, 0, (jsize)count, tmp);
+    }
+    pthread_mutex_lock(&s->lock);
+    s->cheat_search_value = (nj_u8)(nj_u4)value;
+    s->cheat_search_width = (int)width;
+    s->cheat_search_mode = 1;
+    {
+        int k;
+        for (k = 0; k < count; k++) {
+            s->cheat_search_in[k] = (nj_u4)tmp[k];
+        }
+    }
+    s->cheat_search_in_count = (int)count;
+    s->cheat_search_count = 0;
+    s->cheat_search_done = 0;
+    s->cheat_search_req = 1;
+    pthread_mutex_unlock(&s->lock);
+    while (waited < 5000) {
+        pthread_mutex_lock(&s->lock);
+        if (s->cheat_search_done) {
+            n = s->cheat_search_count;
+            copied = n < (int)cap ? (jsize)n : cap;
+            {
+                jsize k;
+                for (k = 0; k < copied; k++) {
+                    tmp[k] = (jlong)s->cheat_search_offsets[k];
+                }
+            }
+            s->cheat_search_done = 0;
+            pthread_mutex_unlock(&s->lock);
+            if (copied > 0) {
+                (*env)->SetLongArrayRegion(env, out, 0, copied, tmp);
+            }
+            return (jint)n;
         }
         pthread_mutex_unlock(&s->lock);
         usleep(5000);

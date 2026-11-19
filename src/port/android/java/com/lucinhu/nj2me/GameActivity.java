@@ -26,6 +26,8 @@ import android.view.WindowManager;
 import android.widget.Button;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
+import android.widget.RadioButton;
+import android.widget.RadioGroup;
 import android.widget.TextView;
 import android.widget.EditText;
 import android.graphics.Typeface;
@@ -34,6 +36,7 @@ import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStreamWriter;
+import java.util.Locale;
 import android.text.Editable;
 import android.text.TextWatcher;
 import android.text.InputType;
@@ -312,6 +315,21 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
      * answer is the number of parsed codes (negative = reload failed).
      */
     private static native int nativeCheatReload(long handle, String path);
+    private static native int nativeCheatSearch(long handle, long value,
+                                                int width, long[] out);
+    private static native int nativeCheatNarrow(long handle, long[] candidates,
+                                                int count, long value,
+                                                int width, long[] out);
+
+    /*
+     * Candidates kept from the last value search, the byte width they were
+     * searched with, and whether a search/narrow request is in flight.  The
+     * panel talks to the run thread through the same lock the other natives
+     * use, so the array is only touched while no request is pending.
+     */
+    private final long[] cheatCandidates = new long[256];
+    private int cheatCandidateCount;
+    private int cheatSearchWidth = 4;
 
     private static native void nativeQuit(long handle);
 
@@ -1390,6 +1408,9 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
                         ? "已启用 " + cheatFile.getName() + "：点开可以编辑并立即重新加载"
                         : "点开编辑这个游戏的作弊码文件（每行一条，例如 1A2B0:05）",
                 false, null);
+        LinearLayout searchRow = Md3.row(this, Md3.IC_TUNE, "搜索作弊数值",
+                "搜游戏里能看到的数值，再输入新数值缩小范围，最后直接生成作弊码",
+                false, null);
         final int frameCap = Settings.frameCap(this);
         LinearLayout fpsRow = Md3.row(this, Md3.IC_PLAY,
                 "帧率上限：" + Settings.frameCapText(frameCap),
@@ -1421,6 +1442,8 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
         box.addView(graphicsDetails, Md3.gap(this, 6));
         box.addView(Md3.divider(this));
         box.addView(cheatRow);
+        box.addView(Md3.divider(this));
+        box.addView(searchRow);
         box.addView(Md3.divider(this));
         box.addView(menuRow);
         box.addView(Md3.divider(this));
@@ -1457,6 +1480,13 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
             public void onClick(View v) {
                 dlg.dismiss();
                 cheatDialog(cheatFile);
+            }
+        });
+        searchRow.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                dlg.dismiss();
+                cheatSearchDialog(cheatCandidateCount > 0);
             }
         });
         adjust.setOnClickListener(new View.OnClickListener() {
@@ -1651,25 +1681,7 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
         input.setTypeface(Typeface.MONOSPACE);
         input.setHint("每行一条：<竞技场偏移>:<十六进制字节>\n例如 1A2B0:05\n# 以 # 开头是注释");
         input.setMinLines(6);
-        StringBuilder sb = new StringBuilder();
-        if (file.isFile()) {
-            try {
-                InputStreamReader r = new InputStreamReader(
-                        new FileInputStream(file), "UTF-8");
-                try {
-                    char[] buf = new char[1024];
-                    int n;
-                    while ((n = r.read(buf)) > 0) {
-                        sb.append(buf, 0, n);
-                    }
-                } finally {
-                    r.close();
-                }
-            } catch (java.io.IOException e) {
-                sb.append("# 读取失败: ").append(e.getMessage()).append('\n');
-            }
-        }
-        input.setText(sb.toString());
+        input.setText(readTextFile(file));
         new AlertDialog.Builder(this)
                 .setTitle("作弊码 · " + jarTitle)
                 .setView(Md3.scroller(this, input))
@@ -1720,6 +1732,233 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
         } else {
             toast("文件已保存，但这次没能重新加载");
         }
+    }
+
+    /*
+     * ---- cheat value search ------------------------------------------
+     *
+     * A front-end style value search: the player types the number they can see
+     * in the game (gold, HP, ...), narrows the list by typing the new number
+     * after something changes, and finally taps an offset to append the code
+     * for it to the cheat file and reload it.  The arena is never scanned on
+     * the UI thread: the run thread does it between frames through
+     * nj_vm_cheat_find()/nj_vm_cheat_filter() (see docs/notes/2026-11-19-cheat-search.md).
+     */
+
+    /** The cheat file's little-endian spelling of a value: 0x1234 -> "3412". */
+    private static String cheatCodeHex(long value, int width) {
+        StringBuilder b = new StringBuilder(width * 2);
+        for (int i = 0; i < width; i++) {
+            b.append(String.format(Locale.ROOT, "%02X",
+                    (int) ((value >> (8 * i)) & 0xff)));
+        }
+        return b.toString();
+    }
+
+    private static String cheatHexOffset(long offset) {
+        return "0x" + Long.toHexString(offset).toUpperCase(Locale.ROOT);
+    }
+
+    /** The player's number as decimal ("120") or hex ("0x78"); null if bad. */
+    private static Long parseCheatValue(String text, int width) {
+        String t = text == null ? "" : text.trim();
+        if (t.isEmpty()) {
+            return null;
+        }
+        long v;
+        try {
+            if (t.startsWith("0x") || t.startsWith("0X")) {
+                v = Long.parseLong(t.substring(2), 16);
+            } else {
+                v = Long.parseLong(t);
+            }
+        } catch (NumberFormatException e) {
+            return null;
+        }
+        if (v < 0) {
+            return null;
+        }
+        if (width == 1 && v > 0xFFL) {
+            return null;
+        }
+        if (width == 2 && v > 0xFFFFL) {
+            return null;
+        }
+        if (width == 4 && v > 0xFFFFFFFFL) {
+            return null;
+        }
+        return v;
+    }
+
+    /** The whole text file, or "" when it does not exist yet. */
+    private static String readTextFile(File file) {
+        StringBuilder sb = new StringBuilder();
+        if (file.isFile()) {
+            try {
+                InputStreamReader r = new InputStreamReader(
+                        new FileInputStream(file), "UTF-8");
+                try {
+                    char[] buf = new char[1024];
+                    int n;
+                    while ((n = r.read(buf)) > 0) {
+                        sb.append(buf, 0, n);
+                    }
+                } finally {
+                    r.close();
+                }
+            } catch (java.io.IOException e) {
+                sb.append("# 读取失败: ").append(e.getMessage()).append('\n');
+            }
+        }
+        return sb.toString();
+    }
+
+    private void cheatSearchDialog(final boolean narrow) {
+        final boolean narrowing = narrow && cheatCandidateCount > 0;
+        final EditText input = new EditText(this);
+        input.setTypeface(Typeface.MONOSPACE);
+        input.setInputType(InputType.TYPE_CLASS_TEXT);
+        input.setHint("当前数值：十进制（如 120）或 0x 开头的十六进制");
+        final RadioGroup group = new RadioGroup(this);
+        group.setOrientation(RadioGroup.HORIZONTAL);
+        final int[] widths = {1, 2, 4};
+        final String[] labels = {"1 字节", "2 字节", "4 字节"};
+        for (int i = 0; i < widths.length; i++) {
+            RadioButton rb = new RadioButton(this);
+            rb.setText(labels[i]);
+            rb.setId(2300 + widths[i]);
+            rb.setChecked(widths[i] == cheatSearchWidth);
+            group.addView(rb);
+        }
+        LinearLayout box2 = new LinearLayout(this);
+        box2.setOrientation(LinearLayout.VERTICAL);
+        int pad = Math.round(20 * getResources().getDisplayMetrics().density);
+        box2.setPadding(pad, pad / 2, pad, 0);
+        box2.addView(input);
+        if (!narrowing) {
+            box2.addView(group);
+        }
+        new AlertDialog.Builder(this)
+                .setTitle(narrowing ? "缩小候选范围" : "搜索作弊数值")
+                .setMessage(narrowing
+                        ? "上次找到 " + cheatCandidateCount
+                                + " 个候选。输入游戏里现在显示的数值继续缩小："
+                        : "输入游戏里能看到的数值（金币、血量等数字）")
+                .setView(box2)
+                .setPositiveButton(narrowing ? "继续缩小" : "搜索",
+                        new android.content.DialogInterface.OnClickListener() {
+                            @Override
+                            public void onClick(android.content.DialogInterface d,
+                                                int which) {
+                                int width = cheatSearchWidth;
+                                if (!narrowing) {
+                                    int checked = group.getCheckedRadioButtonId();
+                                    width = 4;
+                                    for (int i = 0; i < widths.length; i++) {
+                                        if (2300 + widths[i] == checked) {
+                                            width = widths[i];
+                                        }
+                                    }
+                                }
+                                Long value = parseCheatValue(
+                                        input.getText().toString(), width);
+                                if (value == null) {
+                                    toast("数值格式不对，或超出 " + width
+                                            + " 字节范围");
+                                    return;
+                                }
+                                runCheatSearch(value, width, narrowing);
+                            }
+                        })
+                .setNeutralButton(narrowing ? "重新搜索" : "取消",
+                        new android.content.DialogInterface.OnClickListener() {
+                            @Override
+                            public void onClick(android.content.DialogInterface d,
+                                                int which) {
+                                if (narrowing) {
+                                    cheatCandidateCount = 0;
+                                    cheatSearchDialog(false);
+                                }
+                            }
+                        })
+                .show();
+    }
+
+    private void runCheatSearch(long value, int width, boolean narrow) {
+        int n;
+        synchronized (lock) {
+            if (handle == 0) {
+                toast("游戏还没跑起来，稍等一下再搜");
+                return;
+            }
+            n = narrow
+                    ? nativeCheatNarrow(handle, cheatCandidates,
+                            cheatCandidateCount, value, width, cheatCandidates)
+                    : nativeCheatSearch(handle, value, width, cheatCandidates);
+        }
+        if (n < 0) {
+            toast("这次没能搜索（游戏可能还没跑起来）");
+            return;
+        }
+        cheatSearchWidth = width;
+        cheatCandidateCount = Math.min(n, cheatCandidates.length);
+        if (n == 0) {
+            toast("没有找到匹配的数值：换一个数值，或先让游戏显示那个数字再搜");
+            return;
+        }
+        if (n > cheatCandidates.length) {
+            toast("命中 " + n + " 个地址，只保留前 " + cheatCandidates.length
+                    + " 个");
+        }
+        showCheatCandidates(value, width);
+    }
+
+    private void showCheatCandidates(final long value, final int width) {
+        final int shown = Math.min(cheatCandidateCount, 30);
+        final String[] items = new String[shown];
+        for (int i = 0; i < shown; i++) {
+            items[i] = cheatHexOffset(cheatCandidates[i]);
+        }
+        new AlertDialog.Builder(this)
+                .setTitle("候选地址 · 共 " + cheatCandidateCount + " 个"
+                        + (cheatCandidateCount > shown ? "（显示前 " + shown + "）" : ""))
+                .setItems(items, new android.content.DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(android.content.DialogInterface d, int which) {
+                        cheatWriteCode(cheatCandidates[which], value, width);
+                    }
+                })
+                .setPositiveButton("缩小范围",
+                        new android.content.DialogInterface.OnClickListener() {
+                            @Override
+                            public void onClick(android.content.DialogInterface d,
+                                                int which) {
+                                cheatSearchDialog(true);
+                            }
+                        })
+                .setNeutralButton("重新搜索",
+                        new android.content.DialogInterface.OnClickListener() {
+                            @Override
+                            public void onClick(android.content.DialogInterface d,
+                                                int which) {
+                                cheatCandidateCount = 0;
+                                cheatSearchDialog(false);
+                            }
+                        })
+                .setNegativeButton("取消", null)
+                .show();
+    }
+
+    /** Append `<offset>:<bytes>` for this game and reload the cheat file. */
+    private void cheatWriteCode(long offset, long value, int width) {
+        File file = cheatFileFor(jarName);
+        StringBuilder text = new StringBuilder(readTextFile(file));
+        if (text.length() > 0 && text.charAt(text.length() - 1) != '\n') {
+            text.append('\n');
+        }
+        text.append(Long.toHexString(offset).toUpperCase(Locale.ROOT))
+                .append(':').append(cheatCodeHex(value, width)).append('\n');
+        saveCheats(file, text.toString());
     }
 
     /** "1.0x" for the current speed, for a row's hint. */

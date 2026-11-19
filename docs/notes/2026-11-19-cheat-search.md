@@ -68,3 +68,33 @@ buffers, empty or over-long pattern, zero max) return 0 instead of crashing.
 * Expose the search over JNI (`nativeCheatSearch`) from the Android port.
 * libretro frontends already have their own search over `SYSTEM_RAM` and the
   memory map, so the libretro port needs no new export.
+
+## Android panel (round 97)
+
+The in-game panel has a **搜索作弊数值** row.  It drives the API from the run
+thread through `android_input_poll()` (the same frame-boundary handshake as the
+save state and cheat reload), exposed to Java as
+`GameActivity.nativeCheatSearch(handle, value, width, out)` and
+`GameActivity.nativeCheatNarrow(handle, candidates, count, value, width, out)`:
+
+1. "搜索作弊数值" asks for the number the player can see (decimal or `0x…`)
+   and the value width (1/2/4 bytes).  The panel sends the value as a
+   little-endian pattern and gets back up to 256 arena offsets.
+2. The candidate dialog lists the offsets.  **缩小范围** asks for the new value
+   (width is fixed) and calls `nativeCheatNarrow`; **重新搜索** starts over.
+3. Tapping an offset appends `<offset>:<little-endian bytes>` to the game's
+   cheat file (`<jar dir>/cheats/<stem>.txt`) and reloads it through
+   `nativeCheatReload`, so the patch is live immediately and is picked up by
+   the next launch too.
+
+Verified on the API 36 emulator with `tests/fixtures/loopdemo.jar`:
+`cheats: search find value=0x1/1 in=0 -> 9 hit(s)`; narrowing the same value
+reported `in=9 -> 9`; tapping `0x1F0` wrote `1F0:01`
+(`cheat file …:1: slot 0, 1F0:01`, `cheats: reload … -> 1 code(s)`), and a
+restart logged the startup `cheats: …loopdemo.txt` + `applied 1 cheat code(s)`.
+The panel row then showed "已启用 loopdemo.txt".
+
+Limits: the value width must match between the first search and narrowing (the
+panel keeps it); the candidate list is capped at 256 offsets and shows the
+first 30; a value that is not in the arena yet (for example a counter the game
+only creates after a new game) simply yields zero hits.
