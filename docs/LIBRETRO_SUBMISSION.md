@@ -1436,3 +1436,21 @@ multi-second blocking phase.  Earlier 0.5.17 runs had one load-sensitive
 serialize flake under six parallel probes; this run had none.  Combined with
 the full CTest 198/198 and the round-113 artifact table this is the release
 quality evidence for the 0.5.18 submission material.
+
+## Round-115 clean-clone rehearsal of the 0.5.18 tree, 2026-11-19
+
+Fresh `git clone --depth 1` of origin/main at `cedea62` → `/var/tmp/r115-clone`.
+
+- `tools/simulate_ci_builds.sh --out /var/tmp/r115-ci --jobs 8` → **3/3
+  contracts** (linux `.so` 4,000,128 B; windows `.dll` 3,567,775 B; android
+  `.so` 11,711,520 B renamed `_android.so`).
+- Clone-built linux core (`tools/build_libretro_cores.sh linux-x86_64`): mock
+  frontend matrix **20/20 passed**; real RetroArch 1.22.2 LoopDemo 120 frames
+  **PASS** (core log markers verified).
+- `tools/check_libretro_submission_bundle.sh --super-clone … --docs-clone …
+  --apply-clones --mkdocs /var/tmp/mkvenv/bin/mkdocs` → **41 passed / 0
+  failed** against the current upstream masters (`libretro-super`
+  `55e50a81`, `libretro/docs` `9399ee32`).
+
+This is the release-quality evidence for the 0.5.18/r37 submission package
+(round 113); no changes were made to the tree by the rehearsal.

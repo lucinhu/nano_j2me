@@ -1293,3 +1293,10 @@ details in `docs/LIBRETRO_SUBMISSION.md` ("Round-94 end-to-end rehearsal").
   NBA basketball shows 108 M calls each in 300 frames), not runtime overhead.
   Documented in `docs/PERFORMANCE.md` (round 114 section) with the rule to
   profile call graphs before labeling a title slow.
+
+## Round-115 update, 2026-11-19
+
+- Clean-clone rehearsal of the 0.5.18 tree at `cedea62`: CI template
+  simulations **3/3** (linux 4,000,128 B / windows 3,567,775 B / android
+  11,711,520 B), clone-built core mock **20/20** + real RetroArch **PASS**,
+  bundle check **41/41** with the current upstream masters.  No tree changes.
