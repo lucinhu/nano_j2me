@@ -283,3 +283,26 @@ No new crashes, uncaught exceptions, or hangs: the verdict set is effectively
 unchanged for a release-to-release comparison (0.5.14 → 0.5.17 changed only the
 cheat-search API and the Android cheat editor, neither of which runs in the CLI
 sweep path).
+
+## Round-116 revalidation on 0.5.18, 2026-11-19
+
+Fresh 404-title sweep with the released 0.5.18 CLI
+(`/var/tmp/nj2me-goal13-build/nj2me`, 10 workers, 600 frames @30 fps,
+`NJ_KEYS_DIR=tools/corpus_keys`, heap 16):
+**386 ok / 13 title-exit / 2 title-exception / 2 no-frame / 1 bad-jar,
+0 timeout** (`.local-tools/debug-runs/compat-20261119-r116`).
+
+Compared with round 105 on 0.5.17 (384 ok / 14 title-exit / 1 timeout / 2 / 2 / 1):
+
+- `GT Racing 2` timeout → ok — the known ~130 s loader finished inside the
+  90 s budget this run (10-worker load variance; both binaries are borderline).
+- `Hotguys Rhapsody` (美男狂想曲_3876) title-exit → ok and
+  `杀鬼子-敌后武工队_2185` title-exit → ok — both were previously classified as
+  load-sensitive (standalone runs reached 600 frames); they now complete under
+  the parallel sweep too.
+- `跑跑卡丁车-经典中秋版_2117` ok → title-exit — re-ran standalone twice:
+  rc=0, 678/679 frames, 552/555 paints → parallel-load/key-timing flake,
+  not a regression.
+
+The 0.5.18 changes on top of 0.5.17 are the Image-field hot-cache blit
+optimisation and docs/metadata only; no verdict regressed.
