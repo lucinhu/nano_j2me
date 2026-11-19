@@ -123,11 +123,21 @@ def run_one(row, frames, timeout):
            "--timeout", str(max(60, timeout)),
            "--visual-required", "--static-ok", "--min-nonblack", "8",
            "--save-dir", tempfile.mkdtemp(prefix="lj-vis-")]
-    keys = KEYS_DIR / (jar.stem + ".txt")
-    if not keys.is_file():
-        keys = DEFAULT_KEYS
-    if keys is not None:
-        cmd += ["--keys", str(keys)]
+    # Replay the row's own input recipe: "none" means the sweep found the
+    # generic recipe made the title exit, a bare filename is a per-title
+    # script under tools/corpus_keys/, otherwise fall back to the generic one.
+    keys_arg = None
+    key_name = row.get("keys")
+    if key_name == "none":
+        keys_arg = None
+    elif key_name and (KEYS_DIR / key_name).is_file():
+        keys_arg = KEYS_DIR / key_name
+    else:
+        keys_arg = KEYS_DIR / (jar.stem + ".txt")
+        if not keys_arg.is_file():
+            keys_arg = DEFAULT_KEYS
+    if keys_arg is not None:
+        cmd += ["--keys", str(keys_arg)]
     try:
         cp = subprocess.run(cmd, capture_output=True, text=True,
                             timeout=timeout, cwd=str(ROOT))

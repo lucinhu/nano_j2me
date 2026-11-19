@@ -1518,3 +1518,21 @@ every `nano_j2me_*` key from the `lr_options[]` initialiser in
 library manual).  All **18** registered options are currently documented;
 the check runs as CTest `check_libretro_option_docs` (0.02 s) so a future
 option cannot ship without its page row.
+
+## Round-124 (2026-11-20): 399-title libretro visual probe on the released 0.5.18 core
+
+The compat sweep's round-124 pass reclassified thirteen rows (`keys: "none"`)
+and one heap-sensitive title, giving 399 `ok` rows.  Re-running the whole-corpus
+libretro visual probe on that row set (released r37 linux core, 300 frames,
+6 jobs, `.local-tools/debug-runs/r124-visual300`) gives:
+
+| titles | passed | known limitation | failed |
+|---|---|---|---|
+| 399 | **396** | 3 | **0** |
+
+The probe now replays each row's own input recipe: a `keys: "none"` row is run
+with no input at all (the sweep proved the generic recipe made it exit), a row
+with a per-title script uses that script, and everything else keeps the generic
+script.  The three known limitations are unchanged (`毁灭战士3_10598` slow
+loader; `台球传奇_87` and `德州扑克2_3884` load-state request timing out while
+the title sits in a multi-second blocking phase).

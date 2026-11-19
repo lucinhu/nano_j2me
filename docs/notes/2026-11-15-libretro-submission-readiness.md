@@ -1337,3 +1337,11 @@ details in `docs/LIBRETRO_SUBMISSION.md` ("Round-94 end-to-end rehearsal").
   instead of guesses: rewind at granularity 2 spends about half of a 60 Hz
   frame on snapshots, and runahead cannot fit even one snapshot per frame
   within the budget at auto-heap sizes.
+
+## Round-124 (2026-11-20)
+
+The corpus sweep's corrected row set (399 ok after the input-recipe and heap
+fixes) was re-probed through the libretro core: 399 titles, 396 passed, 3 known
+limitations, 0 failed.  `tools/check_libretro_corpus_visual.py` now replays the
+row's input recipe (`keys: "none"` = no input) so reclassified titles are not
+driven into their exit path again.
