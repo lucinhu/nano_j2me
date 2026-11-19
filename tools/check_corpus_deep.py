@@ -62,7 +62,12 @@ def run_one(row, args, keys, work):
         "--run-frames", str(args.frames), "--stats",
         "--rms-dir", str(rms),
     ]
-    row_keys = resolve_keys(jar.name, keys)
+    if row.get("keys") == "none":
+        row_keys = None
+    elif row.get("keys"):
+        row_keys = ROOT / "tools" / "corpus_keys" / row["keys"]
+    else:
+        row_keys = resolve_keys(jar.name, keys)
     if row_keys:
         cmd += ["--keys", "@" + str(row_keys)]
     cmd.append(str(jar))

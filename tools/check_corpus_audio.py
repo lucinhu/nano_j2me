@@ -92,14 +92,21 @@ def main():
                 for x in args.require):
             continue
         seen += 1
-        row_keys = resolve_keys(os.path.basename(path), keys)
+        if row.get("keys") == "none":
+            row_keys = None
+        elif row.get("keys"):
+            row_keys = (os.path.dirname(os.path.dirname(
+                os.path.abspath(__file__))) + "/tools/corpus_keys/" + row["keys"])
+        else:
+            row_keys = resolve_keys(os.path.basename(path), keys)
         with tempfile.TemporaryDirectory() as rms:
-            cp = subprocess.run(
-                [BIN, "--port", "headless", "--size", "240x320", "--heap", "16",
-                 "--fps", "30", "--run-frames", str(args.frames),
-                 "--keys", "@" + row_keys, "--rms-dir", rms, "--stats",
-                 "--verbose", "3", path],
-                capture_output=True, text=True, timeout=120)
+            cmd = [BIN, "--port", "headless", "--size", "240x320", "--heap", "16",
+                   "--fps", "30", "--run-frames", str(args.frames),
+                   "--rms-dir", rms, "--stats", "--verbose", "3"]
+            if row_keys:
+                cmd += ["--keys", "@" + str(row_keys)]
+            cmd.append(path)
+            cp = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
         out = (cp.stderr or "") + (cp.stdout or "")
         observed = re.search(r"observed:.*", out)
         observed = observed.group(0) if observed else ""

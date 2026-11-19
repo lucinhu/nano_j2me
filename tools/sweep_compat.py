@@ -118,6 +118,40 @@ def one(job):
                 row["verdict"] = ("oom" if "OutOfMemoryError" in err else "failure")
             break
         row["verdict"] = "retry-heap32"
+    if row.get("verdict") == "title-exit":
+        # The generic key script can *cause* a self-exit: a title that maps
+        # fire/soft1 to the "exit" item on its first screen quits at frame 30
+        # even though a player would never press it there.  Round 122 found 13
+        # of 14 title-exit rows run to the full budget when no input arrives,
+        # so retry once without keys before calling a title self-exiting.
+        none_path = os.path.join(OUT, "keys-none.txt")
+        if not os.path.exists(none_path):
+            with open(none_path, "w", encoding="utf-8") as fh:
+                fh.write("# deliberately empty: run without input\n")
+        cmd = [BIN, "--port", "headless", "--size", "240x320",
+               "--heap", str(row.get("heap", 16)), "--fps", "30",
+               "--run-frames", str(RUN), "--keys", "@" + none_path,
+               "--rms-dir", os.path.join(OUT, "rms", base.replace(".jar", "") + "-nokeys"),
+               "--stats", path]
+        if row.get("device"):
+            cmd[cmd.index("--stats"):cmd.index("--stats")] = ["--device", row["device"]]
+        try:
+            p = subprocess.run(cmd, capture_output=True, text=True, timeout=90)
+            m = re.search(r"stats:.*", p.stderr)
+            stats = dict(re.findall(r"(\w+)=(\d+)", m[0])) if m else {}
+            frames = int(stats.get("frames", 0))
+            uncaught = len(re.findall(r"uncaught exception in thread \d+:", p.stderr))
+            if p.returncode == 0 and frames >= RUN // 2 and uncaught == 0:
+                row.update({"keys": "none", "frames": frames,
+                            "paints": int(stats.get("paints", 0)),
+                            "bytecodes": int(stats.get("bytecodes", 0)),
+                            "thrown": 0, "uncaught": 0, "verdict": "ok",
+                            "note": "runs without input; the generic key script made it exit"})
+                return row
+            row["note"] = (row.get("note", "") +
+                           "; also exits without input").strip("; ")
+        except subprocess.TimeoutExpired:
+            pass
     if row.get("verdict") in ("failure", "timeout"):
         # A title that reads Nokia device properties cannot start on the generic
         # handset; retry once with a real profile so the row measures the title

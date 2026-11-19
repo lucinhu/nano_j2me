@@ -85,3 +85,20 @@ ways) and is recorded as such.
 - `鲁宾逊漂流记汉化版_702` now runs 600 frames but paints once — it is an
   "ok by budget" row, not evidence of correct rendering; its renderer needs a
   separate look.
+
+## Round 123: some title-exit verdicts were caused by the recipe itself
+
+The pointer-free recipe stopped taps from pressing unknown buttons, but the
+early keyboard presses can still quit a title: on a single-screen JAR book
+(`book4.jar` … `book7.jar`, `jump.jar`) any key closes the page, and some
+start screens default their selection to "exit", so `30:fire`/`55:soft1`
+called `notifyDestroyed()` at frame 30–90.  Re-running the 14 `title-exit`
+rows of the 0.5.18 sweep with **no input at all** showed 13 of them run the
+full 600 frames; only `蹦球传说_7801.jar` is a genuine self-exit.
+
+`tools/sweep_compat.py` now retries a `title-exit` row without keys before
+accepting the verdict (`keys: "none"` rows, note text in `docs/CORPUS.md`
+"Round 123"), and the corpus probes replay that choice.  Curation rules stand:
+a title that needs keys to reach gameplay gets a script in
+`tools/corpus_keys/`; the generic recipe only has to avoid making things
+worse.

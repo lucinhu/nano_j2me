@@ -350,3 +350,54 @@ generic profile reports a false freeze).
   and the run paints nothing; with it the title animates.  This is a recipe
   issue, not a loader defect — the sweep already retries such titles with that
   profile and records `needs --device nokia6230` in the row.
+
+## Round 123: the generic key script can make a title exit
+
+A `title-exit` verdict only means "the MIDlet called `notifyDestroyed()`
+inside the frame budget"; it does not mean a player would have quit there.  The
+generic recipe presses `30:fire` and `55:soft1` to get past start screens, and
+on some titles the default selection on that first screen is "exit"/"quit", or
+the key itself is "close this page".  Re-running all 14 `title-exit` rows of
+the 0.5.18 sweep (`compat-20261119-r105`) **with no input at all** showed that
+13 of them run the complete 600-frame budget; only `蹦球传说_7801.jar` really
+exits by itself (91 frames, 91 paints):
+
+| row | with generic keys | with no input |
+| --- | --- | --- |
+| `Boun_en_ar_de_he-IL_ru-RU.jar` | exit at 55 | 600 frames / 592 paints |
+| `Vime_en_ar_de_he-IL_ru-RU.jar` | exit at 55 | 600 frames / 524 paints |
+| `JBenchmark HD.jar` | exit at 140 | 600 frames / 2 paints |
+| `book4/5/6/7.jar` | exit at 30 | 600 frames / 600 paints |
+| `jump.jar` | exit at 30 | 600 frames / 600 paints |
+| `三国志吞食天地_8144.jar` | exit at 57 | 600 frames / 296 paints |
+| `冰淇淋少女成长日记_7307.jar` | exit at 290 | 600 frames / 600 paints |
+| `杀鬼子-敌后武工队_2185.jar` | exit at 293 | 600 frames (playable) |
+| `百鬼商店破解版_10526.jar` | exit at 72 | 600 frames / 600 paints |
+| `美男狂想曲_3876.jar` | exit at 58 | 600 frames (menu) |
+| `蹦球传说_7801.jar` | exit at 90 | exit at 91 (self-exit) |
+
+`tools/sweep_compat.py` now retries a `title-exit` row once without keys (same
+`--heap`/`--device` recipe, 600 frames, a temporary empty script
+`<rows>/keys-none.txt`).  If it reaches at least half the budget with rc=0 and
+no uncaught exception, the row becomes `ok`, records `keys: "none"` and the
+note "runs without input; the generic key script made it exit"; a title that
+also quits without input keeps `title-exit` and the note says so.  The other
+probes replay the row recipe: `check_corpus_motion.py`,
+`check_corpus_deep.py` and `check_corpus_audio.py` skip `--keys` for a
+`keys: "none"` row and use `tools/corpus_keys/<name>.txt` when the row names a
+per-title script.
+
+The lesson: the generic recipe must stay conservative (no pointer taps, see
+above), and a recipe-caused exit is a property of the *recipe*, not of the
+title.  Per-title scripts in `tools/corpus_keys/` remain the right way to
+drive a screen that needs real input; `keys: "none"` is for titles whose
+attract mode runs on its own.
+
+Full sweep after the fix (`compat-20261120-r123`, the same 0.5.18 CLI and key
+map as r105): **398 ok / 1 title-exit / 2 title-exception / 2 no-frame /
+1 bad-jar, 0 timeout** — up from 386 ok / 13 title-exit and, more importantly,
+with every remaining `title-exit` row now proven to exit without input.  The
+only difference beyond the 13 recipe-caused exits is `GT赛车2_36.jar`
+returning to `ok` (600 frames, 478 paints) after its usual load-sensitive
+timeout in the previous run.  No new crash, hang or uncaught exception
+appeared.

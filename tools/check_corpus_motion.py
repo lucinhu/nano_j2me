@@ -122,21 +122,37 @@ def main():
     seen, moving, static = 0, 0, 0
     jobs = [r for r in ok if find(os.path.basename(r["file"])) is not None]
     jobs = jobs[:max(args.count, 0)]
-    keys = args.keys or os.path.join(args.rows, "keys.txt")
+    generic_keys = args.keys or os.path.join(args.rows, "keys.txt")
     # Honor the recipe the sweep had to use for a title: a device retry also
     # bumped the heap, and replaying with the generic profile would report a
-    # false freeze (1945空战英雄 never paints a frame without --device).
-    specs = [(find(os.path.basename(r["file"])),
-              int(r.get("heap") or 16), r.get("device")) for r in jobs]
+    # false freeze (1945空战英雄 never paints a frame without --device).  The
+    # same applies to input: a title the sweep had to run without keys (the
+    # generic script made it exit) must be replayed without keys, and a
+    # per-title script must win over the generic one.
+    none_keys = os.path.join(args.rows, "keys-none.txt")
+
+    def spec_for(row):
+        keys = generic_keys
+        if row.get("keys") == "none":
+            if not os.path.exists(none_keys):
+                with open(none_keys, "w", encoding="utf-8") as fh:
+                    fh.write("# deliberately empty: run without input\n")
+            keys = none_keys
+        elif row.get("keys"):
+            keys = os.path.join(ROOT, "tools", "corpus_keys", row["keys"])
+        return (find(os.path.basename(row["file"])),
+                int(row.get("heap") or 16), row.get("device"), keys)
+
+    specs = [spec_for(r) for r in jobs]
     paths = [s[0] for s in specs]
     results = []
     if args.jobs <= 1:
         for spec in specs:
-            results.append(probe(spec[0], args.frames, keys, spec[1], spec[2]))
+            results.append(probe(spec[0], args.frames, spec[3], spec[1], spec[2]))
     else:
         with ThreadPoolExecutor(max_workers=args.jobs) as pool:
             results = list(pool.map(
-                lambda spec: probe(spec[0], args.frames, keys, spec[1], spec[2]),
+                lambda spec: probe(spec[0], args.frames, spec[3], spec[1], spec[2]),
                 specs))
     for path, (unique, coverage) in zip(paths, results):
         seen += 1
