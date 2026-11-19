@@ -527,3 +527,53 @@ rebuilds it without dropping either half:
 
 `COMPATIBILITY_MATRIX.md` is generated; the scratch rows directory stays in
 `.local-tools` (untracked) like every other sweep output.
+
+### Round 128 (2026-11-20): the corpus fetcher can ingest loose JARs
+
+The default archive.org items no longer carry `.zip` archives (the fetch
+path had quietly stopped adding titles), so `tools/fetch_corpus.py` grew a
+second ingestion mode: loose `.jar` files listed directly on an item are
+downloaded one by one, filtered by `MIN_BYTES`, deduplicated by SHA-256 and
+flattened into the vault.  `.7z`/`.rar` members are reported as skipped
+(there is no 7z reader in the standard library).  The item
+`my-top-95-mobile-java-games` (95 loose JARs, 61 MB) was added to
+`DEFAULT_ITEMS`; fetching it into `/tmp/vault5` added **108 unique JARs**
+(68 MB), since the same item also ships a redundant ZIP.
+
+The expanded sweep (`NJ_SWEEP_DIRS=/tmp/vault4:/tmp/vault5`, 10 jobs,
+0.5.18 CLI) covered **520 rows**:
+
+| verdict | count |
+| --- | --- |
+| ok | 510 |
+| timeout | 2 |
+| bad-jar | 2 |
+| title-exit | 2 |
+| failure | 1 |
+| title-exception | 1 |
+| no-frame | 2 |
+
+100 rows were new; 95 ran normally.  The five new non-ok rows were triaged
+by hand:
+
+* `vault/assassins_creed_260615.jar` — runs 600 frames normally but needs
+  **246.8 s** (2.4 fps) of game logic, far over the 90 s sweep budget; slow
+  title, not a hang.
+* `vault/gangstar_2_kings_of_260766.jar` — prints `DONE`, creates its MIDI
+  players and then idles in `hrtimer_nanosleep` after repeatedly catching
+  `NullPointerException at e.b()V`; the same happens with the
+  `--device nokia6230 --heap 32` recipe and the FreeJ2ME-Plus reference
+  shows a blank white screen, so this is a game-side startup stall.
+* `vault/bounce_tale_qy5sf1si.jar` — not a ZIP file at all (bad download or
+  a JAD renamed to `.jar`), classified `bad-jar` correctly.
+* `vault/bouncetale_9s1otkmz.jar` — valid JAR (107 entries) that calls
+  `notifyDestroyed()` after one frame, with and without keys; genuine
+  `title-exit`.
+* `vault/snake_2.jar` — runs 60 frames/paints without installing a
+  `Displayable` and exits with code 1 ("installed no Displayable").
+
+The compatibility matrix was regenerated from the merged rows directory
+(`.local-tools/debug-runs/compat-matrix-r128`): **1074 titles — 1063
+`运行正常`, 3 `标题自行退出`, 2 `未呈现画面`, 2 `非可用包`, 1
+`标题自身异常`, 1 `失败`, 2 `超时`**.  Regenerating again reproduces the
+file byte for byte.

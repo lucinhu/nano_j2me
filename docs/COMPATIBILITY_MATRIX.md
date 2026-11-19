@@ -1,6 +1,6 @@
 # Compatibility matrix
 
-One row per JAR from the compatibility corpus (974 titles): the 2026-10-25 external snapshot, re-measured on 0.5.18 for every title in `tests/games` and extended with five fetched titles.
+One row per JAR from the compatibility corpus (1074 titles): the 2026-10-25 external snapshot, re-measured on 0.5.18 for every title in `tests/games` and expanded to 520 rows with fetched archive titles (round 128).
 
 Rows that were re-measured keep the newer numbers; the remaining
 historical rows keep the numbers their original sweep recorded, so
@@ -16,72 +16,74 @@ compare rows within one measurement batch, not across the whole table.
 Corpus provenance and size are in `docs/CORPUS.md`; regenerate this table
 with `tools/make_compat_matrix.py <rows dir>` after a new sweep.
 
-Built from `bcaccfc`, 2026-11-20 (recorded by `tools/sweep_compat.py`).
+Built from `f183a74`, 2026-11-20 (recorded by `tools/sweep_compat.py`).
 
 | verdict | titles |
 | --- | --- |
-| 运行正常 | 968 |
-| 标题自行退出 | 2 |
+| 运行正常 | 1063 |
+| 标题自行退出 | 3 |
+| 超时 | 2 |
+| 非可用包 | 2 |
 | 未呈现画面 | 2 |
+| 失败 | 1 |
 | 标题自身异常 | 1 |
-| 非可用包 | 1 |
 
 | 3D API used | titles |
 | --- | --- |
-| - | 828 |
-| nokia-ui | 114 |
-| m3g | 23 |
-| m3g,nokia-ui | 6 |
-| mascot | 3 |
+| - | 875 |
+| nokia-ui | 154 |
+| m3g | 27 |
+| m3g,nokia-ui | 11 |
+| mascot | 7 |
 
 | title | size KB | MIDlet name | vendor | version | profile | 3D | classes | heap MB | frames | bytecodes | uncaught | exceptions | verdict | note |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| (新)三国之关云长战曹贼_2550.jar | 934 | (新)三国之关云长战曹贼 | - | 1.0.0 | MIDP-1.0 | - | 21 | 16 | 600 | 4316333 | 0 | - | 运行正常 |  |
-| 1942空战_10403.jar | 582 | 1942AirCombat supplied by ne | - | 1.0.17 | MIDP-2.0 | - | 14 | 16 | 600 | 2458499 | 0 | java/lang/ArrayIndexOutOfBoundsE | 运行正常 |  |
-| 1945空战英雄_6105.jar | 588 | ACH1945 Lite | - | 1.0.0 | MIDP-2.0 | nokia-ui | 32 | 16 | 600 | 4748208 | 0 | - | 运行正常 | needs --device nokia6230 |
+| (新)三国之关云长战曹贼_2550.jar | 934 | (新)三国之关云长战曹贼 | - | 1.0.0 | MIDP-1.0 | - | 21 | 16 | 600 | 4316135 | 0 | - | 运行正常 |  |
+| 1942空战_10403.jar | 582 | 1942AirCombat supplied by ne | - | 1.0.17 | MIDP-2.0 | - | 14 | 16 | 600 | 2477223 | 0 | java/lang/ArrayIndexOutOfBoundsE | 运行正常 |  |
+| 1945空战英雄_6105.jar | 588 | ACH1945 Lite | - | 1.0.0 | MIDP-2.0 | nokia-ui | 32 | 16 | 600 | 4748193 | 0 | - | 运行正常 | needs --device nokia6230 |
 | 3D台球之王_5014.jar | 314 | 3D台球之王(EA正版) | - | 1.0.0 | MIDP-2.0 | - | 23 | 16 | 600 | 122474 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
-| 3D坦克对战1944_7139.jar | 345 | Tank Ace | - | 1.03 | MIDP-2.0 | - | 32 | 16 | 600 | 69333941 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
-| 3D城市桌球_8299.jar | 262 | Biliardo 3D Urban Tour | - | 1.5.9 | MIDP-1.0 | m3g | 4 | 16 | 600 | 1792735 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
-| 3D孤胆枪手2010_4634.jar | 985 | Alien Shooter 3D | - | 2.0 | MIDP-2.0 | nokia-ui | 19 | 16 | 600 | 213868933 | 0 | java/lang/ArrayIndexOutOfBoundsE | 运行正常 |  |
-| 3D拉力赛-进化汉化版_6366.jar | 347 | 3DRallyEvolution | - | 1.0 | MIDP-2.0 | m3g | 12 | 16 | 600 | 432972 | 0 | javax/microedition/rms/InvalidRe | 运行正常 |  |
-| 3D摩托赛车_9287.jar | 335 | 3DMotoRacing by Racer_Team | - | 1.0 | MIDP-2.0 | m3g | 12 | 16 | 600 | 840044 | 0 | java/lang/IllegalStateException, | 运行正常 |  |
+| 3D坦克对战1944_7139.jar | 345 | Tank Ace | - | 1.03 | MIDP-2.0 | - | 32 | 16 | 600 | 58142387 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| 3D城市桌球_8299.jar | 262 | Biliardo 3D Urban Tour | - | 1.5.9 | MIDP-1.0 | m3g | 4 | 16 | 600 | 2087855 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| 3D孤胆枪手2010_4634.jar | 985 | Alien Shooter 3D | - | 2.0 | MIDP-2.0 | nokia-ui | 19 | 16 | 600 | 214830789 | 0 | java/lang/ArrayIndexOutOfBoundsE | 运行正常 |  |
+| 3D拉力赛-进化汉化版_6366.jar | 347 | 3DRallyEvolution | - | 1.0 | MIDP-2.0 | m3g | 12 | 16 | 600 | 432979 | 0 | javax/microedition/rms/InvalidRe | 运行正常 |  |
+| 3D摩托赛车_9287.jar | 335 | 3DMotoRacing by Racer_Team | - | 1.0 | MIDP-2.0 | m3g | 12 | 16 | 600 | 840007 | 0 | java/lang/IllegalStateException, | 运行正常 |  |
 | 3D武装直升机2_archive.jar | 80 | Attack Chopper 2 | - | 1.01 | MIDP-2.0 | - | 16 | 16 | 600 | 911 | 0 | java/io/IOException,java/lang/Nu | 运行正常 |  |
-| 3D滚球_11586.jar | 69 | 3D QBlast | - | 1.0.0 | MIDP-1.0 | nokia-ui | 19 | 16 | 600 | 515995 | 0 | - | 运行正常 |  |
-| 3D激爆拳击_8805.jar | 1024 | K.O. Legends | - | 1.0.8 | MIDP-2.0 | m3g,nokia-ui | 23 | 16 | 600 | 4806359325 | 0 | java/lang/NullPointerException | 运行正常 |  |
-| 3D版田园物语_6744.jar | 969 | 3D版田园物语 | - | 1.0 | MIDP-2.0 | - | 65 | 16 | 600 | 20208125 | 0 | java/lang/NullPointerException | 运行正常 |  |
+| 3D滚球_11586.jar | 69 | 3D QBlast | - | 1.0.0 | MIDP-1.0 | nokia-ui | 19 | 16 | 600 | 513565 | 0 | - | 运行正常 |  |
+| 3D激爆拳击_8805.jar | 1024 | K.O. Legends | - | 1.0.8 | MIDP-2.0 | m3g,nokia-ui | 23 | 16 | 600 | 4920812540 | 0 | java/lang/NullPointerException | 运行正常 |  |
+| 3D版田园物语_6744.jar | 969 | 3D版田园物语 | - | 1.0 | MIDP-2.0 | - | 65 | 16 | 600 | 20187948 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | 3D疯狂过山车S60v5版_3875.jar | 797 | Roller Rev 99 | - | 1.0.29 | MIDP-2.0 | - | 39 | 16 | 600 | 186010 | 0 | java/io/EOFException | 运行正常 |  |
-| 3D科林麦克雷拉力赛之尘埃_6600.jar | 5601 | Colin McRae DiRT 3D_konno | - | 1.2.5 | MIDP-1.0 | m3g,nokia-ui | 39 | 16 | 600 | 19710716 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
-| 3D跳台滑雪2011_4507.jar | 964 | SkokiNarciarskie2011 | - | 1.1.0 | MIDP-2.0 | m3g | 91 | 16 | 600 | 7211676 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| 3D科林麦克雷拉力赛之尘埃_6600.jar | 5601 | Colin McRae DiRT 3D_konno | - | 1.2.5 | MIDP-1.0 | m3g,nokia-ui | 39 | 16 | 600 | 19739773 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| 3D跳台滑雪2011_4507.jar | 964 | SkokiNarciarskie2011 | - | 1.1.0 | MIDP-2.0 | m3g | 91 | 16 | 600 | 7465128 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
 | Boun_en_ar_de_he-IL_ru-RU.jar | 40 | Bounce | - | 1.24 | MIDP-1.0 | nokia-ui | 8 | 16 | 600 | 5117 | 0 | - | 运行正常 | runs without input; the generic key script m |
-| CCTV贺岁游戏-三国演义_6527.jar | 929 | 三国演义 | - | 1.0.0 | MIDP-1.0 | nokia-ui | 33 | 16 | 600 | 1577804732 | 0 | - | 运行正常 |  |
+| CCTV贺岁游戏-三国演义_6527.jar | 929 | 三国演义 | - | 1.0.0 | MIDP-1.0 | nokia-ui | 33 | 16 | 600 | 1571426117 | 0 | - | 运行正常 |  |
 | CS反恐特警-狙击精英_6539.jar | 417 | (国际巨作)CS反恐特警-狙击精英 | - | 1.0.0 | MIDP-1.0 | - | 20 | 16 | 600 | 1917148 | 0 | java/lang/ArrayIndexOutOfBoundsE | 运行正常 |  |
 | CS反恐特警真3D版2_6747.jar | 255 | CS反恐特警真3D版II | - | 1.0 | MIDP-1.0 | - | 34 | 16 | 600 | 300352964 | 0 | - | 运行正常 |  |
 | CS反恐精英(蓝牙对战)_6858.jar | 335 | Micro Counter Strike v1.1 | - | 1.1.0 | MIDP-2.0 | m3g | 61 | 16 | 600 | 665 | 0 | - | 运行正常 |  |
-| FIFA09足球(EA中文版)_7962.jar | 695 | FIFA 09宝软网baoruan.com免费分享 | - | 1.0 | MIDP-2.0 | - | 36 | 16 | 600 | 697893 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| FIFA09足球(EA中文版)_7962.jar | 695 | FIFA 09宝软网baoruan.com免费分享 | - | 1.0 | MIDP-2.0 | - | 36 | 16 | 600 | 825391 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
 | Flippy跳跃大冒险_archive.jar | 141 | Flippy's Flying Frenzy | - | 1.07 | MIDP-1.0 | nokia-ui | 13 | 16 | 600 | 1525334 | 0 | java/io/EOFException,javax/micro | 运行正常 |  |
-| GT赛车2_36.jar | 1815 | GT Racing 2 | - | 1.0.9 | MIDP-2.0 | nokia-ui | 11 | 16 | 600 | 312745628 | 0 | java/lang/NullPointerException | 运行正常 |  |
-| JBenchmark HD.jar | 343 | JBenchmark HD | - | 4.0.3 | MIDP-2.0 | m3g | 14 | 16 | 600 | 14604958 | 0 | - | 运行正常 | runs without input; the generic key script m |
+| GT赛车2_36.jar | 1815 | GT Racing 2 | - | 1.0.9 | MIDP-2.0 | nokia-ui | 11 | 16 | 600 | 313697145 | 0 | java/lang/NullPointerException | 运行正常 |  |
+| JBenchmark HD.jar | 343 | JBenchmark HD | - | 4.0.3 | MIDP-2.0 | m3g | 14 | 16 | 600 | 14605929 | 0 | - | 运行正常 | runs without input; the generic key script m |
 | JBenchmark.jar | 25 | JBenchmark | - | 1.1.1 | MIDP-1.0 | - | 4 | 16 | 600 | 412826 | 0 | java/lang/ArithmeticException | 运行正常 |  |
-| JBenchmark2.jar | 62 | JBenchmark2 | - | 2.1.1 | MIDP-2.0 | - | 6 | 16 | 600 | 9086406508 | 0 | java/lang/ArithmeticException,ja | 运行正常 |  |
-| JBenchmark3D.jar | 80 | JBenchmark3D | - | 3.1.0 | MIDP-2.0 | m3g | 5 | 16 | 600 | 24920614 | 0 | - | 运行正常 |  |
+| JBenchmark2.jar | 62 | JBenchmark2 | - | 2.1.1 | MIDP-2.0 | - | 6 | 16 | 600 | 9424006633 | 0 | java/lang/ArithmeticException,ja | 运行正常 |  |
+| JBenchmark3D.jar | 80 | JBenchmark3D | - | 3.1.0 | MIDP-2.0 | m3g | 5 | 16 | 600 | 25640614 | 0 | - | 运行正常 |  |
 | LOVExLOVE恋爱学院_4424.jar | 860 | LS | - | 01.30.00 | MIDP-2.0 | - | 75 | 16 | 600 | 565053 | 0 | - | 运行正常 |  |
-| MinecraftJ2ME_PE_0.6.1_V2.2.jar | 1214 | MinecraftJ2ME_PE_0.6.1 | - | 0.6.1 | MIDP-2.0 | m3g,nokia-ui | 170 | 16 | 600 | 6437532366 | 0 | java/lang/ClassNotFoundException | 运行正常 |  |
-| NBA2010中文版_6247.jar | 849 | NBA 10（EA正版） | - | 1.0.0 | MIDP-2.0 | - | 35 | 16 | 769 | 7980808818 | 0 | javax/microedition/rms/InvalidRe | 运行正常 |  |
-| NBA2010授权正版_5060.jar | 826 | NBA2010（授权正版） | - | 1.0.0 | MIDP-2.0 | - | 13 | 16 | 656 | 10476783 | 0 | - | 运行正常 |  |
-| NBA篮球2007_10887.jar | 298 | NBA LIVE 07 | - | 4.2.23 | MIDP-2.0 | - | 86 | 16 | 1061 | 12801572 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
-| NBA职业篮球2010豪华版_7111.jar | 841 | NBA Pro Basketball 2010 | - | 1.0.8 | MIDP-2.0 | - | 9 | 16 | 600 | 4465908306 | 0 | java/lang/NullPointerException | 运行正常 |  |
-| PC正版-使命召唤5_7199.jar | 407 | PC正版-使命召唤5 | - | 1.0.0 | MIDP-2.0 | - | 21 | 16 | 600 | 17370672 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
-| QQ飞车2010_5772.jar | 457 | QQ2010 | - | 1.0 | MIDP-2.0 | - | 30 | 16 | 600 | 3889424629 | 0 | java/io/EOFException | 运行正常 |  |
+| MinecraftJ2ME_PE_0.6.1_V2.2.jar | 1214 | MinecraftJ2ME_PE_0.6.1 | - | 0.6.1 | MIDP-2.0 | m3g,nokia-ui | 170 | 16 | 600 | 6344511718 | 0 | java/lang/ClassNotFoundException | 运行正常 |  |
+| NBA2010中文版_6247.jar | 849 | NBA 10（EA正版） | - | 1.0.0 | MIDP-2.0 | - | 35 | 16 | 770 | 7996440168 | 0 | javax/microedition/rms/InvalidRe | 运行正常 |  |
+| NBA2010授权正版_5060.jar | 826 | NBA2010（授权正版） | - | 1.0.0 | MIDP-2.0 | - | 13 | 16 | 660 | 10435029 | 0 | - | 运行正常 |  |
+| NBA篮球2007_10887.jar | 298 | NBA LIVE 07 | - | 4.2.23 | MIDP-2.0 | - | 86 | 16 | 1060 | 13002611 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| NBA职业篮球2010豪华版_7111.jar | 841 | NBA Pro Basketball 2010 | - | 1.0.8 | MIDP-2.0 | - | 9 | 16 | 600 | 4496252647 | 0 | java/lang/NullPointerException | 运行正常 |  |
+| PC正版-使命召唤5_7199.jar | 407 | PC正版-使命召唤5 | - | 1.0.0 | MIDP-2.0 | - | 21 | 16 | 600 | 17779119 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| QQ飞车2010_5772.jar | 457 | QQ2010 | - | 1.0 | MIDP-2.0 | - | 30 | 16 | 600 | 3859488639 | 0 | java/io/EOFException | 运行正常 |  |
 | Vime_en_ar_de_he-IL_ru-RU.jar | 62 | Virtual Me | - | 0.17 | MIDP-1.0 | nokia-ui | 9 | 16 | 600 | 838717 | 0 | javax/microedition/rms/InvalidRe | 运行正常 | runs without input; the generic key script m |
 | book4.jar | 20 | J2ME Games Examples | - | 2.0 | MIDP-2.0 | - | 10 | 16 | 600 | 146 | 0 | - | 运行正常 | runs without input; the generic key script m |
 | book5.jar | 29 | J2ME Games Examples | - | 2.0 | MIDP-2.0 | - | 14 | 16 | 600 | 150 | 0 | - | 运行正常 | runs without input; the generic key script m |
 | book6.jar | 38 | J2ME Games Examples | - | 2.0 | MIDP-2.0 | - | 16 | 16 | 600 | 162 | 0 | - | 运行正常 | runs without input; the generic key script m |
 | book7.jar | 39 | J2ME Games Examples | - | 2.0 | MIDP-2.0 | - | 17 | 16 | 600 | 162 | 0 | - | 运行正常 | runs without input; the generic key script m |
-| bubblet.jar | 27 | Bubblet | - | 1.0.0 | - | nokia-ui | 14 | 16 | 600 | 936054 | 0 | - | 运行正常 |  |
-| game15.jar | 3 | Game15MIDlet | - | 1.0.0 | - | - | 2 | 16 | 600 | 120712 | 0 | - | 运行正常 |  |
+| bubblet.jar | 27 | Bubblet | - | 1.0.0 | - | nokia-ui | 14 | 16 | 600 | 938082 | 0 | - | 运行正常 |  |
+| game15.jar | 3 | Game15MIDlet | - | 1.0.0 | - | - | 2 | 16 | 600 | 118861 | 0 | - | 运行正常 |  |
 | hello.jar | 2 | Hello World | - | 2.0 | MIDP-2.0 | - | 2 | 16 | 600 | 9582 | 0 | - | 运行正常 |  |
 | jump.jar | 15 | J2ME Games Examples | - | 2.0 | MIDP-2.0 | - | 7 | 16 | 600 | 138 | 0 | - | 运行正常 | runs without input; the generic key script m |
-| maze.jar | 7 | J2ME Games Examples | - | 1.0 | MIDP-1.0 | - | 4 | 16 | 600 | 861461 | 0 | - | 运行正常 |  |
+| maze.jar | 7 | J2ME Games Examples | - | 1.0 | MIDP-1.0 | - | 4 | 16 | 600 | 866513 | 0 | - | 运行正常 |  |
 | slimevolley.jar | 8 | SlimeVolleyBallMidlet | - | 1.0.0 | - | - | 7 | 16 | 470 | 169509 | 0 | - | 运行正常 | exited itself (notifyDestroyed) |
 | vault/000-Tomb Raider The Osiris Codex v1.0.9 (176x208) [English].jar | 134 | TombRaider1 | - | 1.0.9 | MIDP-1.0 | - | 5 | 16 | 600 | 1006636 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
 | vault/001-Tomb Raider The Osiris Codex v1.1.3 (128x128) [German].jar | 63 | Tomb Raider The Osiris Codex | - | 1.1.3 | MIDP-1.0 | - | 6 | 16 | 600 | 3539767 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
@@ -196,6 +198,7 @@ Built from `bcaccfc`, 2026-11-20 (recorded by `tools/sweep_compat.py`).
 | vault/1916 Dogfight.jar | 376 | 1916 Dogfight | - | 1.0.0 | MIDP-2.0 | - | 39 | 16 | 600 | 47128616 | 0 | java/io/EOFException,java/lang/N | 运行正常 |  |
 | vault/1942.jar | 400 | 1942 | - | 1.0.0 | MIDP-2.0 | - | 18 | 16 | 600 | 13764818 | 0 | - | 运行正常 |  |
 | vault/1943 Sky War.jar | 138 | 1943 SkyWar | - | 1.0 | MIDP-1.0 | - | 16 | 16 | 600 | 3045231 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| vault/1_temple_flee_temple_158578.jar | 997 | 神庙逃亡 | - | 1.0.0 | MIDP-2.0 | - | 32 | 16 | 600 | 2025688 | 0 | java/io/IOException | 运行正常 |  |
 | vault/2004 Real Football.jar | 189 | 2004 Real Football | - | 1.0.0 | MIDP-2.0 | - | 9 | 16 | 600 | 214675124 | 0 | - | 运行正常 |  |
 | vault/2005 Real Football.jar | 201 | 2005RealFootball | - | 1.1.5 | MIDP-1.0 | - | 6 | 16 | 600 | 1861217 | 0 | - | 运行正常 |  |
 | vault/2006 Real Football 3D.jar | 753 | 2006RealFootball3D | - | 1.0.7 | MIDP-2.0 | - | 7 | 16 | 602 | 2983997402 | 0 | java/lang/NumberFormatException | 运行正常 |  |
@@ -215,6 +218,8 @@ Built from `bcaccfc`, 2026-11-20 (recorded by `tools/sweep_compat.py`).
 | vault/3D Solid Weapon.jar | 335 | 3D Solid Weapon - Ballacker | - | 1.0 | MIDP-2.0 | - | 36 | 16 | 600 | 365361 | 0 | - | 运行正常 |  |
 | vault/3D Street Rail Racing.jar | 589 | 3D Street Rail Racing | - | 1.0.22 | MIDP-2.0 | - | 89 | 16 | 600 | 4307255 | 0 | - | 运行正常 |  |
 | vault/3D Super Ball.jar | 221 | 3D SuperBall | - | 1.1.4 | MIDP-2.0 | - | 34 | 16 | 600 | 4711664 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| vault/3d_brick_breaker_revolution_360x640_n97-296782.jar | 420 | 3D Brick Breaker | - | 1.0.0 | MIDP-2.0 | m3g,nokia-ui | 21 | 16 | 600 | 28361429 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| vault/3dbrickbre_lcdvclkl.jar | 566 | 3DBrickBreak2 by Stox | - | 1.0.4 | MIDP-2.0 | m3g | 29 | 16 | 601 | 87352863 | 0 | java/io/EOFException,javax/micro | 运行正常 |  |
 | vault/4 Wheel Xtreme 3D.jar | 313 | 4 Wheel Xtreme 3D | - | 0.5.15 | MIDP-2.0 | - | 56 | 16 | 600 | 18317558 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
 | vault/4 Wheel Xtreme.jar | 237 | 4 Wheel Xtreme | - | 0.7.0 | MIDP-2.0 | - | 19 | 16 | 600 | 1441541 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
 | vault/4x4 Extreme Rally - World Tour.jar | 378 | 4x4 Extreme Rally World Tour | - | 1.0.2 | MIDP-2.0 | - | 9 | 16 | 600 | 614280 | 0 | java/io/IOException,java/lang/Nu | 运行正常 |  |
@@ -292,7 +297,10 @@ Built from `bcaccfc`, 2026-11-20 (recorded by `tools/sweep_compat.py`).
 | vault/Bolt.jar | 432 | Bolt | - | 1.0.0 | MIDP-2.0 | - | 21 | 16 | 600 | 562021 | 0 | java/io/EOFException,java/io/IOE | 运行正常 |  |
 | vault/Bomberman 2007.jar | 291 | Bomberman | - | 1.0.32 | MIDP-1.0 | - | 12 | 16 | 600 | 23434154 | 0 | javax/microedition/rms/InvalidRe | 运行正常 |  |
 | vault/Bomberman Deluxe.jar | 166 | Bomberman Deluxe | - | 1.28.2 | MIDP-1.0 | - | 5 | 16 | 600 | 26684634 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| vault/Bounce (128x128).jar | 54 | Bounce | - | 1.8 | MIDP-1.0 | nokia-ui | 9 | 16 | 600 | 536502 | 0 | java/lang/StackOverflowError | 运行正常 |  |
+| vault/Bounce Tales (240x320).jar | 592 | Bounce Tales | - | 2.0.25 | MIDP-2.0 | nokia-ui | 20 | 16 | 600 | 161638882 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
 | vault/Bounce Tales.jar | 592 | Bounce Tales | - | 2.0.25 | MIDP-2.0 | - | 20 | 16 | 600 | 11624377 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| vault/Brain Genius (240x320).jar | 321 | Brain Genius | - | 0.2.0 | MIDP-1.0 | - | 8 | 16 | 600 | 7216222 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/Brave - The Official Game.jar | 1373 | Brave | - | 1.1.1 | MIDP-2.0 | - | 29 | 16 | 600 | 17818806 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
 | vault/Brothers in Arms - Art of War.jar | 594 | Brothers in Arms Art of War | - | 1.3.8 | MIDP-2.0 | - | 6 | 16 | 600 | 63293982 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
 | vault/Brothers in Arms - Earned in Blood.jar | 257 | Brothers In Arms | - | 1.0.1 | MIDP-2.0 | - | 9 | 16 | 600 | 1103978 | 0 | - | 运行正常 |  |
@@ -310,6 +318,7 @@ Built from `bcaccfc`, 2026-11-20 (recorded by `tools/sweep_compat.py`).
 | vault/Burning Tires.jar | 412 | 3D Burning Tires | - | 1.3.6 | MIDP-2.0 | - | 115 | 16 | 600 | 3805776 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
 | vault/Burnout 3D.jar | 371 | Burnout | - | 4.2.36 | MIDP-2.0 | - | 10 | 16 | 600 | 16499908 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
 | vault/Burnout.jar | 354 | Burnout | - | 4.3.21 | MIDP-2.0 | - | 8 | 16 | 600 | 4671537 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| vault/Burnout_2ri68qv5.jar | 412 | Burnout | - | 4.20.50 | MIDP-2.0 | - | 8 | 16 | 600 | 146910835 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
 | vault/Caesar.jar | 266 | Caesar | - | 0.4.6 | MIDP-1.0 | - | 5 | 16 | 600 | 1345361 | 0 | - | 运行正常 |  |
 | vault/Cake Mania - My Story.jar | 967 | Cake Mania | - | 1.0.1 | MIDP-2.0 | - | 43 | 16 | 600 | 2600879 | 0 | java/io/EOFException,javax/micro | 运行正常 |  |
 | vault/California Gold Rush - Bonanza!.jar | 1227 | CGRBonanza | - | 1.0.8 | MIDP-2.0 | - | 71 | 16 | 600 | 837406 | 0 | java/io/EOFException,javax/micro | 运行正常 |  |
@@ -318,9 +327,11 @@ Built from `bcaccfc`, 2026-11-20 (recorded by `tools/sweep_compat.py`).
 | vault/Castlevania - Aria of Sorrow.jar | 405 | Castlevania Aria Of Sorrow | - | 1.0.0 | MIDP-2.0 | - | 4 | 16 | 600 | 8945551 | 0 | javax/microedition/rms/InvalidRe | 运行正常 |  |
 | vault/Castlevania - Dawn of Sorrow.jar | 610 | Castlevania Dawn of Sorrow | - | 1.0.0 | MIDP-2.0 | - | 19 | 16 | 600 | 4025754 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
 | vault/Castlevania - Order of Shadows.jar | 521 | CastlevaniaOoS | - | 0.0.7 | MIDP-2.0 | - | 66 | 16 | 600 | 1037964 | 0 | javax/microedition/rms/InvalidRe | 运行正常 |  |
+| vault/Chessmaster (240x400).jar | 958 | Chessmaster | - | 1.0.5 | MIDP-2.0 | - | 9 | 16 | 600 | 825593332 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/Chuck Norris - Bring on the Pain.jar | 621 | Chuck Norris - Bring on the | - | 1.1.0 | MIDP-2.0 | - | 7 | 16 | 600 | 27381970 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/City Bloxx.jar | 422 | City Bloxx | - | 1.0.22 | MIDP-2.0 | - | 19 | 16 | 600 | 13757665 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
 | vault/Clash of the Titans - The Movie.jar | 713 | Clash of Titans Movie | - | 1.0.0 | MIDP-2.0 | - | 17 | 16 | 600 | 265234483 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| vault/Climate Mission (640x360).jar | 6347 | Climate Mission | - | 1.3.11 | MIDP-2.0 | nokia-ui | 112 | 16 | 600 | 58790612 | 0 | java/lang/IllegalMonitorStateExc | 运行正常 | runs without input; the generic key script m |
 | vault/Colin McRae - DiRT 3D.jar | 867 | Colin McRae DiRT 3D srv | - | 1.0.5 | MIDP-1.0 | - | 39 | 16 | 600 | 14487631 | 0 | - | 运行正常 |  |
 | vault/Colin McRae - DiRT.jar | 568 | Colin McRae DiRT | - | 1.2.5 | MIDP-1.0 | - | 21 | 16 | 600 | 5785988 | 0 | - | 运行正常 |  |
 | vault/Command & Conquer 3 - Tiberium Wars.jar | 594 | Command & Conquer 3 - Tiberi | - | 4.1.64 | MIDP-2.0 | - | 29 | 16 | 600 | 2847419 | 0 | java/lang/NullPointerException | 运行正常 |  |
@@ -380,10 +391,10 @@ Built from `bcaccfc`, 2026-11-20 (recorded by `tools/sweep_compat.py`).
 | vault/Galaga 3.jar | 141 | Galaga 3 | - | 1.0.2 | MIDP-2.0 | - | 13 | 16 | 600 | 12001759 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/Galaga X.jar | 505 | Galaga X | - | 1.0.5 | MIDP-2.0 | - | 33 | 16 | 600 | 40249450 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
 | vault/Galazer Deluxe.jar | 715 | Galazer Deluxe | - | 1.1.6 | MIDP-2.0 | - | 63 | 16 | 600 | 428041 | 0 | - | 运行正常 |  |
-| vault/Gameloft Brother In Arms Earned In Bloods 1.2.4.jar | 222 | Brothers In Arms | - | 1.2.5 | MIDP-2.0 | - | 7 | 16 | 600 | 2798530563 | 0 | java/io/IOException | 运行正常 |  |
-| vault/Gameloft Christmas Block Breaker.jar | 148 | ChristmasBlockBreaker | - | 1.0.2 | MIDP-1.0 | - | 8 | 16 | 600 | 2273744188 | 0 | - | 运行正常 |  |
-| vault/Gameloft Midnight Bowling.jar | 217 | MidnightBowling [stuart2773] | - | 1.0.7 | MIDP-2.0 | - | 4 | 16 | 600 | 4000128381 | 0 | java/lang/IllegalArgumentExcepti | 运行正常 |  |
-| vault/Gameloft.Mystery.Mansion.Pinball.1.2.1-Retail.JAVA.teamSMPDA.jar | 222 | MysteryMansionPinball | - | 1.2.1 | MIDP-1.0 | - | 5 | 16 | 600 | 7875514552 | 0 | javax/microedition/rms/InvalidRe | 运行正常 |  |
+| vault/Gameloft Brother In Arms Earned In Bloods 1.2.4.jar | 222 | Brothers In Arms | - | 1.2.5 | MIDP-2.0 | nokia-ui | 7 | 16 | 600 | 2776763748 | 0 | java/io/IOException | 运行正常 |  |
+| vault/Gameloft Christmas Block Breaker.jar | 148 | ChristmasBlockBreaker | - | 1.0.2 | MIDP-1.0 | nokia-ui | 8 | 16 | 600 | 2233760323 | 0 | - | 运行正常 |  |
+| vault/Gameloft Midnight Bowling.jar | 217 | MidnightBowling [stuart2773] | - | 1.0.7 | MIDP-2.0 | - | 4 | 16 | 600 | 4068848381 | 0 | java/lang/IllegalArgumentExcepti | 运行正常 |  |
+| vault/Gameloft.Mystery.Mansion.Pinball.1.2.1-Retail.JAVA.teamSMPDA.jar | 222 | MysteryMansionPinball | - | 1.2.1 | MIDP-1.0 | nokia-ui | 5 | 16 | 600 | 7862271038 | 0 | javax/microedition/rms/InvalidRe | 运行正常 |  |
 | vault/Gangstar - Crime City.jar | 324 | Gangstar - Crime City | - | 1.0.3 | MIDP-2.0 | - | 5 | 16 | 600 | 471501210 | 0 | javax/microedition/rms/InvalidRe | 运行正常 |  |
 | vault/Gangstar - Miami Vindication.jar | 1268 | GangStar: Miami Vindication | - | 1.1.8 | MIDP-2.0 | - | 10 | 16 | 600 | 424838050 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/Gangstar 2 - Kings of L.A..jar | 987 | Gangstar 2 | - | 1.0.7 | MIDP-2.0 | - | 11 | 16 | 600 | 360167875 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
@@ -473,8 +484,8 @@ Built from `bcaccfc`, 2026-11-20 (recorded by `tools/sweep_compat.py`).
 | vault/Need for Speed - The Run.jar | 518 | Need for Speed The Run | - | 4.9.7 | MIDP-2.0 | - | 38 | 16 | 600 | 11411748 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
 | vault/Need for Speed - Undercover Velocity 3D.jar | 1125 | Need for Speed Undercover Ve | - | 1.0.0 | MIDP-2.0 | - | 46 | 16 | 600 | 4383476 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
 | vault/Need for Speed - Undercover.jar | 485 | Need for Speed Undercover | - | 4.4.0 | MIDP-2.0 | - | 29 | 16 | 600 | 5010016 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
-| vault/New York Nights.v1.00.jar | 190 | NYNights | - | 0.0.75 | MIDP-1.0 | - | 7 | 16 | 600 | 4989920787 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
-| vault/Nightmare Creatures.jar | 160 | NightmareCreatures | - | 0.3.2 | MIDP-1.0 | - | 4 | 16 | 600 | 2300925730 | 0 | - | 运行正常 |  |
+| vault/New York Nights.v1.00.jar | 190 | NYNights | - | 0.0.75 | MIDP-1.0 | nokia-ui | 7 | 16 | 600 | 4954639326 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| vault/Nightmare Creatures.jar | 160 | NightmareCreatures | - | 0.3.2 | MIDP-1.0 | nokia-ui | 4 | 16 | 600 | 1358464383 | 0 | - | 运行正常 |  |
 | vault/Ninja Prophecy.jar | 1021 | Ninja Prophecy | - | 1.1.5 | MIDP-2.0 | - | 54 | 16 | 600 | 160199619 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/Nitro Street Racing 2.jar | 976 | NitroStreet Racing2 | - | 1.2.0 | MIDP-2.0 | - | 16 | 16 | 600 | 342833686 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/Nitro Street Racing 3D.jar | 1151 | NitroStreet Racing | - | 1.1.2 | MIDP-2.0 | - | 25 | 16 | 600 | 6934450652 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
@@ -529,6 +540,7 @@ Built from `bcaccfc`, 2026-11-20 (recorded by `tools/sweep_compat.py`).
 | vault/Real Football 2016.jar | 1002 | Real Football 2016 | - | 1.0.1 | MIDP-2.0 | - | 16 | 16 | 600 | 113644953 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
 | vault/Real Football 2017.jar | 1015 | Real Football 2017 | - | 1.0.3 | MIDP-2.0 | - | 16 | 16 | 600 | 129738652 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
 | vault/Real Football 2018.jar | 1020 | Real Football 2018 | - | 1.0.1 | MIDP-2.0 | - | 16 | 16 | 600 | 127692104 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| vault/Real_2_Football_2007.jar | 335 | RealFootball2007 | - | 1.0.7 | MIDP-2.0 | - | 7 | 16 | 600 | 3236230882 | 0 | - | 运行正常 |  |
 | vault/Red Bull Motocross.jar | 834 | RedBullMotoCross2D | - | 0.3.9 | MIDP-2.0 | - | 52 | 16 | 600 | 6251660 | 0 | java/io/EOFException,javax/micro | 运行正常 |  |
 | vault/Red Out Racer.jar | 244 | Red Out Racer | - | 1.0.2 | MIDP-2.0 | - | 23 | 16 | 600 | 1890019 | 0 | javax/microedition/media/MediaEx | 运行正常 |  |
 | vault/Resident Evil - The Missions.jar | 974 | Resident Evil - The Missions | - | 1.0.0 | MIDP-2.0 | - | 5 | 16 | 601 | 1497848 | 0 | - | 运行正常 |  |
@@ -618,7 +630,7 @@ Built from `bcaccfc`, 2026-11-20 (recorded by `tools/sweep_compat.py`).
 | vault/Tornado Mania 3D.jar | 455 | 3D Tornado Mania | - | 1.0.0 | MIDP-2.0 | - | 24 | 16 | 600 | 12093672 | 0 | java/io/EOFException,java/lang/N | 运行正常 |  |
 | vault/Tornado Mania.jar | 339 | Tornado Mania! | - | 1.1.0 | MIDP-2.0 | - | 10 | 16 | 600 | 13843036 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
 | vault/Totally Spies.jar | 306 | TotallySpies! | - | 1.0.0 | MIDP-2.0 | - | 8 | 16 | 600 | 111300189 | 0 | - | 运行正常 |  |
-| vault/TotallySpies S60.jar | 193 | TotallySpies! | - | 1.1.4 | MIDP-1.0 | - | 5 | 16 | 600 | 2815451114 | 0 | java/io/EOFException,java/lang/A | 运行正常 |  |
+| vault/TotallySpies S60.jar | 193 | TotallySpies! | - | 1.1.4 | MIDP-1.0 | nokia-ui | 5 | 16 | 600 | 2832811114 | 0 | java/io/EOFException,java/lang/A | 运行正常 |  |
 | vault/Tower Bloxx - My City.jar | 927 | TBloxx My City | - | 1.0.4 | MIDP-2.0 | - | 39 | 16 | 600 | 17704855 | 0 | java/io/EOFException,javax/micro | 运行正常 |  |
 | vault/Tower Bloxx - New York.jar | 1088 | Tower Bloxx NY | - | 1.0.0 | MIDP-2.0 | - | 56 | 16 | 600 | 5546675 | 0 | java/io/EOFException,javax/micro | 运行正常 |  |
 | vault/Tower Bloxx - Revolution.jar | 779 | TowerBloxxRev | - | 1.0.2 | MIDP-2.0 | - | 52 | 16 | 600 | 5325095 | 0 | java/io/EOFException,javax/micro | 运行正常 |  |
@@ -652,361 +664,451 @@ Built from `bcaccfc`, 2026-11-20 (recorded by `tools/sweep_compat.py`).
 | vault/Zombiewood.jar | 820 | Zombiewood | - | 1.2.9 | MIDP-2.0 | - | 42 | 16 | 600 | 93994054 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/Zoo Keeper.jar | 366 | ZOO KEEPER | - | 1.1.1 | MIDP-2.0 | - | 9 | 16 | 600 | 1274023133 | 0 | - | 运行正常 |  |
 | vault/Zuma's Revenge!.jar | 1118 | Zumas Revenge | - | 00.01.47 | MIDP-2.0 | - | 8 | 16 | 601 | 120025308 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
-| vault/gameloft.medieval.combat.v1.04.s60.java.retail-binpda.jar | 200 | Medieval Combat - Age Of Glo | - | 1.0.4 | MIDP-1.0 | - | 5 | 16 | 600 | 3449939888 | 0 | - | 运行正常 |  |
+| vault/adventure_time_hero_259515.jar | 232 | Adventure Time | - | 1.0.2 | MIDP-2.0 | - | 12 | 16 | 600 | 7433287 | 0 | java/lang/ArrayIndexOutOfBoundsE | 运行正常 |  |
+| vault/adventuret_b1N4sR1I.jar | 276 | Adventure Time | - | 1.0.2 | MIDP-2.0 | - | 15 | 16 | 600 | 2433626 | 0 | java/lang/NullPointerException | 运行正常 |  |
+| vault/age_of_empires_iii_m_259219.jar | 296 | Age Of Empires III Mobile | - | 1.0.1 | MIDP-1.0 | - | 13 | 16 | 600 | 79130753 | 0 | java/lang/NullPointerException | 运行正常 |  |
+| vault/alpha_wing_bqYpzkwZ.jar | 261 | Alpha Wing | - | 1.0.0 | MIDP-1.0 | - | 16 | 16 | 600 | 894755 | 0 | java/lang/IllegalArgumentExcepti | 运行正常 |  |
+| vault/ancientemp_wn2uiomk.jar | 125 | Ancient Empires | - | 1.0.3 | MIDP-1.0 | nokia-ui | 9 | 16 | 600 | 522164 | 0 | java/lang/ArrayIndexOutOfBoundsE | 运行正常 |  |
+| vault/asphalt_3_street_rule_360x640_176330.jar | 1103 | Asphalt 3 3D Street Rules | - | 1.1.5 | MIDP-2.0 | m3g,nokia-ui | 18 | 16 | 600 | 3883692646 | 0 | java/lang/ClassNotFoundException | 运行正常 |  |
+| vault/asphalt_6_adrenalin_258989.jar | 2684 | Asphalt6 Adrenaline | - | 1.0.3 | MIDP-2.0 | - | 20 | 16 | 600 | 90600991 | 0 | - | 运行正常 |  |
+| vault/assassins_creed_260615.jar | 633 | Assassins Creed | - | 1.0.0 | MIDP-2.0 | - | 6 | 16 | 0 | 0 | 0 | - | 超时 |  |
+| vault/blades_and_magic_3d_multiscreen-27836.jar | 1142 | Blades and Magic | - | 1.0.9 | MIDP-2.0 | mascot | 86 | 16 | 600 | 8127169 | 0 | java/io/IOException,java/lang/Nu | 运行正常 |  |
+| vault/bobby_carrot_2_wint_240201.jar | 109 | BC2 - Winterland | - | 1.0.6 | MIDP-1.0 | nokia-ui | 4 | 16 | 600 | 196319 | 0 | - | 运行正常 |  |
+| vault/bounce_Nokia.jar | 39 | Bounce | - | 1.24 | MIDP-1.0 | nokia-ui | 8 | 16 | 600 | 5094 | 0 | - | 运行正常 | runs without input; the generic key script m |
+| vault/bounce_tale_qy5sf1si.jar | 426 | - | - | - | - | - | 0 | 16 | 0 | 0 | 0 | - | 非可用包 | not a usable MIDlet suite (bad JAR or no MID |
+| vault/bounce_tales_travel_240x320_191806.jar | 521 | Bounce Tales | - | 2.0.3 | MIDP-2.0 | nokia-ui | 19 | 16 | 600 | 159976841 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| vault/bounce_water_dash_240x320_191284.jar | 93 | Bounce Water Dash v0.3 TEGOS | - | 1.0.0 | MIDP-2.0 | - | 25 | 16 | 600 | 858376 | 0 | java/lang/ClassNotFoundException | 运行正常 |  |
+| vault/bounceback_64b1jou2.jar | 96 | Bounce Back | - | 1.13 | MIDP-1.0 | nokia-ui | 10 | 16 | 600 | 102342 | 0 | - | 运行正常 |  |
+| vault/bouncedash_shItN4ur.jar | 153 | Bounce Dash | - | 1.0.0 | MIDP-2.0 | - | 26 | 16 | 600 | 3305854211 | 0 | java/lang/ClassNotFoundException | 运行正常 |  |
+| vault/bouncetale_9s1otkmz.jar | 368 | Bounce Tales | - | 2.0.3 | MIDP-2.0 | nokia-ui | 19 | 16 | 1 | 37056 | 0 | - | 标题自行退出 | exited itself (notifyDestroyed) after 1 fram |
+| vault/bouncetale_e568o65n.jar | 356 | Bounce Tales 2 | - | 2.0.3 | MIDP-2.0 | nokia-ui | 19 | 16 | 600 | 159957216 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| vault/bouncetale_xzz6ksx6.jar | 1027 | Bounce Tales mod by Gamemen | - | 2.0.3 | MIDP-2.0 | nokia-ui | 19 | 16 | 600 | 159895857 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| vault/brick_breaker_explos_131333.jar | 99 | Brick Breaker Explosive | - | 1.0.0 | MIDP-2.0 | - | 14 | 16 | 600 | 746149 | 0 | java/lang/IllegalStateException | 运行正常 |  |
+| vault/brick_breaker_revolu_360x640_138536.jar | 494 | BB Revolution2 | - | 1.0.11 | MIDP-2.0 | - | 57 | 16 | 600 | 53847387 | 0 | java/io/EOFException,javax/micro | 运行正常 |  |
+| vault/brickbreak_tbpx16jj.jar | 1097 | Block Breaker Deluxe 2 by D@ | - | 1.1.5 | MIDP-2.0 | - | 11 | 16 | 600 | 7552840867 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| vault/button_s40.jar | 62 | Button_s40 | - | F1.1 | MIDP-1.0 | nokia-ui | 14 | 16 | 600 | 1776602 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| vault/castle_of_magic_256724.jar | 1333 | Castle of Magic | - | 1.1.0 | MIDP-2.0 | nokia-ui | 10 | 16 | 600 | 165318 | 0 | - | 运行正常 |  |
+| vault/castlevani_hvcp9fbl.jar | 405 | Castlevania Aria Of Sorrow | - | 1.0.0 | MIDP-2.0 | - | 5 | 16 | 600 | 12429037 | 0 | javax/microedition/rms/InvalidRe | 运行正常 |  |
+| vault/chocolate3_klm926l6.jar | 455 | 3D Tornado Mania | - | 1.0.0 | MIDP-2.0 | m3g,nokia-ui | 24 | 16 | 600 | 17420962 | 0 | java/io/EOFException,java/lang/N | 运行正常 |  |
+| vault/city_rush_256058.jar | 717 | CityRush | - | 1.0.0 | MIDP-2.0 | - | 95 | 16 | 600 | 13721415 | 0 | java/io/IOException,java/lang/Nu | 运行正常 |  |
+| vault/command_amp_conque_261392.jar | 1143 | C&C4 Tiberian Twilight | - | 4.1.58 | MIDP-2.0 | - | 37 | 16 | 600 | 4036363 | 0 | - | 运行正常 |  |
+| vault/cowboys_amp_aliens_261159.jar | 3442 | Cowboys And Aliens | - | 1.2.3 | MIDP-2.0 | - | 18 | 16 | 600 | 98713779 | 0 | java/lang/NullPointerException | 运行正常 |  |
+| vault/critter_crunch_133978_1657.jar | 222 | Critter Crunch | - | 1.0.0 | MIDP-1.0 | nokia-ui | 10 | 16 | 600 | 185777047 | 0 | java/io/EOFException,java/io/IOE | 运行正常 |  |
+| vault/cyber_punk.jar | 404 | CyberPunk Arasakas Plot Etty | - | 1.3.2 | MIDP-2.0 | nokia-ui | 41 | 16 | 600 | 1103483 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| vault/darkest_fear_multiscreen-119931.jar | 182 | Darkest Fear | - | 1.19 | MIDP-1.0 | nokia-ui | 20 | 16 | 600 | 4363995645 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| vault/doomrpg_tmmcss29.jar | 274 | Doom RPG | - | 1.0.20 | MIDP-2.0 | - | 23 | 16 | 600 | 36541278 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| vault/dragonisla_ortv8jio.jar | 76 | Dragon Island | - | 1.0.2 | MIDP-1.0 | nokia-ui | 26 | 16 | 600 | 462487 | 0 | - | 运行正常 |  |
+| vault/edge_extended_260821.jar | 396 | Edge EX | - | 1.0.3 | MIDP-1.0 | - | 2 | 16 | 600 | 21936532 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| vault/elvenchron_66js6a7i.jar | 232 | Elven Chronicles by street_r | - | 1.0.5 | MIDP-2.0 | nokia-ui | 11 | 16 | 600 | 13467814 | 0 | java/lang/ClassNotFoundException | 运行正常 |  |
+| vault/gameloft.medieval.combat.v1.04.s60.java.retail-binpda.jar | 200 | Medieval Combat - Age Of Glo | - | 1.0.4 | MIDP-1.0 | nokia-ui | 5 | 16 | 600 | 3596702371 | 0 | - | 运行正常 |  |
+| vault/gangstar_1_city.jar | 299 | Gangstar -leo5354- | - | 1.0.5 | MIDP-2.0 | - | 5 | 16 | 600 | 4967862370 | 0 | javax/microedition/rms/InvalidRe | 运行正常 |  |
+| vault/gangstar_2_kings_of_260766.jar | 645 | Gangstar 2 | - | 1.0.3 | MIDP-2.0 | - | 12 | 16 | 0 | 0 | 0 | - | 超时 |  |
+| vault/gangstar_rio_city_o_260851.jar | 2111 | Gangstar Rio City of Saints | - | 1.1.3 | MIDP-2.0 | - | 15 | 16 | 600 | 666913518 | 0 | - | 运行正常 |  |
+| vault/god_of_war_betrayal_258309.jar | 417 | God of War | - | 1.0.0 | MIDP-1.0 | - | 7 | 16 | 600 | 21440536 | 0 | java/lang/NumberFormatException, | 运行正常 |  |
+| vault/gothic_3_-_the_beginning_multiscreen-57752.jar | 318 | Gothic3TheBeginning | - | 1.0 | MIDP-2.0 | nokia-ui | 5 | 16 | 600 | 3655380 | 0 | java/io/IOException,java/lang/Nu | 运行正常 |  |
+| vault/gumballjou_alRKKtCJ.jar | 1624 | Gumball | - | 1.1.2 | MIDP-2.0 | - | 16 | 16 | 600 | 3980364 | 0 | - | 运行正常 |  |
+| vault/holywar_fsb7evml.jar | 207 | HolyWars | - | 01.01.02 | MIDP-2.0 | nokia-ui | 19 | 16 | 600 | 1025699 | 0 | - | 运行正常 |  |
+| vault/knight_tales_land_o_240742.jar | 168 | KnightTales | - | 01.00.04 | MIDP-1.0 | nokia-ui | 11 | 16 | 600 | 604123 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| vault/lego_batman_the_mob_261440.jar | 2192 | Lego Batman | - | 1.1.9 | MIDP-2.0 | - | 17 | 16 | 600 | 392290051 | 0 | java/lang/NullPointerException | 运行正常 |  |
+| vault/miami_nights_2_the_258694.jar | 1620 | Miami Nights 2 | - | 1.0.7 | MIDP-2.0 | - | 9 | 16 | 600 | 1338898474 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| vault/midnight_pool_3_258300.jar | 2301 | Midnight Pool 3 | - | 1.2.3 | MIDP-2.0 | - | 30 | 16 | 600 | 1133994691 | 0 | java/lang/ArrayIndexOutOfBoundsE | 运行正常 |  |
+| vault/mini3draci_ix48iqod.jar | 252 | MINI 3D | - | 1.0.22 | MIDP-2.0 | mascot | 43 | 16 | 600 | 371189 | 0 | java/lang/IllegalArgumentExcepti | 运行正常 |  |
+| vault/modern_combat_2_bla_261155.jar | 3061 | Modern Combat 2: Black Pegas | - | 1.1.1 | MIDP-2.0 | - | 14 | 16 | 600 | 600899092 | 0 | java/lang/NullPointerException | 运行正常 |  |
+| vault/my_life_in_new_york_258886.jar | 2235 | My Life in New York | - | 1.1.0 | MIDP-2.0 | - | 15 | 16 | 600 | 85204522 | 0 | java/lang/NullPointerException | 运行正常 |  |
+| vault/need_for_speed_hot_p_259337.jar | 1022 | Need for Speed Hot Pursuit B | - | 4.16.46 | MIDP-2.0 | - | 42 | 16 | 602 | 10901482 | 0 | java/io/IOException,java/lang/Nu | 运行正常 |  |
+| vault/nowhere_360x640_173649.jar | 275 | Nowhere | - | 02.00.00 | MIDP-2.0 | nokia-ui | 11 | 16 | 600 | 4641187 | 0 | - | 运行正常 |  |
+| vault/pacman_149998.jar | 25 | Pac Man | - | 1.2 | MIDP-2.0 | - | 10 | 16 | 600 | 12018 | 0 | javax/microedition/rms/RecordSto | 运行正常 | runs without input; the generic key script m |
+| vault/playman_extreme_runn_260866.jar | 215 | Playman Extreme Running | - | 1.1.2 | MIDP-2.0 | nokia-ui | 8 | 16 | 600 | 16528438 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| vault/radikal_snowboard_240x400_195557.jar | 425 | Radikal Snowboard | - | 1.0.5 | MIDP-2.0 | nokia-ui | 18 | 16 | 600 | 29859615 | 0 | java/lang/ArrayIndexOutOfBoundsE | 运行正常 |  |
+| vault/rayman_3_241466.jar | 172 | Rayman3 | - | 1.1.8 | MIDP-2.0 | - | 5 | 16 | 600 | 3879880021 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| vault/real_1_soccer_2005_ifp63zdu.jar | 89 | RealSoccer2005 | - | 1.1.0 | MIDP-1.0 | nokia-ui | 13 | 16 | 600 | 3045860 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| vault/residentev_4hfni67z.jar | 900 | Resident Evil - The Missions | - | 1.0.0 | MIDP-2.0 | m3g | 9 | 16 | 600 | 881456 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| vault/rollercoaster_1.jar | 930 | Roller Rev 99 | - | 1.1.9 | MIDP-2.0 | nokia-ui | 45 | 16 | 600 | 70654911 | 0 | java/io/EOFException,java/lang/O | 运行正常 |  |
+| vault/rollercoaster_2.jar | 273 | 3D Coaster Rush by street_ra | - | 1.0.0 | MIDP-2.0 | m3g,nokia-ui | 19 | 16 | 600 | 14448617 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| vault/shadowwalk_lGB8Oa7P.jar | 461 | Shadowalker | - | 1.0.6 | MIDP-1.0 | nokia-ui | 12 | 16 | 600 | 11655556 | 0 | java/lang/NullPointerException | 运行正常 |  |
+| vault/siberianstrike.jar | 63 | SiberianStrike | - | 1.0.6 | MIDP-1.0 | nokia-ui | 16 | 16 | 600 | 4608245869 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| vault/snake_2.jar | 42 | Snake EX2 | - | 1.19 | MIDP-1.0 | nokia-ui | 10 | 16 | 60 | 911 | 0 | java/lang/ClassNotFoundException | 失败 | installed no Displayable |
+| vault/snake_3.jar | 260 | Snake III | - | 3.07.2 | MIDP-2.0 | m3g | 49 | 16 | 600 | 133916 | 0 | java/util/EmptyStackException,ja | 运行正常 | runs without input; the generic key script m |
+| vault/snowboardh_zmu8yadv.jar | 795 | Snowboard Hero | - | 1.0.1 | MIDP-2.0 | mascot | 133 | 16 | 600 | 110191028 | 0 | java/io/IOException,java/lang/Nu | 运行正常 |  |
+| vault/snowboardr_m6km8xw5.jar | 374 | Pro Snowboard | - | 1.02 | MIDP-2.0 | m3g,nokia-ui | 26 | 16 | 600 | 2931573 | 0 | java/lang/AbstractMethodError,ja | 运行正常 |  |
+| vault/solitaire_b1q8jwpn.jar | 86 | Solitaire7650 | - | 1.0.6 | MIDP-1.0 | nokia-ui | 3 | 16 | 600 | 4968012 | 0 | - | 运行正常 |  |
+| vault/sonic_advance_259061.jar | 1634 | Sonic Advance | - | 1.3.5 | MIDP-2.0 | - | 177 | 16 | 600 | 3720604 | 0 | java/lang/NullPointerException | 运行正常 |  |
+| vault/sonic_amp_sega_all_261109.jar | 1069 | Sonic Racing | - | 1.2.8 | MIDP-2.0 | - | 30 | 16 | 600 | 43232863 | 0 | java/lang/NullPointerException | 运行正常 |  |
+| vault/sonic_jump_2_240x320_164217.jar | 334 | Sonic Jump 2 supplied by lua | - | 1.0.4 | MIDP-1.0 | - | 7 | 16 | 600 | 3425169 | 0 | java/io/IOException,javax/microe | 运行正常 |  |
+| vault/sonicforno_ja9diknl.jar | 509 | SonicJump | - | 1.0 | MIDP-1.0 | nokia-ui | 7 | 16 | 603 | 1600177 | 0 | java/io/IOException,java/lang/Nu | 运行正常 |  |
+| vault/soulofdark_7xlflnqy.jar | 873 | Soul of darkness 2 | - | 1.0 | MIDP-1.0 | nokia-ui | 10 | 16 | 600 | 3396863884 | 0 | - | 运行正常 |  |
+| vault/spider-man_toxic_ci_258680.jar | 930 | Spider-Man: Toxic City | - | 1.0.5 | MIDP-2.0 | - | 12 | 16 | 600 | 138288 | 0 | java/lang/NullPointerException | 运行正常 |  |
+| vault/splinter_cell_1_mobile_.jar | 159 | Splinter Cell | - | 1.1.8 | MIDP-2.0 | - | 8 | 16 | 600 | 3105080777 | 0 | - | 运行正常 |  |
+| vault/splinter_cell_2_exten_240x320_157266.jar | 136 | SC-EO sefan.ru | - | 1.0.2 | MIDP-2.0 | - | 4 | 16 | 600 | 4082150831 | 0 | - | 运行正常 |  |
+| vault/splinter_cell_3.jar | 318 | Splinter Cell DA | - | 1.0.5 | MIDP-2.0 | - | 6 | 16 | 600 | 3544424566 | 0 | - | 运行正常 |  |
+| vault/splinter_cell_4_tom_clancys_.jar | 228 | SC-PT | - | 1.0.6 | MIDP-2.0 | nokia-ui | 14 | 16 | 600 | 1952516224 | 0 | javax/microedition/rms/InvalidRe | 运行正常 |  |
+| vault/spyro_k7927_nguy_156863.jar | 465 | Spyro Dawn of the Dragon | - | 0.5.7 | MIDP-2.0 | - | 8 | 16 | 600 | 2178575 | 0 | java/io/IOException,javax/microe | 运行正常 |  |
+| vault/stranded_157079_3963.jar | 233 | Stranded | - | 1.0.0 | MIDP-1.0 | - | 9 | 16 | 600 | 6749604 | 0 | java/lang/NullPointerException | 运行正常 |  |
+| vault/the_sims_3_ambition_260250.jar | 837 | The Sims 3 Ambitions | - | 4.5.81 | MIDP-2.0 | - | 28 | 16 | 600 | 11908065 | 0 | java/io/EOFException,java/lang/N | 运行正常 |  |
+| vault/the_sims_3_winter_ed_259820.jar | 332 | The Sims 3 Winter Edition | - | 0.2.81 | MIDP-2.0 | - | 28 | 16 | 602 | 475188 | 0 | java/lang/IllegalStateException, | 运行正常 |  |
+| vault/the_witcher_159073_4136.jar | 261 | The Witcher | - | 1.0.0 | MIDP-2.0 | - | 7 | 16 | 600 | 6199656 | 0 | java/lang/NullPointerException | 运行正常 |  |
+| vault/tornado_mania_360x640_187050.jar | 382 | Tornado Mania! | - | 1.7.40 | MIDP-2.0 | - | 10 | 16 | 600 | 155223 | 0 | java/io/EOFException,javax/micro | 运行正常 |  |
+| vault/totally_spies_the_m_240159.jar | 285 | Totally Spies **MASYAKA** | - | 1.1.7 | MIDP-2.0 | - | 5 | 16 | 600 | 2854713886 | 0 | java/lang/NullPointerException | 运行正常 |  |
+| vault/treasure_towers_240x320-113258.jar | 307 | Treasure Towers | - | 1.4.4 | MIDP-2.0 | mascot | 5 | 16 | 600 | 5796465 | 0 | java/lang/IllegalArgumentExcepti | 运行正常 |  |
+| vault/tron_snowboarding_240x320_192401.jar | 922 | TRON-mod by SL280296 | - | 1.0.1 | MIDP-2.0 | m3g | 135 | 16 | 600 | 81826312 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| vault/ultimate_brick_break_260584.jar | 399 | Ultimate Brick Breaker | - | 1.0.0 | MIDP-2.0 | - | 31 | 16 | 600 | 80409802 | 0 | java/lang/ClassCastException,jav | 运行正常 |  |
+| vault/ultimate_brick_break_260678.jar | 404 | Ultimate Brick Breaker 2 | - | 1.1.3 | MIDP-2.0 | - | 31 | 16 | 600 | 80142943 | 0 | java/lang/ClassCastException,jav | 运行正常 |  |
+| vault/xiii_240x320_169505.jar | 175 | XIII | - | 1.0.0 | MIDP-2.0 | - | 4 | 16 | 600 | 2770878493 | 0 | - | 运行正常 |  |
+| vault/zombie_infection_259648.jar | 615 | Zombie Infection | - | 1.0.1 | MIDP-2.0 | - | 8 | 16 | 600 | 1738946298 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
 | vnes.jar | 148 | vNes | - | 1.0.0 | - | nokia-ui | 67 | 16 | 600 | 1092674 | 0 | java/io/IOException,java/lang/Nu | 运行正常 |  |
-| 七龙珠－终极原始大乱斗_5589.jar | 986 | 七龙珠-终极原始大乱斗 | - | 1.0.0 | MIDP-1.0 | - | 26 | 16 | 600 | 1084972 | 0 | - | 运行正常 |  |
-| 三国争霸之赤壁大战_11681.jar | 233 | 三国争霸之赤壁大战 | - | 1.0.0 | MIDP-1.0 | - | 11 | 16 | 600 | 1585189 | 0 | - | 运行正常 |  |
-| 三国塔防－曹操传_1610.jar | 1066 | 三国塔防-曹操传 | - | 2.0.1 | MIDP-1.0 | nokia-ui | 148 | 16 | 600 | 167975215 | 0 | java/lang/ArrayIndexOutOfBoundsE | 运行正常 |  |
-| 三国志_10617.jar | 213 | C2S－三国志 | - | 1.0 | MIDP-1.0 | - | 2 | 16 | 600 | 4175028252 | 0 | - | 运行正常 |  |
-| 三国志吞食天地_8144.jar | 513 | 三国志：吞食天地 | - | 1.0.2 | MIDP-2.0 | - | 4 | 16 | 600 | 308900 | 0 | java/lang/NullPointerException | 运行正常 | runs without input; the generic key script m |
+| 七龙珠－终极原始大乱斗_5589.jar | 986 | 七龙珠-终极原始大乱斗 | - | 1.0.0 | MIDP-1.0 | - | 26 | 16 | 600 | 1104232 | 0 | - | 运行正常 |  |
+| 三国争霸之赤壁大战_11681.jar | 233 | 三国争霸之赤壁大战 | - | 1.0.0 | MIDP-1.0 | - | 11 | 16 | 600 | 1579416 | 0 | - | 运行正常 |  |
+| 三国塔防－曹操传_1610.jar | 1066 | 三国塔防-曹操传 | - | 2.0.1 | MIDP-1.0 | nokia-ui | 148 | 16 | 600 | 166874361 | 0 | java/lang/ArrayIndexOutOfBoundsE | 运行正常 |  |
+| 三国志_10617.jar | 213 | C2S－三国志 | - | 1.0 | MIDP-1.0 | - | 2 | 16 | 600 | 4217568872 | 0 | - | 运行正常 |  |
+| 三国志吞食天地_8144.jar | 513 | 三国志：吞食天地 | - | 1.0.2 | MIDP-2.0 | - | 4 | 16 | 600 | 308890 | 0 | java/lang/NullPointerException | 运行正常 | runs without input; the generic key script m |
 | 三国志霸王的大陆V3.2.2_5005.jar | 674 | BWDL | - | 1.0 | MIDP-2.0 | - | 7 | 16 | 600 | 543792 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
 | 三国杀2012_809.jar | 1203 | sanguosha | - | 1.0 | MIDP-1.0 | nokia-ui | 81 | 16 | 600 | 2244603 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
-| 三国杀2．2美化版_1347.jar | 1171 | SanGuoQ | - | 2.2 | MIDP-2.0 | - | 376 | 16 | 600 | 5712818 | 0 | java/io/IOException | 运行正常 |  |
-| 三国杀单机BT版_4227.jar | 318 | 三国杀 | - | 1.0.0 | MIDP-2.0 | - | 17 | 16 | 600 | 598517 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| 三国杀2．2美化版_1347.jar | 1171 | SanGuoQ | - | 2.2 | MIDP-2.0 | - | 376 | 16 | 600 | 5713580 | 0 | java/io/IOException | 运行正常 |  |
+| 三国杀单机BT版_4227.jar | 318 | 三国杀 | - | 1.0.0 | MIDP-2.0 | - | 17 | 16 | 600 | 598235 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
 | 三国杀单机战功修改版_4143.jar | 894 | SGSJB | - | 1.0.0 | MIDP-2.0 | - | 17 | 16 | 600 | 8344272 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
-| 三国杀单机版_4312.jar | 895 | SGSJB | - | 1.0.0 | MIDP-2.0 | - | 17 | 16 | 600 | 8344623 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
-| 三国群英传_11539.jar | 58 | 奥汀-三国群英传正版 | - | 1.0 | MIDP-1.0 | nokia-ui | 9 | 16 | 600 | 579601 | 0 | javax/microedition/rms/InvalidRe | 运行正常 |  |
-| 三国群雄争霸_9023.jar | 271 | 超值-三国群雄争霸 | - | 1.0 | MIDP-1.0 | nokia-ui | 3 | 16 | 600 | 135282 | 0 | - | 运行正常 |  |
-| 三国赤壁小乔秘史_7976.jar | 643 | 小乔秘史wap.91soyo.com破解 | - | 1.0.0 | MIDP-2.0 | nokia-ui | 24 | 16 | 600 | 3136663538 | 1 | java/lang/NullPointerException | 标题自身异常 | game code threw java.lang.NullPointerExcepti |
+| 三国杀单机版_4312.jar | 895 | SGSJB | - | 1.0.0 | MIDP-2.0 | - | 17 | 16 | 600 | 8344272 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| 三国群英传_11539.jar | 58 | 奥汀-三国群英传正版 | - | 1.0 | MIDP-1.0 | nokia-ui | 9 | 16 | 600 | 579705 | 0 | javax/microedition/rms/InvalidRe | 运行正常 |  |
+| 三国群雄争霸_9023.jar | 271 | 超值-三国群雄争霸 | - | 1.0 | MIDP-1.0 | nokia-ui | 3 | 16 | 600 | 135311 | 0 | - | 运行正常 |  |
+| 三国赤壁小乔秘史_7976.jar | 643 | 小乔秘史wap.91soyo.com破解 | - | 1.0.0 | MIDP-2.0 | nokia-ui | 24 | 16 | 600 | 3116829962 | 1 | java/lang/NullPointerException | 标题自身异常 | game code threw java.lang.NullPointerExcepti |
 | 世嘉头文字D－宿命对决_1247.jar | 1008 | 世嘉头文字D-宿命对决 | - | 1.0.0 | MIDP-1.0 | m3g | 159 | 16 | 600 | 447732 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
-| 世界五子棋大奖赛_355.jar | 426 | 世界五子棋大奖赛 | - | 1.0 | MIDP-1.0 | - | 9 | 16 | 600 | 58283 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
-| 世界冠军拉力赛3D_8360.jar | 635 | WRC 3D | - | 0.8.4 | MIDP-2.0 | m3g | 4 | 16 | 600 | 8752714 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
-| 世界最强-银星围棋_2631.jar | 402 | wjzq | - | 1.0 | MIDP-1.0 | - | 24 | 16 | 600 | 2744153 | 0 | java/lang/NullPointerException | 运行正常 |  |
-| 世界武术巡回赛教学版_3484.jar | 442 | 世界武术巡回赛-教学版 | - | 0.3.3 | MIDP-2.0 | - | 8 | 16 | 600 | 3920539483 | 0 | java/lang/ArrayIndexOutOfBoundsE | 运行正常 |  |
+| 世界五子棋大奖赛_355.jar | 426 | 世界五子棋大奖赛 | - | 1.0 | MIDP-1.0 | - | 9 | 16 | 600 | 58269 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| 世界冠军拉力赛3D_8360.jar | 635 | WRC 3D | - | 0.8.4 | MIDP-2.0 | m3g | 4 | 16 | 600 | 8752862 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| 世界最强-银星围棋_2631.jar | 402 | wjzq | - | 1.0 | MIDP-1.0 | - | 24 | 16 | 600 | 2744154 | 0 | java/lang/NullPointerException | 运行正常 |  |
+| 世界武术巡回赛教学版_3484.jar | 442 | 世界武术巡回赛-教学版 | - | 0.3.3 | MIDP-2.0 | - | 8 | 16 | 600 | 3894837363 | 0 | java/lang/ArrayIndexOutOfBoundsE | 运行正常 |  |
 | 世界足球2012中文版_1724.jar | 881 | 世界足球2012 | - | 1.0.0 | MIDP-2.0 | - | 16 | 16 | 600 | 41382546 | 0 | java/lang/NullPointerException | 运行正常 |  |
-| 世界足球2012中文版_780.jar | 881 | 世界足球2012 | - | 1.0.0 | MIDP-2.0 | - | 16 | 16 | 600 | 41332993 | 0 | java/lang/NullPointerException | 运行正常 |  |
+| 世界足球2012中文版_780.jar | 881 | 世界足球2012 | - | 1.0.0 | MIDP-2.0 | - | 16 | 16 | 600 | 41476368 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | 丧尸危机2-自由之翼BT版_997.jar | 772 | 丧尸危机2试玩版 | - | 1.0 | MIDP-2.0 | - | 124 | 16 | 600 | 560092 | 0 | - | 运行正常 |  |
 | 丧尸围城_10590.jar | 289 | Dead Rising | - | 1.0.1 | MIDP-2.0 | - | 43 | 16 | 600 | 2576489 | 0 | java/lang/IllegalArgumentExcepti | 运行正常 |  |
-| 中华麻将馆－极限胡牌版_244.jar | 310 | 中华麻将馆-极限胡牌版 | - | 1.0 | MIDP-1.0 | - | 18 | 16 | 600 | 3387977065 | 0 | java/io/IOException,java/lang/Nu | 运行正常 |  |
-| 中国象棋_10893.jar | 293 | 中国象棋三国经典版 | - | 1.0 | MIDP-2.0 | - | 9 | 16 | 600 | 900546 | 0 | javax/microedition/rms/InvalidRe | 运行正常 |  |
-| 中国象棋之水墨珍藏版_871.jar | 375 | 中国象棋之水墨珍藏版 | - | 1.0.0 | MIDP-2.0 | - | 12 | 16 | 624 | 3735846484 | 0 | java/lang/ArrayIndexOutOfBoundsE | 运行正常 |  |
+| 中华麻将馆－极限胡牌版_244.jar | 310 | 中华麻将馆-极限胡牌版 | - | 1.0 | MIDP-1.0 | - | 18 | 16 | 600 | 3063297149 | 0 | java/io/IOException,java/lang/Nu | 运行正常 |  |
+| 中国象棋_10893.jar | 293 | 中国象棋三国经典版 | - | 1.0 | MIDP-2.0 | - | 9 | 16 | 600 | 865639 | 0 | javax/microedition/rms/InvalidRe | 运行正常 |  |
+| 中国象棋之水墨珍藏版_871.jar | 375 | 中国象棋之水墨珍藏版 | - | 1.0.0 | MIDP-2.0 | - | 12 | 16 | 624 | 3778846484 | 0 | java/lang/ArrayIndexOutOfBoundsE | 运行正常 |  |
 | 乱世Q三国_1649.jar | 977 | 乱世Q三国 | - | 1.0 | MIDP-1.0 | - | 232 | 16 | 0 | 128 | 0 | javax/microedition/rms/RecordSto | 未呈现画面 | exited itself (notifyDestroyed) without pain |
-| 乱舞三国之群英会_2972.jar | 817 | 乱舞三国之群英会 | - | 1.0 | MIDP-1.0 | - | 35 | 16 | 600 | 203285094 | 0 | java/io/IOException,java/lang/Nu | 运行正常 |  |
-| 五子棋_10940.jar | 42 | XOXO | - | 1.0 | MIDP-1.0 | - | 24 | 16 | 600 | 284303 | 0 | - | 运行正常 |  |
+| 乱舞三国之群英会_2972.jar | 817 | 乱舞三国之群英会 | - | 1.0 | MIDP-1.0 | - | 35 | 16 | 600 | 216340404 | 0 | java/io/IOException,java/lang/Nu | 运行正常 |  |
+| 五子棋_10940.jar | 42 | XOXO | - | 1.0 | MIDP-1.0 | - | 24 | 16 | 600 | 523725 | 0 | - | 运行正常 |  |
 | 仙剑奇侠传(2008)_12406.jar | 695 | pal | - | 1.0 | MIDP-1.0 | nokia-ui | 3 | 16 | 600 | 201979 | 0 | - | 运行正常 |  |
-| 仙剑奇侠传_10388.jar | 297 | 仙剑奇侠传 | - | 0.0.1 | MIDP-2.0 | - | 6 | 16 | 600 | 11468222 | 0 | javax/microedition/media/MediaEx | 运行正常 |  |
+| 仙剑奇侠传_10388.jar | 297 | 仙剑奇侠传 | - | 0.0.1 | MIDP-2.0 | - | 6 | 16 | 600 | 11468228 | 0 | javax/microedition/media/MediaEx | 运行正常 |  |
 | 仙剑奇侠传完美版_11857.jar | 360 | 仙剑奇侠传 | - | 06.03.10 | MIDP-1.0 | nokia-ui | 4 | 16 | 600 | 4025277 | 0 | - | 运行正常 |  |
-| 仙逆－诛仙弑神_1441.jar | 1356 | 仙逆-诛仙弑神 | - | 1.0.0 | MIDP-1.0 | - | 48 | 16 | 600 | 4877937507 | 0 | java/io/IOException,java/lang/Cl | 运行正常 |  |
-| 仙魔飞行棋_417.jar | 294 | 仙魔飞行棋 | - | 1.0 | MIDP-2.0 | - | 21 | 16 | 600 | 2532021 | 0 | java/lang/ArrayIndexOutOfBoundsE | 运行正常 |  |
-| 众神殿之王子归来_8404.jar | 103 | 王子归来 | - | 1.0.0 | MIDP-2.0 | nokia-ui | 14 | 16 | 600 | 1052241 | 0 | - | 运行正常 |  |
-| 使命召唤4现代战争_9388.jar | 449 | Call of Duty 4 by serviak | - | 1.0.4 | MIDP-2.0 | - | 5 | 16 | 600 | 11849109 | 0 | javax/microedition/rms/InvalidRe | 运行正常 |  |
-| 使命召唤5-战争世界中文版_4583.jar | 416 | 使命召唤5-战争世界 | - | 1.0.1 | MIDP-2.0 | - | 22 | 16 | 600 | 1267794888 | 0 | java/lang/IllegalArgumentExcepti | 运行正常 |  |
-| 侠盗飞车_6246.jar | 360 | 侠盗飞车-Gameloft正版 | - | 1.0.0 | MIDP-2.0 | - | 6 | 16 | 600 | 4296226921 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
-| 侠盗飞车加强版_5640.jar | 350 | 侠盗飞车-Gameloft正版 | - | 1.00 | MIDP-2.0 | - | 11 | 16 | 600 | 4058813869 | 0 | javax/microedition/rms/InvalidRe | 运行正常 |  |
-| 俄罗斯方块中文版_2832.jar | 121 | 俄罗斯方块 | - | 1.0.0 | MIDP-2.0 | - | 56 | 16 | 600 | 805065 | 0 | java/io/IOException,java/util/No | 运行正常 |  |
-| 倚天屠龙之君临天下_12230.jar | 564 | 倚天屠龙之君临天下 | - | 1.0 | MIDP-2.0 | - | 64 | 16 | 600 | 2646968 | 0 | java/lang/NumberFormatException, | 运行正常 |  |
-| 倚天屠龙记_4827.jar | 836 | 倚天屠龙记 | - | 1.0 | MIDP-1.0 | nokia-ui | 62 | 16 | 600 | 11129935 | 0 | - | 运行正常 |  |
-| 倚天屠龙记之魔教教主_4663.jar | 798 | GEYTTJZ | - | 1.0.4 | MIDP-2.0 | - | 7 | 16 | 600 | 3997416987 | 0 | - | 运行正常 |  |
-| 傲世三国志－群雄争霸_5633.jar | 514 | 傲世三国志-群雄争霸 | - | 1.0 | MIDP-1.0 | nokia-ui | 15 | 16 | 600 | 3376011219 | 0 | - | 运行正常 |  |
-| 傲气雄鹰_10432.jar | 249 | 傲气雄鹰汉化版 | - | 1.08 | MIDP-2.0 | - | 10 | 16 | 431 | 650965 | 0 | - | 运行正常 | exited itself (notifyDestroyed) |
+| 仙逆－诛仙弑神_1441.jar | 1356 | 仙逆-诛仙弑神 | - | 1.0.0 | MIDP-1.0 | - | 48 | 16 | 600 | 4803018157 | 0 | java/io/IOException,java/lang/Cl | 运行正常 |  |
+| 仙魔飞行棋_417.jar | 294 | 仙魔飞行棋 | - | 1.0 | MIDP-2.0 | - | 21 | 16 | 600 | 2531836 | 0 | java/lang/ArrayIndexOutOfBoundsE | 运行正常 |  |
+| 众神殿之王子归来_8404.jar | 103 | 王子归来 | - | 1.0.0 | MIDP-2.0 | nokia-ui | 14 | 16 | 600 | 1039660 | 0 | - | 运行正常 |  |
+| 使命召唤4现代战争_9388.jar | 449 | Call of Duty 4 by serviak | - | 1.0.4 | MIDP-2.0 | - | 5 | 16 | 600 | 11849111 | 0 | javax/microedition/rms/InvalidRe | 运行正常 |  |
+| 使命召唤5-战争世界中文版_4583.jar | 416 | 使命召唤5-战争世界 | - | 1.0.1 | MIDP-2.0 | - | 22 | 16 | 600 | 1255721111 | 0 | java/lang/IllegalArgumentExcepti | 运行正常 |  |
+| 侠盗飞车_6246.jar | 360 | 侠盗飞车-Gameloft正版 | - | 1.0.0 | MIDP-2.0 | - | 6 | 16 | 600 | 4376487969 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| 侠盗飞车加强版_5640.jar | 350 | 侠盗飞车-Gameloft正版 | - | 1.00 | MIDP-2.0 | - | 11 | 16 | 600 | 3891787109 | 0 | javax/microedition/rms/InvalidRe | 运行正常 |  |
+| 俄罗斯方块中文版_2832.jar | 121 | 俄罗斯方块 | - | 1.0.0 | MIDP-2.0 | - | 56 | 16 | 600 | 805203 | 0 | java/io/IOException,java/util/No | 运行正常 |  |
+| 倚天屠龙之君临天下_12230.jar | 564 | 倚天屠龙之君临天下 | - | 1.0 | MIDP-2.0 | - | 64 | 16 | 600 | 2651101 | 0 | java/lang/NumberFormatException, | 运行正常 |  |
+| 倚天屠龙记_4827.jar | 836 | 倚天屠龙记 | - | 1.0 | MIDP-1.0 | nokia-ui | 62 | 16 | 600 | 11132392 | 0 | - | 运行正常 |  |
+| 倚天屠龙记之魔教教主_4663.jar | 798 | GEYTTJZ | - | 1.0.4 | MIDP-2.0 | - | 7 | 16 | 600 | 3860440968 | 0 | - | 运行正常 |  |
+| 傲世三国志－群雄争霸_5633.jar | 514 | 傲世三国志-群雄争霸 | - | 1.0 | MIDP-1.0 | nokia-ui | 15 | 16 | 600 | 3203651219 | 0 | - | 运行正常 |  |
+| 傲气雄鹰_10432.jar | 249 | 傲气雄鹰汉化版 | - | 1.08 | MIDP-2.0 | - | 10 | 16 | 600 | 1044453 | 0 | - | 运行正常 |  |
 | 傲视三国之赵云传_11024.jar | 235 | 傲视三国之赵云传 | - | 1.0 | MIDP-1.0 | nokia-ui | 22 | 16 | 600 | 1564791 | 0 | java/lang/ArithmeticException | 运行正常 |  |
-| 僵尸危机2_4349.jar | 1068 | Zombie Infection 2 | - | 1.2.3 | MIDP-2.0 | - | 12 | 16 | 600 | 5979824423 | 0 | java/lang/ArrayIndexOutOfBoundsE | 运行正常 |  |
-| 兔子波比2冰原之旅汉化版_11509.jar | 68 | BC2 - Winterland | - | 1.0.0 | MIDP-1.0 | nokia-ui | 11 | 16 | 600 | 186807 | 0 | - | 运行正常 |  |
-| 冠军足球经理2010汉化版_5198.jar | 543 | CM-2010 | - | 1.2.1 | MIDP-2.0 | nokia-ui | 21 | 16 | 600 | 11689210 | 0 | - | 运行正常 |  |
+| 僵尸危机2_4349.jar | 1068 | Zombie Infection 2 | - | 1.2.3 | MIDP-2.0 | - | 12 | 16 | 600 | 5921315206 | 0 | java/lang/ArrayIndexOutOfBoundsE | 运行正常 |  |
+| 兔子波比2冰原之旅汉化版_11509.jar | 68 | BC2 - Winterland | - | 1.0.0 | MIDP-1.0 | nokia-ui | 11 | 16 | 600 | 186184 | 0 | - | 运行正常 |  |
+| 冠军足球经理2010汉化版_5198.jar | 543 | CM-2010 | - | 1.2.1 | MIDP-2.0 | nokia-ui | 21 | 16 | 600 | 11689786 | 0 | - | 运行正常 |  |
 | 冰淇淋少女成长日记_7307.jar | 344 | 冰淇淋少女成长日记_玉品 | - | 1.0 | MIDP-2.0 | nokia-ui | 9 | 16 | 600 | 451664 | 0 | java/lang/IllegalMonitorStateExc | 运行正常 | runs without input; the generic key script m |
-| 凡人修仙传2-乱星海_12474.jar | 979 | 凡人修仙传2-乱星海 | - | 1.00 | MIDP-1.0 | - | 18 | 16 | 432 | 158507 | 0 | java/lang/NullPointerException | 运行正常 | exited itself (notifyDestroyed) |
-| 凡人修仙传之七派六宗_4145.jar | 984 | 凡人修仙传 | - | 1.0.0 | MIDP-1.0 | nokia-ui | 16 | 16 | 600 | 175488 | 0 | java/io/IOException,java/lang/Nu | 运行正常 |  |
-| 凤凰战机_10636.jar | 216 | Ultra Phoenix - Resurgence | - | 1.1.3 | MIDP-2.0 | - | 32 | 16 | 600 | 6617871 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
-| 初恋物语_7612.jar | 286 | 初恋物语 | - | 1.0 | MIDP-1.0 | - | 9 | 16 | 600 | 36312 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
-| 刺客信条3_266.jar | 1623 | Assassin's Creed III | - | 1.1.1 | MIDP-2.0 | nokia-ui | 12 | 16 | 600 | 116113341 | 0 | java/lang/NullPointerException | 运行正常 |  |
+| 凡人修仙传2-乱星海_12474.jar | 979 | 凡人修仙传2-乱星海 | - | 1.00 | MIDP-1.0 | - | 18 | 16 | 600 | 4524249 | 0 | java/lang/NullPointerException | 运行正常 |  |
+| 凡人修仙传之七派六宗_4145.jar | 984 | 凡人修仙传 | - | 1.0.0 | MIDP-1.0 | nokia-ui | 16 | 16 | 600 | 175690 | 0 | java/io/IOException,java/lang/Nu | 运行正常 |  |
+| 凤凰战机_10636.jar | 216 | Ultra Phoenix - Resurgence | - | 1.1.3 | MIDP-2.0 | - | 32 | 16 | 600 | 6621425 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| 初恋物语_7612.jar | 286 | 初恋物语 | - | 1.0 | MIDP-1.0 | - | 9 | 16 | 600 | 92476 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| 刺客信条3_266.jar | 1623 | Assassin's Creed III | - | 1.1.1 | MIDP-2.0 | nokia-ui | 12 | 16 | 600 | 116031350 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | 刺客信条兄弟会中文版_3668.jar | 1213 | 刺客信条-兄弟会 | - | 1.0.0 | MIDP-2.0 | - | 12 | 16 | 600 | 20080069 | 0 | java/lang/NullPointerException | 运行正常 |  |
-| 剑侠奇缘-玉女问情_2208.jar | 703 | 剑侠奇缘-玉女问情 | - | 1.0 | MIDP-1.0 | - | 30 | 16 | 600 | 18169343 | 0 | java/lang/NumberFormatException | 运行正常 |  |
-| 剑侣情缘Ⅱ魔神至尊传(无bug)_12464.jar | 904 | 剑侣情缘Ⅱ魔神至尊传 | - | 1.0 | MIDP-1.0 | - | 20 | 16 | 600 | 2971026 | 0 | java/io/EOFException | 运行正常 |  |
-| 剑灵－古剑魂梦_676.jar | 1531 | 剑灵-古剑魂梦 | - | 1.0.0 | MIDP-2.0 | nokia-ui | 50 | 16 | 600 | 888554 | 0 | - | 运行正常 |  |
-| 午夜保龄球2中文版_9782.jar | 589 | 终极保龄球2 | - | 1.0.0 | MIDP-2.0 | nokia-ui | 12 | 16 | 600 | 5372639909 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
-| 午夜台球圣诞中文版_8677.jar | 221 | 极限台球挑战赛 | - | 1.04 | MIDP-2.0 | - | 6 | 16 | 600 | 674227763 | 0 | - | 运行正常 |  |
-| 危城无双之三国群英_4891.jar | 220 | 危城无双 | - | 1.0 | MIDP-1.0 | nokia-ui | 2 | 16 | 600 | 2140104309 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
-| 反恐精英2正式版_5836.jar | 510 | CT episod 2 | - | 1.0 | MIDP-2.0 | nokia-ui | 21 | 16 | 600 | 8182904 | 0 | java/lang/IllegalArgumentExcepti | 运行正常 |  |
+| 剑侠奇缘-玉女问情_2208.jar | 703 | 剑侠奇缘-玉女问情 | - | 1.0 | MIDP-1.0 | - | 30 | 16 | 600 | 18169555 | 0 | java/lang/NumberFormatException | 运行正常 |  |
+| 剑侣情缘Ⅱ魔神至尊传(无bug)_12464.jar | 904 | 剑侣情缘Ⅱ魔神至尊传 | - | 1.0 | MIDP-1.0 | - | 20 | 16 | 600 | 2968406 | 0 | java/io/EOFException | 运行正常 |  |
+| 剑灵－古剑魂梦_676.jar | 1531 | 剑灵-古剑魂梦 | - | 1.0.0 | MIDP-2.0 | nokia-ui | 50 | 16 | 600 | 882847 | 0 | - | 运行正常 |  |
+| 午夜保龄球2中文版_9782.jar | 589 | 终极保龄球2 | - | 1.0.0 | MIDP-2.0 | nokia-ui | 12 | 16 | 600 | 5183499909 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| 午夜台球圣诞中文版_8677.jar | 221 | 极限台球挑战赛 | - | 1.04 | MIDP-2.0 | - | 6 | 16 | 600 | 699018193 | 0 | - | 运行正常 |  |
+| 危城无双之三国群英_4891.jar | 220 | 危城无双 | - | 1.0 | MIDP-1.0 | nokia-ui | 2 | 16 | 600 | 2043620081 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| 反恐精英2正式版_5836.jar | 510 | CT episod 2 | - | 1.0 | MIDP-2.0 | nokia-ui | 21 | 16 | 600 | 8205828 | 0 | java/lang/IllegalArgumentExcepti | 运行正常 |  |
 | 口袋仓鼠_11936.jar | 441 | Lab Hamster\gkataria | - | 1.0 | MIDP-2.0 | - | 23 | 16 | 470 | 1426046 | 0 | java/lang/NullPointerException,j | 运行正常 | exited itself (notifyDestroyed) |
-| 口袋妖怪_7872.jar | 54 | 口袋妖怪 | - | 1.0 | MIDP-1.0 | nokia-ui | 8 | 16 | 600 | 787575 | 0 | - | 运行正常 |  |
+| 口袋妖怪_7872.jar | 54 | 口袋妖怪 | - | 1.0 | MIDP-1.0 | nokia-ui | 8 | 16 | 600 | 787582 | 0 | - | 运行正常 |  |
 | 口袋妖怪水晶汉化版_4524.jar | 1067 | MeBoy | - | 1.5.0 | MIDP-2.0 | - | 7 | 16 | 600 | 812 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
-| 口袋灵兽_9902.jar | 582 | 口袋灵兽 | - | 1.0 | MIDP-2.0 | nokia-ui | 41 | 16 | 600 | 238164 | 0 | - | 运行正常 |  |
-| 古剑奇缘-诛仙_4913.jar | 954 | 古剑奇缘-诛仙 | - | 1.0.0 | MIDP-1.0 | - | 64 | 16 | 600 | 1118777358 | 0 | - | 运行正常 |  |
-| 台球传奇_87.jar | 917 | 台球传奇 | - | 1.0 | MIDP-1.0 | - | 53 | 16 | 600 | 11176671 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
-| 史前部落_11059.jar | 486 | Prehistoric Tribes | - | 0.1.28 | MIDP-2.0 | - | 7 | 16 | 600 | 967087190 | 0 | - | 运行正常 |  |
-| 合金弹头2011_5629.jar | 401 | 合金弹头2011 | - | 1.0 | MIDP-1.0 | - | 7 | 16 | 600 | 6146935791 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
-| 合金弹头2013BT版_678.jar | 1021 | 合金弹头2013(正版) | - | 1.0 | MIDP-1.0 | - | 19 | 16 | 600 | 243036 | 0 | java/lang/ClassNotFoundException | 运行正常 |  |
+| 口袋灵兽_9902.jar | 582 | 口袋灵兽 | - | 1.0 | MIDP-2.0 | nokia-ui | 41 | 16 | 600 | 237299 | 0 | - | 运行正常 |  |
+| 古剑奇缘-诛仙_4913.jar | 954 | 古剑奇缘-诛仙 | - | 1.0.0 | MIDP-1.0 | - | 64 | 16 | 600 | 1090536931 | 0 | - | 运行正常 |  |
+| 台球传奇_87.jar | 917 | 台球传奇 | - | 1.0 | MIDP-1.0 | - | 53 | 16 | 600 | 11175098 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| 史前部落_11059.jar | 486 | Prehistoric Tribes | - | 0.1.28 | MIDP-2.0 | - | 7 | 16 | 600 | 1010247182 | 0 | - | 运行正常 |  |
+| 合金弹头2011_5629.jar | 401 | 合金弹头2011 | - | 1.0 | MIDP-1.0 | - | 7 | 16 | 600 | 5991136136 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| 合金弹头2013BT版_678.jar | 1021 | 合金弹头2013(正版) | - | 1.0 | MIDP-1.0 | - | 19 | 16 | 600 | 242106 | 0 | java/lang/ClassNotFoundException | 运行正常 |  |
 | 合金弹头4(完美汉化版)_4053.jar | 798 | Metal Slug 4 | - | 1.0.1 | MIDP-2.0 | - | 6 | 16 | 600 | 6052135 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
 | 周末的沙滩_7453.jar | 1480 | Beach Games 12-Pack | - | 1.0.0 | MIDP-2.0 | nokia-ui | 37 | 16 | 600 | 13255500 | 0 | java/io/EOFException,javax/micro | 运行正常 |  |
-| 哆啦A梦-秘密道具大作战_6557.jar | 552 | 哆啦A梦-秘密道具大作战(正版) | - | 1.0 | MIDP-1.0 | nokia-ui | 26 | 16 | 600 | 7228472936 | 0 | - | 运行正常 |  |
+| 哆啦A梦-秘密道具大作战_6557.jar | 552 | 哆啦A梦-秘密道具大作战(正版) | - | 1.0 | MIDP-1.0 | nokia-ui | 26 | 16 | 600 | 7300712936 | 0 | - | 运行正常 |  |
 | 哆啦A梦运动会_10939.jar | 348 | 哆啦A梦运动会(正版)W | - | 1.0.0 | MIDP-1.0 | - | 17 | 16 | 600 | 589932 | 0 | - | 运行正常 |  |
 | 哆啦A梦－3D卡丁车增值版_1560.jar | 1104 | 哆啦A梦-3D卡丁车 | - | 2.01 | MIDP-1.0 | nokia-ui | 73 | 16 | 600 | 31953332 | 0 | java/io/IOException,java/lang/Nu | 运行正常 |  |
-| 喜羊羊与灰太狼_9241.jar | 296 | 喜羊羊与灰太狼 | - | 1.0.0 | MIDP-2.0 | nokia-ui | 11 | 16 | 600 | 2961152054 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
-| 国色天香MM斗地主真人版_11364.jar | 324 | 国色天香-MM斗地主(真人版) | - | 1.0 | MIDP-1.0 | - | 6 | 16 | 600 | 584680 | 0 | javax/microedition/rms/InvalidRe | 运行正常 |  |
-| 国色天香斗地主_1364.jar | 1249 | 国色天香斗地主 | - | 1.0 | MIDP-2.0 | nokia-ui | 58 | 16 | 600 | 22370620 | 0 | - | 运行正常 |  |
-| 圣百合女子学园-纯色序曲_4875.jar | 993 | SaintLily | - | 1.0.0 | MIDP-2.0 | - | 12 | 16 | 600 | 538731 | 0 | - | 运行正常 |  |
-| 地下城与勇士之鬼剑士_9408.jar | 381 | 地下城与勇士-鬼剑士 | - | 1.0.0 | MIDP-2.0 | - | 27 | 16 | 600 | 58343455 | 0 | - | 运行正常 |  |
+| 喜羊羊与灰太狼_9241.jar | 296 | 喜羊羊与灰太狼 | - | 1.0.0 | MIDP-2.0 | nokia-ui | 11 | 16 | 600 | 2876194120 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| 国色天香MM斗地主真人版_11364.jar | 324 | 国色天香-MM斗地主(真人版) | - | 1.0 | MIDP-1.0 | - | 6 | 16 | 600 | 594232 | 0 | javax/microedition/rms/InvalidRe | 运行正常 |  |
+| 国色天香斗地主_1364.jar | 1249 | 国色天香斗地主 | - | 1.0 | MIDP-2.0 | nokia-ui | 58 | 16 | 600 | 22408913 | 0 | - | 运行正常 |  |
+| 圣百合女子学园-纯色序曲_4875.jar | 993 | SaintLily | - | 1.0.0 | MIDP-2.0 | - | 12 | 16 | 600 | 523347 | 0 | - | 运行正常 |  |
+| 地下城与勇士之鬼剑士_9408.jar | 381 | 地下城与勇士-鬼剑士 | - | 1.0.0 | MIDP-2.0 | - | 27 | 16 | 600 | 58343399 | 0 | - | 运行正常 |  |
 | 地心探险(地心游记)_12471.jar | 94 | 新浪-地心游记 | - | 1.0 | MIDP-2.0 | - | 9 | 16 | 600 | 5389863967 | 0 | - | 运行正常 |  |
-| 坦克大战（经典版）_190.jar | 570 | 3D坦克大战(经典版) | - | 1.0 | MIDP-1.0 | - | 18 | 16 | 600 | 24933156 | 0 | - | 运行正常 |  |
-| 塔塔_2848.jar | 693 | 塔塔 | - | 1.0 | MIDP-1.0 | - | 6 | 16 | 600 | 145815467 | 0 | java/lang/ClassNotFoundException | 运行正常 |  |
-| 夜半鬼吹灯_8363.jar | 222 | 夜半鬼吹灯 | - | 1.0 | MIDP-2.0 | nokia-ui | 5 | 16 | 600 | 69059 | 0 | - | 运行正常 |  |
+| 坦克大战（经典版）_190.jar | 570 | 3D坦克大战(经典版) | - | 1.0 | MIDP-1.0 | - | 18 | 16 | 600 | 25075801 | 0 | - | 运行正常 |  |
+| 塔塔_2848.jar | 693 | 塔塔 | - | 1.0 | MIDP-1.0 | - | 6 | 16 | 600 | 167335467 | 0 | java/lang/ClassNotFoundException | 运行正常 |  |
+| 夜半鬼吹灯_8363.jar | 222 | 夜半鬼吹灯 | - | 1.0 | MIDP-2.0 | nokia-ui | 5 | 16 | 600 | 68160 | 0 | - | 运行正常 |  |
 | 夜店3D斗地主_2296.jar | 847 | 夜店3D斗地主 | - | 1.0.0 | MIDP-2.0 | - | 15 | 16 | 600 | 45098 | 0 | javax/microedition/rms/InvalidRe | 运行正常 |  |
 | 大富翁4纵横四海_8749.jar | 273 | 大富翁4纵横四海 | - | 1.0 | MIDP-1.0 | - | 13 | 16 | 600 | 324418 | 0 | - | 运行正常 |  |
-| 大富翁4－大宇正版_467.jar | 636 | 大富翁4大宇正版 | - | 1.0 | MIDP-2.0 | - | 17 | 16 | 600 | 15816445 | 0 | java/lang/NullPointerException | 运行正常 |  |
-| 大富翁中国之旅_11873.jar | 97 | DFWZGZL | - | 1.0 | MIDP-2.0 | - | 10 | 16 | 600 | 192997 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| 大富翁4－大宇正版_467.jar | 636 | 大富翁4大宇正版 | - | 1.0 | MIDP-2.0 | - | 17 | 16 | 600 | 15603754 | 0 | java/lang/NullPointerException | 运行正常 |  |
+| 大富翁中国之旅_11873.jar | 97 | DFWZGZL | - | 1.0 | MIDP-2.0 | - | 10 | 16 | 600 | 210831 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
 | 大魔界村_11996.jar | 1234 | Ghouls N Ghosts | - | 1.1.64 | MIDP-2.0 | nokia-ui | 103 | 16 | 600 | 3315019 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
 | 大鱼吃小鱼－深海探险2_614.jar | 633 | 大鱼吃小鱼-深海探险2 | - | 1.0.0 | MIDP-1.0 | - | 63 | 16 | 600 | 646997 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
-| 太空侵略者3_archive.jar | 85 | Space Impact III | - | 1.2 | MIDP-1.0 | nokia-ui | 11 | 16 | 600 | 1604845 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
-| 太空冲击303_archive.jar | 85 | Space Impact III | - | 1.2 | MIDP-1.0 | nokia-ui | 11 | 16 | 600 | 1604685 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
-| 头文字D之疾风骤雨_2140.jar | 938 | 世嘉头文字D-疾风骤雨 | - | 1.0.0 | MIDP-2.0 | m3g | 26 | 16 | 600 | 471451 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
-| 奥特曼-宇宙英雄超银河传说_2233.jar | 1245 | 奥特曼-宇宙英雄超银河传说 | - | 1.0.0 | MIDP-1.0 | - | 139 | 16 | 600 | 1053965 | 0 | - | 运行正常 |  |
-| 女仆咖啡厅_1244.jar | 640 | 女仆咖啡厅 | - | 1.0 | MIDP-2.0 | - | 42 | 16 | 600 | 2389374 | 0 | - | 运行正常 |  |
-| 女神转校生-心跳回忆_4993.jar | 908 | 女神转校生-心跳回忆 | - | 1.0 | MIDP-2.0 | - | 58 | 16 | 600 | 1596299 | 0 | java/lang/ClassNotFoundException | 运行正常 |  |
-| 孢子生命起源_6515.jar | 658 | EA-孢子生命起源 | - | 1.0.0 | MIDP-2.0 | - | 42 | 16 | 600 | 3026193673 | 0 | java/io/IOException,java/lang/Nu | 运行正常 |  |
-| 孤岛余生2时间之谜汉化版_7371.jar | 616 | 孤岛余生2 | - | 1.0.3 | MIDP-2.0 | m3g | 36 | 16 | 600 | 10429106 | 0 | javax/microedition/rms/InvalidRe | 运行正常 |  |
+| 太空侵略者3_archive.jar | 85 | Space Impact III | - | 1.2 | MIDP-1.0 | nokia-ui | 11 | 16 | 600 | 1604685 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| 太空冲击303_archive.jar | 85 | Space Impact III | - | 1.2 | MIDP-1.0 | nokia-ui | 11 | 16 | 600 | 1604845 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| 头文字D之疾风骤雨_2140.jar | 938 | 世嘉头文字D-疾风骤雨 | - | 1.0.0 | MIDP-2.0 | m3g | 26 | 16 | 600 | 468402 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| 奥特曼-宇宙英雄超银河传说_2233.jar | 1245 | 奥特曼-宇宙英雄超银河传说 | - | 1.0.0 | MIDP-1.0 | - | 139 | 16 | 600 | 420782 | 0 | - | 运行正常 |  |
+| 女仆咖啡厅_1244.jar | 640 | 女仆咖啡厅 | - | 1.0 | MIDP-2.0 | - | 42 | 16 | 600 | 2389275 | 0 | - | 运行正常 |  |
+| 女神转校生-心跳回忆_4993.jar | 908 | 女神转校生-心跳回忆 | - | 1.0 | MIDP-2.0 | - | 58 | 16 | 600 | 1595807 | 0 | java/lang/ClassNotFoundException | 运行正常 |  |
+| 孢子生命起源_6515.jar | 658 | EA-孢子生命起源 | - | 1.0.0 | MIDP-2.0 | - | 42 | 16 | 600 | 3070364572 | 0 | java/io/IOException,java/lang/Nu | 运行正常 |  |
+| 孤岛余生2时间之谜汉化版_7371.jar | 616 | 孤岛余生2 | - | 1.0.3 | MIDP-2.0 | m3g | 36 | 16 | 600 | 10281878 | 0 | javax/microedition/rms/InvalidRe | 运行正常 |  |
 | 孤岛余生汉化版_10145.jar | 453 | Stranded | - | 1.0.1 | MIDP-1.0 | - | 9 | 16 | 600 | 2403176 | 0 | java/lang/NullPointerException | 运行正常 |  |
-| 学姐的秘密_9071.jar | 121 | 学姐的秘密 | - | 1.0 | MIDP-2.0 | - | 10 | 16 | 600 | 76708 | 0 | - | 运行正常 |  |
-| 宇宙战机_10521.jar | 175 | Triad | - | 1.0.0 | MIDP-2.0 | - | 19 | 16 | 600 | 3074943753 | 0 | java/io/IOException,java/lang/Cl | 运行正常 |  |
-| 实况足球2008中文版_9284.jar | 567 | 世界足球2008-明星正版 | - | 1.01 | MIDP-2.0 | - | 7 | 16 | 600 | 1609517980 | 0 | - | 运行正常 |  |
-| 实况足球2012_2122.jar | 905 | Real Football 2012 | - | 1.0.5 | MIDP-2.0 | - | 14 | 16 | 600 | 170644979 | 0 | java/lang/NullPointerException | 运行正常 |  |
-| 实况足球经理2009_10609.jar | 652 | RF MANAGER 09 | - | 1.1.3 | MIDP-2.0 | nokia-ui | 8 | 16 | 600 | 691111141 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| 学姐的秘密_9071.jar | 121 | 学姐的秘密 | - | 1.0 | MIDP-2.0 | - | 10 | 16 | 600 | 76933 | 0 | - | 运行正常 |  |
+| 宇宙战机_10521.jar | 175 | Triad | - | 1.0.0 | MIDP-2.0 | - | 19 | 16 | 600 | 3059367351 | 0 | java/io/IOException,java/lang/Cl | 运行正常 |  |
+| 实况足球2008中文版_9284.jar | 567 | 世界足球2008-明星正版 | - | 1.01 | MIDP-2.0 | - | 7 | 16 | 600 | 1631780649 | 0 | - | 运行正常 |  |
+| 实况足球2012_2122.jar | 905 | Real Football 2012 | - | 1.0.5 | MIDP-2.0 | - | 14 | 16 | 600 | 171337849 | 0 | java/lang/NullPointerException | 运行正常 |  |
+| 实况足球经理2009_10609.jar | 652 | RF MANAGER 09 | - | 1.1.3 | MIDP-2.0 | nokia-ui | 8 | 16 | 600 | 691135488 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
 | 宠物之王_12445.jar | 933 | 91soyo.com-宠物之王 | - | 1.0 | MIDP-2.0 | - | 63 | 16 | 621 | 1635306 | 0 | java/lang/RuntimeException,javax | 运行正常 |  |
-| 宠物狗狗中文版_11635.jar | 253 | 无敌Z狗狗 | - | 1.02 | MIDP-2.0 | nokia-ui | 6 | 16 | 600 | 3635484625 | 0 | java/lang/NullPointerException | 运行正常 |  |
-| 宠物王国2紫_5550.jar | 438 | cwwg2_z | - | 1.0.0 | MIDP-1.0 | nokia-ui | 19 | 16 | 600 | 1649995 | 0 | - | 运行正常 |  |
-| 宠物王国3金_4892.jar | 585 | 宠物王国3(宝软网baoruan.com免费分享 | - | 1.0 | MIDP-1.0 | nokia-ui | 22 | 16 | 600 | 152091 | 0 | - | 运行正常 |  |
-| 宠物王国4-白金_6531.jar | 699 | 宠物王国4-白金 | - | 1.0 | MIDP-2.0 | nokia-ui | 16 | 16 | 600 | 367836 | 0 | - | 运行正常 |  |
-| 宠物王国5-彩虹_3413.jar | 1029 | 宠物王国5-彩虹 | - | 1.0 | MIDP-2.0 | nokia-ui | 23 | 16 | 600 | 139195 | 0 | - | 运行正常 |  |
-| 宠物王国5-彩虹二次BT版_3356.jar | 1125 | 宠物王国5-彩虹 | - | 1.0 | MIDP-2.0 | nokia-ui | 28 | 16 | 600 | 6068581 | 0 | java/io/EOFException | 运行正常 |  |
-| 宠物王国6(去模拟器限制)_12473.jar | 1387 | PetKing6 | - | 1.0 | MIDP-2.0 | - | 72 | 16 | 600 | 5366230 | 0 | java/io/EOFException | 运行正常 |  |
-| 宠物王国6－烈火_465.jar | 1449 | 宠物王国6-烈火 | - | 1.0 | MIDP-2.0 | - | 121 | 16 | 600 | 12318345 | 0 | java/io/EOFException,java/lang/C | 运行正常 |  |
-| 宠物精灵爱之体验_2861.jar | 1391 | Lovepet | - | 1.0 | MIDP-2.0 | - | 6 | 16 | 600 | 413255 | 0 | - | 运行正常 |  |
-| 家园4汉化版_10405.jar | 215 | Townsmen4 | - | 1.0 | MIDP-2.0 | nokia-ui | 8 | 16 | 600 | 3122655 | 0 | java/lang/IllegalArgumentExcepti | 运行正常 |  |
-| 家园5汉化版_10376.jar | 239 | Townsmen5 | - | 1.5 | MIDP-1.0 | nokia-ui | 7 | 16 | 600 | 2931586 | 0 | java/lang/IllegalArgumentExcepti | 运行正常 |  |
-| 家园6之革命_7692.jar | 643 | Townsmen 6 | - | 1.0.0 | MIDP-2.0 | - | 26 | 16 | 600 | 1545555 | 0 | java/io/IOException,java/lang/Nu | 运行正常 |  |
-| 家园6之革命完美汉化版_7583.jar | 590 | 家园6_光辉革命 | - | 1.0.0 | MIDP-2.0 | - | 26 | 16 | 600 | 1341242 | 0 | java/io/IOException,java/lang/Nu | 运行正常 |  |
-| 寂静岭2汉化版_10177.jar | 507 | Silent Hill Mobile 2 | - | 1.0.0 | MIDP-2.0 | - | 12 | 16 | 600 | 8450377 | 0 | java/io/IOException,java/lang/Nu | 运行正常 |  |
-| 寂静岭汉化版_9575.jar | 415 | Silent Hill | - | 0.1.0 | MIDP-2.0 | - | 11 | 16 | 600 | 3528347 | 0 | java/io/IOException,javax/microe | 运行正常 |  |
-| 密室逃脱_7300.jar | 103 | 密室逃脱 | - | 1.0 | MIDP-1.0 | nokia-ui | 5 | 16 | 600 | 1119583 | 0 | - | 运行正常 |  |
-| 寻秦皇陵的诅咒_12450.jar | 573 | 寻秦 | - | 1.0.0 | MIDP-1.0 | nokia-ui | 33 | 16 | 600 | 425987 | 0 | - | 运行正常 |  |
+| 宠物狗狗中文版_11635.jar | 253 | 无敌Z狗狗 | - | 1.02 | MIDP-2.0 | nokia-ui | 6 | 16 | 600 | 3826740482 | 0 | java/lang/NullPointerException | 运行正常 |  |
+| 宠物王国2紫_5550.jar | 438 | cwwg2_z | - | 1.0.0 | MIDP-1.0 | nokia-ui | 19 | 16 | 600 | 599590 | 0 | - | 运行正常 |  |
+| 宠物王国3金_4892.jar | 585 | 宠物王国3(宝软网baoruan.com免费分享 | - | 1.0 | MIDP-1.0 | nokia-ui | 22 | 16 | 600 | 151927 | 0 | - | 运行正常 |  |
+| 宠物王国4-白金_6531.jar | 699 | 宠物王国4-白金 | - | 1.0 | MIDP-2.0 | nokia-ui | 16 | 16 | 600 | 367914 | 0 | - | 运行正常 |  |
+| 宠物王国5-彩虹_3413.jar | 1029 | 宠物王国5-彩虹 | - | 1.0 | MIDP-2.0 | nokia-ui | 23 | 16 | 600 | 138651 | 0 | - | 运行正常 |  |
+| 宠物王国5-彩虹二次BT版_3356.jar | 1125 | 宠物王国5-彩虹 | - | 1.0 | MIDP-2.0 | nokia-ui | 28 | 16 | 600 | 6065289 | 0 | java/io/EOFException | 运行正常 |  |
+| 宠物王国6(去模拟器限制)_12473.jar | 1387 | PetKing6 | - | 1.0 | MIDP-2.0 | - | 72 | 16 | 600 | 5382022 | 0 | java/io/EOFException | 运行正常 |  |
+| 宠物王国6－烈火_465.jar | 1449 | 宠物王国6-烈火 | - | 1.0 | MIDP-2.0 | - | 121 | 16 | 600 | 12305476 | 0 | java/io/EOFException,java/lang/C | 运行正常 |  |
+| 宠物精灵爱之体验_2861.jar | 1391 | Lovepet | - | 1.0 | MIDP-2.0 | - | 6 | 16 | 600 | 398157 | 0 | - | 运行正常 |  |
+| 家园4汉化版_10405.jar | 215 | Townsmen4 | - | 1.0 | MIDP-2.0 | nokia-ui | 8 | 16 | 600 | 3120005 | 0 | java/lang/IllegalArgumentExcepti | 运行正常 |  |
+| 家园5汉化版_10376.jar | 239 | Townsmen5 | - | 1.5 | MIDP-1.0 | nokia-ui | 7 | 16 | 600 | 2915135 | 0 | java/lang/IllegalArgumentExcepti | 运行正常 |  |
+| 家园6之革命_7692.jar | 643 | Townsmen 6 | - | 1.0.0 | MIDP-2.0 | - | 26 | 16 | 600 | 1545569 | 0 | java/io/IOException,java/lang/Nu | 运行正常 |  |
+| 家园6之革命完美汉化版_7583.jar | 590 | 家园6_光辉革命 | - | 1.0.0 | MIDP-2.0 | - | 26 | 16 | 600 | 1341261 | 0 | java/io/IOException,java/lang/Nu | 运行正常 |  |
+| 寂静岭2汉化版_10177.jar | 507 | Silent Hill Mobile 2 | - | 1.0.0 | MIDP-2.0 | - | 12 | 16 | 600 | 8567383 | 0 | java/io/IOException,java/lang/Nu | 运行正常 |  |
+| 寂静岭汉化版_9575.jar | 415 | Silent Hill | - | 0.1.0 | MIDP-2.0 | - | 11 | 16 | 600 | 3544903 | 0 | java/io/IOException,javax/microe | 运行正常 |  |
+| 密室逃脱_7300.jar | 103 | 密室逃脱 | - | 1.0 | MIDP-1.0 | nokia-ui | 5 | 16 | 600 | 1119308 | 0 | - | 运行正常 |  |
+| 寻秦皇陵的诅咒_12450.jar | 573 | 寻秦 | - | 1.0.0 | MIDP-1.0 | nokia-ui | 33 | 16 | 600 | 424348 | 0 | - | 运行正常 |  |
 | 帝国时代2汉化版_7864.jar | 62 | 帝国时代2（微软正版） | - | 1.0 | MIDP-1.0 | nokia-ui | 9 | 16 | 600 | 1565681 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
-| 帝国时代3-亚洲王朝_6288.jar | 595 | 帝国时代III亚洲王朝 | - | 1.0.0 | MIDP-2.0 | - | 41 | 16 | 600 | 6795324 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| 帝国时代3-亚洲王朝_6288.jar | 595 | 帝国时代III亚洲王朝 | - | 1.0.0 | MIDP-2.0 | - | 41 | 16 | 600 | 6852950 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
 | 帝国时代Ⅲ汉化版_10379.jar | 426 | Age Of Empires III Mobile | - | 1.0.1 | MIDP-1.0 | - | 10 | 16 | 600 | 3315029 | 0 | java/lang/NullPointerException | 运行正常 |  |
-| 开心仓鼠大作战_3911.jar | 506 | kxcsdz | - | 1.0.0 | MIDP-1.0 | - | 38 | 16 | 600 | 31185593 | 0 | java/lang/IllegalArgumentExcepti | 运行正常 |  |
-| 开心农场BT版_6075.jar | 624 | 开心农场 | - | 1.0 | MIDP-1.0 | - | 13 | 16 | 600 | 1566728 | 0 | java/io/IOException,java/lang/Nu | 运行正常 |  |
-| 开心农场_240.jar | 374 | happy_farm | - | 1.30.04 | MIDP-2.0 | - | 39 | 16 | 600 | 1651070 | 0 | - | 运行正常 |  |
-| 开心农场_6370.jar | 374 | happy_farm | - | 1.30.04 | MIDP-2.0 | - | 39 | 16 | 600 | 1654031 | 0 | - | 运行正常 |  |
+| 开心仓鼠大作战_3911.jar | 506 | kxcsdz | - | 1.0.0 | MIDP-1.0 | - | 38 | 16 | 600 | 31120101 | 0 | java/lang/IllegalArgumentExcepti | 运行正常 |  |
+| 开心农场BT版_6075.jar | 624 | 开心农场 | - | 1.0 | MIDP-1.0 | - | 13 | 16 | 600 | 1569123 | 0 | java/io/IOException,java/lang/Nu | 运行正常 |  |
+| 开心农场_240.jar | 374 | happy_farm | - | 1.30.04 | MIDP-2.0 | - | 39 | 16 | 600 | 1654031 | 0 | - | 运行正常 |  |
+| 开心农场_6370.jar | 374 | happy_farm | - | 1.30.04 | MIDP-2.0 | - | 39 | 16 | 600 | 1651070 | 0 | - | 运行正常 |  |
 | 开心餐厅2012_745.jar | 794 | 开心餐厅2012 | - | 1.2 | MIDP-2.0 | - | 76 | 16 | 600 | 150701 | 0 | java/lang/NullPointerException | 运行正常 |  |
-| 异形战机汉化版_8382.jar | 268 | R-Type | - | 1.0 | MIDP-2.0 | - | 5 | 16 | 600 | 4255868 | 0 | java/io/IOException,java/lang/Nu | 运行正常 |  |
+| 异形战机汉化版_8382.jar | 268 | R-Type | - | 1.0 | MIDP-2.0 | - | 5 | 16 | 600 | 4220925 | 0 | java/io/IOException,java/lang/Nu | 运行正常 |  |
 | 彩京打击者1945_10623.jar | 206 | Strikers 1945 | - | 1.0.0 | MIDP-2.0 | - | 4 | 16 | 600 | 15043 | 0 | - | 运行正常 |  |
-| 彩虹岛汉化版_10241.jar | 124 | Rainbow Islands [MICHANG] | - | 1.0.6 | MIDP-2.0 | - | 16 | 16 | 600 | 8692113 | 0 | java/io/IOException | 运行正常 |  |
-| 德州扑克2_3884.jar | 985 | Texas Hold'Em Poker 2 | - | 1.2.9 | MIDP-2.0 | - | 26 | 16 | 600 | 225020496 | 0 | java/lang/NullPointerException | 运行正常 |  |
-| 忍者神龟之最终的判决_8288.jar | 357 | TMNT The Ninja Tribunal | - | 1.22 | MIDP-2.0 | - | 4 | 16 | 600 | 119811274 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
-| 快乐农场_2089.jar | 782 | 快乐农场之僵尸来袭 | - | 1.0.0 | MIDP-2.0 | - | 36 | 16 | 600 | 2150983 | 0 | - | 运行正常 |  |
+| 彩虹岛汉化版_10241.jar | 124 | Rainbow Islands [MICHANG] | - | 1.0.6 | MIDP-2.0 | - | 16 | 16 | 600 | 8674593 | 0 | java/io/IOException | 运行正常 |  |
+| 德州扑克2_3884.jar | 985 | Texas Hold'Em Poker 2 | - | 1.2.9 | MIDP-2.0 | - | 26 | 16 | 600 | 223872649 | 0 | java/lang/NullPointerException | 运行正常 |  |
+| 忍者神龟之最终的判决_8288.jar | 357 | TMNT The Ninja Tribunal | - | 1.22 | MIDP-2.0 | - | 4 | 16 | 600 | 117955514 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| 快乐农场_2089.jar | 782 | 快乐农场之僵尸来袭 | - | 1.0.0 | MIDP-2.0 | - | 36 | 16 | 600 | 2150989 | 0 | - | 运行正常 |  |
 | 快打旋风_10825.jar | 273 | FinalFight | - | 1.2.5 | MIDP-2.0 | - | 4 | 16 | 600 | 3046669 | 0 | - | 运行正常 |  |
-| 急速公路狂飙－新年版_84.jar | 880 | 急速公路狂飙新年版 | - | 1.0 | MIDP-2.0 | m3g | 119 | 16 | 600 | 22516675 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
-| 急速狂飙完美破解版_4964.jar | 1301 | HighSpeed 3D | - | 1.6.0 | MIDP-2.0 | m3g | 48 | 16 | 600 | 114501933 | 0 | java/io/EOFException,java/io/IOE | 运行正常 |  |
-| 恋爱物语－我的机器女友_6219.jar | 973 | cyborg_lover | - | 1.30.01 | MIDP-2.0 | - | 66 | 16 | 600 | 11358915 | 0 | java/lang/NegativeArraySizeExcep | 运行正常 |  |
+| 急速公路狂飙－新年版_84.jar | 880 | 急速公路狂飙新年版 | - | 1.0 | MIDP-2.0 | m3g | 119 | 16 | 600 | 22518057 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| 急速狂飙完美破解版_4964.jar | 1301 | HighSpeed 3D | - | 1.6.0 | MIDP-2.0 | m3g | 48 | 16 | 600 | 114504176 | 0 | java/io/EOFException,java/io/IOE | 运行正常 |  |
+| 恋爱物语－我的机器女友_6219.jar | 973 | cyborg_lover | - | 1.30.01 | MIDP-2.0 | - | 66 | 16 | 600 | 11978879 | 0 | java/lang/NegativeArraySizeExcep | 运行正常 |  |
 | 恋色狂想之魔女恋歌_4899.jar | 774 | LCMS | - | 01.30.00 | MIDP-2.0 | - | 88 | 16 | 600 | 7086488 | 0 | - | 运行正常 |  |
-| 愤怒的小鸟-高清版_2353.jar | 16451 | Angry Birds - by novchik | - | 0.1.1 | MIDP-2.0 | - | 45 | 32 | 600 | 9345329 | 0 | java/io/IOException,java/lang/Il | 运行正常 |  |
+| 愤怒的小鸟-高清版_2353.jar | 16451 | Angry Birds - by novchik | - | 0.1.1 | MIDP-2.0 | - | 45 | 32 | 600 | 9196578 | 0 | java/io/IOException,java/lang/Il | 运行正常 |  |
 | 愤怒的小鸟_383.jar | 6333 | Angry Birds | - | 1.1 | MIDP-2.1 | - | 145 | 16 | 600 | 63733 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
-| 我们要恋爱之校园篇_1815.jar | 779 | 我们要恋爱之校园篇 | - | 1.0.0 | MIDP-2.0 | - | 32 | 16 | 600 | 150638 | 0 | java/lang/NullPointerException | 运行正常 |  |
-| 我的宠物我做主BT版_3055.jar | 633 | 我的宠物我做主(正版)_玉品 | - | 1.0 | MIDP-1.0 | - | 20 | 16 | 600 | 20830919 | 0 | - | 运行正常 |  |
+| 我们要恋爱之校园篇_1815.jar | 779 | 我们要恋爱之校园篇 | - | 1.0.0 | MIDP-2.0 | - | 32 | 16 | 600 | 155240 | 0 | java/lang/NullPointerException | 运行正常 |  |
+| 我的宠物我做主BT版_3055.jar | 633 | 我的宠物我做主(正版)_玉品 | - | 1.0 | MIDP-1.0 | - | 20 | 16 | 600 | 20830843 | 0 | - | 运行正常 |  |
 | 战争机器1945_5414.jar | 466 | 1945 | - | 1.0.0 | MIDP-1.0 | - | 11 | 16 | 600 | 652553 | 0 | java/lang/StringIndexOutOfBounds | 运行正常 |  |
-| 战争艺术2之全球联盟中文版_1918.jar | 573 | 战争艺术2 | - | 1.0.0 | MIDP-2.0 | - | 15 | 16 | 600 | 6465403 | 0 | java/io/EOFException,java/lang/I | 运行正常 |  |
-| 扫雷行动_10904.jar | 559 | Minesweeper Mobile | - | 0.0.1 | MIDP-2.0 | nokia-ui | 11 | 16 | 600 | 14196290 | 0 | java/lang/NullPointerException | 运行正常 |  |
+| 战争艺术2之全球联盟中文版_1918.jar | 573 | 战争艺术2 | - | 1.0.0 | MIDP-2.0 | - | 15 | 16 | 600 | 6465832 | 0 | java/io/EOFException,java/lang/I | 运行正常 |  |
+| 扫雷行动_10904.jar | 559 | Minesweeper Mobile | - | 0.0.1 | MIDP-2.0 | nokia-ui | 11 | 16 | 600 | 14496290 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | 拳王2009南拳北腿_1167.jar | 331 | 拳王2009-南拳北腿 | - | 1.0 | MIDP-1.0 | - | 8 | 16 | 600 | 976524 | 0 | - | 运行正常 |  |
-| 拳王争霸_11585.jar | 582 | Lucha Libre | - | 1.0.8 | MIDP-2.0 | nokia-ui | 6 | 16 | 601 | 971254332 | 0 | java/lang/NullPointerException | 运行正常 |  |
+| 拳王争霸_11585.jar | 582 | Lucha Libre | - | 1.0.8 | MIDP-2.0 | nokia-ui | 6 | 16 | 601 | 973481106 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | 拳皇98终极之战_7534.jar | 831 | 拳皇98-终极之战 | - | 1.0 | MIDP-1.0 | - | 37 | 16 | 600 | 7213891 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
-| 捕鱼达人3金装版_1511.jar | 634 | 深海猎奇-捕鱼达人 | - | 1.00 | MIDP-1.0 | nokia-ui | 15 | 16 | 600 | 19303314 | 0 | java/io/IOException,java/lang/Nu | 运行正常 |  |
-| 文明3_10522.jar | 160 | Civilization 3 | - | 1.0.0 | MIDP-2.0 | - | 7 | 16 | 600 | 11936758 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
-| 斗po苍穹bt版_1127.jar | 1609 | 斗破苍穹 | - | 1.0.0 | MIDP-1.0 | - | 37 | 16 | 600 | 30413926 | 0 | java/io/EOFException,java/io/IOE | 运行正常 |  |
-| 斩妖伏魔录3_6306.jar | 1016 | 斩妖伏魔录3 | - | 1.0 | MIDP-2.0 | nokia-ui | 21 | 16 | 600 | 6585739 | 0 | java/io/IOException | 运行正常 |  |
-| 斩妖伏魔录4(QQ挑战)_2922.jar | 1043 | 斩妖伏魔录4 | - | 1.0 | MIDP-2.0 | nokia-ui | 55 | 16 | 600 | 8781705 | 0 | java/io/IOException | 运行正常 |  |
+| 捕鱼达人3金装版_1511.jar | 634 | 深海猎奇-捕鱼达人 | - | 1.00 | MIDP-1.0 | nokia-ui | 15 | 16 | 600 | 611315 | 0 | java/io/IOException,java/lang/Nu | 运行正常 |  |
+| 文明3_10522.jar | 160 | Civilization 3 | - | 1.0.0 | MIDP-2.0 | - | 7 | 16 | 600 | 12011323 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| 斗po苍穹bt版_1127.jar | 1609 | 斗破苍穹 | - | 1.0.0 | MIDP-1.0 | - | 37 | 16 | 600 | 30686957 | 0 | java/io/EOFException,java/io/IOE | 运行正常 |  |
+| 斩妖伏魔录3_6306.jar | 1016 | 斩妖伏魔录3 | - | 1.0 | MIDP-2.0 | nokia-ui | 21 | 16 | 600 | 6587795 | 0 | java/io/IOException | 运行正常 |  |
+| 斩妖伏魔录4(QQ挑战)_2922.jar | 1043 | 斩妖伏魔录4 | - | 1.0 | MIDP-2.0 | nokia-ui | 55 | 16 | 600 | 8785297 | 0 | java/io/IOException | 运行正常 |  |
 | 斩妖伏魔录_6231.jar | 584 | 斩妖伏魔录(华娱) | - | 1.0 | MIDP-1.0 | nokia-ui | 19 | 16 | 600 | 4349932 | 0 | java/io/IOException,java/lang/Nu | 运行正常 |  |
-| 新2011拳皇_4132.jar | 948 | 新拳皇2011 | - | 1.0 | MIDP-1.0 | - | 33 | 16 | 600 | 2682664 | 0 | java/io/EOFException,javax/micro | 运行正常 |  |
-| 新三国志_10225.jar | 186 | 新三国志 | - | 1.0.0 | MIDP-2.0 | - | 17 | 16 | 600 | 107040 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
-| 新牧场物语2恋爱季节_1340.jar | 991 | 新牧场物语2恋爱季节 | - | 1.0.0 | MIDP-2.0 | - | 73 | 16 | 600 | 2169139 | 0 | java/lang/NullPointerException | 运行正常 |  |
-| 新西游记－格斗天王_1211.jar | 1327 | 新西游记-格斗天王 | - | 1.0 | MIDP-1.0 | - | 56 | 16 | 600 | 34421503 | 0 | - | 运行正常 |  |
+| 新2011拳皇_4132.jar | 948 | 新拳皇2011 | - | 1.0 | MIDP-1.0 | - | 33 | 16 | 600 | 2681877 | 0 | java/io/EOFException,javax/micro | 运行正常 |  |
+| 新三国志_10225.jar | 186 | 新三国志 | - | 1.0.0 | MIDP-2.0 | - | 17 | 16 | 600 | 322646 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| 新牧场物语2恋爱季节_1340.jar | 991 | 新牧场物语2恋爱季节 | - | 1.0.0 | MIDP-2.0 | - | 73 | 16 | 600 | 2071031 | 0 | java/lang/NullPointerException | 运行正常 |  |
+| 新西游记－格斗天王_1211.jar | 1327 | 新西游记-格斗天王 | - | 1.0 | MIDP-1.0 | - | 56 | 16 | 600 | 33150254 | 0 | - | 运行正常 |  |
 | 时光八音盒2忆之篇_3865.jar | 1014 | 时光八音盒II_忆之篇_玉品 | - | 1.0.0 | MIDP-1.0 | - | 11 | 16 | 600 | 25620870 | 0 | java/io/IOException,java/lang/Ar | 运行正常 |  |
-| 时光八音盒萌之篇_3806.jar | 961 | sgbyh | - | 1.0.0 | MIDP-1.0 | - | 11 | 16 | 600 | 32937728 | 0 | java/lang/ArrayIndexOutOfBoundsE | 运行正常 |  |
-| 时光樱花册－遗失之心_1009.jar | 1380 | 时光樱花册-遗失之心 | - | 1.0 | MIDP-1.0 | - | 33 | 16 | 600 | 332843578 | 0 | - | 运行正常 |  |
-| 明星制造梦工厂_11048.jar | 220 | 明星制造梦工厂 | - | 1.2 | MIDP-1.0 | - | 8 | 16 | 600 | 168151965 | 0 | java/io/IOException | 运行正常 |  |
-| 明星麻将馆美女_9760.jar | 362 | 明星麻将馆(美女真人版) | - | 1.0.0 | MIDP-1.0 | nokia-ui | 11 | 16 | 600 | 5634250 | 0 | - | 运行正常 |  |
-| 星空恋曲-遥远的记忆(修正版)_4008.jar | 982 | STAR | - | 01.30.00 | MIDP-2.0 | - | 84 | 16 | 600 | 4508025 | 0 | - | 运行正常 |  |
-| 星辰变S60V5完整版_3364.jar | 926 | 星辰变(盛大正版) | - | 1.0.0 | MIDP-1.0 | nokia-ui | 40 | 16 | 600 | 3420089729 | 0 | java/io/IOException | 运行正常 |  |
-| 是男人就下100层_1882.jar | 636 | 是男人就下100层 | - | 2.01 | MIDP-1.0 | nokia-ui | 75 | 16 | 600 | 54249407 | 0 | java/io/IOException,java/lang/Nu | 运行正常 |  |
-| 暗黑启示录2－黑暗王朝_888.jar | 1268 | 暗黑启示录2黑暗王朝 | - | 1.0 | MIDP-1.0 | - | 214 | 16 | 600 | 3055756994 | 0 | java/io/EOFException | 运行正常 |  |
+| 时光八音盒萌之篇_3806.jar | 961 | sgbyh | - | 1.0.0 | MIDP-1.0 | - | 11 | 16 | 600 | 32941285 | 0 | java/lang/ArrayIndexOutOfBoundsE | 运行正常 |  |
+| 时光樱花册－遗失之心_1009.jar | 1380 | 时光樱花册-遗失之心 | - | 1.0 | MIDP-1.0 | - | 33 | 16 | 600 | 332848087 | 0 | - | 运行正常 | needs --device nokia6230 |
+| 明星制造梦工厂_11048.jar | 220 | 明星制造梦工厂 | - | 1.2 | MIDP-1.0 | - | 8 | 16 | 600 | 168170297 | 0 | java/io/IOException | 运行正常 |  |
+| 明星麻将馆美女_9760.jar | 362 | 明星麻将馆(美女真人版) | - | 1.0.0 | MIDP-1.0 | nokia-ui | 11 | 16 | 600 | 4361525 | 0 | - | 运行正常 |  |
+| 星空恋曲-遥远的记忆(修正版)_4008.jar | 982 | STAR | - | 01.30.00 | MIDP-2.0 | - | 84 | 16 | 600 | 4504637 | 0 | - | 运行正常 |  |
+| 星辰变S60V5完整版_3364.jar | 926 | 星辰变(盛大正版) | - | 1.0.0 | MIDP-1.0 | nokia-ui | 40 | 16 | 600 | 3129689729 | 0 | java/io/IOException | 运行正常 |  |
+| 是男人就下100层_1882.jar | 636 | 是男人就下100层 | - | 2.01 | MIDP-1.0 | nokia-ui | 75 | 16 | 600 | 54020714 | 0 | java/io/IOException,java/lang/Nu | 运行正常 |  |
+| 暗黑启示录2－黑暗王朝_888.jar | 1268 | 暗黑启示录2黑暗王朝 | - | 1.0 | MIDP-1.0 | - | 214 | 16 | 600 | 3006576994 | 0 | java/io/EOFException | 运行正常 |  |
 | 有女倾城破解版_11525.jar | 258 | 有女倾城 | - | 1.0 | MIDP-1.0 | - | 9 | 16 | 0 | 44358 | 0 | - | 未呈现画面 | exited itself (notifyDestroyed) without pain |
 | 机甲风暴_7888.jar | 673 | 机甲风暴 | - | 1.0 | MIDP-2.0 | nokia-ui | 41 | 16 | 600 | 147035 | 0 | - | 运行正常 |  |
-| 杀戮机器-纳粹僵尸_3610.jar | 995 | 杀戮机器-纳粹僵尸 | - | 1.0 | MIDP-2.0 | m3g | 37 | 16 | 600 | 706963 | 0 | java/lang/NumberFormatException | 运行正常 |  |
-| 杀鬼子-敌后武工队_2185.jar | 515 | 杀鬼子-敌后武工队 | - | 1.0.0 | MIDP-1.0 | nokia-ui | 37 | 16 | 600 | 2869218820 | 0 | java/io/IOException,java/lang/Nu | 运行正常 | runs without input; the generic key script m |
+| 杀戮机器-纳粹僵尸_3610.jar | 995 | 杀戮机器-纳粹僵尸 | - | 1.0 | MIDP-2.0 | m3g | 37 | 16 | 600 | 706884 | 0 | java/lang/NumberFormatException | 运行正常 |  |
+| 杀鬼子-敌后武工队_2185.jar | 515 | 杀鬼子-敌后武工队 | - | 1.0.0 | MIDP-1.0 | nokia-ui | 37 | 16 | 600 | 3095178820 | 0 | java/io/IOException,java/lang/Nu | 运行正常 | runs without input; the generic key script m |
 | 极品飞车13之变速英文3D版_6646.jar | 754 | Need for Speed Shift | - | 7.2.18 | MIDP-2.0 | m3g | 38 | 16 | 600 | 34056179 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
 | 极品飞车14之热力追踪中文版_4160.jar | 1219 | 极品飞车：热血追踪 | - | 1.0.0 | MIDP-2.0 | m3g | 44 | 16 | 626 | 16283471 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
 | 极品飞车16：亡命狂飙_1519.jar | 1046 | Need for Speed The Run | - | 4.4.88 | MIDP-2.0 | m3g,nokia-ui | 41 | 16 | 618 | 72856913 | 0 | java/lang/ArrayIndexOutOfBoundsE | 运行正常 |  |
-| 极品飞车之无间风云FX中文版_4518.jar | 1000 | 极品飞车无间风云FX | - | 1.0.0 | MIDP-2.0 | m3g | 63 | 16 | 600 | 10474044 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
-| 极品飞车精装版_7557.jar | 159 | 极品飞车精装版 | - | 1.0 | MIDP-1.0 | - | 16 | 16 | 600 | 2526773 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
-| 柯楠之密室杀人事件_3821.jar | 429 | 柯楠－密室杀人事件 | - | 1.0 | MIDP-2.0 | nokia-ui | 39 | 16 | 600 | 1482223 | 0 | javax/microedition/media/MediaEx | 运行正常 |  |
-| 校园回忆_1940.jar | 358 | 校园回忆 | - | 1.0 | MIDP-1.0 | - | 16 | 16 | 600 | 110827 | 0 | - | 运行正常 |  |
-| 格斗2011-拳王争霸_4253.jar | 805 | GDQWZB | - | 1.2.0 | MIDP-2.0 | - | 8 | 16 | 600 | 3458192117 | 0 | java/lang/NullPointerException | 运行正常 |  |
-| 格斗三国五虎将精装版_9085.jar | 275 | 格斗三国五虎将(精装版) | - | 1.0 | MIDP-1.0 | - | 8 | 16 | 600 | 1684506 | 0 | javax/microedition/rms/InvalidRe | 运行正常 |  |
-| 格斗少女_3271.jar | 709 | gdsn | - | 1.0 | MIDP-2.0 | - | 14 | 16 | 600 | 1101622 | 0 | - | 运行正常 |  |
+| 极品飞车之无间风云FX中文版_4518.jar | 1000 | 极品飞车无间风云FX | - | 1.0.0 | MIDP-2.0 | m3g | 63 | 16 | 600 | 10473405 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| 极品飞车精装版_7557.jar | 159 | 极品飞车精装版 | - | 1.0 | MIDP-1.0 | - | 16 | 16 | 600 | 2533637 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| 柯楠之密室杀人事件_3821.jar | 429 | 柯楠－密室杀人事件 | - | 1.0 | MIDP-2.0 | nokia-ui | 39 | 16 | 600 | 1484095 | 0 | javax/microedition/media/MediaEx | 运行正常 |  |
+| 校园回忆_1940.jar | 358 | 校园回忆 | - | 1.0 | MIDP-1.0 | - | 16 | 16 | 600 | 110788 | 0 | - | 运行正常 |  |
+| 格斗2011-拳王争霸_4253.jar | 805 | GDQWZB | - | 1.2.0 | MIDP-2.0 | - | 8 | 16 | 600 | 3699298994 | 0 | java/lang/NullPointerException | 运行正常 |  |
+| 格斗三国五虎将精装版_9085.jar | 275 | 格斗三国五虎将(精装版) | - | 1.0 | MIDP-1.0 | - | 8 | 16 | 600 | 1626047 | 0 | javax/microedition/rms/InvalidRe | 运行正常 |  |
+| 格斗少女_3271.jar | 709 | gdsn | - | 1.0 | MIDP-2.0 | - | 14 | 16 | 600 | 1102934 | 0 | - | 运行正常 |  |
 | 格斗火柴人_3938.jar | 416 | Enter The Flip | - | 1.0 | MIDP-2.0 | - | 11 | 16 | 600 | 7835566 | 0 | - | 运行正常 |  |
-| 梦幻西游_4223.jar | 1024 | 梦幻西游 | - | 1.0 | MIDP-1.0 | - | 88 | 16 | 600 | 10930056 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
-| 植物大战僵尸(新角色加强版)_982.jar | 421 | 植物大战僵尸 | - | 1.0 | MIDP-1.0 | - | 37 | 16 | 600 | 64118 | 0 | - | 运行正常 |  |
-| 植物大战僵尸2011加强版_2912.jar | 533 | 植物大战僵尸(2011加强版) | - | 1.0 | MIDP-1.0 | - | 56 | 16 | 600 | 473284 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
-| 植物大战僵尸2013完美升级版_326.jar | 516 | 植物大战僵尸 | - | 1.0 | MIDP-1.0 | - | 41 | 16 | 600 | 290480 | 0 | - | 运行正常 |  |
-| 植物大战僵尸BT版_650.jar | 905 | 植物大战僵尸 | - | 2.2 | MIDP-2.0 | - | 99 | 16 | 601 | 141762867 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
-| 植物大战僵尸欧美大波版_407.jar | 510 | 植物大战僵尸2013欧美大波版 | - | 1.0 | MIDP-1.0 | - | 34 | 16 | 600 | 893612 | 0 | - | 运行正常 |  |
-| 模拟人生2_10762.jar | 273 | 模拟人生2 | - | 1.0.0 | MIDP-1.0 | - | 31 | 16 | 600 | 3591164497 | 0 | java/io/IOException,javax/microe | 运行正常 |  |
-| 模拟人生2完美版_11722.jar | 417 | The Sims 2 | - | 1.8.13 | MIDP-2.0 | nokia-ui | 20 | 16 | 600 | 1527564806 | 0 | javax/microedition/rms/InvalidRe | 运行正常 |  |
+| 梦幻西游_4223.jar | 1024 | 梦幻西游 | - | 1.0 | MIDP-1.0 | - | 88 | 16 | 600 | 10929013 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| 植物大战僵尸(新角色加强版)_982.jar | 421 | 植物大战僵尸 | - | 1.0 | MIDP-1.0 | - | 37 | 16 | 600 | 64160 | 0 | - | 运行正常 |  |
+| 植物大战僵尸2011加强版_2912.jar | 533 | 植物大战僵尸(2011加强版) | - | 1.0 | MIDP-1.0 | - | 56 | 16 | 600 | 473382 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| 植物大战僵尸2013完美升级版_326.jar | 516 | 植物大战僵尸 | - | 1.0 | MIDP-1.0 | - | 41 | 16 | 600 | 291434 | 0 | - | 运行正常 |  |
+| 植物大战僵尸BT版_650.jar | 905 | 植物大战僵尸 | - | 2.2 | MIDP-2.0 | - | 99 | 16 | 601 | 141757931 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| 植物大战僵尸欧美大波版_407.jar | 510 | 植物大战僵尸2013欧美大波版 | - | 1.0 | MIDP-1.0 | - | 34 | 16 | 600 | 892873 | 0 | - | 运行正常 |  |
+| 模拟人生2_10762.jar | 273 | 模拟人生2 | - | 1.0.0 | MIDP-1.0 | - | 31 | 16 | 600 | 3519944497 | 0 | java/io/IOException,javax/microe | 运行正常 |  |
+| 模拟人生2完美版_11722.jar | 417 | The Sims 2 | - | 1.8.13 | MIDP-2.0 | nokia-ui | 20 | 16 | 600 | 1450027910 | 0 | javax/microedition/rms/InvalidRe | 运行正常 |  |
 | 模拟人生2宠物当家_10928.jar | 410 | 模拟人生2宠物当家 | - | 1.0 | MIDP-2.0 | - | 35 | 16 | 600 | 6780141 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
-| 模拟人生3_7562.jar | 559 | The Sims 3 | - | 7.5.73 | MIDP-2.0 | - | 28 | 16 | 600 | 37091183 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
-| 模拟人生3中文版_6162.jar | 492 | 模拟人生3(EA正版) | - | 1.0.0 | MIDP-2.0 | - | 25 | 16 | 600 | 6693924 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| 模拟人生3_7562.jar | 559 | The Sims 3 | - | 7.5.73 | MIDP-2.0 | - | 28 | 16 | 600 | 40248936 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| 模拟人生3中文版_6162.jar | 492 | 模拟人生3(EA正版) | - | 1.0.0 | MIDP-2.0 | - | 25 | 16 | 600 | 6692003 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
 | 模拟人生3之野心_4936.jar | 817 | The Sims 3 Ambitions | - | 4.2.28 | MIDP-2.0 | - | 26 | 16 | 600 | 12762170 | 0 | java/io/EOFException | 运行正常 |  |
-| 模拟人生3繁体bt版_6026.jar | 497 | The Sims 3 | - | 2.0.0 | MIDP-2.0 | - | 27 | 16 | 600 | 7507950 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
-| 模拟恋爱2_11543.jar | 291 | SimBabe2 by serviak | - | 1.4 | MIDP-2.0 | - | 2 | 16 | 600 | 9683387 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
-| 武林外传-明星斗地主增值版_3971.jar | 689 | 武林外传-明星斗地主(电影正版) | - | 1.0.0 | MIDP-2.0 | - | 52 | 16 | 600 | 418852 | 0 | - | 运行正常 |  |
+| 模拟人生3繁体bt版_6026.jar | 497 | The Sims 3 | - | 2.0.0 | MIDP-2.0 | - | 27 | 16 | 600 | 7483379 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| 模拟恋爱2_11543.jar | 291 | SimBabe2 by serviak | - | 1.4 | MIDP-2.0 | - | 2 | 16 | 600 | 9644636 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| 武林外传-明星斗地主增值版_3971.jar | 689 | 武林外传-明星斗地主(电影正版) | - | 1.0.0 | MIDP-2.0 | - | 52 | 16 | 600 | 418837 | 0 | - | 运行正常 |  |
 | 武林外传_9847.jar | 400 | 武林外传-RPG巨作正版 | - | 1.0 | MIDP-2.0 | nokia-ui | 85 | 16 | 600 | 3540114 | 0 | javax/microedition/media/MediaEx | 运行正常 |  |
 | 歪歪隋唐英雄传_11206.jar | 52 | waiwai | - | 1.0 | MIDP-1.0 | nokia-ui | 6 | 16 | 600 | 41788 | 0 | java/io/IOException | 运行正常 |  |
-| 毁灭战士3_10598.jar | 1590 | Doom3D | - | 1.0 | MIDP-2.0 | m3g | 48 | 16 | 600 | 2110405 | 0 | java/io/IOException | 运行正常 |  |
-| 比基尼美女海底影相_9643.jar | 275 | Foto Quest Bikini | - | 2.0.6 | MIDP-1.0 | nokia-ui | 14 | 16 | 600 | 12927172 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
-| 水浒108将-激斗篇_2196.jar | 625 | 水浒108将-激斗篇 | - | 1.0.0 | MIDP-1.0 | - | 33 | 16 | 600 | 626126236 | 0 | java/io/IOException,java/lang/Nu | 运行正常 |  |
-| 法拉利GT3－世界赛道BT版_776.jar | 2881 | Ferrari GT 3 - World Track | - | 1.1.2 | MIDP-2.0 | nokia-ui | 22 | 16 | 600 | 3151115636 | 0 | java/lang/NullPointerException | 运行正常 |  |
-| 波斯王子之时之沙中文版_11315.jar | 60 | 波斯王子-时之沙 | - | 1.0.1 | MIDP-1.0 | nokia-ui | 6 | 16 | 600 | 1278198828 | 0 | - | 运行正常 |  |
-| 波斯王子之武者之心_8424.jar | 202 | Prince Of Persia | - | 1.0.2 | MIDP-2.0 | - | 5 | 16 | 600 | 2330347737 | 0 | - | 运行正常 |  |
-| 波斯王子经典版_9715.jar | 326 | Prince of Persia Classic | - | 1.0.3 | MIDP-2.0 | - | 9 | 16 | 600 | 6461397868 | 0 | java/lang/NullPointerException | 运行正常 |  |
-| 浴火银河2完整版_7689.jar | 1639 | Galaxy on Fire 2 | - | 1.0.3 | MIDP-2.0 | m3g | 154 | 16 | 600 | 642932059 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
-| 浴火银河2汉化版_6950.jar | 1680 | Galaxy on Fire 2 | - | 1.0.3 | MIDP-2.0 | m3g | 155 | 16 | 600 | 648839951 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
-| 浴火银河2瓦尔基里(汉化)_3067.jar | 9771 | Galaxy on Fire 2 | - | 1.0.3 | MIDP-2.0 | m3g | 155 | 16 | 600 | 546673015 | 0 | java/lang/IllegalArgumentExcepti | 运行正常 |  |
-| 浴火银河2瓦尔基里_3093.jar | 9746 | Galaxy on Fire 2 | - | 1.0.3 | MIDP-2.0 | m3g | 154 | 16 | 600 | 461228029 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
-| 浴火银河_10189.jar | 510 | 3D Galaxy on Fire | - | 1.0.3 | MIDP-2.0 | mascot | 101 | 16 | 600 | 72063695 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
-| 浴火银河_3621.jar | 510 | 3D Galaxy on Fire | - | 1.0.3 | MIDP-2.0 | mascot | 101 | 16 | 600 | 83195511 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
-| 海绵宝宝卡丁车_4684.jar | 651 | HMBBKDC | - | 0.1.0 | MIDP-2.0 | - | 9 | 16 | 600 | 3630778220 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| 毁灭战士3_10598.jar | 1590 | Doom3D | - | 1.0 | MIDP-2.0 | m3g | 48 | 16 | 600 | 2092735 | 0 | java/io/IOException | 运行正常 |  |
+| 比基尼美女海底影相_9643.jar | 275 | Foto Quest Bikini | - | 2.0.6 | MIDP-1.0 | nokia-ui | 14 | 16 | 600 | 10051757 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| 水浒108将-激斗篇_2196.jar | 625 | 水浒108将-激斗篇 | - | 1.0.0 | MIDP-1.0 | - | 33 | 16 | 600 | 611977571 | 0 | java/io/IOException,java/lang/Nu | 运行正常 |  |
+| 法拉利GT3－世界赛道BT版_776.jar | 2881 | Ferrari GT 3 - World Track | - | 1.1.2 | MIDP-2.0 | nokia-ui | 22 | 16 | 600 | 3110367259 | 0 | java/lang/NullPointerException | 运行正常 |  |
+| 波斯王子之时之沙中文版_11315.jar | 60 | 波斯王子-时之沙 | - | 1.0.1 | MIDP-1.0 | nokia-ui | 6 | 16 | 600 | 1203698810 | 0 | - | 运行正常 |  |
+| 波斯王子之武者之心_8424.jar | 202 | Prince Of Persia | - | 1.0.2 | MIDP-2.0 | - | 5 | 16 | 600 | 2639540390 | 0 | - | 运行正常 |  |
+| 波斯王子经典版_9715.jar | 326 | Prince of Persia Classic | - | 1.0.3 | MIDP-2.0 | - | 9 | 16 | 600 | 6652950206 | 0 | java/lang/NullPointerException | 运行正常 |  |
+| 浴火银河2完整版_7689.jar | 1639 | Galaxy on Fire 2 | - | 1.0.3 | MIDP-2.0 | m3g | 154 | 16 | 600 | 619679040 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| 浴火银河2汉化版_6950.jar | 1680 | Galaxy on Fire 2 | - | 1.0.3 | MIDP-2.0 | m3g | 155 | 16 | 600 | 646073263 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| 浴火银河2瓦尔基里(汉化)_3067.jar | 9771 | Galaxy on Fire 2 | - | 1.0.3 | MIDP-2.0 | m3g | 155 | 16 | 600 | 589011690 | 0 | java/lang/IllegalArgumentExcepti | 运行正常 |  |
+| 浴火银河2瓦尔基里_3093.jar | 9746 | Galaxy on Fire 2 | - | 1.0.3 | MIDP-2.0 | m3g | 154 | 16 | 600 | 534881439 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| 浴火银河_10189.jar | 510 | 3D Galaxy on Fire | - | 1.0.3 | MIDP-2.0 | mascot | 101 | 16 | 600 | 82784015 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| 浴火银河_3621.jar | 510 | 3D Galaxy on Fire | - | 1.0.3 | MIDP-2.0 | mascot | 101 | 16 | 600 | 77538960 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| 海绵宝宝卡丁车_4684.jar | 651 | HMBBKDC | - | 0.1.0 | MIDP-2.0 | - | 9 | 16 | 600 | 3835418224 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
 | 涂鸦地带_模拟可玩_12472.jar | 62 | 涂鸦地带 | - | 1.0 | MIDP-2.0 | - | 22 | 16 | 600 | 903247 | 0 | java/io/IOException,javax/microe | 运行正常 |  |
-| 涂鸦跳跃中文豪华版(汉化)_2524.jar | 1424 | 涂鸦跳跃 | - | 1.8.2 | MIDP-2.0 | - | 13 | 16 | 600 | 573869062 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| 涂鸦跳跃中文豪华版(汉化)_2524.jar | 1424 | 涂鸦跳跃 | - | 1.8.2 | MIDP-2.0 | - | 13 | 16 | 600 | 684707986 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
 | 灌篮高手-爆发!樱木_7947.jar | 327 | 灌篮高手-爆发！樱木 | - | 1.0.0 | MIDP-2.0 | - | 44 | 16 | 600 | 945737 | 0 | java/lang/ArithmeticException,ja | 运行正常 |  |
-| 火影忍者-终极格斗_6604.jar | 673 | 火影忍者-精品格斗2010 | - | 1.0.0 | MIDP-1.0 | nokia-ui | 41 | 16 | 600 | 7436954 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| 火影忍者-终极格斗_6604.jar | 673 | 火影忍者-精品格斗2010 | - | 1.0.0 | MIDP-1.0 | nokia-ui | 41 | 16 | 600 | 6442858 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
 | 火影忍者_11531.jar | 335 | Naruto | - | Mod | MIDP-1.0 | nokia-ui | 9 | 16 | 600 | 732981 | 0 | javax/microedition/rms/InvalidRe | 运行正常 |  |
-| 火影忍者格斗2010_4601.jar | 652 | 火影忍者-精品格斗2010 | - | 1.0.0 | MIDP-1.0 | nokia-ui | 39 | 16 | 600 | 6479290 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
-| 火影忍者汉化版_10735.jar | 261 | Ninja Fighter (RoS) | - | 1.0 | MIDP-1.0 | nokia-ui | 22 | 16 | 600 | 3377862 | 0 | java/io/EOFException,java/io/IOE | 运行正常 |  |
-| 火焰-纹章之谜_12128.jar | 316 | 火焰-纹章之谜 | - | 1.9 | MIDP-1.0 | nokia-ui | 17 | 16 | 600 | 817751 | 0 | java/io/IOException,java/lang/Nu | 运行正常 |  |
+| 火影忍者格斗2010_4601.jar | 652 | 火影忍者-精品格斗2010 | - | 1.0.0 | MIDP-1.0 | nokia-ui | 39 | 16 | 600 | 7394532 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| 火影忍者汉化版_10735.jar | 261 | Ninja Fighter (RoS) | - | 1.0 | MIDP-1.0 | nokia-ui | 22 | 16 | 600 | 3417862 | 0 | java/io/EOFException,java/io/IOE | 运行正常 |  |
+| 火焰-纹章之谜_12128.jar | 316 | 火焰-纹章之谜 | - | 1.9 | MIDP-1.0 | nokia-ui | 17 | 16 | 600 | 831811 | 0 | java/io/IOException,java/lang/Nu | 运行正常 |  |
 | 火焰-纹章传说第一章_12129.jar | 365 | 火焰-纹章传说第一章 | - | 1.6 | MIDP-1.0 | nokia-ui | 18 | 16 | 600 | 839273 | 0 | java/io/IOException,java/lang/Nu | 运行正常 |  |
-| 火焰-纹章传说第三章_12130.jar | 354 | 火焰-纹章传说第三章 | - | 1.8 | MIDP-1.0 | nokia-ui | 18 | 16 | 600 | 1166891 | 0 | java/io/IOException,java/lang/Nu | 运行正常 |  |
-| 火焰-纹章传说第二章_12131.jar | 343 | 火焰-纹章传说第二章 | - | 1.8 | MIDP-1.0 | nokia-ui | 18 | 16 | 600 | 950218 | 0 | java/io/IOException,java/lang/Nu | 运行正常 |  |
-| 火焰纹章勇者之剑_10337.jar | 163 | 圣火纹章-勇者之剑 | - | 1.0 | MIDP-1.0 | - | 16 | 16 | 600 | 336804 | 0 | - | 运行正常 |  |
-| 灵异村庄_11169.jar | 94 | The Village | - | 1.2 | MIDP-1.0 | nokia-ui | 19 | 16 | 600 | 1854028 | 0 | java/io/IOException,javax/microe | 运行正常 |  |
-| 炸弹人_10311.jar | 302 | Bomberman | - | 1.0.0 | MIDP-1.0 | nokia-ui | 12 | 16 | 600 | 22036594 | 0 | javax/microedition/rms/InvalidRe | 运行正常 |  |
-| 热血沙滩9球赛_894.jar | 472 | 热血沙滩9球赛 | - | 1.0.0 | MIDP-2.0 | - | 27 | 16 | 600 | 7759091 | 0 | java/lang/ArrayIndexOutOfBoundsE | 运行正常 |  |
+| 火焰-纹章传说第三章_12130.jar | 354 | 火焰-纹章传说第三章 | - | 1.8 | MIDP-1.0 | nokia-ui | 18 | 16 | 600 | 1127821 | 0 | java/io/IOException,java/lang/Nu | 运行正常 |  |
+| 火焰-纹章传说第二章_12131.jar | 343 | 火焰-纹章传说第二章 | - | 1.8 | MIDP-1.0 | nokia-ui | 18 | 16 | 600 | 996673 | 0 | java/io/IOException,java/lang/Nu | 运行正常 |  |
+| 火焰纹章勇者之剑_10337.jar | 163 | 圣火纹章-勇者之剑 | - | 1.0 | MIDP-1.0 | - | 16 | 16 | 600 | 337161 | 0 | - | 运行正常 |  |
+| 灵异村庄_11169.jar | 94 | The Village | - | 1.2 | MIDP-1.0 | nokia-ui | 19 | 16 | 600 | 1847836 | 0 | java/io/IOException,javax/microe | 运行正常 |  |
+| 炸弹人_10311.jar | 302 | Bomberman | - | 1.0.0 | MIDP-1.0 | nokia-ui | 12 | 16 | 600 | 22061888 | 0 | javax/microedition/rms/InvalidRe | 运行正常 |  |
+| 热血沙滩9球赛_894.jar | 472 | 热血沙滩9球赛 | - | 1.0.0 | MIDP-2.0 | - | 27 | 16 | 600 | 7898891 | 0 | java/lang/ArrayIndexOutOfBoundsE | 运行正常 |  |
 | 爆笑三国斗地主_10552.jar | 312 | 爆笑三国斗地主 | - | 1.0 | MIDP-1.0 | nokia-ui | 8 | 16 | 600 | 323296 | 0 | - | 运行正常 |  |
-| 狂野飙车4-gameloft(中文版)_2603.jar | 647 | 狂野飙车4 | - | 1.0.0 | MIDP-2.0 | - | 22 | 16 | 600 | 207126848 | 0 | - | 运行正常 |  |
-| 狂野飙车4-亡命都市_2875.jar | 616 | 狂野飙车-亡命都市 | - | 1.0.0 | MIDP-2.0 | - | 13 | 16 | 600 | 210573668 | 0 | - | 运行正常 |  |
-| 狂野飙车4_6959.jar | 596 | 狂野飙车4-gameloft | - | 1.0.0 | MIDP-2.0 | - | 12 | 16 | 600 | 68898695 | 0 | - | 运行正常 |  |
-| 猿人时代BT版_4519.jar | 489 | 猿人时代 | - | 1.0.0 | MIDP-2.0 | - | 49 | 16 | 600 | 10634521 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
-| 生化危机-险境求生_3290.jar | 914 | 生化危机 | - | 1.0.0 | MIDP-1.0 | nokia-ui | 53 | 16 | 600 | 3267192343 | 0 | - | 运行正常 |  |
+| 狂野飙车4-gameloft(中文版)_2603.jar | 647 | 狂野飙车4 | - | 1.0.0 | MIDP-2.0 | - | 22 | 16 | 600 | 205557100 | 0 | - | 运行正常 |  |
+| 狂野飙车4-亡命都市_2875.jar | 616 | 狂野飙车-亡命都市 | - | 1.0.0 | MIDP-2.0 | - | 13 | 16 | 600 | 211748075 | 0 | - | 运行正常 |  |
+| 狂野飙车4_6959.jar | 596 | 狂野飙车4-gameloft | - | 1.0.0 | MIDP-2.0 | - | 12 | 16 | 600 | 68883605 | 0 | - | 运行正常 |  |
+| 猿人时代BT版_4519.jar | 489 | 猿人时代 | - | 1.0.0 | MIDP-2.0 | - | 49 | 16 | 600 | 1318193 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| 生化危机-险境求生_3290.jar | 914 | 生化危机 | - | 1.0.0 | MIDP-1.0 | nokia-ui | 53 | 16 | 600 | 3207432343 | 0 | - | 运行正常 |  |
 | 生化危机3D(CAPCOM经典)_3671.jar | 983 | shwjd | - | 1.0 | MIDP-2.0 | m3g | 21 | 16 | 601 | 625127 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
 | 生化危机5核变_866.jar | 1181 | 生化危机5核变 | - | 1.0 | MIDP-1.0 | nokia-ui | 61 | 16 | 600 | 698850 | 0 | - | 运行正常 |  |
-| 生化危机之恶化_8448.jar | 372 | RED http://www.universosymbi | - | 1.0.0 | MIDP-2.0 | - | 10 | 16 | 600 | 2882975 | 0 | java/lang/NumberFormatException | 运行正常 |  |
-| 生化惊悚2死亡寂静中文版_2607.jar | 1144 | shjswjj | - | 0.0.5 | MIDP-2.0 | - | 26 | 16 | 600 | 255017776 | 0 | java/lang/ArrayIndexOutOfBoundsE | 运行正常 |  |
+| 生化危机之恶化_8448.jar | 372 | RED http://www.universosymbi | - | 1.0.0 | MIDP-2.0 | - | 10 | 16 | 600 | 2882957 | 0 | java/lang/NumberFormatException | 运行正常 |  |
+| 生化惊悚2死亡寂静中文版_2607.jar | 1144 | shjswjj | - | 0.0.5 | MIDP-2.0 | - | 26 | 16 | 600 | 254852533 | 0 | java/lang/ArrayIndexOutOfBoundsE | 运行正常 |  |
 | 电子宠物蛋_11972.jar | 95 | Tamagotchi 240x320 | - | 1.0.96 | MIDP-1.0 | nokia-ui | 8 | 16 | 600 | 1900458 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
-| 电玩美女麻将_7260.jar | 439 | 电玩美女麻将 | - | 1.0.0 | MIDP-1.0 | - | 9 | 16 | 600 | 2350223 | 0 | javax/microedition/rms/InvalidRe | 运行正常 |  |
-| 男摄影师_11003.jar | 250 | 男摄影师 | - | 1.0.0 | MIDP-1.0 | - | 19 | 16 | 600 | 8890771 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| 电玩美女麻将_7260.jar | 439 | 电玩美女麻将 | - | 1.0.0 | MIDP-1.0 | - | 9 | 16 | 600 | 2350215 | 0 | javax/microedition/rms/InvalidRe | 运行正常 |  |
+| 男摄影师_11003.jar | 250 | 男摄影师 | - | 1.0.0 | MIDP-1.0 | - | 19 | 16 | 600 | 8890767 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
 | 疯狂企鹅中文版_10228.jar | 140 | 功夫企鹅 | - | 1.0.0 | MIDP-2.0 | - | 13 | 16 | 600 | 12931226 | 0 | java/io/EOFException,javax/micro | 运行正常 |  |
-| 疯狂农场2_2375.jar | 551 | Farm Frenzy 2 | - | 1.0.3 | MIDP-2.0 | - | 42 | 16 | 600 | 11658759 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
-| 疯狂农场汉化版_5998.jar | 400 | Farm Frenzy | - | 2.0.0 | MIDP-2.0 | - | 33 | 16 | 600 | 3844539 | 0 | java/io/EOFException,java/io/IOE | 运行正常 |  |
+| 疯狂农场2_2375.jar | 551 | Farm Frenzy 2 | - | 1.0.3 | MIDP-2.0 | - | 42 | 16 | 600 | 11658725 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| 疯狂农场汉化版_5998.jar | 400 | Farm Frenzy | - | 2.0.0 | MIDP-2.0 | - | 33 | 16 | 600 | 3838792 | 0 | java/io/EOFException,java/io/IOE | 运行正常 |  |
 | 疯狂出租车中文版_721.jar | 491 | 疯狂出租车 | - | 1.0 | MIDP-1.0 | - | 49 | 16 | 600 | 183740 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
-| 疯狂战机_2013.jar | 219 | Srcombat20110928 | - | 1.0.0 | MIDP-2.0 | - | 65 | 16 | 600 | 2187261514 | 0 | java/io/IOException | 运行正常 |  |
-| 百战天虫2010中文版_5380.jar | 560 | PC原版-百战天虫2010-EA | - | 1.0.0 | MIDP-2.0 | - | 25 | 16 | 600 | 54905178 | 0 | java/lang/NullPointerException | 运行正常 |  |
-| 百鬼商店破解版_10526.jar | 382 | BAI_GUI_SHANG_DIAN | - | 1.0 | MIDP-2.0 | - | 4 | 16 | 600 | 1088203 | 0 | - | 运行正常 | runs without input; the generic key script m |
-| 真三国无双横扫千军_12449.jar | 270 | 横扫千军.宝软网baoruan.com免费分享 | - | 1.0 | MIDP-2.0 | - | 14 | 16 | 600 | 1016541 | 0 | - | 运行正常 |  |
-| 真人快打3中文版_3252.jar | 299 | 真人快打3 | - | 1.0.0 | MIDP-2.0 | - | 50 | 16 | 600 | 15113798 | 0 | java/lang/ClassCastException | 运行正常 |  |
-| 真幻想三国志完整版_12469.jar | 877 | 真幻想三国志 | - | 1.0 | MIDP-1.0 | nokia-ui | 138 | 16 | 600 | 2265822263 | 0 | - | 运行正常 |  |
-| 真武三国BT版_3953.jar | 1013 | 真武三国 | - | 1.0 | MIDP-2.0 | - | 23 | 16 | 600 | 7074534 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
-| 真武三国_3962.jar | 1018 | 真武三国 | - | 1.0 | MIDP-2.0 | - | 22 | 16 | 600 | 7074784 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| 疯狂战机_2013.jar | 219 | Srcombat20110928 | - | 1.0.0 | MIDP-2.0 | - | 65 | 16 | 600 | 2190698219 | 0 | java/io/IOException | 运行正常 |  |
+| 百战天虫2010中文版_5380.jar | 560 | PC原版-百战天虫2010-EA | - | 1.0.0 | MIDP-2.0 | - | 25 | 16 | 600 | 52130932 | 0 | java/lang/NullPointerException | 运行正常 |  |
+| 百鬼商店破解版_10526.jar | 382 | BAI_GUI_SHANG_DIAN | - | 1.0 | MIDP-2.0 | - | 4 | 16 | 600 | 1088210 | 0 | - | 运行正常 | runs without input; the generic key script m |
+| 真三国无双横扫千军_12449.jar | 270 | 横扫千军.宝软网baoruan.com免费分享 | - | 1.0 | MIDP-2.0 | - | 14 | 16 | 600 | 1011118 | 0 | - | 运行正常 |  |
+| 真人快打3中文版_3252.jar | 299 | 真人快打3 | - | 1.0.0 | MIDP-2.0 | - | 50 | 16 | 600 | 15163885 | 0 | java/lang/ClassCastException | 运行正常 |  |
+| 真幻想三国志完整版_12469.jar | 877 | 真幻想三国志 | - | 1.0 | MIDP-1.0 | nokia-ui | 138 | 16 | 600 | 2513785708 | 0 | - | 运行正常 |  |
+| 真武三国BT版_3953.jar | 1013 | 真武三国 | - | 1.0 | MIDP-2.0 | - | 23 | 16 | 600 | 7074860 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| 真武三国_3962.jar | 1018 | 真武三国 | - | 1.0 | MIDP-2.0 | - | 22 | 16 | 600 | 7074978 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
 | 真西游记_6848.jar | 738 | 真西游记(华娱) | - | 1.0 | MIDP-1.0 | - | 18 | 16 | 600 | 1666936 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
-| 神庙逃亡2（Temple_18.jar | 680 | Run2 | - | 2.0.0 | MIDP-2.0 | - | 4 | 16 | 600 | 630382927 | 0 | - | 运行正常 |  |
-| 科比职业篮球2008中文版_11136.jar | 520 | 科比大灌篮(gameloft正版) | - | 1.02 | MIDP-1.0 | - | 10 | 16 | 600 | 4974551803 | 0 | java/lang/ArrayIndexOutOfBoundsE | 运行正常 |  |
-| 空战1944_10321.jar | 309 | Air Strike 1944 | - | 1.0.0 | MIDP-2.0 | - | 6 | 16 | 600 | 108793305 | 0 | - | 运行正常 |  |
-| 穿越火线-韩国正版_6874.jar | 480 | chuanyuehuoxian | - | 1.0.0 | MIDP-1.0 | - | 21 | 16 | 600 | 2804894266 | 0 | - | 运行正常 |  |
-| 竞技者之极限酷跑_5431.jar | 250 | 竞技者之极限酷跑 | - | 1.0.4 | MIDP-2.0 | - | 7 | 16 | 600 | 881843392 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
-| 精品美女斗地主2013_104.jar | 1203 | 精品美女斗地主 | - | 1.0 | MIDP-1.0 | nokia-ui | 61 | 16 | 600 | 1772500873 | 0 | java/io/IOException,java/lang/Nu | 运行正常 |  |
-| 红色警戒3_7037.jar | 784 | C&C: Red Alert Mobile by bli | - | 4.15.48 | MIDP-2.0 | - | 33 | 16 | 600 | 4534390 | 0 | - | 运行正常 |  |
+| 神庙逃亡2（Temple_18.jar | 680 | Run2 | - | 2.0.0 | MIDP-2.0 | - | 4 | 16 | 600 | 387905654 | 0 | - | 运行正常 |  |
+| 科比职业篮球2008中文版_11136.jar | 520 | 科比大灌篮(gameloft正版) | - | 1.02 | MIDP-1.0 | - | 10 | 16 | 600 | 4521086534 | 0 | java/lang/ArrayIndexOutOfBoundsE | 运行正常 |  |
+| 空战1944_10321.jar | 309 | Air Strike 1944 | - | 1.0.0 | MIDP-2.0 | - | 6 | 16 | 600 | 109016545 | 0 | - | 运行正常 |  |
+| 穿越火线-韩国正版_6874.jar | 480 | chuanyuehuoxian | - | 1.0.0 | MIDP-1.0 | - | 21 | 16 | 600 | 2770968608 | 0 | - | 运行正常 |  |
+| 竞技者之极限酷跑_5431.jar | 250 | 竞技者之极限酷跑 | - | 1.0.4 | MIDP-2.0 | - | 7 | 16 | 600 | 861082446 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| 精品美女斗地主2013_104.jar | 1203 | 精品美女斗地主 | - | 1.0 | MIDP-1.0 | nokia-ui | 61 | 16 | 600 | 1729627427 | 0 | java/io/IOException,java/lang/Nu | 运行正常 |  |
+| 红色警戒3_7037.jar | 784 | C&C: Red Alert Mobile by bli | - | 4.15.48 | MIDP-2.0 | - | 33 | 16 | 600 | 4534250 | 0 | - | 运行正常 |  |
 | 纯爱物语3之梦想之翼_5112.jar | 978 | L3D | - | 1.30.0 | MIDP-2.0 | - | 82 | 16 | 600 | 6446105 | 0 | - | 运行正常 |  |
-| 纯爱物语之湛蓝回忆简体版_5164.jar | 1007 | LoveMemory | - | 1.0 | MIDP-1.0 | - | 66 | 16 | 600 | 85446 | 0 | java/lang/NullPointerException | 运行正常 |  |
-| 纽约人生_1339.jar | 879 | My Life in New York | - | 1.0.6 | MIDP-2.0 | - | 12 | 16 | 600 | 122146670 | 0 | - | 运行正常 |  |
-| 细胞分裂4混沌法则中文版_11671.jar | 101 | 细胞分裂3-混沌法则 | - | 1.02 | MIDP-1.0 | nokia-ui | 4 | 16 | 600 | 2808416718 | 0 | - | 运行正常 |  |
+| 纯爱物语之湛蓝回忆简体版_5164.jar | 1007 | LoveMemory | - | 1.0 | MIDP-1.0 | - | 66 | 16 | 600 | 85692 | 0 | java/lang/NullPointerException | 运行正常 |  |
+| 纽约人生_1339.jar | 879 | My Life in New York | - | 1.0.6 | MIDP-2.0 | - | 12 | 16 | 600 | 122193068 | 0 | - | 运行正常 |  |
+| 细胞分裂4混沌法则中文版_11671.jar | 101 | 细胞分裂3-混沌法则 | - | 1.02 | MIDP-1.0 | nokia-ui | 4 | 16 | 600 | 2696196718 | 0 | - | 运行正常 |  |
 | 终极雷电_4125.jar | 293 | 终极雷电 | - | 1.0.0 | MIDP-1.0 | - | 57 | 16 | 600 | 740685 | 0 | - | 运行正常 |  |
 | 经典推箱子_1070.jar | 247 | 纸盒人 | - | 1.0.0 | MIDP-1.0 | - | 34 | 16 | 600 | 149462 | 0 | java/io/IOException | 运行正常 |  |
 | 绝密反击破解版_8377.jar | 174 | 绝密反击 | - | 1.0 | MIDP-1.0 | nokia-ui | 39 | 16 | 600 | 3024851 | 0 | - | 运行正常 |  |
-| 网球大满贯_11950.jar | 143 | 网球大满贯 | - | 1.0 | MIDP-1.0 | - | 11 | 16 | 434 | 207944269 | 0 | java/io/IOException,javax/microe | 运行正常 | exited itself (notifyDestroyed) |
-| 美女台球_9377.jar | 205 | Billard Girls | - | 1.0.11 | MIDP-1.0 | - | 40 | 16 | 600 | 18068447 | 0 | java/lang/NullPointerException | 运行正常 |  |
-| 美女斗地主(真人语音版)_1609.jar | 1089 | 写真美女斗地主(真人语音) | - | 1.0.0 | MIDP-1.0 | - | 29 | 16 | 600 | 1361644 | 0 | java/lang/NullPointerException | 运行正常 |  |
-| 美女斗地主_1088.jar | 717 | 美女斗地主 | - | 1.0 | MIDP-2.0 | nokia-ui | 14 | 16 | 600 | 13771182 | 0 | java/lang/NullPointerException | 运行正常 |  |
-| 美女滑雪胜地_2.jar | 290 | 美女滑雪胜地 | - | 1.0.0 | MIDP-2.0 | - | 23 | 16 | 600 | 14302040 | 0 | - | 运行正常 |  |
+| 网球大满贯_11950.jar | 143 | 网球大满贯 | - | 1.0 | MIDP-1.0 | - | 11 | 16 | 434 | 205915291 | 0 | java/io/IOException,javax/microe | 运行正常 | exited itself (notifyDestroyed) |
+| 美女台球_9377.jar | 205 | Billard Girls | - | 1.0.11 | MIDP-1.0 | - | 40 | 16 | 600 | 17868433 | 0 | java/lang/NullPointerException | 运行正常 |  |
+| 美女斗地主(真人语音版)_1609.jar | 1089 | 写真美女斗地主(真人语音) | - | 1.0.0 | MIDP-1.0 | - | 29 | 16 | 600 | 1378664 | 0 | java/lang/NullPointerException | 运行正常 |  |
+| 美女斗地主_1088.jar | 717 | 美女斗地主 | - | 1.0 | MIDP-2.0 | nokia-ui | 14 | 16 | 600 | 13848815 | 0 | java/lang/NullPointerException | 运行正常 |  |
+| 美女滑雪胜地_2.jar | 290 | 美女滑雪胜地 | - | 1.0.0 | MIDP-2.0 | - | 23 | 16 | 600 | 14184217 | 0 | - | 运行正常 |  |
 | 美少女梦幻工厂_11443.jar | 181 | 美少女梦幻工厂 | - | 1.0 | MIDP-1.0 | nokia-ui | 4 | 16 | 323 | 32553 | 0 | javax/microedition/rms/InvalidRe | 运行正常 | exited itself (notifyDestroyed) |
-| 美男狂想曲_3876.jar | 856 | Hotguys Rhapsody | - | 1.0.0 | MIDP-1.0 | - | 11 | 16 | 600 | 4375947 | 0 | java/io/IOException,java/lang/Nu | 运行正常 |  |
-| 聊斋之倩女幽魂_11185.jar | 300 | 聊斋之倩女幽魂 | - | 1.0 | MIDP-2.0 | nokia-ui | 6 | 16 | 600 | 2078544119 | 0 | - | 运行正常 |  |
-| 航海世纪2_10583.jar | 157 | Tradewinds 2 | - | 1.1.4 | MIDP-2.0 | - | 4 | 16 | 600 | 1527328830 | 0 | java/lang/IllegalArgumentExcepti | 运行正常 |  |
-| 色戒之虚拟人生_7230.jar | 584 | 色戒之虚拟人生 | - | 1.0.0 | MIDP-1.0 | - | 19 | 16 | 600 | 2006037 | 0 | - | 运行正常 |  |
-| 花样少年恋爱学院_5977.jar | 764 | love_school | - | 1.30.02 | MIDP-2.0 | - | 45 | 16 | 600 | 21398974 | 0 | java/lang/NullPointerException | 运行正常 |  |
-| 花样少年恋爱学院特别版_5527.jar | 776 | love-school-sp | - | 1.30.11 | MIDP-2.0 | - | 45 | 16 | 600 | 21398977 | 0 | java/lang/NullPointerException | 运行正常 |  |
-| 苍穹默示录完美运行版_4035.jar | 1790 | 苍穹默示录 | - | 1.0.0 | MIDP-1.0 | - | 53 | 16 | 600 | 4695304846 | 0 | java/io/IOException,java/lang/Cl | 运行正常 |  |
-| 荒岛余生(GLU正版)_12478.jar | 451 | 荒岛余生(GLU正版) | - | 1.0.1 | MIDP-1.0 | - | 9 | 16 | 600 | 6583625 | 0 | java/lang/NullPointerException | 运行正常 |  |
-| 荒岛余生2时空探秘_6794.jar | 486 | 荒岛余生2时空探秘 | - | 1.0.1 | MIDP-2.0 | - | 31 | 16 | 600 | 5490895 | 0 | javax/microedition/rms/InvalidRe | 运行正常 |  |
-| 荣誉勋章之空降神兵改良版_2993.jar | 559 | Medal Of Honor Airborne Elit | - | 4.18.80 | MIDP-2.0 | - | 32 | 16 | 600 | 24906017 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
-| 蓝牙真3D格斗_3424.jar | 602 | 真3D格斗 | - | 1.0 | MIDP-2.0 | m3g,nokia-ui | 26 | 16 | 600 | 7376479 | 0 | javax/bluetooth/BluetoothStateEx | 运行正常 |  |
-| 蓝白五子棋_9790.jar | 104 | Gomoku by drAdeLante | - | 1.0.0 | MIDP-2.0 | - | 15 | 16 | 600 | 3327532308 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
-| 蛋蛋历险记_11460.jar | 162 | Bird ETTY | - | 1.4.6 | MIDP-2.0 | - | 2 | 16 | 600 | 608263439 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
-| 血战三国之吕布貂蝉_4012.jar | 347 | 血战三国-吕布VS貂蝉 | - | 1.0.0 | MIDP-1.0 | - | 10 | 16 | 600 | 56920 | 0 | javax/microedition/rms/InvalidRe | 运行正常 |  |
-| 血战轩辕之魔神蚩尤_11172.jar | 198 | 血战轩辕之魔神蚩尤 | - | 1.0 | MIDP-1.0 | nokia-ui | 12 | 16 | 600 | 1639981 | 0 | java/lang/IllegalArgumentExcepti | 运行正常 |  |
-| 街头反恐之格斗女王_822.jar | 285 | 街头反恐之格斗女王 | - | 1.0.0 | MIDP-2.0 | - | 10 | 16 | 600 | 2768234 | 0 | - | 运行正常 |  |
-| 街头霸王-街机经典_2664.jar | 563 | 街头霸王 | - | 1.0.0 | MIDP-1.0 | - | 12 | 16 | 605 | 2084446 | 0 | java/lang/IllegalArgumentExcepti | 运行正常 |  |
-| 街头霸王2_11388.jar | 493 | StreetFighter2 | - | 1.2.4 | MIDP-1.0 | - | 5 | 16 | 600 | 24822616 | 0 | java/lang/NullPointerException | 运行正常 |  |
-| 街头霸王2冠军典藏版_1812.jar | 730 | jtbw | - | 1.0.0 | MIDP-2.0 | - | 9 | 16 | 600 | 2856859 | 0 | - | 运行正常 |  |
-| 街霸2012(加强版)_2302.jar | 1117 | 街霸2012加强版 | - | 1.0 | MIDP-1.0 | - | 40 | 16 | 600 | 129511225 | 0 | java/io/EOFException,java/lang/C | 运行正常 |  |
-| 西伯利亚大反击_11466.jar | 205 | 西伯利亚大反击 | - | 1.0 | MIDP-1.0 | - | 2 | 16 | 600 | 2018272282 | 0 | - | 运行正常 |  |
-| 诈金花_6358.jar | 557 | 诈金花 | - | 1.0 | MIDP-1.0 | nokia-ui | 24 | 16 | 600 | 765590 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
-| 诛神－斗破苍穹_1402.jar | 1190 | 诛神-斗破苍穹 | - | 1.0.0 | MIDP-2.0 | - | 62 | 16 | 600 | 372930402 | 0 | java/io/EOFException,java/lang/A | 运行正常 |  |
-| 诸神战纪-堕落天使路西法_5070.jar | 1324 | 诸神战纪-堕落天使路西法 | - | 1.0 | MIDP-1.0 | - | 28 | 16 | 600 | 5632002 | 0 | - | 运行正常 |  |
+| 美男狂想曲_3876.jar | 856 | Hotguys Rhapsody | - | 1.0.0 | MIDP-1.0 | - | 11 | 16 | 600 | 219415 | 0 | java/io/IOException,java/lang/Nu | 运行正常 | runs without input; the generic key script m |
+| 聊斋之倩女幽魂_11185.jar | 300 | 聊斋之倩女幽魂 | - | 1.0 | MIDP-2.0 | nokia-ui | 6 | 16 | 600 | 2123512879 | 0 | - | 运行正常 |  |
+| 航海世纪2_10583.jar | 157 | Tradewinds 2 | - | 1.1.4 | MIDP-2.0 | - | 4 | 16 | 600 | 1210214034 | 0 | java/lang/IllegalArgumentExcepti | 运行正常 |  |
+| 色戒之虚拟人生_7230.jar | 584 | 色戒之虚拟人生 | - | 1.0.0 | MIDP-1.0 | - | 19 | 16 | 600 | 2020393 | 0 | - | 运行正常 |  |
+| 花样少年恋爱学院_5977.jar | 764 | love_school | - | 1.30.02 | MIDP-2.0 | - | 45 | 16 | 600 | 21078860 | 0 | java/lang/NullPointerException | 运行正常 |  |
+| 花样少年恋爱学院特别版_5527.jar | 776 | love-school-sp | - | 1.30.11 | MIDP-2.0 | - | 45 | 16 | 600 | 22258675 | 0 | java/lang/NullPointerException | 运行正常 |  |
+| 苍穹默示录完美运行版_4035.jar | 1790 | 苍穹默示录 | - | 1.0.0 | MIDP-1.0 | - | 53 | 16 | 600 | 4673824576 | 0 | java/io/IOException,java/lang/Cl | 运行正常 |  |
+| 荒岛余生(GLU正版)_12478.jar | 451 | 荒岛余生(GLU正版) | - | 1.0.1 | MIDP-1.0 | - | 9 | 16 | 600 | 6583185 | 0 | java/lang/NullPointerException | 运行正常 |  |
+| 荒岛余生2时空探秘_6794.jar | 486 | 荒岛余生2时空探秘 | - | 1.0.1 | MIDP-2.0 | - | 31 | 16 | 600 | 5523079 | 0 | javax/microedition/rms/InvalidRe | 运行正常 |  |
+| 荣誉勋章之空降神兵改良版_2993.jar | 559 | Medal Of Honor Airborne Elit | - | 4.18.80 | MIDP-2.0 | - | 32 | 16 | 600 | 24879505 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| 蓝牙真3D格斗_3424.jar | 602 | 真3D格斗 | - | 1.0 | MIDP-2.0 | m3g,nokia-ui | 26 | 16 | 600 | 7359799 | 0 | javax/bluetooth/BluetoothStateEx | 运行正常 |  |
+| 蓝白五子棋_9790.jar | 104 | Gomoku by drAdeLante | - | 1.0.0 | MIDP-2.0 | - | 15 | 16 | 600 | 3479867348 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| 蛋蛋历险记_11460.jar | 162 | Bird ETTY | - | 1.4.6 | MIDP-2.0 | - | 2 | 16 | 600 | 704622177 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| 血战三国之吕布貂蝉_4012.jar | 347 | 血战三国-吕布VS貂蝉 | - | 1.0.0 | MIDP-1.0 | - | 10 | 16 | 600 | 53557 | 0 | javax/microedition/rms/InvalidRe | 运行正常 |  |
+| 血战轩辕之魔神蚩尤_11172.jar | 198 | 血战轩辕之魔神蚩尤 | - | 1.0 | MIDP-1.0 | nokia-ui | 12 | 16 | 600 | 1682313 | 0 | java/lang/IllegalArgumentExcepti | 运行正常 |  |
+| 街头反恐之格斗女王_822.jar | 285 | 街头反恐之格斗女王 | - | 1.0.0 | MIDP-2.0 | - | 10 | 16 | 600 | 2771512 | 0 | - | 运行正常 |  |
+| 街头霸王-街机经典_2664.jar | 563 | 街头霸王 | - | 1.0.0 | MIDP-1.0 | - | 12 | 16 | 604 | 2061532 | 0 | java/lang/IllegalArgumentExcepti | 运行正常 |  |
+| 街头霸王2_11388.jar | 493 | StreetFighter2 | - | 1.2.4 | MIDP-1.0 | - | 5 | 16 | 600 | 24744639 | 0 | java/lang/NullPointerException | 运行正常 |  |
+| 街头霸王2冠军典藏版_1812.jar | 730 | jtbw | - | 1.0.0 | MIDP-2.0 | - | 9 | 16 | 601 | 2866220 | 0 | - | 运行正常 |  |
+| 街霸2012(加强版)_2302.jar | 1117 | 街霸2012加强版 | - | 1.0 | MIDP-1.0 | - | 40 | 16 | 600 | 129510862 | 0 | java/io/EOFException,java/lang/C | 运行正常 |  |
+| 西伯利亚大反击_11466.jar | 205 | 西伯利亚大反击 | - | 1.0 | MIDP-1.0 | - | 2 | 16 | 600 | 2160452282 | 0 | - | 运行正常 |  |
+| 诈金花_6358.jar | 557 | 诈金花 | - | 1.0 | MIDP-1.0 | nokia-ui | 24 | 16 | 600 | 765532 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| 诛神－斗破苍穹_1402.jar | 1190 | 诛神-斗破苍穹 | - | 1.0.0 | MIDP-2.0 | - | 62 | 16 | 600 | 372950807 | 0 | java/io/EOFException,java/lang/A | 运行正常 |  |
+| 诸神战纪-堕落天使路西法_5070.jar | 1324 | 诸神战纪-堕落天使路西法 | - | 1.0 | MIDP-1.0 | - | 28 | 16 | 600 | 5631426 | 0 | - | 运行正常 |  |
 | 贪吃蛇经典版_4515.jar | 124 | Snake | - | 1.3 | MIDP-2.0 | - | 68 | 16 | 470 | 9751 | 0 | - | 运行正常 | exited itself (notifyDestroyed) |
-| 赤色要塞－FC移植版_5285.jar | 282 | 赤色要塞 | - | 1.0.0 | MIDP-1.0 | nokia-ui | 43 | 16 | 600 | 2817705 | 0 | java/io/EOFException,javax/micro | 运行正常 |  |
+| 赤色要塞－FC移植版_5285.jar | 282 | 赤色要塞 | - | 1.0.0 | MIDP-1.0 | nokia-ui | 43 | 16 | 600 | 2819462 | 0 | java/io/EOFException,javax/micro | 运行正常 |  |
 | 超时空帝国机甲风暴_12065.jar | 542 | 超时空帝国机甲风暴 | - | 1.0 | MIDP-2.0 | nokia-ui | 20 | 16 | 600 | 279131 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
-| 超级坦克大战2汉化版_531.jar | 655 | (发烧)超级坦克大战II(增强版) | - | 1.0.1 | MIDP-1.0 | nokia-ui | 24 | 16 | 600 | 3458989703 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
-| 超级酒吧女生_4728.jar | 569 | 超级酒吧女生 | - | 1.0.0 | MIDP-2.0 | - | 10 | 16 | 600 | 3581091800 | 0 | javax/microedition/rms/InvalidRe | 运行正常 |  |
-| 超级马里奥_10283.jar | 534 | 超级马里奥 | - | 1.0.0 | MIDP-2.0 | - | 11 | 16 | 600 | 3414672416 | 0 | - | 运行正常 |  |
-| 足球经理2010汉化版_4756.jar | 517 | CM-2010 | - | 1.2.1 | MIDP-2.0 | nokia-ui | 21 | 16 | 600 | 5860530 | 0 | - | 运行正常 |  |
-| 跑跑卡丁车-经典中秋版_2117.jar | 623 | 跑跑卡丁车 | - | 1.0.0 | MIDP-2.0 | - | 21 | 16 | 691 | 676425 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| 超级坦克大战2汉化版_531.jar | 655 | (发烧)超级坦克大战II(增强版) | - | 1.0.1 | MIDP-1.0 | nokia-ui | 24 | 16 | 600 | 3459129703 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| 超级酒吧女生_4728.jar | 569 | 超级酒吧女生 | - | 1.0.0 | MIDP-2.0 | - | 10 | 16 | 600 | 3582291800 | 0 | javax/microedition/rms/InvalidRe | 运行正常 |  |
+| 超级马里奥_10283.jar | 534 | 超级马里奥 | - | 1.0.0 | MIDP-2.0 | - | 11 | 16 | 600 | 3496182271 | 0 | - | 运行正常 |  |
+| 足球经理2010汉化版_4756.jar | 517 | CM-2010 | - | 1.2.1 | MIDP-2.0 | nokia-ui | 21 | 16 | 600 | 5858901 | 0 | - | 运行正常 |  |
+| 跑跑卡丁车-经典中秋版_2117.jar | 623 | 跑跑卡丁车 | - | 1.0.0 | MIDP-2.0 | - | 21 | 16 | 691 | 677713 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
 | 蹦球传说_7801.jar | 375 | Bounce Tales | - | 2.0.3 | MIDP-2.0 | nokia-ui | 21 | 16 | 91 | 56857 | 0 | - | 标题自行退出 | exited itself (notifyDestroyed) after 91 fra |
-| 蹦球传说美化版_2959.jar | 416 | Bounce Tales | - | 2.0.3 | MIDP-2.0 | nokia-ui | 19 | 16 | 600 | 159980728 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
-| 轩辕神剑_2419.jar | 1324 | 轩辕神剑 | - | 1.0 | MIDP-2.0 | - | 71 | 16 | 600 | 3422946 | 0 | java/io/EOFException,java/lang/N | 运行正常 |  |
-| 迈阿密之夜_9566.jar | 315 | MiamiNights | - | 1.0.2 | MIDP-2.0 | - | 6 | 16 | 600 | 178487745 | 0 | javax/microedition/rms/InvalidRe | 运行正常 |  |
-| 远古帝国2汉化版_10357.jar | 168 | Ancient Empires II | - | 1.0.2 | MIDP-1.0 | - | 10 | 16 | 600 | 498639 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
-| 速度与激情5中文版_3043.jar | 380 | Fast Five The Movie Game | - | 1.0.2 | MIDP-2.0 | nokia-ui | 25 | 16 | 600 | 3579347302 | 0 | - | 运行正常 |  |
-| 速度与激情6_9.jar | 1917 | Fast & Furious 6 | - | 1.1.2 | MIDP-2.0 | - | 19 | 16 | 600 | 55077556 | 0 | java/lang/NullPointerException | 运行正常 |  |
-| 都市摩天楼_6192.jar | 160 | Tower Bloxx(TM) | - | 1.2.4 | MIDP-1.0 | m3g,nokia-ui | 16 | 16 | 600 | 3966756 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
-| 都市摩天楼中文版_3219.jar | 1026 | 都市摩天楼 | - | 1.0.0 | MIDP-2.0 | nokia-ui | 46 | 16 | 479 | 109818364 | 0 | java/io/EOFException,javax/micro | 运行正常 | exited itself (notifyDestroyed) |
-| 都市赛车3-暴力街头3D版_10199.jar | 285 | Asphalt 3 3D Street Rules | - | 1.0.2 | MIDP-2.0 | - | 5 | 16 | 600 | 3716184550 | 0 | javax/microedition/rms/InvalidRe | 运行正常 |  |
-| 都市赛车3_10192.jar | 286 | Asphalt3: Street Rules | - | 1.0.4 | MIDP-2.0 | - | 5 | 16 | 600 | 3173145531 | 0 | javax/microedition/rms/InvalidRe | 运行正常 |  |
-| 都市赛车6火线追击_2230.jar | 940 | Asphalt 6 Adrenaline | - | 1.0.0 | MIDP-2.0 | - | 21 | 16 | 601 | 20706934 | 0 | - | 运行正常 |  |
-| 都市赛车_11517.jar | 223 | Asphalt | - | 1.0.7 | MIDP-2.0 | - | 5 | 16 | 600 | 1895914174 | 0 | javax/microedition/rms/InvalidRe | 运行正常 |  |
-| 野人岛2宠物精灵_7061.jar | 534 | 宝软网baoruan.com免费分享 | - | 1.0 | MIDP-1.0 | nokia-ui | 24 | 16 | 600 | 3031993 | 0 | - | 运行正常 |  |
-| 钻石狂潮_1335.jar | 293 | Diamond Rush | - | 1.1.7 | MIDP-2.0 | - | 12 | 16 | 600 | 7297465 | 0 | javax/microedition/rms/InvalidRe | 运行正常 |  |
-| 铠甲勇士2-刑天_2895.jar | 1120 | 铠甲勇士2刑天 | - | 1.0.0 | MIDP-1.0 | - | 37 | 16 | 600 | 2387833923 | 0 | javax/microedition/rms/InvalidRe | 运行正常 |  |
-| 闪电战机－雷霆出击_118.jar | 1388 | 闪电战机-雷霆出击 | - | 2.01 | MIDP-1.0 | - | 129 | 16 | 600 | 188825429 | 0 | java/io/IOException | 运行正常 |  |
+| 蹦球传说美化版_2959.jar | 416 | Bounce Tales | - | 2.0.3 | MIDP-2.0 | nokia-ui | 19 | 16 | 600 | 159950003 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| 轩辕神剑_2419.jar | 1324 | 轩辕神剑 | - | 1.0 | MIDP-2.0 | - | 71 | 16 | 600 | 3424223 | 0 | java/io/EOFException,java/lang/N | 运行正常 |  |
+| 迈阿密之夜_9566.jar | 315 | MiamiNights | - | 1.0.2 | MIDP-2.0 | - | 6 | 16 | 600 | 178227198 | 0 | javax/microedition/rms/InvalidRe | 运行正常 |  |
+| 远古帝国2汉化版_10357.jar | 168 | Ancient Empires II | - | 1.0.2 | MIDP-1.0 | - | 10 | 16 | 600 | 498644 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| 速度与激情5中文版_3043.jar | 380 | Fast Five The Movie Game | - | 1.0.2 | MIDP-2.0 | nokia-ui | 25 | 16 | 600 | 3681930487 | 0 | - | 运行正常 |  |
+| 速度与激情6_9.jar | 1917 | Fast & Furious 6 | - | 1.1.2 | MIDP-2.0 | - | 19 | 16 | 600 | 55077562 | 0 | java/lang/NullPointerException | 运行正常 |  |
+| 都市摩天楼_6192.jar | 160 | Tower Bloxx(TM) | - | 1.2.4 | MIDP-1.0 | m3g,nokia-ui | 16 | 16 | 600 | 3966126 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| 都市摩天楼中文版_3219.jar | 1026 | 都市摩天楼 | - | 1.0.0 | MIDP-2.0 | nokia-ui | 46 | 16 | 479 | 109819495 | 0 | java/io/EOFException,javax/micro | 运行正常 | exited itself (notifyDestroyed) |
+| 都市赛车3-暴力街头3D版_10199.jar | 285 | Asphalt 3 3D Street Rules | - | 1.0.2 | MIDP-2.0 | - | 5 | 16 | 600 | 3752944550 | 0 | javax/microedition/rms/InvalidRe | 运行正常 |  |
+| 都市赛车3_10192.jar | 286 | Asphalt3: Street Rules | - | 1.0.4 | MIDP-2.0 | - | 5 | 16 | 600 | 3030782761 | 0 | javax/microedition/rms/InvalidRe | 运行正常 |  |
+| 都市赛车6火线追击_2230.jar | 940 | Asphalt 6 Adrenaline | - | 1.0.0 | MIDP-2.0 | - | 21 | 16 | 601 | 20707090 | 0 | - | 运行正常 |  |
+| 都市赛车_11517.jar | 223 | Asphalt | - | 1.0.7 | MIDP-2.0 | - | 5 | 16 | 600 | 1886281618 | 0 | javax/microedition/rms/InvalidRe | 运行正常 |  |
+| 野人岛2宠物精灵_7061.jar | 534 | 宝软网baoruan.com免费分享 | - | 1.0 | MIDP-1.0 | nokia-ui | 24 | 16 | 600 | 3031855 | 0 | - | 运行正常 |  |
+| 钻石狂潮_1335.jar | 293 | Diamond Rush | - | 1.1.7 | MIDP-2.0 | - | 12 | 16 | 600 | 897812 | 0 | javax/microedition/rms/InvalidRe | 运行正常 |  |
+| 铠甲勇士2-刑天_2895.jar | 1120 | 铠甲勇士2刑天 | - | 1.0.0 | MIDP-1.0 | - | 37 | 16 | 600 | 2594047095 | 0 | javax/microedition/rms/InvalidRe | 运行正常 |  |
+| 闪电战机－雷霆出击_118.jar | 1388 | 闪电战机-雷霆出击 | - | 2.01 | MIDP-1.0 | - | 129 | 16 | 600 | 189261085 | 0 | java/io/IOException | 运行正常 |  |
 | 阿尔卑斯牧场物语_7043.jar | 824 | 阿尔卑斯牧场物 | - | 1.0 | MIDP-1.0 | nokia-ui | 8 | 16 | 600 | 4070823 | 0 | java/lang/NullPointerException | 运行正常 |  |
-| 雷欧历险记_11451.jar | 175 | FilaoFriedChicken | - | 01.03.08 | MIDP-1.0 | - | 11 | 16 | 600 | 13674525 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| 雷欧历险记_11451.jar | 175 | FilaoFriedChicken | - | 01.03.08 | MIDP-1.0 | - | 11 | 16 | 600 | 13956722 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
 | 雷电2012末日浩劫增值版_3029.jar | 879 | 雷电2012末日浩劫 | - | 1.0.0 | MIDP-1.0 | - | 40 | 16 | 600 | 762759 | 0 | - | 运行正常 |  |
-| 雷电4_39.jar | 545 | 雷电4 | - | 1.0 | MIDP-2.0 | - | 26 | 16 | 600 | 535534 | 0 | java/io/IOException | 运行正常 |  |
-| 雷电战机(精装升级版)_3138.jar | 876 | 雷电战机(精装升级版) | - | 1.0.0 | MIDP-1.0 | - | 48 | 16 | 600 | 4578263962 | 0 | java/io/IOException,java/lang/Cl | 运行正常 |  |
-| 雷电战机精装升级BT版_3110.jar | 869 | 雷电战机(精装升级版) | - | 1.0.0 | MIDP-1.0 | - | 48 | 16 | 600 | 3899403865 | 0 | java/io/IOException,java/lang/Cl | 运行正常 |  |
+| 雷电4_39.jar | 545 | 雷电4 | - | 1.0 | MIDP-2.0 | - | 26 | 16 | 600 | 543754 | 0 | java/io/IOException | 运行正常 |  |
+| 雷电战机(精装升级版)_3138.jar | 876 | 雷电战机(精装升级版) | - | 1.0.0 | MIDP-1.0 | - | 48 | 16 | 600 | 4572803962 | 0 | java/io/IOException,java/lang/Cl | 运行正常 |  |
+| 雷电战机精装升级BT版_3110.jar | 869 | 雷电战机(精装升级版) | - | 1.0.0 | MIDP-1.0 | - | 48 | 16 | 600 | 4215223865 | 0 | java/io/IOException,java/lang/Cl | 运行正常 |  |
 | 雷霆战机2012BT版_3101.jar | 851 | 雷霆战机2012 | - | 1.0.0 | MIDP-1.0 | - | 30 | 16 | 600 | 20477487 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
-| 鬼吹灯(网络火热)_7647.jar | 1007 | qcd | - | 1.0.0 | MIDP-1.0 | nokia-ui | 21 | 16 | 600 | 3197572780 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
-| 鬼泣3D中文版_3376.jar | 1118 | 鬼泣(CAPCOM正版) | - | 1.0.0 | MIDP-2.1 | mascot | 26 | 16 | 600 | 7071287 | 0 | java/io/EOFException,java/lang/N | 运行正常 |  |
+| 鬼吹灯(网络火热)_7647.jar | 1007 | qcd | - | 1.0.0 | MIDP-1.0 | nokia-ui | 21 | 16 | 600 | 3177032826 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| 鬼泣3D中文版_3376.jar | 1118 | 鬼泣(CAPCOM正版) | - | 1.0.0 | MIDP-2.1 | mascot | 26 | 16 | 600 | 6864584 | 0 | java/io/EOFException,java/lang/N | 运行正常 |  |
 | 魂斗罗3代-完全版_3784.jar | 610 | 魂斗罗3代 | - | 1.0 | MIDP-1.0 | nokia-ui | 22 | 16 | 600 | 643877 | 0 | java/lang/NullPointerException | 运行正常 |  |
-| 魂斗罗4中文版_2226.jar | 530 | 魂斗罗4 | - | 1.0.0 | MIDP-2.0 | nokia-ui | 56 | 16 | 600 | 2012431 | 0 | javax/microedition/rms/InvalidRe | 运行正常 |  |
-| 魂斗罗V铁血兵团_119.jar | 990 | 魂斗罗V铁血兵团 | - | 1.0.0 | MIDP-1.0 | - | 68 | 16 | 600 | 4212059 | 0 | - | 运行正常 |  |
-| 魂斗罗_5652.jar | 896 | 魂斗罗 | - | 1.0.0 | MIDP-2.0 | nokia-ui | 54 | 16 | 600 | 10192121555 | 0 | java/lang/NullPointerException | 运行正常 |  |
-| 魔兽争霸_10622.jar | 59 | MSZB | - | 1.0 | MIDP-2.0 | nokia-ui | 22 | 16 | 600 | 2646161628 | 0 | - | 运行正常 |  |
-| 魔兽塔防_12480.jar | 243 | 魔兽塔防 | - | 1.0 | MIDP-1.0 | - | 18 | 16 | 600 | 807411 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
-| 魔塔_8052.jar | 86 | 魔塔 | - | 1.00 | MIDP-1.0 | nokia-ui | 21 | 16 | 600 | 86326 | 0 | - | 运行正常 |  |
-| 魔塔－英雄联盟_582.jar | 1451 | 魔塔-英雄联盟 | - | 3.11 | MIDP-1.0 | nokia-ui | 63 | 16 | 600 | 57916748 | 0 | java/lang/NullPointerException | 运行正常 |  |
+| 魂斗罗4中文版_2226.jar | 530 | 魂斗罗4 | - | 1.0.0 | MIDP-2.0 | nokia-ui | 56 | 16 | 600 | 1952483 | 0 | javax/microedition/rms/InvalidRe | 运行正常 |  |
+| 魂斗罗V铁血兵团_119.jar | 990 | 魂斗罗V铁血兵团 | - | 1.0.0 | MIDP-1.0 | - | 68 | 16 | 600 | 4250747 | 0 | - | 运行正常 |  |
+| 魂斗罗_5652.jar | 896 | 魂斗罗 | - | 1.0.0 | MIDP-2.0 | nokia-ui | 54 | 16 | 600 | 10154508282 | 0 | java/lang/NullPointerException | 运行正常 |  |
+| 魔兽争霸_10622.jar | 59 | MSZB | - | 1.0 | MIDP-2.0 | nokia-ui | 22 | 16 | 600 | 2686001628 | 0 | - | 运行正常 |  |
+| 魔兽塔防_12480.jar | 243 | 魔兽塔防 | - | 1.0 | MIDP-1.0 | - | 18 | 16 | 600 | 825364 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| 魔塔_8052.jar | 86 | 魔塔 | - | 1.00 | MIDP-1.0 | nokia-ui | 21 | 16 | 600 | 86462 | 0 | - | 运行正常 |  |
+| 魔塔－英雄联盟_582.jar | 1451 | 魔塔-英雄联盟 | - | 3.11 | MIDP-1.0 | nokia-ui | 63 | 16 | 600 | 57939647 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | 魔法少女_10523.jar | 204 | 魔法少女 | - | 1.0 | MIDP-1.0 | - | 5 | 16 | 600 | 239692 | 0 | - | 运行正常 |  |
 | 鲁宾逊漂流记汉化BT版_4677.jar | 279 | - | - | - | - | - | 0 | 16 | 0 | 0 | 0 | - | 非可用包 | not a usable MIDlet suite (bad JAR or no MID |
 | 鲁宾逊漂流记汉化版_702.jar | 367 | 鲁宾逊漂流记-海难生存 | - | 1.0.0 | MIDP-2.0 | - | 34 | 16 | 600 | 6714502 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
 | 麻将三国_5157.jar | 732 | MJSG | - | 1.0 | MIDP-2.0 | nokia-ui | 38 | 16 | 600 | 636318 | 0 | java/io/EOFException,java/io/IOE | 运行正常 |  |
-| 麻将无双之乱世群英_10298.jar | 173 | 麻将无双之乱世群英 | - | 1.0 | MIDP-1.0 | nokia-ui | 2 | 16 | 600 | 4069296059 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
-| 麻将象棋五子棋3合1_12014.jar | 311 | 麻将象棋五子棋3合1 | - | 1.0 | MIDP-1.0 | - | 8 | 16 | 600 | 2571216 | 0 | - | 运行正常 |  |
-| 黑暗破坏神II_9009.jar | 84 | 黑暗破坏神II | - | 1.0 | MIDP-2.0 | - | 10 | 16 | 600 | 2927735692 | 0 | - | 运行正常 |  |
+| 麻将无双之乱世群英_10298.jar | 173 | 麻将无双之乱世群英 | - | 1.0 | MIDP-1.0 | nokia-ui | 2 | 16 | 600 | 2955848615 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| 麻将象棋五子棋3合1_12014.jar | 311 | 麻将象棋五子棋3合1 | - | 1.0 | MIDP-1.0 | - | 8 | 16 | 600 | 2769607 | 0 | - | 运行正常 |  |
+| 黑暗破坏神II_9009.jar | 84 | 黑暗破坏神II | - | 1.0 | MIDP-2.0 | - | 10 | 16 | 600 | 3006195692 | 0 | - | 运行正常 |  |
 | 龙之谷之天空战记_5383.jar | 885 | 龙之谷之天空战记 | - | 1.0.0 | MIDP-2.0 | - | 60 | 16 | 600 | 4234947 | 0 | - | 运行正常 |  |
 | 龙火2加强版_12437.jar | 117 | 龙火2加强版 | - | 1.0 | MIDP-1.0 | - | 22 | 16 | 600 | 1252337 | 0 | - | 运行正常 |  |
 | 龙珠Z传说_9583.jar | 319 | 龙珠Z传说 | - | 1.0 | MIDP-1.0 | - | 8 | 16 | 321 | 333637 | 0 | - | 运行正常 | exited itself (notifyDestroyed) |
-| 龙鸟战机_9762.jar | 345 | E-Brid | - | 1.0 | MIDP-1.0 | - | 13 | 16 | 600 | 216372029 | 0 | - | 运行正常 |  |
+| 龙鸟战机_9762.jar | 345 | E-Brid | - | 1.0 | MIDP-1.0 | - | 13 | 16 | 600 | 184030642 | 0 | - | 运行正常 |  |
