@@ -12,7 +12,7 @@ opened without rewriting text.
 ## Branch / patch
 
 Apply `docs/libretro/upstream/libretro-super-nano_j2me-info.patch` on top of
-`1b988c49`:
+`55e50a81`:
 
 ```
 git clone https://github.com/libretro/libretro-super.git

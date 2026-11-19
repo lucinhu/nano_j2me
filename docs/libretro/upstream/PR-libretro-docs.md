@@ -12,7 +12,7 @@ rewriting text.
 ## Branch / patch
 
 Apply `docs/libretro/upstream/libretro-docs-nano_j2me.patch` on top of
-`177c6699`:
+`9399ee32`:
 
 ```
 git clone https://github.com/libretro/libretro-docs.git
