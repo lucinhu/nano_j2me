@@ -69,11 +69,15 @@ Outputs go to `build/libretro-dist/<target>/`, with a library and its metadata.
 Use `--no-strip` to retain symbols. `all` selects the script's supported targets
 and requires all of their toolchains.
 
-The eight candidates currently in `build/libretro-dist/` are the r36 package
-(the 0.5.17 release) built on 2026-11-19 from revision `d6eef33`. r36 adds
-live candidate values to the Android cheat search and keeps one cheat line per
-address (`docs/notes/2026-11-19-cheat-search.md`); the libretro core itself is
-unchanged from r35. r35 was the
+The eight candidates currently in `build/libretro-dist/` are the r37 package
+(the 0.5.18 release) built on 2026-11-19 from revision `3b96b69`. r37 folds in
+the blit-path field cache (Image width/height/pixels resolved once per VM
+through `nj_hot_field`, byte-exact, -4.2 %/-5.1 % on the unpaced Minecraft
+loader; `docs/PERFORMANCE.md`), so the libretro core gains the same runtime
+speed-up as the CLI and APK. r36 added
+live candidate values to the Android cheat search and kept one cheat line per
+address (`docs/notes/2026-11-19-cheat-search.md`); that release left the
+libretro core functionally unchanged from r35. r35 was the
 Android in-game cheat-editor + value-search release: the game panel's 作弊码
 row opens the title's cheat file, writes it and reloads the running VM's table
 at the next frame boundary, and its 搜索作弊数值 row scans the arena for a

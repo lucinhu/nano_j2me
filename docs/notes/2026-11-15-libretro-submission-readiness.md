@@ -1271,3 +1271,14 @@ details in `docs/LIBRETRO_SUBMISSION.md` ("Round-94 end-to-end rehearsal").
 - Validation: bundle **32/32** plain, **41/41** with fresh clones + mkdocs.
   PRs #2204/#1239 OPEN/MERGEABLE, no CI checks on the fork branches; no merge
   claimed.
+
+## Round-113 update, 2026-11-19
+
+- **0.5.18 / r37 released** (tag `v0.5.18` at `3b96b69`): blit-path field cache
+  shipped to cli/APK/libretro (`-4.2 %/-5.1 %` on the unpaced Minecraft loader,
+  byte-exact).  r37 package installed as `build/libretro-dist`.
+- Verification: mock 20/20, real RetroArch PASS, Wine 4/4 @300, bundle 32/32,
+  full CTest 198/198 (360.07 s).  APKs versionCode 518 (0.5.18 + legacy).
+- Release assets: cores zip 11,351,007 B, APK 3,295,594 B, legacy 704,234 B
+  (+SHA256SUMS).  Upstream PRs unchanged from round 112: #2204 head `772fcf8`,
+  #1239 head `51ef4a9`, both OPEN/MERGEABLE; no merge claimed.

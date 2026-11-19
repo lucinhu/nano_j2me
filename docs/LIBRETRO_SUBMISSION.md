@@ -1405,3 +1405,21 @@ Validation after the rebase: `tools/check_libretro_submission_bundle.sh`
 101,260 B).  Both PRs are OPEN/MERGEABLE (no CI checks reported on the fork
 branches; docs PR shows `UNSTABLE` only because the base repository has no
 reported checks for this branch).  No merge claimed.
+
+## 0.5.18 / r37 release, 2026-11-19 (round 113)
+
+Release tag `v0.5.18` at `3b96b69`, GitHub release with four assets.  r37 package
+built from a clean worktree at `3b96b69` into
+`/var/tmp/nj2me-submission-dist-r37` (eight targets, `.info` SHA-256
+`85f96f9526abd3073d0b60db153c8c1362b0131e434ef3fd7e6555e0fbf97ca7`) and installed
+as the canonical `build/libretro-dist`.
+
+Validation: mock frontend matrix **20/20**, real RetroArch 1.22.2 LoopDemo 120
+frames **PASS**, Windows x86_64 Wine **4/4** at 300 frames, submission bundle
+**32/32**, full serial CTest **198/198 in 360.07 s**, and the byte-exact
+parity/CPU evidence in `docs/PERFORMANCE.md` for the blit-path field cache.
+Core hashes: linux-x86_64 `da3093f0…`, linux-aarch64 `17461bfa…`, linux-armv7
+`d1456f30…`, android-arm64 `5ee3b2b9…`, android-armv7 `0607c536…`,
+android-x86_64 `8607eac5…`, windows-i686 `7ff8fa2c…`, windows-x86_64
+`c722d746…` (full table in `docs/RELEASE_0.5.18.md`).  Upstream PR branches were
+refreshed in round 112 and remain OPEN/MERGEABLE; no merge claimed.
