@@ -1178,3 +1178,22 @@ details in `docs/LIBRETRO_SUBMISSION.md` ("Round-94 end-to-end rehearsal").
   spin waits (`Thread.yield` busy loops), not raster work; recorded in
   `docs/PERFORMANCE.md` so future 2D optimisation effort targets the right
   titles.
+
+## Update, 2026-11-19 (round 98): 0.5.16 / r35 released
+
+- 0.5.16 ships the Android in-game cheat **value search** on top of the round-96
+  runtime API (`nj_vm_cheat_find/filter/read()`); the libretro core is
+  feature-identical to r34 (same options, cheats and save states).
+- r35 built from clean worktree `64ad3cf`, `.info` SHA-256
+  `e372f211ed6c26e55bd23160e14d5e55422a54452209a7ed65032bf55c3c57da`
+  (`display_version = "0.5.16"`); super patch regenerated from a fresh clone at
+  `1b988c491e31f1cc768572f3d68f45e69d194e5b` and applies cleanly.
+- Full validation green: mock 20/20, real RetroArch LoopDemo 120 PASS, Wine 4/4
+  at 300 frames, bundle 32/32, full CTest 197/197 in 347.93 s.
+- Release assets: cores zip 11,346,011 B
+  `bfeb3738a9b45251ea4a5726e275c6ed3c5de9bfddee863a56a3ea2e26a4cb3e`,
+  APK 3,295,594 B `763ed720…`, legacy APK 703,979 B `c594b9e6…`; tag
+  `v0.5.16` + GitHub release published.
+- Upstream PRs #2204 (super, branch rebuilt on current master) and #1239
+  (docs) remain OPEN/MERGEABLE with the 0.5.16 body; awaiting review, no merge
+  claimed.

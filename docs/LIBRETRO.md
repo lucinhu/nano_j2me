@@ -69,15 +69,19 @@ Outputs go to `build/libretro-dist/<target>/`, with a library and its metadata.
 Use `--no-strip` to retain symbols. `all` selects the script's supported targets
 and requires all of their toolchains.
 
-The eight candidates currently in `build/libretro-dist/` are the r34 package
-(the 0.5.15 release) built on 2026-11-19 from revision `f18ed5c`. r34 is the
-first release with the Android in-game cheat editor: the game panel's 作弊码
+The eight candidates currently in `build/libretro-dist/` are the r35 package
+(the 0.5.16 release) built on 2026-11-19 from revision `64ad3cf`. r35 is the
+Android in-game cheat-editor + value-search release: the game panel's 作弊码
 row opens the title's cheat file, writes it and reloads the running VM's table
-at the next frame boundary, so a code takes effect without a restart
-(`docs/notes/2026-11-19-android-cheat-editor.md`). The core itself is
-feature-identical to r33, which moved the cheat engine into the runtime so the
-libretro core, the headless CLI (`--cheat`/`--cheat-file`) and the Android build
-share one table (`docs/notes/2026-11-19-core-cheat-engine.md`). r32 added the arena-offset
+at the next frame boundary, and its 搜索作弊数值 row scans the arena for a
+value the player can see, narrows the candidate list and appends the generated
+code (`docs/notes/2026-11-19-android-cheat-editor.md`,
+`docs/notes/2026-11-19-cheat-search.md`). The libretro core itself is
+feature-identical to r33/r34 — the search helpers are a new runtime API used by
+the Android panel, and libretro frontends keep using their own cheat search —
+and r33 moved the cheat engine into the runtime so the libretro core, the
+headless CLI (`--cheat`/`--cheat-file`) and the Android build share one table
+(`docs/notes/2026-11-19-core-cheat-engine.md`). r32 added the arena-offset
 cheat codes documented under [Cheats](#cheats) and the corrected
 mock-frontend pointer-key parsing
 (`docs/notes/2026-11-17-harness-pointer-keys.md`). r31 shipped the

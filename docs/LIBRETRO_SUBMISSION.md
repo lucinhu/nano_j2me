@@ -1217,3 +1217,43 @@ Re-ran the whole rehearsal on the 0.5.15 release tree (`8b20d50`) so the
   `5917f7d`; both 0 comments / 0 reviews — awaiting upstream review, no merge
   claimed.
 
+
+### 0.5.16 / r35 (2026-11-19)
+
+- Version bumped to `0.5.16`; both `.info` copies are byte-identical with
+  SHA-256 `e372f211ed6c26e55bd23160e14d5e55422a54452209a7ed65032bf55c3c57da`
+  (`display_version = "0.5.16"`). The super patch was regenerated from a fresh
+  `libretro/libretro-super` clone at master
+  `1b988c491e31f1cc768572f3d68f45e69d194e5b` (37 lines, one added file,
+  `git apply --check` passes).
+- r35 package built from clean worktree at `64ad3cf`
+  (`/var/tmp/nj2me-r35-tree`) into `/var/tmp/nj2me-submission-dist-r35`; the
+  canonical `build/libretro-dist` was swapped (previous tree backed up
+  `/var/tmp/libretro-dist-20261119-pre-r35-backup.tgz`). Hashes:
+
+| target | bytes | SHA-256 |
+| --- | ---: | --- |
+| linux-x86_64 | 3,848,064 | `3c993241be743fc7a82395cfd7f4dd420cda43a09e21029ba641a80b9d8a3305` |
+| linux-aarch64 | 3,331,296 | `8844bc88e15213cd218ac7b1e88978949bf5a545938a09ee2cd03762fcab586a` |
+| linux-armv7 | 3,038,512 | `b782c0d16dd89f2e9fce17b7f29ae8160786f5e8380436dc54ac3b42030e8324` |
+| android-arm64 | 3,565,904 | `424e41db70cf6aaddd794889a39acd8dcbc2759d5afc47b1b3907e2a37262b07` |
+| android-armv7 | 2,751,136 | `a234b145abfe857038451d90b39874c47d8ae67fae2bf2daeca7eb5acc2465fe` |
+| android-x86_64 | 3,606,040 | `df12b5e210b7cc0d07f878e5be1a510e87599030708a695d4962c19d1cf573da` |
+| windows-i686 | 3,459,584 | `119d1f4021c4097c14f37e50a0f301377b1bbe455763d84482379194626eaa3f` |
+| windows-x86_64 | 3,235,328 | `1e0a8479e19acf46bbd2f7c30aff6146962c3314433553c6e6cb2c7d877fe701` |
+
+- Validation: mock conformance matrix **20/20**; real RetroArch 1.22.2
+  LoopDemo 120 frames **PASS**; Windows x86_64 under Wine **4/4** at 300
+  frames; submission bundle check **32/32**; full serial CTest **197/197 in
+  347.93 s**.
+- APKs rebuilt for 0.5.16 (`versionCode 516`, `versionName 0.5.16`):
+  `nj2me.apk` 3,295,594 B
+  `763ed720e7c3650a04be2303e7b48e6418842c7a27bee6e81178e0e607d3f931`;
+  `nj2me-legacy.apk` 703,979 B
+  `c594b9e6241144bc7b0a1747a20e76ce12255b1083725cbebe4f53fd0efd4fad`.
+- Release package `nj2me-0.5.16-libretro-cores.zip` 11,346,011 B, SHA-256
+  `bfeb3738a9b45251ea4a5726e275c6ed3c5de9bfddee863a56a3ea2e26a4cb3e`.
+- GitHub release: https://github.com/lucinhu/nano_j2me/releases/tag/v0.5.16
+  (tag `v0.5.16`). Upstream PR bodies updated to 0.5.16; super branch rebuilt
+  on the current master and force-pushed; both PRs remain OPEN/MERGEABLE and
+  await review — no merge claimed.
