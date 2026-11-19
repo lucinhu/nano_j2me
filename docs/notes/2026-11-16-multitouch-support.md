@@ -77,3 +77,65 @@ second one start.
 * Only the Nokia MultipointTouch API is implemented; the newer
   `com.nokia.mid.ui.multipointtouch` Asha convenience methods beyond the
   listener are not (the stub covers what titles compile against).
+
+## Round-106 verification: real J2ME Minecraft PE and the APK path
+
+The user reported (m19726) testing multi-touch with the J2ME Minecraft PE
+build, so this round checked that exact title and then the Android APK path.
+
+### Real Minecraft PE (`tests/games/MinecraftJ2ME_PE_0.6.1_V2.2.jar`)
+
+The JAR's manifest carries `Nokia-UI-Enhancement:
+EnableMultiPointTouchEvents` and its classes reference
+`com/nokia/mid/ui/multipointtouch/MultipointTouch` and
+`MultipointTouchListener` - i.e. it is exactly the Nokia hardware-slot API
+this runtime implements.
+
+Run (two fingers down, dragged, released; paced 30 fps, heap 64 MB):
+
+    build/nj2me --port headless --size 240x320 --heap 64 --fps 30 \
+        --run-frames 1800 --keys @/tmp/r106-mt3.keys --verbose 3 --stats \
+        --rms-dir /tmp/r106-rms3 tests/games/MinecraftJ2ME_PE_0.6.1_V2.2.jar
+
+The runtime log shows both fingers delivered independently to the game's
+listener, and the game itself logs that it found the API:
+
+    MCJ: multitouch: Nokia Multipoint Touch API
+    nokia mpt: pointer 0 state 0 at 100,160
+    nokia mpt: pointer 1 state 0 at 180,160
+    nokia mpt: pointer 0 state 1 at 120,180
+    nokia mpt: pointer 1 state 1 at 160,140
+    nokia mpt: pointer 0 state 2 at 120,180
+    nokia mpt: pointer 1 state 2 at 160,140
+
+The title never leaves its own loading loop in headless mode (`paints=1`,
+81,275,659 `drawImage` calls, 8.38 billion bytecodes in 60 s), so this proves
+the pointer delivery to the game's `MultipointTouchListener`, not gameplay.
+
+### Fixture now draws the hand
+
+`tests/multitouchdemo/MultitouchDemo.java` paints one coloured dot per active
+pointer (id 0 red, 1 green, 2 blue, 3 yellow) with its coordinates, the
+`MPT events=N` counter, and a white crosshair for the last MIDP Canvas
+pointer. Console lines are unchanged, so `tools/check_multitouch.sh` still
+passes 13/13 and CTest `check_multitouch` / `test_nokia_touch` stay green.
+The dots let a headless screenshot (or a real handset) show that each finger
+arrives with its own coordinates.
+
+### Android APK on the emulator
+
+`build/android/nj2me.apk` (0.5.17) installs and runs `multitouchdemo.jar` on
+AVD `Medium_Phone_API_36.1`; the fixture registers its listener and the
+`MPT events=N` counter advances when a tap is delivered from `adb shell input
+tap` (two `pointersChanged` calls, one down and one up, plus the Canvas
+crosshair), which proves the Android View -> MotionEvent -> runtime ->
+MultipointTouch plumbing end to end on device.
+
+Two-finger host-side injection could not be completed on this image: the AVD
+is a production build (`adb root` -> "adbd cannot run as root in production
+builds"), `sendevent /dev/input/event2` is denied to the `shell` user, and
+`adb emu event send` accepts MT protocol-B events (`OK`) but they do not
+surface through InputReader (the fixture stays at `MPT events=0`). A real
+handset - or an AVD with root/writable system - is needed for the two-finger
+screenshot; interactive two-finger play on the user's phone with this APK is
+the natural acceptance test.
