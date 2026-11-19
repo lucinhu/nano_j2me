@@ -1379,3 +1379,29 @@ Re-verified offline: `tools/check_libretro_submission_bundle.sh` → **32 passed
 `libretro/docs` clone at `177c6699`) plus `--apply-clones --mkdocs
 /var/tmp/mkvenv/bin/mkdocs` → **41 passed, 0 failed**. Both PRs remain
 OPEN/MERGEABLE with 0 comments / 0 reviews; no merge claimed.
+
+### Update, 2026-11-19 (round 112): PRs rebased onto the current upstream masters
+
+While round 112 started, `libretro/libretro-super` master moved to
+`55e50a81…` and `libretro/docs` master to `9399ee32…` (the recorded baselines
+were `1b988c49…` / `177c6699…`).  Both prepared patches still applied, but the
+fork branches and tracked baselines were stale, so both PRs were rebased:
+
+- `libretro-super`: branch `add-nano_j2me` rebuilt as `772fcf8` on top of
+  `55e50a81…` (patch adds one file, +31 lines) and force-pushed; PR #2204
+  head is now `772fcf8`.
+- `libretro/docs`: branch `add-nano_j2me` rebuilt as `51ef4a9` on top of
+  `9399ee32…` (5 files, +252 lines; the page was copied from the current
+  `docs/libretro/upstream/nano_j2me.md`) and force-pushed; PR #1239 head is now
+  `51ef4a9`.
+- `tools/check_libretro_submission_bundle.sh` records the new baselines
+  (`SUPER_BASE`/`DOCS_BASE`); the tracked README, both PR drafts and the posted
+  PR bodies were updated to the new hashes and dates.
+
+Validation after the rebase: `tools/check_libretro_submission_bundle.sh`
+**32 passed / 0 failed**; with fresh clones of both new masters plus
+`--apply-clones --mkdocs /var/tmp/mkvenv/bin/mkdocs` → **41 passed / 0 failed**
+(both patches apply; docs site builds, `site/library/nano_j2me/index.html`
+101,260 B).  Both PRs are OPEN/MERGEABLE (no CI checks reported on the fork
+branches; docs PR shows `UNSTABLE` only because the base repository has no
+reported checks for this branch).  No merge claimed.

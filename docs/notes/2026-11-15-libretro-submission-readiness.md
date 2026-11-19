@@ -1258,3 +1258,16 @@ details in `docs/LIBRETRO_SUBMISSION.md` ("Round-94 end-to-end rehearsal").
   `libretro-super` patch baseline is now `1b988c49`.
 - Validation: bundle check **32/32** plain and **41/41** with fresh clones +
   mkdocs. Both PRs OPEN/MERGEABLE, 0 comments / 0 reviews; no merge claimed.
+
+## Round-112 update, 2026-11-19
+
+- Upstream masters moved: `libretro-super` → `55e50a81…`, `libretro/docs` →
+  `9399ee32…`.  Both PR branches rebased and force-pushed:
+  super `772fcf8` (parent `55e50a81`), docs `51ef4a9` (parent `9399ee32`).
+- Patches regenerated against the new masters (`libretro-super` +31 lines,
+  `libretro-docs` 5 files +252 lines); `tools/check_libretro_submission_bundle.sh`
+  `SUPER_BASE`/`DOCS_BASE` updated; tracked README/PR drafts and the posted PR
+  bodies updated to the new hashes and dates.
+- Validation: bundle **32/32** plain, **41/41** with fresh clones + mkdocs.
+  PRs #2204/#1239 OPEN/MERGEABLE, no CI checks on the fork branches; no merge
+  claimed.

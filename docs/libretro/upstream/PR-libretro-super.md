@@ -1,7 +1,7 @@
 # Ready-to-post PR: libretro-super (core info)
 
 Post this as a pull request against **`libretro/libretro-super`** (branch
-`master`, baseline `1b988c491e31f1cc768572f3d68f45e69d194e5b`, 2026-11-17).
+`master`, baseline `55e50a81195eaf8dd1b7720a601282459832ced1`, 2026-11-19).
 Nothing has been pushed upstream; this file exists so the submission can be
 opened without rewriting text.
 
@@ -17,7 +17,7 @@ Apply `docs/libretro/upstream/libretro-super-nano_j2me-info.patch` on top of
 ```
 git clone https://github.com/libretro/libretro-super.git
 cd libretro-super
-git checkout 1b988c491e31f1cc768572f3d68f45e69d194e5b
+git checkout 55e50a81195eaf8dd1b7720a601282459832ced1
 git checkout -b add-nano_j2me
 git apply /path/to/libretro-super-nano_j2me-info.patch
 git add dist/info/nano_j2me_libretro.info
@@ -38,7 +38,7 @@ Adds `dist/info/nano_j2me_libretro.info` for the nano_j2me core, a J2ME (MIDP/CL
 
 Validation (offline, on the candidate tree):
 
-- The patch applies cleanly to `libretro-super` master `1b988c49`.
+- The patch applies cleanly to `libretro-super` master `55e50a81`.
 - The `.info` file is byte-identical to the file shipped in the release archive and parses in RetroArch 1.22.2 (core info cache written, no warnings).
 - The command shapes from the three upstream CI templates were reproduced locally, producing `linux-<arch>/libretro/nano_j2me_libretro.so`, the Windows `.dll` and the Android `_android.so`.
 - A clean clone of the core repository built from the same commit; the resulting core passed the mock-frontend conformance matrix and real RetroArch load/run/exit checks.

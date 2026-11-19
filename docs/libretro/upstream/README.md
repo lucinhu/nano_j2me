@@ -4,9 +4,9 @@ The project author authorized libretro upstream submission on 2026-11-16, and
 the prepared bundles were opened as pull requests from forks:
 
 * `libretro/libretro-super#2204` — `info: add nano_j2me (Mobile - J2ME)`
-  (branch `add-nano_j2me` in `lucinhu/libretro-super`, commit `bf88d89`)
+  (branch `add-nano_j2me` in `lucinhu/libretro-super`, commit `772fcf8`)
 * `libretro/docs#1239` — `docs: add nano_j2me (Mobile - J2ME)`
-  (branch `add-nano_j2me` in `lucinhu/docs`, commit `e34bae2`)
+  (branch `add-nano_j2me` in `lucinhu/docs`, commit `51ef4a9`)
 
 The files in this directory remain the exact copies used for those PRs, plus
 the validation notes and the manual checklist. If upstream requests changes,
@@ -14,8 +14,8 @@ update the fork branch and regenerate the patch from it.
 
 Prepared 2026-11-15. The exact-index patches below were generated against and
 verified to apply cleanly to `libretro/docs` master
-`177c669990b659e7cfd00add4564b85c2a692179` (rebased 2026-11-16; the first revision of the PR was against `d83b34b2`) and `libretro-super` master
-`1b988c491e31f1cc768572f3d68f45e69d194e5b` (rebased 2026-11-17; the patch also applied to the earlier `fb15e63`).
+`9399ee32829094ab6f2ea51add4bb1562312412e` (rebased 2026-11-19; the first revision of the PR was against `d83b34b2`) and `libretro-super` master
+`55e50a81195eaf8dd1b7720a601282459832ced1` (rebased 2026-11-19; the patch also applied to the earlier `fb15e63`).
 
 Re-check the whole bundle offline (including clean-clone apply and a docs
 site build when you point it at scratch clones):

@@ -1,7 +1,7 @@
 # Ready-to-post PR: libretro/docs (library page)
 
 Post this as a pull request against **`libretro/docs`** (branch `master`,
-baseline `177c669990b659e7cfd00add4564b85c2a692179`, 2026-11-16). Nothing has
+baseline `9399ee32829094ab6f2ea51add4bb1562312412e`, 2026-11-19). Nothing has
 been pushed upstream; this file exists so the submission can be opened without
 rewriting text.
 
@@ -17,7 +17,7 @@ Apply `docs/libretro/upstream/libretro-docs-nano_j2me.patch` on top of
 ```
 git clone https://github.com/libretro/libretro-docs.git
 cd libretro-docs
-git checkout 177c669990b659e7cfd00add4564b85c2a692179
+git checkout 9399ee32829094ab6f2ea51add4bb1562312412e
 git clean -fdq
 git checkout -b add-nano_j2me
 git apply /path/to/libretro-docs-nano_j2me.patch
@@ -45,7 +45,7 @@ Companion `.info` PR: libretro/libretro-super#2204.
 
 Validation (offline, on the candidate tree):
 
-- Patch applies cleanly to `177c669990b659e7cfd00add4564b85c2a692179`.
+- Patch applies cleanly to `9399ee32829094ab6f2ea51add4bb1562312412e`.
 - `mkdocs build` with the patch applied exits 0 and renders `site/library/nano_j2me/index.html`.
 - No relative markdown links; the offline bundle validator checks the five-file set, front matter and the patched mkdocs build.
 
