@@ -1159,3 +1159,22 @@ upstream CI template build contracts, and the CI-built Linux core passes the
 mock matrix 20/20 and a real RetroArch LoopDemo run.  PRs #2204 (head
 `576d189`) and #1239 (head `5917f7d`) remain OPEN/MERGEABLE with no comments;
 details in `docs/LIBRETRO_SUBMISSION.md` ("Round-94 end-to-end rehearsal").
+
+## Round 95: fuzz coverage and a release-artifact corpus probe (2026-11-19)
+
+- Fuzz campaigns on the 0.5.15 CLI are clean: `fuzz_classfile` 3000×2
+  mutations on the MIDlet class and 3000×2 in all-class mode, `fuzz_jar`
+  2000×2, `fuzz_media` 3000×2 in multi-target mode — 0 crashes, 0 hangs
+  (evidence in the three fuzzing notes).
+- Whole-corpus libretro visual probe on the r34 core (300 frames, 6 jobs,
+  387 titles): **383 passed, 3 known limitations, 1 failed**.  The failure,
+  `杀鬼子-敌后武工队_2185.jar` (`unserialize_restores_state: retro_wunserialize
+  returned 0`), does not reproduce: two standalone 300-frame paced runs with
+  an immutable private copy of the r34 core pass all 46 checks.  Classified as
+  a load-sensitive state flake under six parallel probes (each core instance
+  runs a 128 MB arena), not a regression — the same probe class passed 383/385
+  without failures in round 78.
+- 2D perf note: the two "slow" titles in the round-60 survey are self-pacing
+  spin waits (`Thread.yield` busy loops), not raster work; recorded in
+  `docs/PERFORMANCE.md` so future 2D optimisation effort targets the right
+  titles.
