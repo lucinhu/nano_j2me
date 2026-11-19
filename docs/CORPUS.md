@@ -494,6 +494,36 @@ Breaker`, `Gameloft Midnight Bowling`, `Gameloft.Mystery.Mansion.Pinball
 are exactly the round-124 set (game-side NPE, two self-exits confirmed against
 the reference oracle, one genuine title exit, one truncated ZIP).
 
-`docs/COMPATIBILITY_MATRIX.md` is deliberately **not** regenerated: it is the
-0.5.18-era snapshot of the 969-title external sweep from 2026-10-25 and is the
-only remaining record of those rows while the vault archives are offline.
+`docs/COMPATIBILITY_MATRIX.md` was refreshed in round 127 by merging the
+2026-10-25 external snapshot with this sweep: every in-repo title (and the three
+fetched titles that already had a historical row) now carries its 0.5.18
+measurement, the five genuinely new titles were appended, and the table states
+this mixed provenance explicitly instead of pretending all rows were measured
+at once.
+
+## Round 127: the compatibility matrix merges history with a fresh sweep (2026-11-20)
+
+The published matrix mixed two impossible-to-repeat things: 969 rows measured
+in October on an older binary and a vault that no longer exists.  Round 127
+rebuilds it without dropping either half:
+
+- `tools/make_compat_matrix.py` now reads an optional `meta.json` provenance
+  block and, when it carries a `sources` paragraph, prints that paragraph plus
+  an explicit "rows were measured in different batches, compare within a batch"
+  note.  It also reads each row's optional absolute `jar_path` before falling
+  back to `tests/games`, so fetched titles can report their 3D API usage.
+- A scratch rows directory (`.local-tools/debug-runs/compat-matrix-r127`)
+  contains the 969 historical rows parsed back out of the Markdown table, with
+  407 of them replaced by their round-126 measurements (404 in-repo titles +
+  3 fetched titles that already existed in the old vault snapshot), plus the
+  five new fetched titles as `extra_rows.jsonl`.
+- Regenerated `docs/COMPATIBILITY_MATRIX.md`: **974 titles — 968 `运行正常`,
+  2 `标题自行退出`, 2 `未呈现画面`, 1 `标题自身异常`, 1 `非可用包`**.  Each
+  re-measured row now records its current frame/paint/bytecode numbers, the
+  run's note (e.g. `runs without input; the generic key script made it exit`)
+  and its heap (`愤怒的小鸟-高清版` now runs at 32 MB instead of failing).
+- Historical rows that could not be re-run keep their October numbers, so the
+  matrix remains the only record of that external set while it is offline.
+
+`COMPATIBILITY_MATRIX.md` is generated; the scratch rows directory stays in
+`.local-tools` (untracked) like every other sweep output.

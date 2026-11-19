@@ -58,8 +58,9 @@ def load():
 def detect(row):
     """The JARs do not bundle the platform APIs they call: read the constant pool."""
     found = set()
+    path = row.get("jar_path") or os.path.join(ROOT, "tests", "games", row.get("file", ""))
     try:
-        with zipfile.ZipFile(os.path.join(ROOT, "tests", "games", row.get("file", ""))) as jar:
+        with zipfile.ZipFile(path) as jar:
             for info in jar.infolist():
                 if not info.filename.endswith(".class"):
                     continue
@@ -89,10 +90,26 @@ def main():
             meta["commit"], meta.get("date", "unknown date"))
     else:
         built = "Built from `%s`, 2026-10-25." % head
+    sources = (meta or {}).get("sources")
+    if sources:
+        intro = [
+            "One row per JAR from the compatibility corpus (%d titles): %s." % (
+                len(rows), sources),
+            "",
+            "Rows that were re-measured keep the newer numbers; the remaining",
+            "historical rows keep the numbers their original sweep recorded, so",
+            "compare rows within one measurement batch, not across the whole table.",
+            "",
+        ]
+    else:
+        intro = [
+            "One row per JAR in `tests/games` (%d titles), from one headless replay per title" % len(rows),
+            "with the same recipe, so neighbouring rows are comparable:",
+            "",
+        ]
     out = [
         "# Compatibility matrix", "",
-        "One row per JAR in `tests/games` (%d titles), from one headless replay per title" % len(rows),
-        "with the same recipe, so neighbouring rows are comparable:", "",
+    ] + intro + [
         "* port `headless`, screen `240x320`, `--fps 30`, `--run-frames 600`;",
         "* heap `16 MB`, retried at `32 MB` only after an out-of-memory;",
         "* one shared input script (fire, both soft keys, two screen taps, four arrows,",
