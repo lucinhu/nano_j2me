@@ -95,7 +95,18 @@ def one(job):
                     "thrown": len(thrown), "uncaught": uncaught,
                     "exceptions": ",".join(sorted(set(thrown))[:4])})
         if rc == 0 and row["frames"] >= RUN // 2:
-            row["verdict"] = "ok" if uncaught == 0 else "title-exception"
+            if uncaught == 0:
+                row["verdict"] = "ok"
+                break
+            if heap == 16 and "OutOfMemoryError" in err:
+                # The thread that died was the title exhausting the heap, not a
+                # runtime defect: retry with 32 MB like the boot-OOM path.
+                row["verdict"] = "retry-heap32"
+                continue
+            row["verdict"] = "title-exception"
+            m = re.search(r"uncaught exception in thread \d+: ([\w./$]+) @ (\S+)", err)
+            row["note"] = ("game code threw %s in a thread while the MIDlet kept painting"
+                           % (m.group(1) if m else "an exception"))
             break
         if "not a usable MIDlet suite" in err or "bad JAR" in err:
             row.update({"verdict": "bad-jar"})

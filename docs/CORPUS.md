@@ -401,3 +401,34 @@ only difference beyond the 13 recipe-caused exits is `GT赛车2_36.jar`
 returning to `ok` (600 frames, 478 paints) after its usual load-sensitive
 timeout in the previous run.  No new crash, hang or uncaught exception
 appeared.
+
+## Round 124: an uncaught `OutOfMemoryError` is a heap verdict, not a title verdict
+
+`愤怒的小鸟-高清版_2353.jar` was the last `title-exception` row that looked
+like a runtime defect.  At the default 16 MB heap its media loader throws
+`OutOfMemoryError` several times and the game thread finally dies with
+`uncaught exception in thread 2: java.lang.OutOfMemoryError @ luma.k.c+209`,
+yet the MIDlet keeps painting (600 frames, 525 paints).  The sweep marked that
+`title-exception` because the thread died, even though the cause is the heap:
+at 32 MB the same recipe runs all 600 frames with **zero uncaught exceptions**.
+
+The sweep now routes that case through the existing heap retry: when a run
+reaches the frame budget with rc=0 but has an uncaught exception *and* the log
+contains `OutOfMemoryError` at heap 16, it retries at 32 MB instead of
+reporting `title-exception`.  Genuine game-code exceptions keep the verdict and
+now carry a readable note naming the exception, e.g. `三国赤壁小乔秘史_7976.jar`
+under heap 16: "game code threw java.lang.NullPointerException in a thread
+while the MIDlet kept painting" — a bug inside the title's own thread, not a
+runtime failure.
+
+The lesson is the same as for the boot path: an OOM always means "retry with
+more heap" first, and only a title that still fails at 32 MB is a compatibility
+row.
+
+The round-124 full sweep (`.local-tools/debug-runs/compat-20261120-r124`, 10
+jobs, 0.5.18 CLI) therefore reports **399 ok / 1 title-exception / 2 no-frame /
+1 title-exit / 1 bad-jar, 0 timeout** — 404 rows, 387 of them fully rendering
+without any exception.  The single `title-exception` is the game-side
+`NullPointerException` above; the two `no-frame` rows are an expired activation
+and a self-exit confirmed against the FreeJ2ME-Plus reference; `蹦球传说`
+exits by itself after 91 painted frames; `鲁宾逊` is a truncated ZIP.
