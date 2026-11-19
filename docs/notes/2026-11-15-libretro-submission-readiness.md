@@ -1308,3 +1308,12 @@ details in `docs/LIBRETRO_SUBMISSION.md` ("Round-94 end-to-end rehearsal").
   patch regenerated (5 files, +261 lines), fork branch `3316299` pushed, PR
   #1239 head updated (OPEN/MERGEABLE, 0 comments/reviews).
 - Bundle validation: 32/32 plain, 41/41 with baseline clones + mkdocs.
+
+## Round-118 update, 2026-11-19
+
+- Re-checked `.gitlab-ci.yml` against the current `libretro-infrastructure/
+  ci-templates` master (fetched from git.libretro.com): all job anchors,
+  include files and command shapes still match; no change needed.
+- Added `tools/check_libretro_option_docs.py` + CTest gate
+  `check_libretro_option_docs`: all 18 core options must be documented on
+  `docs/libretro/upstream/nano_j2me.md`; prevents doc drift before submission.

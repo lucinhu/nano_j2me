@@ -2328,6 +2328,18 @@ if(UNIX AND EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_libretro_submission_b
     TIMEOUT 120)
 endif()
 
+# The upstream library page is the user manual for the core options.  A key
+# registered in lr_options[] but missing from docs/libretro/upstream/
+# nano_j2me.md is an undocumented option in the submitted material.
+if(NJ_PYTHON AND EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_libretro_option_docs.py)
+  add_test(NAME check_libretro_option_docs
+           COMMAND ${NJ_PYTHON}
+                   ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_libretro_option_docs.py)
+  set_tests_properties(check_libretro_option_docs PROPERTIES
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    TIMEOUT 60)
+endif()
+
 message(STATUS "nano_j2me ${PROJECT_VERSION}: "
                "JPEG=${NJ_ENABLE_JPEG} PNG=${NJ_ENABLE_PNG} "
                "pixfmt=${NJ_PIXFMT} tests=${NJ_BUILD_TESTS}")

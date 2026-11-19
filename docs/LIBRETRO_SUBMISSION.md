@@ -1485,3 +1485,36 @@ Regenerated `docs/libretro/upstream/libretro-docs-nano_j2me.patch` from the
 Validation: `tools/check_libretro_submission_bundle.sh` → **32 passed / 0
 failed**; with baselines (`libretro-super` `55e50a81`, `libretro/docs`
 `9399ee32`) + `--apply-clones --mkdocs` → **41 passed / 0 failed**.
+
+## Round-118 update: CI template re-verification and an option-docs gate, 2026-11-19
+
+**CI contract re-checked against the current upstream templates.**  Fetched
+`libretro-infrastructure/ci-templates` master from `git.libretro.com` on
+2026-11-19 (`linux-cmake.yml` 50 lines, `windows-cmake-mingw.yml` 44,
+`android-cmake.yml` 53) and compared with `.gitlab-ci.yml`:
+
+- every job anchor referenced by the core exists in the templates
+  (`.libretro-windows-cmake-x86_64`, `.libretro-windows-cmake-x86`,
+  `.libretro-linux-cmake-x86_64`, `.libretro-linux-cmake-aarch64`,
+  `.libretro-android-cmake-armeabi-v7a`, `.libretro-android-cmake-arm64-v8a`,
+  `.libretro-android-cmake-x86_64`);
+- the three `include:` entries still point at the existing template files;
+- the templates supply `LIBNAME`, `BUILD_DIR`, `STRIP_CORE_LIB=1`,
+  `CMAKE_SOURCE_ROOT=.` and `NUMPROC`; `.core-defs` only adds `CORENAME`,
+  `EXTRA_PATH=libretro` and `CORE_ARGS`, exactly as before;
+- the command shape is still
+  `cmake -DCMAKE_BUILD_TYPE=Release $CORE_ARGS … -B$BUILD_DIR` +
+  `cmake --build … --target ${CORENAME}_libretro -- -j $NUMPROC` +
+  `mv $BUILD_DIR/$EXTRA_PATH/$LIBNAME`, which `tools/simulate_ci_builds.sh`
+  reproduces; the Android template still renames the core to
+  `${CORENAME}_libretro_android.so`.
+
+No CI change was needed; `tools/simulate_ci_builds.sh` remains current.
+
+**New documentation gate.**  `tools/check_libretro_option_docs.py` extracts
+every `nano_j2me_*` key from the `lr_options[]` initialiser in
+`src/port/libretro/nj_port_libretro.c` and fails if any key is missing from
+`docs/libretro/upstream/nano_j2me.md` (the page that becomes the upstream
+library manual).  All **18** registered options are currently documented;
+the check runs as CTest `check_libretro_option_docs` (0.02 s) so a future
+option cannot ship without its page row.
