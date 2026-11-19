@@ -1563,6 +1563,6 @@ full-screen fix (`cc4acfb`, see
 `docs/notes/2026-11-20-fullscreen-visible-toggle.md`).  r38 validation: mock
 matrix 20/20, real RetroArch 120 frames PASS, Wine 4/4 at 300 frames, bundle
 32/32, full serial CTest 199/199 in 350.20 s; whole-corpus libretro probe on
-the released core: 5.  Tracked `.info`/patch/PR drafts were bumped;
+the released core: 510 titles, 509 passed, 1 known limitation, 0 failed.  Tracked `.info`/patch/PR drafts were bumped;
 the super fork branch and PR body were refreshed from the 0.5.19 metadata (no
 merge claimed).

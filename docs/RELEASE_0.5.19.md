@@ -50,7 +50,7 @@ mode fix below.  APKs and the CLI are built from the same tree.
 * Windows x86_64 under Wine 11.22, 4 titles at 300 frames: **4/4**;
 * submission-bundle validator: **32/32**;
 * full serial CTest on the release tree: **199/199 in 350.20 s**;
-* whole-corpus libretro probe on the released r38 core: 5
+* whole-corpus libretro probe on the released r38 core: 510 titles, **509 passed, 1 known limitation, 0 failed** (the known limitation is the slow Doom 3 loader).
 
 ## Upgrade notes
 
