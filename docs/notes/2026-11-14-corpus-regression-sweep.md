@@ -247,3 +247,39 @@ Result: **404 rows = 387 ok / 12 title-exit / 2 title-exception / 2 no-frame /
 (0 changes), so the cheat-engine refactor, the metadata bump and the Android
 change are compat-neutral. This is the current best distribution and the one
 0.5.14 ships with.
+
+## Round-105 revalidation on 0.5.17, 2026-11-19
+
+Full 404-title sweep with the 0.5.17 CLI (`/var/tmp/nj2me-goal13-build`,
+commit `cfe7126`), same recipe as previous rounds (`NJ_KEYS_DIR=tools/corpus_keys`,
+10 workers, 600 frames @ 30 fps, heap 16 then 32):
+
+| verdict | round 88 (0.5.14) | round 105 (0.5.17) |
+| --- | ---: | ---: |
+| ok | 387 | 384 |
+| title-exit | 12 | 14 |
+| timeout | 0 | 1 |
+| title-exception | 2 | 2 |
+| no-frame | 2 | 2 |
+| bad-jar | 1 | 1 |
+
+Three verdict changes, all adjudicated as load-sensitive (not regressions):
+
+- `GT赛车2_36.jar` ok → timeout: the known very slow loader (previously measured
+  at ~130 s against both old and new binaries, already over the 90 s
+  per-title budget in earlier rounds); under ten parallel workers this run hit
+  the budget again.
+- `杀鬼子-敌后武工队_2185.jar` ok → title-exit at frames=293/paints=155
+  (`rc=0`, no exception): two standalone runs with the same binary and the same
+  generic key script reached the full 600 frames and 335 paints, so the exit is
+  a title reaction to slow scheduling, not a runtime failure.  (This title is
+  also the one that shows the load-sensitive libretro state flake in the
+  parallel visual probes.)
+- `美男狂想曲_3876.jar` ok → title-exit at frames=58/paints=26 (`rc=0`, no
+  exception): two standalone runs reached 600 frames/196 paints; same
+  parallel-load reaction class.
+
+No new crashes, uncaught exceptions, or hangs: the verdict set is effectively
+unchanged for a release-to-release comparison (0.5.14 → 0.5.17 changed only the
+cheat-search API and the Android cheat editor, neither of which runs in the CLI
+sweep path).

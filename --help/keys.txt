@@ -1,0 +1,16 @@
+30:fire
+55:soft1
+80:53
+140:left
+165:right
+190:48
+215:up
+240:down
+290:5
+320:fire
+375:star
+400:6
+430:fire
+470:soft1
+545:fire
+575:left
