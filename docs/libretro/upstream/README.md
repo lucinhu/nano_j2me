@@ -4,7 +4,7 @@ The project author authorized libretro upstream submission on 2026-11-16, and
 the prepared bundles were opened as pull requests from forks:
 
 * `libretro/libretro-super#2204` — `info: add nano_j2me (Mobile - J2ME)`
-  (branch `add-nano_j2me` in `lucinhu/libretro-super`, commit `772fcf8`)
+  (branch `add-nano_j2me` in `lucinhu/libretro-super`, commit `2339093`)
 * `libretro/docs#1239` — `docs: add nano_j2me (Mobile - J2ME)`
   (branch `add-nano_j2me` in `lucinhu/docs`, commit `51ef4a9`)
 
