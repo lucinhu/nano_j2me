@@ -252,3 +252,41 @@ The first two scripts are the ones this document already discusses:
 Neither script changes a verdict by pressing through a game-side gate: the SMS
 page stays a gate, and the sweep reports it as `ok` with the billing screen
 painted, exactly like the round-66 adjudication.
+
+### Motion and heap probes on 0.5.17 (round 108)
+
+`tools/check_corpus_motion.py` grew from three samples of ~10 titles to two
+targeted runs: 24 `ok` 2D rows (seed 5, 300-frame recipe, three dumps) and 10 3D
+rows (`--min-m3g 1000`).  The 2D sample
+gave **23 titles changing frames, 1 painting one frame**; the 3D sample gave
+**10 of 10 changing frames**.  No stale-frame or black-frame row surfaced, so
+the earlier reading rule ("a frozen row is a statement about the input recipe
+until a reference comparison says otherwise") held again.
+
+The single static 2D row was read to the end.  `法拉利GT3－世界赛道BT版_776.jar`
+at the default 16 MB heap paints a blue screen with the title's own text
+`WOOP'S! OUT OF MEMORY!` / `Total=16384` and burns 4.15 billion bytecodes in
+900 frames while it waits.  With `--heap 32` (or 64) the same run starts the
+game's Ferrari F430 splash and settles at ~300k bytecodes: the frame is still
+static (it is a splash screen), but the game is no longer in its error path.
+So this is a **heap-sensitive title**, not a rendering defect: the game checks
+the total Java heap itself, catches the failure and paints its own error
+screen, which is why the sweep records it as `ok` at 16 MB.  `--heap 32` makes
+it start; the APK's in-game tools panel can raise the same setting.
+
+`--heap 16 --heap-grow` is the general workaround: the arena grew to a
+22,078,880-byte peak and the game left the error path, so growth is what a
+title like this needs when the static default is too small.  The client keeps
+`heap_auto_grow = 0` by default on purpose (fixed heaps keep state sizes and
+GC behaviour predictable; the launcher/APK offer an explicit switch), so the
+probe documents the case rather than changing the default.
+
+To find rows like this automatically, the new
+`tools/check_corpus_heap.py <rows dir> --count N --frames F --seed S` runs each
+sampled `ok` title twice (16 MB and 32 MB) and flags a row `heap-sensitive`
+when the low-heap run burns at least 8x the high-heap bytecode count - the
+signature of a game-side error screen plus a busy wait.  A 40-title sample
+(seed 7, 300 frames) found **0 heap-sensitive rows**: the 16 MB default is
+adequate for the typical corpus title, and the heap-hungry ones are rare
+outliers (this title; 愤怒小鸟 needs more than 16 MB as recorded earlier).
+The tool is kept for regressions in the default heap or in error handling.
