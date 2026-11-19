@@ -1317,3 +1317,23 @@ details in `docs/LIBRETRO_SUBMISSION.md` ("Round-94 end-to-end rehearsal").
 - Added `tools/check_libretro_option_docs.py` + CTest gate
   `check_libretro_option_docs`: all 18 core options must be documented on
   `docs/libretro/upstream/nano_j2me.md`; prevents doc drift before submission.
+
+## Round 119 (2026-11-19): measured rewind/runahead cost
+
+- `tools/check_libretro_rewind.sh` now runs the same session twice (rewind
+  on and off) and reports the snapshot cost per stored frame instead of only
+  checking that the frontend buffer initializes. Measured headless on the
+  released core with `nano_j2me_heap=16`, `rewind_granularity=2`, 600 frames:
+  2730 ms with rewind vs 491 ms without -> about 7.4 ms per stored frame for a
+  25,473,088-byte state.
+- `tests/test_libretro_frontend.c` gained `--serialize-timing N`: after the
+  frame run it drives a frame and measures N save+restore pairs, printing
+  `[timing] state size=... save ... load ...` (mock frontend upper bound; it
+  includes the request handshake when no frame loop is driving the VM).
+  `tools/check_libretro_state_cost.sh` wraps it. At the auto heap the same
+  report shows ~1 s per save/restore for a ~157 MB state, which is the
+  capacity story the frontend reports as an insufficient rewind buffer.
+- `docs/LIBRETRO.md` Rewind/Runahead bullets now state these measured costs
+  instead of guesses: rewind at granularity 2 spends about half of a 60 Hz
+  frame on snapshots, and runahead cannot fit even one snapshot per frame
+  within the budget at auto-heap sizes.

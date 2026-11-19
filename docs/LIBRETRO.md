@@ -442,23 +442,35 @@ worse than refusing it.
   snapshot therefore costs the heap budget: about **23 MB with
   `nano_j2me_heap=16`**, 40 MB at 32, and ~140 MB with the auto heap on a big
   host. RetroArch's rewind ring buffer must hold at least one snapshot
-  (`rewind_buffer_size` in MB; the default 67 MB buffer at granularity 2 fills
-  with the 16 MB-heap snapshot and, measured headless, costs ~2.5 s for 600
-  frames versus 0.5 s without rewind). With the auto heap the frontend reports
-  "rewind buffer capacity insufficient" and cannot store history. Recommended
-  setup if rewind is wanted: `nano_j2me_heap=16` plus a rewind buffer of at
-  least twice the snapshot size, and a coarser `rewind_granularity` to trade
-  history resolution for buffer use -- `tools/check_libretro_rewind.sh` runs
-  exactly that check (it asserts the buffer initializes, snapshots fit and the
-  frontend does not report capacity errors). History fidelity is still
-  VM-only: a restored VM keeps newer RecordStore/FileConnection data and
-  loses native media handles, so rewind is a convenience, not a validated
-  guarantee. Manual save states remain the supported mechanism.
+  (`rewind_buffer_size` in MB; the default 67 MB buffer at granularity 2 holds
+  the 16 MB-heap snapshot). Measured headless on the released core with
+  `nano_j2me_heap=16` and `rewind_granularity=2`: 600 loopdemo frames take
+  **2730 ms with rewind versus 491 ms without**, i.e. the frontend pays about
+  **7.4 ms per stored frame** (snapshot size 25,473,088 bytes, 300 snapshots).
+  That is what decides whether rewind feels smooth: at granularity 2 it eats
+  roughly half of a 60 Hz frame, so it works but competes with the emulation,
+  and the ring holds only about two seconds of history in the default buffer.
+  With the auto heap the snapshot is ~140 MB: the frontend reports "rewind
+  buffer capacity insufficient" and cannot store history; a mock-frontend
+  measurement of the bare request path (`tests/test_libretro_frontend
+  --serialize-timing`) shows ~1 s per save/restore at that size, so the
+  capacity error is honest. Recommended setup if rewind is wanted:
+  `nano_j2me_heap=16` plus a rewind buffer of at least twice the snapshot
+  size, and a coarser `rewind_granularity` to trade history resolution for
+  buffer use and CPU -- `tools/check_libretro_rewind.sh` runs exactly that
+  check and now also prints the measured per-stored-frame cost. History
+  fidelity is still VM-only: a restored VM keeps newer
+  RecordStore/FileConnection data and loses native media handles, so rewind is
+  a convenience, not a validated guarantee. Manual save states remain the
+  supported mechanism.
 - **Runahead** — runahead requires running frames ahead of presentation and
   restoring a state every frame deterministically. The asynchronous worker,
   host wall-clock timers, external file side effects and Java scheduling
   nondeterminism break that contract, so the frame that is finally presented
-  could differ from the one run at the same input. Not advertised.
+  could differ from the one run at the same input. The cost side is measured
+  too: even at `nano_j2me_heap=16` a snapshot is ~7.4 ms, and a two-frame
+  runahead needs at least two of them per displayed frame, so it would spend
+  the whole 60 Hz budget before any emulation runs. Not advertised.
 - **Netplay** — rollback netplay needs cheap, deterministic snapshots and a
   stable input-to-frame mapping. The same nondeterminism, the multi-megabyte
   state and the single process-wide VM make lockstep/rollback synchronization

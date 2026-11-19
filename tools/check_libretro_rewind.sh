@@ -26,7 +26,11 @@
 #   JAR    default tests/fixtures/loopdemo.jar
 #   FRAMES default 600
 # Env: HEAP (core option, default 16), GRANULARITY (default 2),
-#      BUFFER_SIZE (rewind_buffer_size MB, default 64), TIMEOUT (default 180).
+#      BUFFER_SIZE (rewind_buffer_size MB, default 64), TIMEOUT (default 180),
+#      MAX_STORE_MS (per-stored-frame budget, default 250).
+#
+# It also runs a baseline without rewind and reports the measured snapshot
+# cost per stored frame, which is what decides whether rewind feels smooth.
 #
 # Exit: 0 pass, 1 fail, 2 setup problem.
 
@@ -58,6 +62,7 @@ echo "frames      : $FRAMES"
 echo "heap        : ${HEAP} MB option (snapshot grows with it)"
 echo "granularity : $GRANULARITY"
 echo "buffer      : ${BUFFER_SIZE} MB"
+MAX_STORE_MS=${MAX_STORE_MS:-250}
 
 RW_CFG="rewind_enable = \"true\"
 rewind_granularity = $GRANULARITY
@@ -88,6 +93,28 @@ fi
 
 echo "rewind init : $BUFFER_LINE"
 echo "wall time   : ${WALL_MS}ms for $FRAMES frames with granularity $GRANULARITY"
+
+# Baseline without rewind, same options and frame count, to isolate the cost
+# of the snapshots the frontend takes into its rewind ring.
+START=$(date +%s%N)
+KEEP_LOG=1 CORE_OPTIONS_CFG="$OPTS" TIMEOUT="$TIMEOUT" \
+   "$ROOT/tools/check_libretro_retroarch.sh" "$CORE" "$JAR" "$FRAMES" \
+   > "$WORK/baseline.log" 2>&1
+RC=$?
+END=$(date +%s%N)
+BASE_MS=$(( (END - START) / 1000000 ))
+[ "$RC" -eq 0 ] || fail "baseline run without rewind failed (rc=$RC)"
+
+STORES=$(( FRAMES / GRANULARITY ))
+[ "$STORES" -gt 0 ] || fail "granularity $GRANULARITY stores nothing"
+OVER_MS=$(( WALL_MS - BASE_MS ))
+if [ "$OVER_MS" -lt 0 ]; then OVER_MS=0; fi
+PER_STORE_X10=$(( OVER_MS * 10 / STORES ))
+echo "baseline    : ${BASE_MS}ms for $FRAMES frames without rewind"
+echo "overhead    : ${OVER_MS}ms over $STORES stored snapshots ~= $((PER_STORE_X10 / 10)).$((PER_STORE_X10 % 10))ms per stored frame"
+if [ "$PER_STORE_X10" -gt $(( MAX_STORE_MS * 10 )) ]; then
+   fail "snapshot cost $((PER_STORE_X10 / 10)).$((PER_STORE_X10 % 10))ms/frame exceeds MAX_STORE_MS=${MAX_STORE_MS}"
+fi
 echo "frontend log: $LOG (kept)"
 echo "PASS: rewind enabled, buffer initialized, snapshots fit, clean exit"
 exit 0

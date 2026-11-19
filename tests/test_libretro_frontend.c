@@ -34,6 +34,10 @@
  *   --visual-required  enforce non-black + animated frame content
  *   --static-ok        with --visual-required, accept a static (non-animated) frame
  *   --min-nonblack N   non-black pixel threshold for --visual-required (default 1)
+ *   --serialize-timing N
+ *                      after the frame run, measure N save+restore pairs and
+ *                      print min/median milliseconds (frontend rewind/runahead
+ *                      cost); does not affect pass/fail
  *   --timeout N        watchdog seconds (default 30, 0 disables)
  *   -h, --help         this help
  *
@@ -128,11 +132,17 @@ struct config
     * turns the named J2ME keys into joypad bits so a libretro probe can reach
     * gameplay instead of stopping on a title menu. */
    char keys_path[PATH_MAX];
+
+   /* --serialize-timing N: after the frame run, measure N save+restore
+    * pairs and print min/median milliseconds.  A frontend's rewind buffer
+    * and runahead both spend this cost per stored/restored frame, so the
+    * number describes what those frontend features can afford. */
+   unsigned serialize_timing;
 };
 
 static struct config cfg = {
    "", "", "", 180u, 0u, 0, 0, 0, 0, 0, 0, 0u, 0, 0, 1u, 30, 0, 0, 0, 0u,
-   0u, 0, "", "", ""
+   0u, 0, "", "", "", 0u
 };
 
 /* ------------------------------------------------------------------ */
@@ -2360,6 +2370,83 @@ static void check_multitouch_input(void)
          g.env.canvas_down_lines);
 }
 
+/* Monotonic milliseconds for the --serialize-timing report. */
+static double mono_ms(void)
+{
+   struct timespec ts;
+   clock_gettime(CLOCK_MONOTONIC, &ts);
+   return (double)ts.tv_sec * 1000.0 + (double)ts.tv_nsec / 1000000.0;
+}
+
+/* Sorts in place; returns the median. */
+static double median_of(double *values, unsigned count)
+{
+   unsigned i, j;
+   for (i = 0; i + 1 < count; i++)
+      for (j = i + 1; j < count; j++)
+         if (values[j] < values[i])
+         {
+            double tmp = values[i];
+            values[i] = values[j];
+            values[j] = tmp;
+         }
+   return values[count / 2u];
+}
+
+/* Measures the per-stored-frame cost a frontend pays for rewind/runahead: one
+ * serialize plus one unserialize of the live state.  Informational only; the
+ * buffer is the same allocation a frontend would keep. */
+static void measure_state_cost(size_t size, unsigned runs)
+{
+   unsigned char *buffer;
+   double save_ms[32];
+   double load_ms[32];
+   unsigned i;
+
+   buffer = (unsigned char *)malloc(size);
+   if (!buffer)
+   {
+      note("serialize timing skipped: cannot allocate %zu bytes", size);
+      return;
+   }
+   for (i = 0; i < runs; i++)
+   {
+      double t0, t1, t2;
+      /* Drive one frame first: a frontend snapshots a *live* VM right after
+       * retro_run() returns, and measuring after the harness stops calling
+       * retro_run would include the handshake wait for a frame boundary.
+       * run_frames(1) keeps the session counters consistent (one run, one
+       * presentation) so the regular checks still hold. */
+      run_frames(1u);
+      t0 = mono_ms();
+      if (!api.serialize(buffer, size))
+      {
+         note("serialize timing aborted: retro_serialize failed");
+         free(buffer);
+         return;
+      }
+      t1 = mono_ms();
+      if (!api.unserialize(buffer, size))
+      {
+         note("serialize timing aborted: retro_unserialize failed");
+         free(buffer);
+         return;
+      }
+      t2 = mono_ms();
+      save_ms[i] = t1 - t0;
+      load_ms[i] = t2 - t1;
+   }
+   {
+      double save_med = median_of(save_ms, runs);
+      double load_med = median_of(load_ms, runs);
+      printf("[timing] state size=%zu bytes save min=%.2f ms median=%.2f ms "
+             "load min=%.2f ms median=%.2f ms (runs=%u)\n",
+             size, save_ms[0], save_med, load_ms[0], load_med, runs);
+   }
+   note("frontend rewind/runahead spends this cost per stored frame");
+   free(buffer);
+}
+
 /* Runs load -> frames -> (serialize roundtrip) -> unload -> checks.
  * Returns 1 on success, 0 when load_game() failed (game was not loaded). */
 static int run_game_cycle(int cycle)
@@ -2414,6 +2501,8 @@ static int run_game_cycle(int cycle)
       /* A restore may replace the VM, so the published memory map has to be
        * republished for the new arena. */
       check_memory_map_after_restore();
+      if (cfg.serialize_timing > 0)
+         measure_state_cost(serialize_size, cfg.serialize_timing);
    }
 
    if (cfg.cheat_check)
@@ -2667,6 +2756,12 @@ static int parse_args(int argc, char **argv)
          if (cfg.min_nonblack == 0)
             cfg.min_nonblack = 1;
       }
+      else if (strcmp(arg, "--serialize-timing") == 0 && i + 1 < argc)
+      {
+         if (!parse_uint(argv[++i], &cfg.serialize_timing) ||
+             cfg.serialize_timing > 32u)
+            goto bad_value;
+      }
       else if (strcmp(arg, "--timeout") == 0 && i + 1 < argc)
       {
          unsigned value;
@@ -2838,6 +2933,7 @@ int main(int argc, char **argv)
           cfg.expect_load_fail ? "yes" : "no",
           cfg.multitouch_check ? "yes" : "no");
    note("cheat check: %s", cfg.cheat_check ? "yes" : "no");
+   note("serialize timing runs: %u", cfg.serialize_timing);
    if (g_override_count > 0)
    {
       int i;
