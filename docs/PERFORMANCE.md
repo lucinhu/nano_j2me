@@ -4282,3 +4282,32 @@ policy here is to measure, then drop neutral changes.
 Next lever if this path ever matters: the group loop's translucent blend is
 the per-pixel cost — a vectorised 565 blend (or a "row has one alpha value"
 shortcut) would have to be where the pixels are.
+
+## LTO: helps one workload, hurts the two that matter, not kept (round 121, 2026-11-19)
+
+Link-time optimisation is the usual first "free" build-flag lever for an
+interpreter, so it was measured before touching any more code.  A scratch
+Release CLI was built with `-O2 -flto` in `CMAKE_C_FLAGS` and `-flto` in
+`CMAKE_EXE_LINKER_FLAGS` (the effective compile flags still end in CMake's
+`-O3 -DNDEBUG`, so this is `-O3 -flto`), next to a plain Release build of the
+same commit.  Five interleaved runs per workload, `taskset -c 5`, child
+user+sys CPU through `os.wait4`, medians:
+
+| workload | plain Release | `-O3 -flto` | delta |
+| --- | ---: | ---: | ---: |
+| `bench.jar`, 2000 frames uncapped (interpreter) | 0.149 s | 0.159 s | **+6.7 %** |
+| 毁灭战士3 loader, 3000 frames uncapped (M3G raster) | 4.201 s | 4.962 s | **+18.1 %** |
+| Minecraft PE, 600 frames @30 fps, heap 64 (blit-heavy) | 19.162 s | 18.650 s | −2.7 % |
+| 浴火银河2完整版, 600 frames @30 fps, heap 32 (3D gameplay) | 3.522 s | 3.529 s | +0.2 % (noise) |
+
+The interpreter and the M3G raster are the two hot paths that decide real
+gameplay, and LTO makes both slower (the inline/layout decisions for the
+giant interpreter/raster translation units get worse, not better).  The only
+winner is the blit-heavy Minecraft loader, where overdraw dominates anyway
+(round 103).  A clearly mixed result is a rejection under the "measure, then
+drop neutral or harmful changes" policy, so no `NJ_ENABLE_LTO` option was
+added and the release build stays plain Release.
+
+Lesson: for this codebase, throughput lives in hand-written hot loops
+(span/tri/band raster, interpreter dispatch) that are already inlined and
+laid out deliberately; whole-program inlining mostly perturbs them.
