@@ -58,10 +58,15 @@ def run_one(row, args, keys, work):
     rms = work / ("rms-" + re.sub(r"[^A-Za-z0-9_.-]", "_", name))
     cmd = [
         str(BIN), "--port", "headless", "--size", "240x320",
-        "--heap", str(args.heap), "--fps", str(args.fps),
+        "--heap", str(row.get("heap") or args.heap), "--fps", str(args.fps),
         "--run-frames", str(args.frames), "--stats",
         "--rms-dir", str(rms),
     ]
+    # Replay the sweep's device profile too: a title that only starts with the
+    # Nokia property set (1945空战英雄) fails the constructor at load without it.
+    if row.get("device"):
+        cmd[cmd.index("--stats"):cmd.index("--stats")] = [
+            "--device", str(row["device"])]
     if row.get("keys") == "none":
         row_keys = None
     elif row.get("keys"):

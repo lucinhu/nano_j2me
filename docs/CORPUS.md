@@ -432,3 +432,33 @@ without any exception.  The single `title-exception` is the game-side
 `NullPointerException` above; the two `no-frame` rows are an expired activation
 and a self-exit confirmed against the FreeJ2ME-Plus reference; `蹦球传说`
 exits by itself after 91 painted frames; `鲁宾逊` is a truncated ZIP.
+
+## Round 125: 399-title deep probe at 900 frames (2026-11-20)
+
+The round-124 `ok` set re-run through `tools/check_corpus_deep.py` at 900
+frames (30 s per title at 30 fps), 8 jobs, with every row's own heap, device
+profile and input recipe replayed:
+
+| titles | passed | early exit (title ends itself) | failed |
+|---|---|---|---|
+| 399 | **390** | 8 | **1** |
+
+The one failure was a parallel-load timeout, not a regression:
+`时光樱花册－遗失之心_1009.jar` hit the 240 s per-title budget with zero
+frames while seven other titles loaded concurrently; stand-alone (same
+binary, same recipe) the same 900-frame run completes in **29.8 s** with
+`frames=900 paints=900 gfx=4500` and no exceptions.  It is a heavy loader
+that loses badly under load, not a hang.
+
+The eight early exits are titles whose program ends by itself during a longer
+run (`Lab Hamster`, `SlimeVolleyBallMidlet`, `Snake` at 470 frames; `都市摩天楼`
+479; `龙珠Z传说` 321; `明星麻将馆(美女真人版)` 325; `杀鬼子-敌后武工队` 293;
+`Hotguys Rhapsody` 58) — all `notifyDestroyed()` paths, and the probe treats a
+clean early exit as acceptable rather than a failure.
+
+Tooling: `tools/check_corpus_deep.py` now replays the row's `heap` and
+`device` profile instead of a uniform `--heap 16`.  The first probe run
+flagged `1945空战英雄_6105.jar` with `rc=1 frames=0`; the row records
+`"device": "nokia6230"` and "needs --device nokia6230", and the unmodified
+uniform run cannot start that title's constructor.  Replaying the row profile
+removes that false failure.
