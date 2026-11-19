@@ -4122,3 +4122,50 @@ rendering to optimise; few paints plus huge `currentTimeMillis`/`yield`
 counts = the title is waiting for its own clock, and any speed-up has to come
 from the interpreter or the wait path (both risk timing semantics), not from
 `nj_region_draw` or the fonts.
+
+## Minecraft PE's 41.7 % blit share is overdraw, not blit overhead (round 103, 2026-11-19)
+
+`毁灭战士3` profile work is about M3G; this one starts from a plain 2D title
+that costs real CPU.  A gprof run of the Minecraft PE JAR at `--fps 30`
+(`--heap 64`, 300 frames) put `nj_region_draw` at **41.74 %** with
+5,757,114 calls, `nj_interp_run` 30.25 %, `nj_field_lookup` 4.20 %,
+`vm_invoke` 3.08 % and `nj_gc_run` 1.96 % (5 collections).  Nineteen thousand
+blits per frame looked like a per-call-overhead problem, and the function
+already has dedicated branches for every common shape, so the first question
+was *which* branch those calls take.
+
+A temporary counter patch (reverted) answered it and then ruled the
+optimisation out:
+
+| measurement (90-frame run while the title was still loading) | value |
+| --- | ---: |
+| `nj_region_draw` calls | 1,936,168 |
+| of those, ARGB8888 source → RGB565 surface branch | 1,936,168 (100 %) |
+| clipped destination pixels blitted | 1,542,025,862 |
+| average clipped area per call | ~796 px |
+| wall-clock cost of the whole function | 1.49 s (300-frame run) |
+
+The source format is `NJ_PIXFMT_ARGB8888` and the headless surface is
+`NJ_PIXFMT_RGB565`, so every call lands in the "ARGB8888 sprites onto a 16-bit
+screen" branch, which already converts rows with the two-pixels-per-64-bit-word
+loop.  The 1.5 *billion* pixels are ~200 screens' worth of blits inside 90
+frames of loader activity (`paints=1` — the title is pre-rendering, not
+presenting), i.e. Minecraft PE paints its loading/preview view with hundreds of
+thousands of small `drawImage` calls per frame instead of compositing once.
+At ~1 ns per converted pixel that branch is already at memory speed; the cost
+is the title's overdraw, not the runtime's per-call bookkeeping (per call that
+is ~0.26 µs, of which most is the actual 796-pixel conversion).
+
+What that means for optimisation:
+
+- No per-call batching/validation trimming can move this: the call count is
+  what the title chooses, and the branch it takes has no overhead left to
+  remove relative to the pixels it converts.
+- The only real lever would be SIMD ARGB8888 → RGB565 conversion inside
+  `nj_565_row_from_argb()` (e.g. SSE2 four pixels per vector store), which
+  could roughly double that one branch.  It must stay byte-identical to the
+  scalar loop; the deterministic-prefix dump comparison is the gate.  Not
+  attempted in this round — recorded as the next lever if loader time matters.
+- Do not read "19k draw calls per frame" as a renderer defect: check the
+  clipped pixel count first.  A title that converts 200 screens per frame is
+  doing redundant work on its side of the API.
