@@ -271,8 +271,11 @@ static int img_dims(nj_vm *vm, nj_ref img, int *w, int *h)
     if (!img) {
         return 0;
     }
-    fw = fld(vm, NJ_C_IMAGE, F_IMG_W, D_INT, 0);
-    fh = fld(vm, NJ_C_IMAGE, F_IMG_H, D_INT, 0);
+    /* These three fields are read for every Image on the blit path (the
+     * renderer asks for the same Image dozens of times per draw), so resolve
+     * them once per VM instead of hashing class/member/descriptor triples. */
+    fw = nj_hot_field(vm, NJ_HF_IMG_W, NJ_C_IMAGE, F_IMG_W, D_INT);
+    fh = nj_hot_field(vm, NJ_HF_IMG_H, NJ_C_IMAGE, F_IMG_H, D_INT);
     if (!fw || !fh) {
         return 0;
     }
@@ -453,12 +456,14 @@ int nj_midp_image_size(nj_vm *vm, nj_ref image_obj, int *w, int *h)
 
 nj_u4 *nj_midp_image_pixels(nj_vm *vm, nj_ref image_obj)
 {
+    nj_field *fp;
     nj_ref px;
 
     if (!image_obj) {
         return NULL;
     }
-    px = rget(vm, image_obj, NJ_C_IMAGE, F_IMG_PX, D_INTARR);
+    fp = nj_hot_field(vm, NJ_HF_IMG_PX, NJ_C_IMAGE, F_IMG_PX, D_INTARR);
+    px = fp ? nj_field_read_ref(vm, image_obj, fp) : NULL;
     if (!px || px->kind != NJ_OBJ_ARRAY || px->aflags != NJ_ARRAY_T_INT) {
         return NULL;
     }

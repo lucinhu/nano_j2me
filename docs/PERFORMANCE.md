@@ -4062,6 +4062,49 @@ loading that title, and the 20,000-frame CPU did not move. Reverted rather
 than ship an unexercised thread path; a future parallel raster would need a
 large-triangle workload (real 3D gameplay, not loader animations) to measure.
 
+## Image field lookups on the blit path: resolve once per VM (round 111, 2026-11-19)
+
+The round-103 Minecraft profile put `nj_field_lookup` at 78.3 M calls in 300
+paced frames (about 5 % of samples with the three-string `strcmp` chain on every
+hit).  The calls come from the Image accessors the blit path uses:
+`img_dims()` and `nj_midp_image_pixels()` (reached from `img_view()` and
+`nj_midp_surface()`), so every `drawImage()` re-hashed `Image.imgWidth`,
+`imgHeight` and `imgPixels` even though the class layout cannot change during a
+frame.
+
+The field *pointers* were cached per VM in the existing `vm->hot_field[]` slots
+(the same mechanism the Graphics and text paths already use):
+
+- `src/core/nj_internal.h`: new slots `NJ_HF_IMG_W`, `NJ_HF_IMG_H`,
+  `NJ_HF_IMG_PX` after the `NJ_HF_G_*` block.
+- `src/midp/nj_lib_lcdui.c`: `img_dims()` and `nj_midp_image_pixels()` now use
+  `nj_hot_field()` instead of `fld()`/`rget()`.  `nj_midp_surface()`,
+  `img_view()` and every `drawImage()` path go through those two helpers, so no
+  other call site changes.
+- Save/load already invalidates all hot slots (`vm->hot_field[i] = NULL` in
+  `src/core/nj_save.c`), so a restored class layout is never read through a
+  stale pointer.
+
+Byte-exactness: the eight fixture JARs dumped at frames 10-40 (unpaced) give
+**22/22 PPM byte-identical** frames, and unpaced Minecraft counters are
+identical run-to-run and between binaries (`600` frames: 64,043,215 bytecodes,
+888,149 natives; `3000` frames: 112,043,215 bytecodes, 586,288 gfx calls).
+
+CPU (user+sys through `RUSAGE_CHILDREN`, `taskset -c 5`, unpaced deterministic
+runs):
+
+| workload | before | after | delta |
+| --- | --- | --- | --- |
+| Minecraft PE, 600 frames | 0.1913 s | **0.1833 s** | −4.2 % |
+| Minecraft PE, 3000 frames | 0.5345 s | **0.5071 s** | −5.1 % |
+| 合金弹头4(完美汉化版), 600 frames | 0.0363 s | 0.0327 s | noisy, lower |
+
+The loader/Minecraft path is exactly the one that blits thousands of small
+images; ordinary 2D titles blit a handful per frame, so the absolute gain there
+is small but never negative.  This is the first change kept on the 2D blit path
+since round 103 established that the remaining Minecraft cost is game-side
+overdraw.
+
 ## M3G span dispatch: the general-path locals were already free (round 89, 2026-11-19)
 
 `sw_span()` loads the ~45 fields the general (slow) span loop needs and *then*

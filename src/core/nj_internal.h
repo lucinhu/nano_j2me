@@ -433,6 +433,9 @@ enum {
     NJ_HF_G_FONT,       /* .font LFont; */
     NJ_HF_G_XOR,        /* .xorMode I */
     NJ_HF_G_XORC,       /* .xorColor I */
+    NJ_HF_IMG_W,        /* javax/microedition/lcdui/Image.imgWidth  I */
+    NJ_HF_IMG_H,        /* .imgHeight I */
+    NJ_HF_IMG_PX,       /* .imgPixels [I */
     NJ_HF_COUNT
 };
 
