@@ -139,3 +139,24 @@ surface through InputReader (the fixture stays at `MPT events=0`). A real
 handset - or an AVD with root/writable system - is needed for the two-finger
 screenshot; interactive two-finger play on the user's phone with this APK is
 the natural acceptance test.
+
+## Round-107: the fixture draws each finger, with an automated frame check
+
+The fixture's pointer colours are now fixed per id (`FINGER_RGB`: id 0 red,
+1 green, 2 blue, 3 yellow, ...), with a white ring while the finger is
+dragged and a white `idN x,y` label. That makes the delivery visible in a
+plain frame dump, independent of a frontend or a device.
+
+New tracked gate `tools/check_multitouch_draw.sh` drives two fingers
+(`pressed#1@40,50`, `pressed#2@150,120`), dumps frames every 10 frames at
+30 fps, and parses the last PPM:
+
+* both ids reached the `MultipointTouchListener`;
+* the dumped frame is 240x320;
+* finger 1's dot sits at (40,50) in green and finger 2's at (150,120) in
+  blue, and neither position has the other finger's colour;
+* both dots cover a dot's worth of pixels (guards against a stray pixel).
+
+It passes 7/7; CTest now runs `check_multitouch` and
+`check_multitouch_draw` side by side (both ~4-5 s), so a regression in the
+per-finger coordinates fails the suite without a device.

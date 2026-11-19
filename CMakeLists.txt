@@ -1328,6 +1328,16 @@ endif()
                      ${NJ_FIXTURES}/multitouchdemo.jar)
     set_tests_properties(check_multitouch PROPERTIES TIMEOUT 120
                          SKIP_RETURN_CODE 77)
+    # The same fixture paints one coloured dot per active pointer, so a frame
+    # dump proves the fingers arrive with independent coordinates and not as
+    # one merged pointer.
+    add_test(NAME check_multitouch_draw
+             COMMAND ${CMAKE_COMMAND} -E env
+                     NJ_BIN=$<TARGET_FILE:nj2me-cli>
+                     ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_multitouch_draw.sh
+                     ${NJ_FIXTURES}/multitouchdemo.jar)
+    set_tests_properties(check_multitouch_draw PROPERTIES TIMEOUT 120
+                         SKIP_RETURN_CODE 77)
     # A java.util.Timer task runs on a thread that reaches it through a native,
     # so a task that parks leaves a native frame at the top of that thread's
     # stack.  Running it from the scheduler fed that frame to the interpreter

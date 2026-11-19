@@ -95,7 +95,7 @@ class TouchCanvas extends Canvas implements MultipointTouchListener {
         for (int id = 0; id < MAX; id++) {
             int st = lastState[id];
             if (st == 0 || st == 1) {
-                drawFinger(g, id, lastX[id], lastY[id], st == 0 ? 0xE53935 : 0x43A047);
+                drawFinger(g, id, lastX[id], lastY[id], FINGER_RGB[id], st == 1);
             }
         }
         if (canvasX >= 0) {
@@ -105,9 +105,19 @@ class TouchCanvas extends Canvas implements MultipointTouchListener {
         }
     }
 
-    private void drawFinger(Graphics g, int id, int x, int y, int color) {
+    private static final int[] FINGER_RGB = {
+        0xE53935, 0x43A047, 0x1E88E5, 0xFDD835,
+        0x8E24AA, 0x00ACC1, 0xFB8C00, 0x6D4C41
+    };
+
+    private void drawFinger(Graphics g, int id, int x, int y, int color,
+            boolean dragging) {
         g.setColor(color);
         g.fillArc(x - 9, y - 9, 18, 18, 0, 360);
+        if (dragging) {
+            g.setColor(0xFFFFFF);
+            g.drawArc(x - 11, y - 11, 22, 22, 0, 360);
+        }
         g.setColor(0xFFFFFF);
         g.drawString("id" + id, x + 10, y - 6, Graphics.TOP | Graphics.LEFT);
         g.drawString(x + "," + y, x + 10, y + 6, Graphics.TOP | Graphics.LEFT);
