@@ -1149,3 +1149,13 @@ bundle check 32/32 on the new canonical tree.  r34 validation: mock 20/20,
 RetroArch LoopDemo PASS, Wine 4/4, full CTest 197/197.  Release `v0.5.15`
 published with the r34 zip and both 0.5.15 APKs; details live in
 `docs/RELEASE_0.5.15.md`.
+
+## Round 94: rehearsal on the 0.5.15 tree (2026-11-19)
+
+`tools/check_libretro_submission_bundle.sh` is 32/32 on the release tree and
+41/41 with clean upstream clones at the recorded baselines plus real `mkdocs`.
+A fresh `--depth 1` clone of origin/main at `8b20d50` satisfies all three
+upstream CI template build contracts, and the CI-built Linux core passes the
+mock matrix 20/20 and a real RetroArch LoopDemo run.  PRs #2204 (head
+`576d189`) and #1239 (head `5917f7d`) remain OPEN/MERGEABLE with no comments;
+details in `docs/LIBRETRO_SUBMISSION.md` ("Round-94 end-to-end rehearsal").

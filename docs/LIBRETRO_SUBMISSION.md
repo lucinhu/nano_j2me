@@ -1195,3 +1195,25 @@ canonical `build/libretro-dist`).  Hashes and validation: mock 20/20, real
 RetroArch LoopDemo 120 frames PASS, Wine 4/4 at 300 frames, bundle 32/32, full
 CTest 197/197 — see `docs/RELEASE_0.5.15.md`.
 
+## Round-94 end-to-end rehearsal (2026-11-19, 0.5.15)
+
+Re-ran the whole rehearsal on the 0.5.15 release tree (`8b20d50`) so the
+"ready to submit" evidence matches the published release:
+
+- `tools/check_libretro_submission_bundle.sh` → **32 passed, 0 failed** on the
+  canonical `build/libretro-dist` (r34).
+- The same check with clean `libretro-super` / `libretro/docs` clones reset to
+  the recorded baselines (`1b988c49…`, `177c6699…`), both patches applied and
+  the docs site built with real `mkdocs` → **41 passed, 0 failed**.
+- Fresh `git clone --depth 1` of origin/main at `8b20d50`:
+  `tools/simulate_ci_builds.sh --jobs 8` satisfied **all three upstream CI
+  template contracts** (linux `.so` 3,999,920 B; windows `.dll` 3,565,867 B;
+  android `.so` 11,700,936 B after the template rename).
+- In that clone (with the test fixtures copied in), the CI-template-built
+  Linux core passed the mock conformance matrix **20/20** and real RetroArch
+  1.22.2 LoopDemo for 120 frames.
+- Upstream state: `libretro/libretro-super#2204` OPEN/MERGEABLE at head
+  `576d189` (0.5.15 `.info`), `libretro/docs#1239` OPEN/MERGEABLE at
+  `5917f7d`; both 0 comments / 0 reviews — awaiting upstream review, no merge
+  claimed.
+
