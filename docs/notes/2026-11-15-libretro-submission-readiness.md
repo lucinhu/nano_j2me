@@ -1227,3 +1227,19 @@ details in `docs/LIBRETRO_SUBMISSION.md` ("Round-94 end-to-end rehearsal").
   prerelease both false). PR #2204 head rebuilt to `bf88d89` with the 0.5.17
   `.info`; PR #1239 head `5917f7d`; both OPEN/MERGEABLE with 0 comments / 0
   reviews, no merge claimed.
+
+## Update, 2026-11-19 (round 102): 0.5.17 submission rehearsal and r36 corpus probe
+
+- Fresh `git clone --depth 1` of origin/main at `084c29a`: CI template
+  simulations **3/3** (linux 4,000,096 B, windows 3,567,227 B, android
+  11,708,520 B); clone-built Linux core passed mock **20/20** and real
+  RetroArch LoopDemo 120 frames.
+- Bundle check against baselines (super `1b988c49`, docs `177c6699`) with
+  `--apply-clones --mkdocs`: **41 passed, 0 failed**.
+- r36 whole-corpus libretro visual probe (300 frames, 6 jobs): 387 titles →
+  **383 passed, 3 known limitations, 1 failed**. The failure
+  (`杀鬼子-敌后武工队_2185`, save-state write refused) passed 45/45 checks in
+  three standalone runs with a private core copy → parallel-load state flake,
+  same class as rounds 78/95/99, not a regression.
+- PRs #2204 (head `bf88d89`) and #1239 (head `5917f7d`) still
+  OPEN/MERGEABLE with 0 comments / 0 reviews; no merge claimed.
