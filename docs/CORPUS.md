@@ -124,6 +124,15 @@ holding the whole run; because duplicates are dropped by content hash, the next
 run resumes exactly where this one stopped.
 
 
+### Fetcher regression and repair (round 126, 2026-11-20)
+
+A later edit of the metadata/download timeout arguments repeated a keyword
+(`timeout=120, timeout=60`), which is a Python `SyntaxError`: the reproducible
+corpus-fetch path was broken from that commit until round 126, where the
+duplicate was removed (metadata request 60 s, payload request 120 s).  The
+script compiles cleanly again and a fresh run into `/tmp/vault4` downloaded
+eight titles that are not in `tests/games`.
+
 ## Does an ok row actually move? (round 13)
 
 The sweep records that a title painted something, not that the frame ever
