@@ -1360,4 +1360,7 @@ titles are covered by libretro evidence, not just the in-repo set.
 Released 0.5.19 from `994cdca` (r38, `.info` `67a021b3…`) with the
 visible-Canvas full-screen fix.  Validation: mock 20/20, RetroArch PASS,
 Wine 4/4, bundle 32/32, CTest 199/199 (350.20 s).  The released core was
-probed over the whole 510-title rendered corpus: 510 titles, 509 passed, 1 known limitation, 0 failed.
+probed over the whole 510-title rendered corpus: 510 titles, 509 passed, 1
+known limitation, 0 failed.  Super fork branch rebuilt on master `55e50a81` as
+`99d7d92` (0.5.19 `.info`); PR #2204 OPEN/MERGEABLE, #1239 OPEN/MERGEABLE
+(head `3316299`), no merge claimed.

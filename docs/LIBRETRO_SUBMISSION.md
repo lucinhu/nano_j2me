@@ -1564,5 +1564,8 @@ full-screen fix (`cc4acfb`, see
 matrix 20/20, real RetroArch 120 frames PASS, Wine 4/4 at 300 frames, bundle
 32/32, full serial CTest 199/199 in 350.20 s; whole-corpus libretro probe on
 the released core: 510 titles, 509 passed, 1 known limitation, 0 failed.  Tracked `.info`/patch/PR drafts were bumped;
-the super fork branch and PR body were refreshed from the 0.5.19 metadata (no
-merge claimed).
+the super fork branch `add-nano_j2me` was rebuilt on current master
+(`55e50a81`) as `99d7d9238c9a835f16af95a664d03af2c991c78a` with the 0.5.19
+`.info` and PR #2204's body was refreshed.  Both PRs stay OPEN/MERGEABLE
+(#2204 head `99d7d92`, #1239 head `3316299`), 0 comments, 0 reviews - no merge
+claimed.
