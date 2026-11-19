@@ -98,3 +98,30 @@ Limits: the value width must match between the first search and narrowing (the
 panel keeps it); the candidate list is capped at 256 offsets and shows the
 first 30; a value that is not in the arena yet (for example a counter the game
 only creates after a new game) simply yields zero hits.
+
+## Candidate list shows the live value (round 100)
+
+Picking blind from a list of offsets that all matched the searched number is
+error-prone once several objects hold the same number (coins, HP, ammo…).  The
+candidate dialog now reads each candidate's current bytes through
+`nj_vm_cheat_read()`:
+
+- `GameActivity.nativeCheatRead(handle, offsets, count, width, out)` runs the
+  same frame-boundary handshake (`cheat_search_mode = 2` in
+  `src/port/android/nj_port_android.c`); the run thread reads each offset with
+  `nj_vm_cheat_read`, assembles the little-endian value and publishes it.
+- The list renders `0x1F0  = 1 (0x1)`, so the player can see which address
+  still holds a plausible number (and spot ones that changed since the scan).
+- Tapping a candidate now writes **the value read at that moment**, not the
+  number the search used — the generated patch matches what is on screen.
+- `cheatWriteCode()` keeps **one line per address**: re-picking an
+  already-written offset rewrites that line instead of stacking duplicates
+  that would compete for the same bytes.
+
+Verified on the API 36 emulator with `loopdemo.jar` (value `1`, width 1):
+the dialog listed `0x1F0  = 1 (0x1)`, `0xAC1  = 1 (0x1)`, …; tapping `0x1F0`
+produced exactly one `1F0:01` line in
+`…/files/jars/cheats/loopdemo.txt` (`cheats: reload … -> 1 code(s)`), where the
+pre-fix build had left two identical lines.  `tools/check_android_java.sh`
+stays at 33 checks passed; the legacy APK still builds
+(`build/android-legacy/nj2me-legacy.apk`, 704,232 B).

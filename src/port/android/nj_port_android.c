@@ -443,9 +443,10 @@ typedef struct android_state {
      */
     nj_u8 cheat_search_value;
     int   cheat_search_width;
-    int   cheat_search_mode;      /* 0 = find, 1 = narrow */
+    int   cheat_search_mode;      /* 0 = find, 1 = narrow, 2 = read values */
     nj_u4 cheat_search_in[512];
     int   cheat_search_in_count;
+    nj_u4 cheat_search_values[512];   /* mode 2 answer: value at each offset */
     nj_u4 cheat_search_offsets[512];
     int   cheat_search_req;
     int   cheat_search_done;
@@ -1713,7 +1714,33 @@ static int android_input_poll(void *ud, nj_event *ev)
         }
         memcpy(in, s->cheat_search_in, (size_t)in_count * sizeof(nj_u4));
         pthread_mutex_unlock(&s->lock);
-        if (s->vm && width > 0) {
+        if (s->vm && mode == 2) {
+            /* Read the current value at each candidate offset for the panel's
+             * list, so the player can see which address actually holds the
+             * number instead of picking blind. */
+            nj_u4 values[512];
+            for (i = 0; i < in_count; i++) {
+                nj_u1 buf[4] = { 0, 0, 0, 0 };
+                nj_u4 v = 0;
+                int b;
+                if (nj_vm_cheat_read(s->vm, in[i], buf, (nj_u2)width) != 0) {
+                    for (b = 0; b < width; b++) {
+                        v |= (nj_u4)buf[b] << (8 * b);
+                    }
+                    values[i] = v;
+                } else {
+                    values[i] = 0xFFFFFFFFu;   /* unreadable: mark */
+                }
+            }
+            pthread_mutex_lock(&s->lock);
+            memcpy(s->cheat_search_values, values,
+                   (size_t)in_count * sizeof(nj_u4));
+            pthread_mutex_unlock(&s->lock);
+            n = in_count;
+            __android_log_print(ANDROID_LOG_INFO, "nj2me",
+                                "cheats: read value(s) width=%d count=%d",
+                                width, n);
+        } else if (s->vm && width > 0) {
             if (mode == 1 && in_count > 0) {
                 n = (int)nj_vm_cheat_filter(s->vm, in, (nj_u4)in_count, pat,
                                             (nj_u2)width,
@@ -6651,6 +6678,84 @@ Java_com_lucinhu_nj2me_GameActivity_nativeCheatNarrow(JNIEnv *env, jobject thiz,
                 jsize k;
                 for (k = 0; k < copied; k++) {
                     tmp[k] = (jlong)s->cheat_search_offsets[k];
+                }
+            }
+            s->cheat_search_done = 0;
+            pthread_mutex_unlock(&s->lock);
+            if (copied > 0) {
+                (*env)->SetLongArrayRegion(env, out, 0, copied, tmp);
+            }
+            return (jint)n;
+        }
+        pthread_mutex_unlock(&s->lock);
+        usleep(5000);
+        waited += 5;
+    }
+    return NJ_ERR_STATE;
+}
+
+/*
+ * Read the current arena value at each candidate offset ({offsets} -> {out}),
+ * with `width` 1..4 little-endian bytes.  The list comes from the previous
+ * search; showing the live values lets the player pick the address that still
+ * holds the number they see on screen.  Returns the number of offsets read, or
+ * a negative error, and fills `out` only up to its length.
+ */
+JNIEXPORT jint JNICALL
+Java_com_lucinhu_nj2me_GameActivity_nativeCheatRead(JNIEnv *env, jobject thiz,
+                                                    jlong handle,
+                                                    jlongArray offsets,
+                                                    jint count, jint width,
+                                                    jlongArray out)
+{
+    android_app *a = (android_app *)(intptr_t)handle;
+    android_state *s;
+    jlong tmp[512];
+    jsize cap, copied;
+    int waited = 0, n;
+    (void)thiz;
+    if (!a || !(s = AS(a->port.ud)) || !offsets || !out) {
+        return NJ_ERR_STATE;
+    }
+    if (width < 1 || width > 4 || count < 0) {
+        return NJ_ERR;
+    }
+    cap = (*env)->GetArrayLength(env, out);
+    if (cap > (jsize)(sizeof(tmp) / sizeof(tmp[0]))) {
+        cap = (jsize)(sizeof(tmp) / sizeof(tmp[0]));
+    }
+    if (count > (int)cap) {
+        count = (int)cap;
+    }
+    if (count > (int)(sizeof(tmp) / sizeof(tmp[0]))) {
+        count = (int)(sizeof(tmp) / sizeof(tmp[0]));
+    }
+    if (count > 0) {
+        (*env)->GetLongArrayRegion(env, offsets, 0, (jsize)count, tmp);
+    }
+    pthread_mutex_lock(&s->lock);
+    s->cheat_search_width = (int)width;
+    s->cheat_search_mode = 2;
+    {
+        int k;
+        for (k = 0; k < count; k++) {
+            s->cheat_search_in[k] = (nj_u4)tmp[k];
+        }
+    }
+    s->cheat_search_in_count = (int)count;
+    s->cheat_search_count = 0;
+    s->cheat_search_done = 0;
+    s->cheat_search_req = 1;
+    pthread_mutex_unlock(&s->lock);
+    while (waited < 5000) {
+        pthread_mutex_lock(&s->lock);
+        if (s->cheat_search_done) {
+            n = s->cheat_search_count;
+            copied = n < (int)cap ? (jsize)n : cap;
+            {
+                jsize k;
+                for (k = 0; k < copied; k++) {
+                    tmp[k] = (jlong)s->cheat_search_values[k];
                 }
             }
             s->cheat_search_done = 0;

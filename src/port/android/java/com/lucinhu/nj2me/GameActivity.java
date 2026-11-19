@@ -320,6 +320,8 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
     private static native int nativeCheatNarrow(long handle, long[] candidates,
                                                 int count, long value,
                                                 int width, long[] out);
+    private static native int nativeCheatRead(long handle, long[] offsets,
+                                             int count, int width, long[] out);
 
     /*
      * Candidates kept from the last value search, the byte width they were
@@ -1913,11 +1915,46 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
         showCheatCandidates(value, width);
     }
 
+    /** The value at one candidate offset, formatted for the candidate list. */
+    private String cheatValueText(long value, int width) {
+        if (value == 0xFFFFFFFFL && width < 4) {
+            return "?";                         /* unreadable */
+        }
+        long mask = width >= 4 ? 0xFFFFFFFFL : (1L << (8 * width)) - 1L;
+        long v = value & mask;
+        return v + " (0x" + Long.toHexString(v).toUpperCase(Locale.ROOT) + ")";
+    }
+
+    /**
+     * Read the current arena value of every candidate, so the list can show
+     * which addresses still hold a plausible number.  Returns null on failure.
+     */
+    private long[] cheatReadCandidateValues() {
+        if (cheatCandidateCount <= 0) {
+            return new long[0];
+        }
+        long[] values = new long[cheatCandidateCount];
+        int n;
+        synchronized (lock) {
+            n = nativeCheatRead(handle, cheatCandidates, cheatCandidateCount,
+                                cheatSearchWidth, values);
+        }
+        if (n < 0) {
+            return null;
+        }
+        return values;
+    }
+
     private void showCheatCandidates(final long value, final int width) {
+        final long[] live = cheatReadCandidateValues();
         final int shown = Math.min(cheatCandidateCount, 30);
         final String[] items = new String[shown];
         for (int i = 0; i < shown; i++) {
-            items[i] = cheatHexOffset(cheatCandidates[i]);
+            String text = cheatHexOffset(cheatCandidates[i]);
+            if (live != null && i < live.length) {
+                text += "  = " + cheatValueText(live[i], width);
+            }
+            items[i] = text;
         }
         new AlertDialog.Builder(this)
                 .setTitle("候选地址 · 共 " + cheatCandidateCount + " 个"
@@ -1925,7 +1962,9 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
                 .setItems(items, new android.content.DialogInterface.OnClickListener() {
                     @Override
                     public void onClick(android.content.DialogInterface d, int which) {
-                        cheatWriteCode(cheatCandidates[which], value, width);
+                        long current = (live != null && which < live.length)
+                                ? live[which] : value;
+                        cheatWriteCode(cheatCandidates[which], current, width);
                     }
                 })
                 .setPositiveButton("缩小范围",
@@ -1952,12 +1991,32 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
     /** Append `<offset>:<bytes>` for this game and reload the cheat file. */
     private void cheatWriteCode(long offset, long value, int width) {
         File file = cheatFileFor(jarName);
-        StringBuilder text = new StringBuilder(readTextFile(file));
-        if (text.length() > 0 && text.charAt(text.length() - 1) != '\n') {
-            text.append('\n');
+        String offsetHex = Long.toHexString(offset).toUpperCase(Locale.ROOT);
+        String code = offsetHex + ":" + cheatCodeHex(value, width);
+        StringBuilder text = new StringBuilder();
+        boolean replaced = false;
+        for (String line : readTextFile(file).split("\n")) {
+            String trimmed = line.trim();
+            if (trimmed.isEmpty()) {
+                continue;
+            }
+            int colon = trimmed.indexOf(':');
+            String lineOffset = colon > 0 ? trimmed.substring(0, colon).trim() : "";
+            if (lineOffset.equalsIgnoreCase(offsetHex)) {
+                /* Keep one line per address: re-picking an offset rewrites it
+                 * instead of stacking duplicates that fight for the same
+                 * bytes.  Later duplicates of the same address are dropped. */
+                if (!replaced) {
+                    text.append(code).append('\n');
+                    replaced = true;
+                }
+            } else {
+                text.append(trimmed).append('\n');
+            }
         }
-        text.append(Long.toHexString(offset).toUpperCase(Locale.ROOT))
-                .append(':').append(cheatCodeHex(value, width)).append('\n');
+        if (!replaced) {
+            text.append(code).append('\n');
+        }
         saveCheats(file, text.toString());
     }
 
