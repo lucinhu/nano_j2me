@@ -69,8 +69,12 @@ Outputs go to `build/libretro-dist/<target>/`, with a library and its metadata.
 Use `--no-strip` to retain symbols. `all` selects the script's supported targets
 and requires all of their toolchains.
 
-The eight candidates currently in `build/libretro-dist/` are the r37 package
-(the 0.5.18 release) built on 2026-11-19 from revision `3b96b69`. r37 folds in
+The eight candidates currently in `build/libretro-dist/` are the r38 package
+(the 0.5.19 release) built on 2026-11-20 from revision `994cdca`. r38 applies
+full-screen mode changes requested on a visible `Canvas` instead of throwing
+`IllegalStateException` (`docs/notes/2026-11-20-fullscreen-visible-toggle.md`);
+titles such as `The Sims 3 Winter Edition`, which switch the mode from their
+paint loop, painted pure black before and now render normally. r37 folded in
 the blit-path field cache (Image width/height/pixels resolved once per VM
 through `nj_hot_field`, byte-exact, -4.2 %/-5.1 % on the unpaced Minecraft
 loader; `docs/PERFORMANCE.md`), so the libretro core gains the same runtime

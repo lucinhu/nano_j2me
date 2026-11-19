@@ -1553,3 +1553,16 @@ rule.  The one known limitation is still `毁灭战士3_10598`'s slow loader.
 To replay fetched titles the probes now use the row's absolute `jar_path`
 (recorded by `tools/sweep_compat.py`, honored by the visual probe), so the
 archive items under `/tmp/vault4`/`/tmp/vault5` are exercised too.
+
+## Round 130 (2026-11-20): 0.5.19 / r38 released
+
+The 0.5.19 package is r38, built from `994cdca` (`.info` SHA-256
+`67a021b3f061fe6ffe97911642432bbc216db9b74d9961b77bc375e0edf42a07`,
+`display_version = "0.5.19"`).  It is the 0.5.18 runtime plus the visible-Canvas
+full-screen fix (`cc4acfb`, see
+`docs/notes/2026-11-20-fullscreen-visible-toggle.md`).  r38 validation: mock
+matrix 20/20, real RetroArch 120 frames PASS, Wine 4/4 at 300 frames, bundle
+32/32, full serial CTest 199/199 in 350.20 s; whole-corpus libretro probe on
+the released core: 5.  Tracked `.info`/patch/PR drafts were bumped;
+the super fork branch and PR body were refreshed from the 0.5.19 metadata (no
+merge claimed).

@@ -1354,3 +1354,10 @@ one known limitation and one failure that turned out to be a runtime bug
 visible-Canvas full-screen change).  Fixed in `cc4acfb`; full serial CTest
 199/199.  Probes now honor each row's absolute `jar_path`, so fetched archive
 titles are covered by libretro evidence, not just the in-repo set.
+
+### Round 130 (2026-11-20): 0.5.19 / r38
+
+Released 0.5.19 from `994cdca` (r38, `.info` `67a021b3…`) with the
+visible-Canvas full-screen fix.  Validation: mock 20/20, RetroArch PASS,
+Wine 4/4, bundle 32/32, CTest 199/199 (350.20 s).  The released core was
+probed over the whole 510-title rendered corpus: 5.
