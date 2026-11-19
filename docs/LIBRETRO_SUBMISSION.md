@@ -1536,3 +1536,20 @@ with a per-title script uses that script, and everything else keeps the generic
 script.  The three known limitations are unchanged (`毁灭战士3_10598` slow
 loader; `台球传奇_87` and `德州扑克2_3884` load-state request timing out while
 the title sits in a multi-second blocking phase).
+
+## Round 129 (2026-11-20): 510-title libretro probe, one real runtime bug fixed
+
+The expanded corpus (520 sweep rows, 510 with a rendered frame) was probed
+through the released r37 libretro core at 300 frames, 8 jobs:
+**510 titles — 508 passed, 1 known limitation, 1 failed**.  The failure was a
+new fetched title, `the_sims_3_winter_ed_259820.jar`, which rendered pure
+black because the runtime rejected a full-screen mode change on a visible
+Canvas (`IllegalStateException`) and the title swallowed it.  The runtime now
+applies such changes and repaints (see
+`docs/notes/2026-11-20-fullscreen-visible-toggle.md`); a scan of all 108
+fetched titles with the pre-fix binary showed no other title affected by the
+rule.  The one known limitation is still `毁灭战士3_10598`'s slow loader.
+
+To replay fetched titles the probes now use the row's absolute `jar_path`
+(recorded by `tools/sweep_compat.py`, honored by the visual probe), so the
+archive items under `/tmp/vault4`/`/tmp/vault5` are exercised too.

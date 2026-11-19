@@ -1345,3 +1345,12 @@ fixes) was re-probed through the libretro core: 399 titles, 396 passed, 3 known
 limitations, 0 failed.  `tools/check_libretro_corpus_visual.py` now replays the
 row's input recipe (`keys: "none"` = no input) so reclassified titles are not
 driven into their exit path again.
+
+### Round 129 (2026-11-20): expanded-corpus probe and a real fix
+
+The 510-title libretro visual probe against the r37 core passed **508**, with
+one known limitation and one failure that turned out to be a runtime bug
+(`The Sims 3 Winter Edition` painted black after the runtime rejected a
+visible-Canvas full-screen change).  Fixed in `cc4acfb`; full serial CTest
+199/199.  Probes now honor each row's absolute `jar_path`, so fetched archive
+titles are covered by libretro evidence, not just the in-repo set.
