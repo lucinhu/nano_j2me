@@ -121,6 +121,10 @@ int main(int argc, char **argv)
     CHECK(strstr(cap.buf, "FSORDER full=true") != NULL,
           "the Canvas is in full-screen mode");
 
+    /* A visible Canvas may change the mode too; titles do this from paint(). */
+    CHECK(strstr(cap.buf, "FSORDER toggle full=false") != NULL,
+          "a visible Canvas accepted a full-screen mode change");
+
     /* showNotify() still runs exactly once before the first paint(). */
     CHECK(strstr(cap.buf, "FSORDER painted shown=true full=true shows=1") != NULL,
           "the full-screen Canvas receives showNotify() before its first paint");

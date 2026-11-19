@@ -3797,9 +3797,24 @@ NJFN(d_setFullScreenMode)
     if (cur == self && isa(vm, self, NJ_C_CANVAS) &&
         (fget(vm, self, NJ_C_CANVAS, F_C_VISIBLE, D_BOOL) != 0) &&
         (fget(vm, self, NJ_C_DISPLAYABLE, F_D_FULL, D_BOOL) != on)) {
+        /*
+         * The specification allows (but does not require) an
+         * IllegalStateException when a *visible* Displayable changes its
+         * full-screen mode.  Titles written for real handsets switch the mode
+         * from their paint()/run() loop and treat the exception as fatal for
+         * that frame - The Sims 3 Winter Edition then painted pure black for
+         * every frame while throwing once per paint.  Applying the change and
+         * scheduling a repaint matches the phones these games were written
+         * for; the showNotify-before-first-paint ordering that 开心农场 needs
+         * is unaffected because the mode change from a constructor still
+         * happens while F_C_VISIBLE is 0.
+         */
         fput(vm, self, NJ_C_DISPLAYABLE, F_D_FULL, D_BOOL, on);
-        return nj_throw(vm, "java/lang/IllegalStateException",
-                        "setFullScreenMode() on a visible Displayable");
+        if (isa(vm, self, NJ_C_GAMECANVAS)) {
+            fput(vm, self, NJ_C_GAMECANVAS, F_GC_FULL, D_BOOL, on);
+        }
+        nj_midp_repaint(vm);
+        return NJ_OK;
     }
     fput(vm, self, NJ_C_DISPLAYABLE, F_D_FULL, D_BOOL, on);
     if (isa(vm, self, NJ_C_GAMECANVAS)) {

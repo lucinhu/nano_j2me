@@ -577,3 +577,17 @@ The compatibility matrix was regenerated from the merged rows directory
 `运行正常`, 3 `标题自行退出`, 2 `未呈现画面`, 2 `非可用包`, 1
 `标题自身异常`, 1 `失败`, 2 `超时`**.  Regenerating again reproduces the
 file byte for byte.
+
+### Round 129 (2026-11-20): the last libretro visual failure was a runtime bug
+
+The 510-title libretro corpus probe on the expanded corpus finished with
+**508 passed, 1 known limitation, 1 failed**.  The single failure was a new
+fetched title, `the_sims_3_winter_ed_259820.jar` (EA Mobile, The Sims 3
+Winter Edition): every frame pure black.  Root cause: the title calls
+`setFullScreenMode(true)` from its paint loop, the runtime rejected changes on
+a *visible* Canvas with `IllegalStateException`, the title swallowed the
+exception and never drew.  See
+`docs/notes/2026-11-20-fullscreen-visible-toggle.md`; after relaxing the rule
+the game renders its main menu (600 frames, 817 paints, 83 259 gfx calls).
+A scan of all 108 fetched titles with the pre-fix binary found no other title
+affected by this rule.  Full serial CTest: 199/199.

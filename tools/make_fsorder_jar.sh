@@ -66,6 +66,12 @@ public class FsOrder extends MIDlet {
              * make the test hang rather than fail. */
             if (!FsOrder.done) {
                 FsOrder.done = true;
+                /* Switching the mode from a *visible* Canvas is legal on the
+                 * handsets these titles target; some games (The Sims 3 Winter
+                 * Edition) do it from every paint.  It must be applied, not
+                 * rejected with IllegalStateException. */
+                setFullScreenMode(false);
+                System.out.println("FSORDER toggle full=" + isFullScreenMode());
                 FsOrder.self.notifyDestroyed();
             }
         }
