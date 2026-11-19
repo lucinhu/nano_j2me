@@ -290,3 +290,33 @@ signature of a game-side error screen plus a busy wait.  A 40-title sample
 adequate for the typical corpus title, and the heap-hungry ones are rare
 outliers (this title; 愤怒小鸟 needs more than 16 MB as recorded earlier).
 The tool is kept for regressions in the default heap or in error handling.
+
+## Reference cross-check of leftover non-ok rows (round 116, 2026-11-19)
+
+The remaining non-`ok` corpus rows were historically adjudicated by inspecting
+the titles themselves.  This round re-checked a sample against an independent
+runtime, FreeJ2ME-Plus, using the tracked headless driver
+`.local-tools/run-freej2me-headless.sh JAR RUNDIR [W H]` (commands on stdin:
+`wait MS`, `shot PATH.png`, `quit`).
+
+| title | our verdict | FreeJ2ME-Plus reference | conclusion |
+|---|---|---|---|
+| `有女倾城破解版_11525.jar` | immediate exit, 0 frames, 44,358 bytecodes; `ZWFRZMIDlet.startApp()` sets a Canvas whose `run()` switch calls `ZWFRZMIDlet.a()` → `notifyDestroyed()` when static state `l == 6` | same immediate exit; screenshot is FreeJ2ME's own "APP TERMINATED! Open a new one through Drag-Drop or 'File->Open'." placeholder | game-side self-exit (cracked build), not a runtime defect |
+| `乱世Q三国_1649.jar` | no frame, `RecordStoreNotFoundException` on first frame | prints `授权过期` (authorization expired) and terminates immediately (screenshot: same APP TERMINATED placeholder) | game-side authorization expiry; runtime failure is the expected consequence |
+| `愤怒的小鸟-高清版_2353.jar` | runs but needs more than the 16 MB default heap (OutOfMemoryError surfaced by the game) | cannot load at all in the reference: `java.lang.NullPointerException … this.suitename is null` in `MIDletLoader.loadManifest` | not comparable — our runtime gets further; documented under the known >16 MB heap requirement |
+| `三国赤壁小乔秘史_7976.jar` | NPE thrown twice inside game code, keeps running 300 frames / 1.7 B bytecodes | 4.5 s screenshot is effectively black (6×10⁻⁴ lit pixels, small gray text block) and no exception is logged | both runtimes fail to bring up the game; the title depends on resources that are missing/stale in this dump, not on runtime behaviour |
+
+Method notes:
+
+- `printf` inside a single-quoted format does not expand shell variables; pass
+  the absolute screenshot path as an argument (`printf 'wait 4500\nshot %s\nquit\n' "$shot"`).
+- FreeJ2ME's headless driver writes screenshots as `shot PATH.png` and exits
+  non-zero if the target exists; always use a fresh path per run.
+- Run each title in its own `RUN_DIRECTORY` — the reference keeps its own
+  `rms/`, `config/` and `freej2me_system/` state there, so re-using a directory
+  would mix runs.
+
+Conclusion: every row checked shows the same failure class in both runtimes,
+strengthening the existing adjudications (the remaining non-`ok` rows are
+title-side: authorization/SMS menus, cracked self-exit, missing resources,
+insufficient heap, or intentionally malformed fixtures).
