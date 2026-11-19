@@ -6,7 +6,7 @@ the prepared bundles were opened as pull requests from forks:
 * `libretro/libretro-super#2204` — `info: add nano_j2me (Mobile - J2ME)`
   (branch `add-nano_j2me` in `lucinhu/libretro-super`, commit `2339093`)
 * `libretro/docs#1239` — `docs: add nano_j2me (Mobile - J2ME)`
-  (branch `add-nano_j2me` in `lucinhu/docs`, commit `51ef4a9`)
+  (branch `add-nano_j2me` in `lucinhu/docs`, commit `3316299`)
 
 The files in this directory remain the exact copies used for those PRs, plus
 the validation notes and the manual checklist. If upstream requests changes,
@@ -49,7 +49,7 @@ The ready-to-post title, patch commands, body text and checklist are in
 ## 2. `libretro/libretro/docs`
 
 Apply the prepared patch, which adds the page and every index update in one
-diff (5 files, +252 lines):
+diff (5 files, +261 lines):
 
 ```
 git apply libretro-docs-nano_j2me.patch

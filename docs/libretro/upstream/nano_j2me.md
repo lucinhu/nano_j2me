@@ -140,12 +140,17 @@ execution guarantee.
 
 ## Core options
 
-All options take effect on **content reload**. Defaults are bold.
+Most options take effect on **content reload**; the frame-rate limit is
+applied immediately. Defaults are bold.
 
 | Option (key) | Values | Description |
 | --- | --- | --- |
+| Renderer (`nano_j2me_renderer`) | **software**, hardware | optional OpenGL drawing path; only present in hardware-enabled builds |
 | Device profile (`nano_j2me_device`) | **generic**, nokia6230, sonyericsson-k750, motorola-e398, samsung-sgh-e700, siemens-s65 | handset system properties and key conventions |
+| Screen size (`nano_j2me_screen`) | **240x320**, 176x208, 128x160, 320x240 | canvas size the MIDlet sees; reported geometry follows |
 | Screen rotation (`nano_j2me_rotation`) | **0**, 90, 180, 270 | rotate output, including reported geometry |
+| Locale (`nano_j2me_locale`) | **auto** (en-US), en-US, zh-CN, zh-TW, ja-JP, ko-KR, de-DE, fr-FR, es-ES, ru-RU | `microedition.locale` system property; auto keeps the runtime default and never uses the host locale |
+| Frame rate limit (`nano_j2me_fps`) | 15, 20, **30**, 60, 0 | presentation cap in frames per second; 0 means unlimited; applied without a reload |
 | Java heap (`nano_j2me_heap`) | **auto**, 16, 32, 64, 128 | MB; auto selects host RAM / 16, clamped to 32–128 MB in 8 MB steps; unknown RAM uses 32 MB |
 | Font (`nano_j2me_font`) | **auto**, system, builtin | external TrueType font selection, see below |
 | Audio output (`nano_j2me_sound`) | **enabled**, disabled | PCM and tone output |
@@ -158,6 +163,10 @@ All options take effect on **content reload**. Defaults are bold.
 | Button R (`nano_j2me_btn_r`) | **GAME_B**, any binding below | R key |
 | Button Select (`nano_j2me_btn_select`) | **0**, any binding below | Select key |
 | Button Start (`nano_j2me_btn_start`) | **5**, any binding below | Start key |
+
+Screen size is emulated by the runtime, not scaled by the frontend: the MIDlet
+paints its canvas at the selected size and the reported geometry changes with
+it. Rotation stays a core-side transform on top of that canvas.
 
 Each button option accepts `NONE`, `FIRE`, `UP`, `DOWN`, `LEFT`, `RIGHT`, `0`–`9`,
 `STAR`, `POUND`, `SOFT_LEFT`, `SOFT_RIGHT`, `CLEAR`, `GAME_A`–`GAME_D`, `VOLUP`,

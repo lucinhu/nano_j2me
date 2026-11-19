@@ -1300,3 +1300,11 @@ details in `docs/LIBRETRO_SUBMISSION.md` ("Round-94 end-to-end rehearsal").
   simulations **3/3** (linux 4,000,128 B / windows 3,567,775 B / android
   11,711,520 B), clone-built core mock **20/20** + real RetroArch **PASS**,
   bundle check **41/41** with the current upstream masters.  No tree changes.
+
+## Round-117 update, 2026-11-19
+
+- Upstream `libretro/docs` page now documents every core option (`screen`,
+  `locale`, `fps`, optional `renderer` with hardware builds included); docs
+  patch regenerated (5 files, +261 lines), fork branch `3316299` pushed, PR
+  #1239 head updated (OPEN/MERGEABLE, 0 comments/reviews).
+- Bundle validation: 32/32 plain, 41/41 with baseline clones + mkdocs.

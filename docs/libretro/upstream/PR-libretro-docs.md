@@ -31,7 +31,7 @@ git push <fork> add-nano_j2me
 
 Adds a library page for the **nano_j2me** core (a J2ME/MIDP-CLDC runtime for RetroArch) and lists it next to the existing J2ME cores.
 
-Files changed (5 files, +252 lines):
+Files changed (5 files, +261 lines):
 
 - `docs/library/nano_j2me.md` — new page with `title`/`description` front matter, features, core options, save states, limitations and build notes.
 - `mkdocs.yml` — `'Mobile - J2ME (nano_j2me)': 'library/nano_j2me.md'` in the `Mobile Emulation` nav group, after FreeJ2ME-Plus.

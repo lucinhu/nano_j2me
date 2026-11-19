@@ -1454,3 +1454,34 @@ Fresh `git clone --depth 1` of origin/main at `cedea62` → `/var/tmp/r115-clone
 
 This is the release-quality evidence for the 0.5.18/r37 submission package
 (round 113); no changes were made to the tree by the rehearsal.
+
+## Round-117 update: complete the upstream core-option documentation, 2026-11-19
+
+The `libretro/docs` page documented only a subset of the core's options.  The
+missing entries were added to `docs/libretro/upstream/nano_j2me.md`:
+
+- `nano_j2me_screen` (240x320 **default**, 176x208, 128x160, 320x240 — the canvas
+  size the MIDlet sees; reported geometry follows);
+- `nano_j2me_locale` (**auto** = en-US, en-US, zh-CN, zh-TW, ja-JP, ko-KR,
+  de-DE, fr-FR, es-ES, ru-RU — `microedition.locale`, never the host locale);
+- `nano_j2me_fps` (15, 20, **30**, 60, 0 = unlimited — presentation cap,
+  applied immediately without a reload);
+- `nano_j2me_renderer` (**software**, hardware — only present in
+  hardware-enabled builds).
+
+The "all options take effect on content reload" sentence was corrected (the
+frame-rate limit is applied live) and a short note explains that screen size is
+emulated inside the core (not frontend scaling) while rotation is a core-side
+transform on top of the canvas.
+
+Regenerated `docs/libretro/upstream/libretro-docs-nano_j2me.patch` from the
+`libretro/docs` master `9399ee32`: **5 files, +261 lines**, 311-line patch;
+`mkdocs build` succeeds (`site/library/nano_j2me/index.html` 102,554 B).  The
+`lucinhu/docs` fork branch `add-nano_j2me` is now commit `3316299` (parent
+`9399ee32`), force-pushed; PR **libretro/docs#1239** head updated to `3316299`
+(body refreshed, files/lines list) and remains OPEN/MERGEABLE with 0 comments /
+0 reviews.  No merge claimed.
+
+Validation: `tools/check_libretro_submission_bundle.sh` → **32 passed / 0
+failed**; with baselines (`libretro-super` `55e50a81`, `libretro/docs`
+`9399ee32`) + `--apply-clones --mkdocs` → **41 passed / 0 failed**.
