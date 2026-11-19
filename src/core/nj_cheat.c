@@ -176,3 +176,97 @@ void nj_vm_apply_cheats(nj_vm *vm)
     if (vm == NULL || vm->cheats.count <= 0) return;
     nj_cheat_apply(vm);
 }
+
+/* ------------------------------------------------------------------ */
+/* Cheat search                                                        */
+/* ------------------------------------------------------------------ */
+/*
+ * A frontend cheat search needs two operations over the arena: find every
+ * occurrence of a value ("first search"), then keep only the ones whose bytes
+ * changed to the new value ("next search").  Both are plain reads: no object
+ * is written, so a mistaken candidate only wastes a slot in the frontend's
+ * list.  Offsets are the same arena offsets a cheat code names, which is what
+ * lets a search result be turned into a code without translation.
+ */
+
+static const nj_u1 *cheat_arena(nj_vm *vm, nj_u4 *out_size)
+{
+    void *data = NULL;
+    nj_size size = 0;
+
+    if (out_size) *out_size = 0u;
+    if (!vm) return NULL;
+    if (nj_vm_memory_region(vm, &data, &size) != NJ_OK) return NULL;
+    if (!data || size == 0) return NULL;
+    if (size > (nj_size)0xFFFFFFFFu) size = (nj_size)0xFFFFFFFFu;
+    if (out_size) *out_size = (nj_u4)size;
+    return (const nj_u1 *)data;
+}
+
+nj_u4 nj_vm_cheat_find(nj_vm *vm, const nj_u1 *pattern, nj_u2 plen,
+                       nj_u2 align, nj_u4 *offsets, nj_u4 max)
+{
+    const nj_u1 *arena;
+    nj_u4 size = 0u;
+    nj_u4 stored = 0u;
+    nj_size i;
+
+    if (!pattern || plen == 0u || plen > NJ_CHEAT_MAX_BYTES) return 0u;
+    if (!offsets || max == 0u) return 0u;
+    if (align == 0u) align = 1u;
+    arena = cheat_arena(vm, &size);
+    if (!arena || size < plen) return 0u;
+
+    i = 0u;
+    while (i + plen <= (nj_size)size) {
+        const nj_u1 *hit;
+
+        hit = (const nj_u1 *)memchr(arena + i, (int)pattern[0],
+                                    (size_t)((nj_size)size - i - plen + 1u));
+        if (!hit) break;
+        i = (nj_size)(hit - arena);
+        if ((align == 1u || ((nj_u4)i % align) == 0u) &&
+            memcmp(hit, pattern, plen) == 0) {
+            offsets[stored++] = (nj_u4)i;
+            if (stored >= max) break;   /* full: more hits may exist */
+        }
+        i++;
+    }
+    return stored;
+}
+
+nj_u4 nj_vm_cheat_filter(nj_vm *vm, const nj_u4 *in_offsets, nj_u4 count,
+                         const nj_u1 *pattern, nj_u2 plen,
+                         nj_u4 *out_offsets)
+{
+    const nj_u1 *arena;
+    nj_u4 size = 0u;
+    nj_u4 kept = 0u;
+    nj_u4 k;
+
+    if (!in_offsets || !out_offsets || count == 0u) return 0u;
+    if (!pattern || plen == 0u || plen > NJ_CHEAT_MAX_BYTES) return 0u;
+    arena = cheat_arena(vm, &size);
+    if (!arena) return 0u;
+
+    for (k = 0u; k < count; k++) {
+        nj_u4 off = in_offsets[k];
+        if (off > size || plen > size - off) continue;
+        if (memcmp(arena + off, pattern, plen) == 0) {
+            out_offsets[kept++] = off;
+        }
+    }
+    return kept;
+}
+
+int nj_vm_cheat_read(nj_vm *vm, nj_u4 offset, nj_u1 *buf, nj_u2 len)
+{
+    const nj_u1 *arena;
+    nj_u4 size = 0u;
+
+    if (!buf || len == 0u) return 0;
+    arena = cheat_arena(vm, &size);
+    if (!arena || offset > size || len > size - offset) return 0;
+    memcpy(buf, arena + offset, len);
+    return 1;
+}

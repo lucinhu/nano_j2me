@@ -519,6 +519,15 @@ feature: the VM heap is not a save file, a restore replaces the arena, and a
 cheat applies to whatever object currently occupies the offset. No cheat
 database is shipped.
 
+The runtime also has the engine side of an app-level cheat search
+(`nj_vm_cheat_find`/`nj_vm_cheat_filter`/`nj_vm_cheat_read` in
+`src/core/nj_cheat.c`): it finds a byte pattern in the arena, narrows a
+candidate list and reads current values, returning the same arena offsets a
+code names (`docs/notes/2026-11-19-cheat-search.md`). This is for shells such
+as the Android in-game panel; the libretro core does not export it over the
+libretro API because frontends already run their own search over the
+`RETRO_MEMORY_SYSTEM_RAM` window.
+
 The CTest gate `check_libretro_cheat` exercises the API end to end: it
 enables a patch near the unused tail of the arena, verifies the write, verifies
 it is re-applied after the game overwrites the byte, and verifies

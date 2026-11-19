@@ -164,12 +164,97 @@ static void test_load_file(void)
     nj_vm_destroy(vm);
 }
 
+/*
+ * Cheat search: find/filter/read over the arena.  The fixture pokes bytes into
+ * the free tail of a real arena; the VM is never run, so these bytes are only
+ * inspected by this test.
+ */
+static void test_search(void)
+{
+    static const nj_u1 pat[4] = { 0xDE, 0xAD, 0xBE, 0xEF };
+    static const nj_u1 pat2[4] = { 0x11, 0x22, 0x33, 0x44 };
+    static const nj_u1 pat_tail[4] = { 0xCA, 0xFE, 0xBA, 0xBE };
+    nj_vm *vm = fresh_vm();
+    void *base = NULL;
+    nj_size size = 0;
+    unsigned char *arena;
+    nj_u4 off_a, off_b, off_u, off_tail;
+    nj_u4 hits[16];
+    nj_u1 buf[8];
+    nj_u4 n;
+
+    CHECK(nj_vm_memory_region(vm, &base, &size) == NJ_OK, "search: arena exposed");
+    arena = (unsigned char *)base;
+    off_a = (nj_u4)(size - 64u);
+    off_b = off_a + 8u;
+    off_u = off_a + 17u;                 /* deliberately not 4-byte aligned */
+    off_tail = (nj_u4)(size - 4u);
+
+    memcpy(arena + off_a, pat, 4);
+    memcpy(arena + off_b, pat, 4);
+    memcpy(arena + off_u, pat, 4);
+    memcpy(arena + off_tail, pat_tail, 4);
+
+    /* Any offsets: all three copies, in ascending order. */
+    n = nj_vm_cheat_find(vm, pat, 4u, 0u, hits, 16u);
+    CHECK(n == 3u, "find: three copies found");
+    CHECK(hits[0] == off_a && hits[1] == off_b && hits[2] == off_u,
+          "find: offsets are ascending and exact");
+
+    /* 4-byte alignment drops the unaligned copy. */
+    n = nj_vm_cheat_find(vm, pat, 4u, 4u, hits, 16u);
+    CHECK(n == 2u && hits[0] == off_a && hits[1] == off_b,
+          "find: alignment filters unaligned hit");
+
+    /* A full result list stops the scan instead of overrunning. */
+    n = nj_vm_cheat_find(vm, pat, 4u, 0u, hits, 1u);
+    CHECK(n == 1u && hits[0] == off_a, "find: max caps the result list");
+
+    /* The pattern that ends exactly at the last byte is still found. */
+    n = nj_vm_cheat_find(vm, pat_tail, 4u, 0u, hits, 16u);
+    CHECK(n == 1u && hits[0] == off_tail, "find: hit ending at arena end");
+
+    /* Narrow a candidate list: only the copy rewritten with pat2 survives. */
+    memcpy(arena + off_b, pat2, 4);
+    {
+        nj_u4 cands[3];
+        cands[0] = off_a;
+        cands[1] = off_b;
+        cands[2] = off_u;
+        n = nj_vm_cheat_filter(vm, cands, 3u, pat2, 4u, cands);
+        CHECK(n == 1u && cands[0] == off_b, "filter: keeps the changed copy");
+    }
+
+    /* Read back a candidate and the same range out of bounds. */
+    CHECK(nj_vm_cheat_read(vm, off_b, buf, 4u) == 1, "read: candidate readable");
+    CHECK(memcmp(buf, pat2, 4) == 0, "read: bytes match the arena");
+    CHECK(nj_vm_cheat_read(vm, (nj_u4)(size - 2u), buf, 4u) == 0,
+          "read: range past the arena end refused");
+    CHECK(nj_vm_cheat_read(vm, (nj_u4)size, buf, 1u) == 0,
+          "read: offset at arena end refused");
+
+    /* Malformed search arguments are refused, not crashed on. */
+    CHECK(nj_vm_cheat_find(vm, NULL, 4u, 0u, hits, 16u) == 0u,
+          "find: NULL pattern refused");
+    CHECK(nj_vm_cheat_find(vm, pat, 0u, 0u, hits, 16u) == 0u,
+          "find: empty pattern refused");
+    CHECK(nj_vm_cheat_find(vm, pat, 17u, 0u, hits, 16u) == 0u,
+          "find: over-long pattern refused");
+    CHECK(nj_vm_cheat_find(vm, pat, 4u, 0u, NULL, 16u) == 0u,
+          "find: NULL output refused");
+    CHECK(nj_vm_cheat_find(vm, pat, 4u, 0u, hits, 0u) == 0u,
+          "find: zero max refused");
+
+    nj_vm_destroy(vm);
+}
+
 int main(void)
 {
     test_parser();
     test_slots();
     test_apply();
     test_load_file();
+    test_search();
     printf("test_cheat: %u checks, %u failures\n", checks, failures);
     return failures == 0 ? 0 : 1;
 }

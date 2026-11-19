@@ -590,6 +590,33 @@ void    nj_vm_cheat_clear(nj_vm *vm);
 void    nj_vm_apply_cheats(nj_vm *vm);
 
 /*
+ * Cheat search over the same non-moving arena.
+ *
+ * nj_vm_cheat_find() scans the whole arena for the byte pattern `pattern`
+ * (`plen` bytes, 1..16) and stores up to `max` absolute arena offsets in
+ * `offsets`.  `align` filters candidates by offset alignment: 0 and 1 mean
+ * "any offset" and 4 keeps only 4-byte-aligned hits, which is what a frontend
+ * wants when the user searches for an int.  The return value is the number of
+ * offsets stored; when it equals `max` the scan stopped early, so more hits
+ * may exist.  The arena is only read: the VM does not need to be paused, but
+ * the caller must choose a point between frames so the values it searches are
+ * a consistent snapshot.
+ *
+ * nj_vm_cheat_filter() narrows a candidate list: it keeps only the offsets
+ * from `in_offsets` whose bytes still match `pattern`.  `out_offsets` may be
+ * the same array as `in_offsets`; the return value is the number of survivors.
+ *
+ * nj_vm_cheat_read() copies `len` arena bytes into `buf` and returns 1, or 0
+ * when the requested range is not fully inside the arena.
+ */
+nj_u4   nj_vm_cheat_find(nj_vm *vm, const nj_u1 *pattern, nj_u2 plen,
+                         nj_u2 align, nj_u4 *offsets, nj_u4 max);
+nj_u4   nj_vm_cheat_filter(nj_vm *vm, const nj_u4 *in_offsets, nj_u4 count,
+                           const nj_u1 *pattern, nj_u2 plen,
+                           nj_u4 *out_offsets);
+int     nj_vm_cheat_read(nj_vm *vm, nj_u4 offset, nj_u1 *buf, nj_u2 len);
+
+/*
  * Diagnostic: describe where every live thread currently is.
  *
  * One line per thread (id, state, depth) followed by the innermost frames of
