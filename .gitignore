@@ -55,3 +55,6 @@ __pycache__/
 
 # CTest artifacts
 Testing/
+
+# gprof output from local profiling builds
+gmon.out
