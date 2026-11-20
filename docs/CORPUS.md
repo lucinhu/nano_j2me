@@ -630,3 +630,47 @@ A further fetch run was started for five game collections with loose JARs
 `nokia35103g2017gamepack`) into `/tmp/vault6`; the transfer is slow under the
 current archive.org conditions (~200 of ~600 files after 25 minutes) and a
 sweep over the new titles follows when it finishes.
+
+## Round 133: the expanded corpus, and a real library gap it found (2026-11-20)
+
+`/tmp/vault6` finished at 238 new JARs from five archive.org collections, so
+the sweep now covers **862 titles** (404 in-repo + 458 fetched):
+
+    ok 827 | title-exception 20 | failure 6 | timeout 3 | bad-jar 2
+    title-exit 2 | no-frame 2
+
+The twenty `title-exception` rows are almost all one family: seventeen
+`Tomb Raider Anniversary` device builds.  Re-running each row alone (same heap,
+same key script) gives `frames=600`, rc=0 and **no uncaught exception**, so
+those are timing-sensitive game-code threads under ten-way sweep load, not
+runtime defects; a solo recheck before counting a `title-exception` row is the
+rule from round 124 applied again.
+
+The six `failure` rows exposed two useful things:
+
+* `Alco Bench.jar` died at startup with
+  `NoSuchFieldError: java/lang/Boolean.TRUE`.  CLDC does not declare the
+  `Boolean.TRUE`/`FALSE` constants, but ports built against the J2SE shape read
+  them with `getstatic`; the class library now materialises the two boxed
+  singletons in `nj_boxing_init()` (`src/core/nj_lib_boxing.c`, direct object
+  construction because the native call machinery is not available during
+  builtin setup).  The title now runs 600 frames / 448 paints.  `tests/test_lib.c`
+  gained a regression case: the statics are non-null boxed singletons whose
+  `booleanValue()` is true/false (1795 checks, 0 failures).
+* `DiamondTwister.jar` fails with `NoClassDefFoundError: e`, but the JAR on
+  disk is byte-identical to the archive.org md5 and `unzip -t` itself reports
+  "invalid compressed data to inflate e.class": the archived JAR is corrupt, so
+  the sweep's `failure` is honest - the loader cannot extract a class that the
+  archive stored damaged.  (`AMF_Xtreme_Bowling.jar` has no MIDlet class in its
+  manifest at all, and `biohazard-...jar` names `bingdu.CBMID` while shipping
+  `bingdu/CBMIDlet.class`: both game-package defects.)
+
+Audio re-validated on the released 0.5.19 core (same recipe as round 107):
+40-title sample 30 delivered / 9 silent, MIDI and AMR subsets ran normally, the
+only non-silent anomaly was `时光樱花册－遗失之心_1009` exceeding the per-title
+budget (known slow loader).  **0 `silent-started` rows**: the invariant from
+round 107 still holds.
+
+Fetcher helpers (`tools/fetch_corpus.py`) now retry with backoff, fall back to
+`curl` for archive.org's flaky TLS and skip files already on disk; the motion,
+audio and deep probes all accept `NJ_SWEEP_DIRS` so fetched titles replay.

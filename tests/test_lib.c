@@ -1297,6 +1297,30 @@ static void test_numbers(nj_vm *vm)
            "Integer.valueOf(\"4x\") throws");
     nj_clear_exception(vm);
 
+    /*
+     * java.lang.Boolean.TRUE / FALSE.  CLDC does not declare these constants,
+     * but ports built against the J2SE shape read them with `getstatic` and
+     * die with NoSuchFieldError on a CLDC-only library (AlcoBench from the
+     * fetched corpus did exactly that).  The statics have to hold boxed
+     * singletons, not null.
+     */
+    {
+        nj_field *ft = NJ_FS(vm, "java/lang/Boolean", "TRUE",
+                             "Ljava/lang/Boolean;");
+        nj_field *ff = NJ_FS(vm, "java/lang/Boolean", "FALSE",
+                             "Ljava/lang/Boolean;");
+        nj_ref vt = ft ? nj_field_read_ref(vm, NULL, ft) : NULL;
+        nj_ref vf = ff ? nj_field_read_ref(vm, NULL, ff) : NULL;
+        OK_MSG(vt != NULL
+               && nj_call_int(vm, vt, "java/lang/Boolean", "booleanValue",
+                              "()Z", NULL) == 1,
+               "Boolean.TRUE is a boxed true");
+        OK_MSG(vf != NULL
+               && nj_call_int(vm, vf, "java/lang/Boolean", "booleanValue",
+                              "()Z", NULL) == 0,
+               "Boolean.FALSE is a boxed false");
+    }
+
     /* The 64-bit parse has to hold the whole range, in both directions. */
     OK_MSG(static_from_string(vm, LONGW, "parseLong", "(Ljava/lang/String;)J",
                               "9223372036854775807",

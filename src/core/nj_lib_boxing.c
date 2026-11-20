@@ -1423,6 +1423,10 @@ static const nj_builtin_field Character_fields[] = {
 };
 static const nj_builtin_field Boolean_fields[] = {
     { "value", "Z", 0 },
+    { "TRUE",  "Ljava/lang/Boolean;",
+      NJ_ACC_PUBLIC | NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "FALSE", "Ljava/lang/Boolean;",
+      NJ_ACC_PUBLIC | NJ_ACC_STATIC | NJ_ACC_FINAL },
     { "TYPE",  "Ljava/lang/Class;",
       NJ_ACC_PUBLIC | NJ_ACC_STATIC | NJ_ACC_FINAL }
 };
@@ -1588,6 +1592,38 @@ nj_status nj_boxing_init(nj_vm *vm)
             return NJ_ERR;
         }
         nj_field_write_ref(vm, NULL, f, mirror);
+    }
+    /*
+     * java.lang.Boolean.TRUE / FALSE.  CLDC does not require the constants,
+     * but plenty of J2ME ports are compiled against the J2SE shape and read
+     * them through getstatic (AlcoBench is one): materialise the two boxed
+     * singletons once so those titles start instead of dying with
+     * NoSuchFieldError.
+     */
+    {
+        static const struct { const char *name; nj_s4 value; } bools[] = {
+            { "TRUE",  1 },
+            { "FALSE", 0 }
+        };
+        nj_u4 b;
+        for (b = 0u; b < (nj_u4)(sizeof(bools) / sizeof(bools[0])); b++) {
+            nj_field *f = nj_field_lookup(vm, "java/lang/Boolean", bools[b].name,
+                                          "Ljava/lang/Boolean;", 1);
+            nj_ref boxed;
+            nj_field *zf;
+            if (!f) {
+                return NJ_ERR;
+            }
+            /* Build the boxed singleton directly: the native call machinery
+             * is not available while the builtin library is being set up. */
+            boxed = nj_object_new(vm, "java/lang/Boolean");
+            zf = vf(vm, "java/lang/Boolean", "Z");
+            if (!boxed || !zf) {
+                return NJ_ERR;
+            }
+            nj_field_write_int(vm, boxed, zf, bools[b].value);
+            nj_field_write_ref(vm, NULL, f, boxed);
+        }
     }
     return NJ_OK;
 }
