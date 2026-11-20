@@ -26,18 +26,52 @@ DEFAULT_ITEMS = ["NokiaJavaGames", "J2ME-games", "the-promise-funy",
 MIN_BYTES = 20000
 
 
-def fetch_bytes(url, attempts=4):
-    """Download one URL, retrying transient network errors with backoff."""
+def fetch_bytes(url, attempts=3):
+    """Download one URL, retrying transient errors; curl is the fallback.
+
+    archive.org answers some TLS handshakes with a plain EOF from Python's
+    ssl module while curl succeeds against the same URL, so when urllib keeps
+    failing and curl is available, read the body through curl instead.
+    """
+    import shutil
+    import subprocess
+    import tempfile
     import time
     last = None
     for attempt in range(attempts):
         try:
             return urllib.request.urlopen(url, timeout=120).read()
-        except Exception as exc:                     # retry, then report
+        except Exception as exc:                     # retry, then fall back
             last = exc
             if attempt + 1 < attempts:
                 time.sleep(1 + 2 * attempt)
+    if shutil.which("curl"):
+        fd, path = tempfile.mkstemp(suffix=".download")
+        os.close(fd)
+        try:
+            rc = subprocess.run(
+                ["curl", "-sL", "--fail", "--retry", "3", "-m", "600",
+                 "-o", path, url],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode
+            if rc == 0:
+                with open(path, "rb") as fh:
+                    return fh.read()
+        finally:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
     raise last
+
+
+def already_saved(out, name):
+    """True when a file of that basename is already in the output directory."""
+    base = os.path.basename(name).replace("/", "_")
+    path = os.path.join(out, base)
+    try:
+        return os.path.getsize(path) >= MIN_BYTES
+    except OSError:
+        return False
 
 
 def known_hashes():
@@ -73,6 +107,8 @@ def main(argv):
         for entry in meta.get("files", []):
             name = entry.get("name", "")
             if name.lower().endswith(".jar"):
+                if already_saved(out, name):
+                    continue
                 url = "https://archive.org/download/%s/%s" % (
                     ident, urllib.parse.quote(name))
                 try:
@@ -112,6 +148,8 @@ def main(argv):
                 continue
             for member in archive.namelist():
                 if not member.lower().endswith(".jar"):
+                    continue
+                if already_saved(out, member):
                     continue
                 try:
                     blob = archive.read(member)
