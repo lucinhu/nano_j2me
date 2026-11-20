@@ -43,17 +43,60 @@ UNCAUGHT = re.compile(r"uncaught exception in thread \d+:\s*([\w.$]+)")
 THROWN = re.compile(r"thrown: ([\w.$]+)")
 STATS = re.compile(r"^stats: frames=(\d+) paints=(\d+)")
 
-ROW_PATH_KEYS = ("path", "jar", "file")
+ROW_PATH_KEYS = ("jar_path", "path", "jar", "file")
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from corpus_keymap import resolve as resolve_keys  # noqa: E402
 
 
+def corpus_dirs():
+    """Search path for JARs: the repo fixtures plus NJ_SWEEP_DIRS entries."""
+    dirs = [ROOT / "tests" / "games"]
+    for d in os.environ.get("NJ_SWEEP_DIRS", "").split(os.pathsep):
+        if d:
+            dirs.append(Path(d))
+    return dirs
+
+
+def resolve_jar(row):
+    """Absolute JAR path for a row, tolerating fetched/vault corpus layouts."""
+    for key in ROW_PATH_KEYS:
+        value = row.get(key)
+        if not value:
+            continue
+        path = Path(value)
+        if path.is_absolute() and path.exists():
+            return path
+        for directory in corpus_dirs():
+            cand = directory / path.name
+            if cand.exists():
+                return cand
+        if not path.is_absolute():
+            cand = ROOT / path
+            if cand.exists():
+                return cand
+    return None
+
+
 def run_one(row, args, keys, work):
-    jar = Path(row["path"])
-    if not jar.is_absolute():
-        cand = ROOT / "tests" / "games" / jar.name
-        jar = cand if cand.exists() else (ROOT / jar)
+    jar = resolve_jar(row)
+    if jar is None:
+        return {
+            "name": row.get("name") or row.get("file", "?"),
+            "jar": "",
+            "rc": -1,
+            "timed_out": False,
+            "wall_s": 0.0,
+            "frames": 0,
+            "paints": 0,
+            "early_exit": False,
+            "uncaught": [],
+            "new_uncaught": 0,
+            "thrown_kinds": [],
+            "base_uncaught": 0,
+            "fail": True,
+            "note": "JAR not found (set NJ_SWEEP_DIRS)",
+        }
     name = row.get("name") or jar.name
     rms = work / ("rms-" + re.sub(r"[^A-Za-z0-9_.-]", "_", name))
     cmd = [
