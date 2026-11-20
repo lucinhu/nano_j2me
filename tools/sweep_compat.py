@@ -122,6 +122,8 @@ def one(job):
         row.update({"rc": rc, "heap": heap,
                     "frames": int(stats.get("frames", 0)), "paints": int(stats.get("paints", 0)),
                     "bytecodes": int(stats.get("bytecodes", 0)),
+                    "gfx": int(stats.get("gfx", 0)),
+                    "natives": int(stats.get("natives", 0)),
                     "tris": int(stats.get("tris", 0)), "m3g": int(stats.get("m3g", 0)),
                     "thrown": len(thrown), "uncaught": uncaught,
                     "exceptions": ",".join(sorted(set(thrown))[:4])})

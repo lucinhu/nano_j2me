@@ -1364,3 +1364,17 @@ probed over the whole 510-title rendered corpus: 510 titles, 509 passed, 1
 known limitation, 0 failed.  Super fork branch rebuilt on master `55e50a81` as
 `99d7d92` (0.5.19 `.info`); PR #2204 OPEN/MERGEABLE, #1239 OPEN/MERGEABLE
 (head `3316299`), no merge claimed.
+
+## Round 135 (2026-11-21): 862-title libretro visual probe
+
+The expanded corpus was rendered through a libretro core built at HEAD
+(`tools/build_libretro_cores.sh linux-x86_64`, Boolean fix included):
+**845 titles -> 840 passed, 2 known limitations, 3 failed**.  The known
+limitations are unchanged (`毁灭战士3_10598` slow loader, `台球传奇_87` /
+`德州扑克2_3884` load-state timeout during a long blocking phase).  The three
+failures are newly fetched titles that also render black in the CLI
+(`GoldenSolitaire`, `NeonRunner`, one `Tomb Raider Anniversary` 128x128 build);
+they paint frames without issuing a single draw call and the reference renders
+a language screen, so they are title-initialisation gaps - see
+`docs/notes/2026-11-21-fetched-black-screen-titles.md`.  The sweep now records
+the `gfx`/`natives` counters so this class is visible without a visual probe.
