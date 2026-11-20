@@ -1,6 +1,16 @@
+From 147ed1e72877c6053a2bab1351677c078227680e Mon Sep 17 00:00:00 2001
+From: release <release@local>
+Date: Sat, 21 Nov 2026 00:41:19 +0800
+Subject: [PATCH] info: add nano_j2me 0.5.20
+
+---
+ dist/info/nano_j2me_libretro.info | 31 +++++++++++++++++++++++++++++++
+ 1 file changed, 31 insertions(+)
+ create mode 100644 dist/info/nano_j2me_libretro.info
+
 diff --git a/dist/info/nano_j2me_libretro.info b/dist/info/nano_j2me_libretro.info
 new file mode 100644
-index 0000000..e3d82ed
+index 0000000..985ce10
 --- /dev/null
 +++ b/dist/info/nano_j2me_libretro.info
 @@ -0,0 +1,31 @@
@@ -17,7 +27,7 @@ index 0000000..e3d82ed
 +# Preserve all applicable MIT, OFL and Apache license/notice files in packages.
 +license = "MIT|OFL-1.1|Apache-2.0"
 +permissions = ""
-+display_version = "0.5.19"
++display_version = "0.5.20"
 +supports_no_game = "false"
 +# Manual states only; architecture/ABI/build dependent, with external resources omitted.
 +savestate = "true"
@@ -35,3 +45,6 @@ index 0000000..e3d82ed
 +is_experimental = "true"
 +notes = "Local JAR MIDlet-1 loading; JAD files are not read. RMS and FileConnection saves are core-managed under <save directory>/nano_j2me/<normalized JAR stem>/. Manual save states are architecture/ABI/build dependent; decoded heap PCM and playback cursors are preserved, native playback handles/queues are cleared, and external files are not rewound. No rewind, runahead, netplay or determinism claim. MIT code, Apache-2.0 AMR data and OFL font notices accompany distribution."
 +description = "A native C99 J2ME runtime for MIDP MIDlets, with handset profiles, keypad/pointer input and software video. No external JVM or BIOS is required. Loads local JAR content; JAD and network services are not supported by this core."
+-- 
+2.56.1
+
