@@ -78,13 +78,30 @@ def find(name):
     return None
 
 
+def _dump_every(frames):
+    """Spacing between dumped frames.
+
+    The dump schedule has to include the EARLY frames, not just the middle and
+    the end: a title that animates its intro for two seconds and then settles
+    on a static menu looks "frozen" if the only dumps are at 300/600/900
+    (round 139: 33 of 250 fetched titles were flagged static at 900 frames
+    even though 24 of them had animated at 300).  Keep dumps at 100-frame
+    steps so the first-second behaviour is always sampled, and thin them out
+    only when the run is long enough to produce more than a dozen files.
+    """
+    every = 100 if frames >= 300 else max(1, frames // 3)
+    if frames // every > 12:
+        every = max(1, frames // 12)
+    return every
+
+
 def probe(path, frames, keys, heap=16, device=None):
     """Run one title and return (unique_dumps, non_black_ratio)."""
     with tempfile.TemporaryDirectory() as out:
         cmd = [BIN, "--port", "headless",
                "--size", "240x320", "--heap", str(heap), "--fps", "30",
                "--run-frames", str(frames), "--dump-frames", out,
-               "--dump-every", str(frames // 3),
+               "--dump-every", str(_dump_every(frames)),
                "--keys", "@" + keys,
                "--stats", path]
         if device:

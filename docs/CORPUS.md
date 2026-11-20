@@ -718,3 +718,29 @@ failures; the note makes them visible from a plain sweep as well, which is
 what a future batch of fetched titles needs (`tools/run-freej2me-headless.sh`
 shows `NeonRunner`/`GoldenSolitaire` reaching a language-select screen, so
 their blank canvas is a title/renderer init gap, not a core crash).
+
+### Round 139: motion at a fixed horizon is not a verdict
+
+`tools/check_corpus_motion.py` used to dump three frames spaced `frames // 3`
+apart, so a 900-frame run only looked at frames 300/600/900.  That schedule
+misses a title's intro: a game that animates its logo for two seconds and then
+settles on a menu looks frozen at 900 frames but animated at 300.  Measured on
+the 335 `ok` fetched rows under `/tmp/vault6` (sample of 250, 8 jobs):
+
+| run frames | dump schedule | change frames | one frame only |
+|-----------:|---------------|--------------:|---------------:|
+| 300        | every 100 (100/200/300) | 226 | 24 |
+| 900        | every 300 (300/600/900) | 217 | 33 |
+| 900        | every 100 (100..900) | **233** | **17** |
+
+The old 900-frame schedule reclassified 16 titles as static even though they
+animate in their first second; the corrected schedule keeps the early frames
+in every run (`_dump_every()` in the tool: 100-frame steps, thinned to at most
+12 dumps for very long runs).  The remaining 17 static titles are mostly
+Tomb Raider device builds and menu screens (non-black 53-100 %), plus the
+three blank-canvas titles already tracked in
+`docs/notes/2026-11-21-fetched-black-screen-titles.md` (`NeonRunner.jar`,
+`GoldenSolitaire.jar`, `Tomb Raider Anniversary v0.3.2 (s40v2) (128x128)`).
+Lesson: "same pixels at three sample points" is not the same question as
+"does this title ever draw two different frames" - put the early frames in
+the window before calling a title static.
