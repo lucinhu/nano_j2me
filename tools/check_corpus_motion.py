@@ -36,6 +36,9 @@ ROOT = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 BIN = os.environ.get("NJ_BIN", os.path.join(ROOT, "build", "nj2me"))
 SEARCH = [os.path.join(ROOT, "tests", "games"), "/tmp/vault/Roms",
           "/tmp/vault2", "/tmp/vault3"]
+# Same extra corpus directories as tools/sweep_compat.py (NJ_SWEEP_DIRS).
+SEARCH += [d for d in os.environ.get("NJ_SWEEP_DIRS", "").split(os.pathsep)
+           if d]
 
 
 def non_black_ratio(raw):

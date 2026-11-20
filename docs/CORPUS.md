@@ -591,3 +591,42 @@ exception and never drew.  See
 the game renders its main menu (600 frames, 817 paints, 83 259 gfx calls).
 A scan of all 108 fetched titles with the pre-fix binary found no other title
 affected by this rule.  Full serial CTest: 199/199.
+
+## Round 132: fetcher robustness and motion of the fetched titles (2026-11-20)
+
+The archive.org corpus cannot be rebuilt in one pass: the twenty-year-old items
+are served slowly, hand out `SSL: UNEXPECTED_EOF_WHILE_READING` on some files
+and keep several collections in `.rar` archives that the standard library
+cannot open.  `tools/fetch_corpus.py` was hardened so a resume is cheap:
+
+* `fetch_bytes()` retries transient failures with backoff and falls back to
+  `curl -sL --fail --retry 3` when urllib keeps failing (archive.org answers
+  some handshakes with a plain EOF from Python's ssl module while curl gets the
+  same URL fine);
+* archive.org metadata requests go through the same helper (a whole collection
+  no longer disappears because one metadata fetch blipped);
+* an output file that already exists with a plausible size is skipped, so a
+  second run only downloads what is missing.
+
+`tools/check_corpus_motion.py` now appends `NJ_SWEEP_DIRS` directories to its
+search path (same override as the sweep), so fetched titles can be probed; and
+a subset rows directory must contain the sweep's `keys.txt` — without it every
+title runs with no input and menus look frozen (the first pass reported 54 of
+111 static for that reason, the corrected pass 26).
+
+Fetched-corpus motion at 300/900/1500 frames (111 ok titles that live under
+`/tmp/vault4` and `/tmp/vault5`):
+
+* 300 frames: 57 animate / 54 static;
+* 900 frames with the real key script: **85 animate / 26 static**;
+* the 23 static rows matched by name were re-probed at 1500 frames: 6 animate
+  (slow loaders), **14 remain static title/menu screens** (Asphalt 6, Sonic
+  Advance, Midnight Pool 3, Castlevania/... style splash menus) — titles that
+  wait for a specific key rather than a frame count.
+
+A further fetch run was started for five game collections with loose JARs
+(`j2me_game_collection_vol1`, `tomb_raider_j2me_collection`,
+`j2me_20230404_202304`, `j2me-horror-games-collection`,
+`nokia35103g2017gamepack`) into `/tmp/vault6`; the transfer is slow under the
+current archive.org conditions (~200 of ~600 files after 25 minutes) and a
+sweep over the new titles follows when it finishes.
