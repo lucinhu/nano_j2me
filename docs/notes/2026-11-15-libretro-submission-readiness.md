@@ -1414,3 +1414,15 @@ single-pointer drag fix; `test_pointer` now tests the built CLI.  Tag `v0.5.21`
 PR #2204 body refreshed (head `863af5d5`); docs PR #1239 unchanged (head
 `3316299`).  No merge claimed.  Sample probe on the r40 core: 200/200 renderable
 titles passed (0 known limitations, 0 failed).
+
+### Round-142 clean-clone rehearsal (2026-11-21)
+
+Re-ran the whole submission kit from a depth-1 clone of origin/main `665552c`
+in `/tmp/r142-clone`: CI template simulations 3/3 (clone sizes 4,008,416 /
+3,569,902 / 11,717,720 B), clone-built Linux core 3,856,264 B
+`40517cbc…`, mock conformance 20/20, option matrix 88/88, real RetroArch 1.22.2
+LoopDemo 120 frames PASS, bundle 25/25 in the clone and 32/32 with
+`--dist /var/tmp/nj2me-submission-dist-r40b`; baseline clones
+`55e50a81`/`9399ee32` + mkdocs -> 25/25 with the docs page rendered.  No
+functional drift found; PR heads unchanged (#2204 `863af5d5`, #1239
+`3316299`, both OPEN/MERGEABLE, no merge claimed).

@@ -1675,3 +1675,27 @@ visual probe (300 frames, 8 jobs, subset of the 845 renderable rows) ->
 **200 passed, 0 known limitations, 0 failed**; the full 862-row probe on the
 r39 core was 840/845 renderable with 2 known limitations and 3 fetched-title
 black screens (unchanged titles, not core regressions).
+
+### Round-142 rehearsal: 0.5.21 submission kit from a clean clone (2026-11-21)
+
+Fresh `git clone --depth 1` of origin/main at `665552c` ("docs: record the
+0.5.21 sample probe on the released core") into `/tmp/r142-clone`, then the
+shipped validation commands run *inside that clone*:
+
+| Step | Result |
+| --- | --- |
+| `tools/simulate_ci_builds.sh --out /tmp/r142-ci --jobs 8` | **3/3 upstream CI template contracts PASS** (linux `.so` 4,008,416 B, windows `.dll` 3,569,902 B, android `.so` 11,717,720 B renamed `nano_j2me_libretro_android.so`) |
+| `tools/build_libretro_cores.sh linux-x86_64 --out /tmp/r142-dist` | core built from the clone (3,856,264 B, sha256 `40517cbc4caa368847348b7053cb97b8887cf11abd96927514a6c75373e6b419`) |
+| mock frontend conformance (`CORE=` clone core, `HARNESS=` private harness) | **20 passed, 0 failed, 0 skipped** |
+| `tools/check_libretro_option_matrix.py` (clone core, 8 titles x 11 profiles) | **88 passed, 0 failed** |
+| `tools/check_libretro_retroarch.sh <clone core> tests/fixtures/loopdemo.jar 120` | **PASS** (real RetroArch 1.22.2, core log markers verified) |
+| `tools/check_libretro_submission_bundle.sh` | 25 passed / 0 failed (dist artifacts are gitignored in a clone) |
+| same check with `--dist /var/tmp/nj2me-submission-dist-r40b` | **32 passed / 0 failed** |
+| baseline clones `/tmp/r138-super` (`55e50a81`) + `/tmp/r138-docs2` (`9399ee32`) with `--apply-clones --mkdocs /var/tmp/mkvenv/bin/mkdocs` | **25 passed / 0 failed**, mkdocs rendered `site/library/nano_j2me/index.html` |
+
+Notes: the clone-built Linux core has a different hash from the published r40
+artifact (`b5146bb5…`) because the release package is built from a clean
+worktree with the release flags; both binaries pass the same conformance gates,
+so the hash difference is build provenance, not a functional drift.  Material:
+`docs/libretro/upstream/{nano_j2me.md,libretro-super-nano_j2me-info.patch,libretro-docs-nano_j2me.patch}`,
+`.info` sha256 `e974a5c6…` (0.5.21).
