@@ -1636,3 +1636,35 @@ Fresh `git clone --depth 1` of origin/main at `ce17636` into `/tmp/r138-clone`
   **32/32**).  Baselines unchanged: `libretro-super`
   `55e50a81195eaf8dd1b7720a601282459832ced1`, `libretro/docs`
   `9399ee32829094ab6f2ea51add4bb1562312412e`.
+
+### Round-141 (2026-11-21): release 0.5.21 / r40
+
+Version bump `4358359` "release: nano_j2me 0.5.21 metadata" plus the pointer
+fix `4ac5381` "fix(input): keep a bare drag on the single pointer"; both `.info`
+copies are byte-identical with SHA-256
+`e974a5c60a8cb6034d3507b2a6b3e0ce9b628575bb6c303e7bab0bd0c55f17f9`;
+`docs/libretro/upstream/libretro-super-nano_j2me-info.patch` regenerated (50
+lines) against `libretro-super` master
+`55e50a81195eaf8dd1b7720a601282459832ced1`.
+
+r40 package, built from a clean worktree at `4ac5381`:
+
+| target | size | SHA-256 |
+|---|---:|---|
+| linux-x86_64 | 3,856,264 | `b5146bb56cfa772f819a84f055cbd4567f9a0dbc7720b398209827485f4a74c1` |
+| linux-aarch64 | 3,332,912 | `5843586c74def8d8c2ed77ac5cada9d7efd101e5b4ef67e4cd8047ad68731c68` |
+| linux-armv7 | 3,040,344 | `d07d7670680d8bd5b6edff3a46fcfbd9278f134c97973e722af0da8b40428f9c` |
+| android-arm64 | 3,567,712 | `a2649d459d90ae929fb21fad4580dea3d115d4a8cbe5f0a172bca0a7ba4f62f1` |
+| android-armv7 | 2,752,568 | `b6aa6e09d39e671c35752481423d2358ad4747f4fdf144674540ed57cdefd2a4` |
+| android-x86_64 | 3,608,136 | `46f293b8d501d636e74a9bd3aa1f571967d871d425e5eefe6ef4dacf4156826f` |
+| windows-i686 | 3,462,144 | `791ca67b71f217415fdc8462a6026152949b30ebca5e4481448b34e2000414cb` |
+| windows-x86_64 | 3,237,888 | `5e8abec823c48bdea9a494abbe893be8c860bcc921536a955c0d53451142486f` |
+
+Validation: libretro mock matrix 20/20; real RetroArch 1.22.2 LoopDemo 120
+frames PASS; Windows x86_64 under Wine 4/4 at 300 frames; submission bundle
+32/32; full serial CTest **199/199 in 363.96 s**.  APKs 0.5.21 (versionCode 521,
+3,299,690 B `676ba4ee…`; legacy 704,323 B `cfab9365…`).  Release zip
+`nj2me-0.5.21-libretro-cores.zip` 11,709,796 B `e385253f…` (128 entries).
+Tag `v0.5.21` + GitHub release; super fork branch rebuilt on master `55e50a81`
+with the 0.5.21 `.info` (PR #2204 body refreshed); docs PR #1239 unchanged
+(page version-independent).  No merge claimed.
