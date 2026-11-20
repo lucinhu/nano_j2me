@@ -1569,3 +1569,18 @@ the super fork branch `add-nano_j2me` was rebuilt on current master
 `.info` and PR #2204's body was refreshed.  Both PRs stay OPEN/MERGEABLE
 (#2204 head `99d7d92`, #1239 head `3316299`), 0 comments, 0 reviews - no merge
 claimed.
+
+### Round-135 (2026-11-21): expanded 862-title libretro visual probe
+
+A libretro core built at HEAD (`tools/build_libretro_cores.sh linux-x86_64`,
+including the round-134 `Boolean.TRUE/FALSE` library fix) rendered the whole
+expanded corpus of `ok` rows (404 in-repo + 458 fetched archive titles, 300
+frames each, 8 jobs): **845 titles -> 840 passed, 2 known limitations, 3
+failed**.  Known limitations unchanged (`毁灭战士3_10598` slow loader;
+`台球传奇_87`/`德州扑克2_3884` load-state timeout while the title sits in a
+multi-second blocking phase).  The three failures (`GoldenSolitaire`,
+`NeonRunner`, one `Tomb Raider Anniversary` 128x128 build) paint no draw calls
+in the CLI either; they are title-initialisation gaps recorded in
+`docs/notes/2026-11-21-fetched-black-screen-titles.md`, not core regressions.
+The compat sweep now stores `gfx`/`natives` counters per row so an empty-paint
+title is visible without a visual probe.
