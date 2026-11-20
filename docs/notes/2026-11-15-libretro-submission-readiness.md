@@ -1378,3 +1378,15 @@ they paint frames without issuing a single draw call and the reference renders
 a language screen, so they are title-initialisation gaps - see
 `docs/notes/2026-11-21-fetched-black-screen-titles.md`.  The sweep now records
 the `gfx`/`natives` counters so this class is visible without a visual probe.
+
+## Round 136 (2026-11-21): 0.5.20 / r39 released
+
+Version bump `d12094c`, `.info` SHA-256
+`f1323bd73c5a798e845fda550d8d0ab837991e70e3473f5bddcd22135115c20e`, r39 package
+built from a clean worktree (8 targets; linux-x86_64 3,852,160 B
+`50195aa1…`), installed as `build/libretro-dist`.  Validation: mock 20/20, real
+RetroArch 120 frames PASS, Wine 4/4, bundle 32/32, full CTest 199/199.  APKs
+0.5.20 (versionCode 520, 3,299,690 B; legacy 704,318 B).  Release zip
+11,352,213 B `1ec812c6…`.  Tag `v0.5.20` + GitHub release; super fork branch
+rebuilt on master `55e50a81` with the 0.5.20 `.info`, PR #2204 body refreshed;
+docs PR #1239 unchanged (page version-independent).  No merge claimed.

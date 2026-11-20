@@ -1584,3 +1584,34 @@ in the CLI either; they are title-initialisation gaps recorded in
 `docs/notes/2026-11-21-fetched-black-screen-titles.md`, not core regressions.
 The compat sweep now stores `gfx`/`natives` counters per row so an empty-paint
 title is visible without a visual probe.
+
+### Round-136 (2026-11-21): release 0.5.20 / r39
+
+Version bump `d12094c` "release: nano_j2me 0.5.20 metadata"; both `.info`
+copies are byte-identical with SHA-256
+`f1323bd73c5a798e845fda550d8d0ab837991e70e3473f5bddcd22135115c20e`;
+`docs/libretro/upstream/libretro-super-nano_j2me-info.patch` regenerated against
+`libretro-super` master `55e50a81195eaf8dd1b7720a601282459832ced1`.
+
+r39 package, built from a clean worktree at `d12094c`:
+
+| target | size | SHA-256 |
+|---|---:|---|
+| linux-x86_64 | 3,852,160 | `50195aa1398fe2d27dc768098f681c4ac5803a5306ce94a5da8c1c6bb39ab86f` |
+| linux-aarch64 | 3,332,336 | `f425068a7a53ef3344984764b1f49a3db0e107fac4bf2d706a6718b3d8514d27` |
+| linux-armv7 | 3,039,720 | `88aebbcc0cd28e3c2df1ec61fa55e1af0c67187ee630018f8b6a36ff1ccc4e50` |
+| android-arm64 | 3,567,104 | `84046d9355435d05bdbcb97ba5ccd44d228f8a783acccc9eee74c14def4b4db5` |
+| android-armv7 | 2,752,120 | `2668696884191fa7669cefe1de41bc5bc9a0f470ad1aada8f35cd0d049b0f6f4` |
+| android-x86_64 | 3,607,480 | `3052d7526d1785d181c19dd7a6257489816553eb53b73cac3b59f33c7f99b56d` |
+| windows-i686 | 3,460,096 | `160e7bea2ad3cccd75a092b99b6cb6ed0f973b18181c574f8151e99ce49e0c80` |
+| windows-x86_64 | 3,236,352 | `7cce95959680492632d771d87a3ede3ea1c82fc9465526f22897bf7a781dfa65` |
+
+Validation on the packaged tree: libretro mock matrix **20/20**; real
+RetroArch 1.22.2 LoopDemo 120 frames **PASS**; Windows x86_64 under Wine
+**4/4** at 300 frames; submission bundle **32/32**; full CTest **199/199**.
+Contents are the round-134 `Boolean.TRUE`/`FALSE` library fix on top of r38
+(full-screen toggle on a visible Canvas, multi-touch, cheat codes/value search,
+SYSTEM_RAM memory map, measured rewind limits).  Release assets:
+`nj2me-0.5.20-libretro-cores.zip` (11,352,213 B, SHA-256
+`1ec812c6a7f067a79403ca89fae9f07eecafb612452c27d804c5ce85da5cbb61`), the two
+APKs and `SHA256SUMS-0.5.20.txt`.

@@ -69,8 +69,11 @@ Outputs go to `build/libretro-dist/<target>/`, with a library and its metadata.
 Use `--no-strip` to retain symbols. `all` selects the script's supported targets
 and requires all of their toolchains.
 
-The eight candidates currently in `build/libretro-dist/` are the r38 package
-(the 0.5.19 release) built on 2026-11-20 from revision `994cdca`. r38 applies
+The eight candidates currently in `build/libretro-dist/` are the r39 package
+(the 0.5.20 release) built on 2026-11-21 from revision `d12094c`.  r39 adds the
+`java.lang.Boolean.TRUE`/`FALSE` constants that J2SE-shaped ports read with
+`getstatic` (`src/core/nj_lib_boxing.c`; `Alco Bench.jar` and other titles that
+died with `NoSuchFieldError` now start).  r38 applies
 full-screen mode changes requested on a visible `Canvas` instead of throwing
 `IllegalStateException` (`docs/notes/2026-11-20-fullscreen-visible-toggle.md`);
 titles such as `The Sims 3 Winter Edition`, which switch the mode from their
