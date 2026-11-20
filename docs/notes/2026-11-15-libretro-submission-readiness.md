@@ -1390,3 +1390,13 @@ RetroArch 120 frames PASS, Wine 4/4, bundle 32/32, full CTest 199/199.  APKs
 11,352,213 B `1ec812c6…`.  Tag `v0.5.20` + GitHub release; super fork branch
 rebuilt on master `55e50a81` with the 0.5.20 `.info`, PR #2204 body refreshed;
 docs PR #1239 unchanged (page version-independent).  No merge claimed.
+
+## Round 138 (2026-11-21): clean-clone rehearsal of 0.5.20
+
+Clone `/tmp/r138-clone` at `ce17636`: CI templates 3/3 (linux 4,004,264 B,
+windows 3,568,305 B, android 11,714,016 B); clone core mock 20/20 and real
+RetroArch LoopDemo 120 frames PASS; bundle with fresh baseline clones
+(`libretro-super` `55e50a81`, `libretro/docs` `9399ee32`) plus
+`--apply-clones --mkdocs` -> 25 passed / 0 failed (patches apply, library page
+renders).  Main-tree bundle check remains 32/32 against the r39 dist.  No
+upstream merge claimed.

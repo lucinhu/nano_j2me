@@ -1615,3 +1615,24 @@ SYSTEM_RAM memory map, measured rewind limits).  Release assets:
 `nj2me-0.5.20-libretro-cores.zip` (11,352,213 B, SHA-256
 `1ec812c6a7f067a79403ca89fae9f07eecafb612452c27d804c5ce85da5cbb61`), the two
 APKs and `SHA256SUMS-0.5.20.txt`.
+
+### Round-138 (2026-11-21): clean-clone rehearsal of the 0.5.20 submission kit
+
+Fresh `git clone --depth 1` of origin/main at `ce17636` into `/tmp/r138-clone`
+(the 0.5.20 release tree plus its post-release notes):
+
+- `tools/simulate_ci_builds.sh --out /tmp/r138-ci --jobs 8` -> **all three
+  upstream CI template contracts PASS**: linux `.so` 4,004,264 B, windows
+  `.dll` 3,568,305 B, android `.so` 11,714,016 B (template renames it to
+  `nano_j2me_libretro_android.so`).
+- Clone-built Linux core (`tools/build_libretro_cores.sh linux-x86_64`) with
+  copied fixture JARs: libretro mock matrix **20 passed / 0 failed / 0
+  skipped**, real RetroArch 1.22.2 LoopDemo 120 frames **PASS**.
+- `tools/check_libretro_submission_bundle.sh --super-clone /tmp/r138-super
+  --docs-clone /tmp/r138-docs2 --apply-clones --mkdocs
+  /var/tmp/mkvenv/bin/mkdocs`: **25 passed / 0 failed** (the clone-check
+  variant: both patches apply to the recorded baselines, mkdocs 1.13 builds
+  the page; the full main-tree run including the r39 dist artifacts stays
+  **32/32**).  Baselines unchanged: `libretro-super`
+  `55e50a81195eaf8dd1b7720a601282459832ced1`, `libretro/docs`
+  `9399ee32829094ab6f2ea51add4bb1562312412e`.
