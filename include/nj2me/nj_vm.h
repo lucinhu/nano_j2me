@@ -508,6 +508,15 @@ int  nj_vm_in_paint(const nj_vm *vm);
 int  nj_vm_save(nj_vm *vm, FILE *f);
 int  nj_vm_load(nj_vm *vm, FILE *f);
 int  nj_vm_save_file(nj_vm *vm, const char *path);
+/*
+ * Boundary save, for ports that only get control from the frame hook (the
+ * Android launcher asks for a save from its input poll).  A thread parked in
+ * a frame-wait native is stored as resumed-after-the-call instead of being
+ * refused; everywhere else this behaves exactly like nj_vm_save_file().  Must
+ * be called from the port while the VM is pumping a frame, not from a Java
+ * callback.
+ */
+int  nj_vm_save_file_boundary(nj_vm *vm, const char *path);
 int  nj_vm_load_file(nj_vm *vm, const char *path);
 
 /*

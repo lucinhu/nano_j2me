@@ -643,9 +643,15 @@ int nj_vm_can_save(const nj_vm *vm_c)
     if (vm->native_depth != 0u) {
         return 0;
     }
-    /* Re-entrancy guards: the VM is inside its own paint/hook/pump. */
-    if (vm->in_paint || vm->in_frame_hook || vm->in_call_pump ||
-        vm->in_exception_new) {
+    /*
+     * Re-entrancy guards: the VM is inside its own paint/hook/pump.  A
+     * boundary save is requested BY the port from the frame hook, so the hook
+     * guard is expected there; nothing else is relaxed (the arena walk below
+     * and every other guard sees the same VM).
+     */
+    if (!vm->boundary_save &&
+        (vm->in_paint || vm->in_frame_hook || vm->in_call_pump ||
+         vm->in_exception_new)) {
         return 0;
     }
     /* A temporary C root means C code holds a ref across a call: that ref
@@ -669,7 +675,15 @@ int nj_vm_can_save(const nj_vm *vm_c)
         if (!th) {
             continue;
         }
-        if (th->in_c_call) {
+        /*
+         * A thread parked in a nested C call normally cannot be saved: its C
+         * stack has nowhere to live.  A boundary save is taken from the frame
+         * hook, where the parked thread is only waiting for that hook (a
+         * repaint-paced loop parked in serviceRepaints()/paint), so the blob
+         * can drop the native dispatch frame and resume the caller after the
+         * call returns - see save_threads().
+         */
+        if (th->in_c_call && !vm->boundary_save) {
             return 0;                 /* parked in a nested C call */
         }
         if (!th->stack_mem || !th->stack_end || th->top < th->stack_mem ||
@@ -679,7 +693,14 @@ int nj_vm_can_save(const nj_vm *vm_c)
         if (th->nframes < 0 || th->nframes > NJ_MAX_FRAMES) {
             return 0;
         }
-        for (f = 0; f < th->nframes; f++) {
+        {
+        int nfr = th->nframes;
+
+        if (vm->boundary_save && th->in_c_call && nfr > 0 &&
+            th->frames[nfr - 1].is_native) {
+            nfr--;                    /* native dispatch frame is C, not blob */
+        }
+        for (f = 0; f < nfr; f++) {
             const nj_frame *fr = &th->frames[f];
 
             /*
@@ -700,6 +721,7 @@ int nj_vm_can_save(const nj_vm *vm_c)
             if (fr->sp < fr->locals || fr->stack_limit < fr->stack) {
                 return 0;
             }
+        }
         }
     }
     return 1;
@@ -925,6 +947,14 @@ static int save_threads(nj_vm *vm, nj_swriter *w)
         nj_u4 used;
         nj_u8 ret;
         int f;
+        int nfr;
+        int boundary;
+        nj_u1 saved_state;
+        nj_u4 saved_c_call;
+        nj_s8 saved_wake_at;
+        nj_s8 saved_wait_deadline;
+        nj_u4 saved_wakeup_seq;
+        nj_u8 saved_wait_bits;
 
         if (!th || th->top < th->stack_mem || th->top > th->stack_end) {
             return 0;
@@ -932,6 +962,38 @@ static int save_threads(nj_vm *vm, nj_swriter *w)
         used = (nj_u4)(th->top - th->stack_mem);
         if (th->nframes < 0 || th->nframes > NJ_MAX_FRAMES) {
             return 0;
+        }
+        /*
+         * A thread parked in a frame-wait native at the boundary the port
+         * asked for is stored as if that native had returned: its C stack is
+         * the hook pump, and the blob resumes the Java caller after the call.
+         * The native dispatch frame (is_native) is dropped; the caller frame
+         * already points past the invoke.  Nothing else changes.
+         */
+        boundary = (vm->boundary_save && th->in_c_call != 0u) ? 1 : 0;
+        nfr = th->nframes;
+        saved_state = (nj_u1)th->state;
+        saved_c_call = (nj_u4)th->in_c_call;
+        saved_wake_at = th->wake_at_ms;
+        saved_wait_deadline = th->wait_deadline;
+        saved_wakeup_seq = th->wakeup_seq;
+        saved_wait_bits = ((nj_u4)th->wait_kind) |
+                          ((nj_u4)th->wait_ready << 8) |
+                          ((nj_u4)th->wait_depth << 16);
+        if (boundary) {
+            if (nfr > 0 && th->frames[nfr - 1].is_native) {
+                nfr--;
+            }
+            if (nfr <= 0) {
+                return 0;
+            }
+            /* Resume the Java frame after the parked native call. */
+            saved_state = (nj_u1)NJ_THREAD_RUNNING;
+            saved_c_call = 0u;
+            saved_wake_at = 0;
+            saved_wait_deadline = 0;
+            saved_wakeup_seq = 0u;
+            saved_wait_bits = 0u;
         }
         /*
          * th->top is only the frame-allocation frontier and it can lag BEHIND
@@ -942,7 +1004,7 @@ static int save_threads(nj_vm *vm, nj_swriter *w)
          * its operands were.  The image has to reach the highest slot any live
          * frame can read: its sp, or its locals.
          */
-        for (f = 0; f < th->nframes; f++) {
+        for (f = 0; f < nfr; f++) {
             nj_frame *fr = &th->frames[f];
             nj_u4 need;
 
@@ -960,21 +1022,21 @@ static int save_threads(nj_vm *vm, nj_swriter *w)
             }
         }
         if (used > (nj_u4)NJ_MAX_STACK_SLOTS ||
-            th->nframes < 0 || th->nframes > NJ_MAX_FRAMES) {
+            nfr < 0 || nfr > NJ_MAX_FRAMES) {
             return 0;
         }
         memcpy(&ret, &th->ret_value, sizeof(ret));
-        if (!sw_u32(w, ((nj_u4)th->state) | ((nj_u4)th->daemon << 8) |
+        if (!sw_u32(w, ((nj_u4)saved_state) | ((nj_u4)th->daemon << 8) |
                        ((nj_u4)th->started << 16) | ((nj_u4)th->is_main << 24)) ||
             !sw_u32(w, (nj_u4)th->priority) ||
             !sw_u32(w, (nj_u4)th->exit_value) ||
             !sw_u64(w, ret) ||
             !sw_u32(w, (nj_u4)th->stop_depth) ||
-            !sw_u32(w, (nj_u4)th->in_c_call) ||
+            !sw_u32(w, saved_c_call) ||
             !sw_u32(w, th->id) ||
-            !sw_u64(w, (nj_u8)th->wake_at_ms) ||
-            !sw_u64(w, (nj_u8)th->wait_deadline) ||
-            !sw_u32(w, th->wakeup_seq) ||
+            !sw_u64(w, (nj_u8)saved_wake_at) ||
+            !sw_u64(w, (nj_u8)saved_wait_deadline) ||
+            !sw_u32(w, saved_wakeup_seq) ||
             !sw_u32(w, used) ||
             /*
              * The used stack top, which is also where the live stack image
@@ -983,7 +1045,7 @@ static int save_threads(nj_vm *vm, nj_swriter *w)
              * caught.
              */
             !sw_u32(w, (nj_u4)(th->top - th->stack_mem)) ||
-            !sw_u32(w, (nj_u4)th->nframes) ||
+            !sw_u32(w, (nj_u4)nfr) ||
             /*
              * v3: held monitors and the wait state.  A thread parked in
              * wait() has released its monitors, so the saved list is exactly
@@ -1009,16 +1071,14 @@ static int save_threads(nj_vm *vm, nj_swriter *w)
                 }
             }
         }
-        if (!sw_u32(w, ((nj_u4)th->wait_kind) |
-                       ((nj_u4)th->wait_ready << 8) |
-                       ((nj_u4)th->wait_depth << 16))) {
+        if (!sw_u32(w, (nj_u4)saved_wait_bits)) {
             return 0;
         }
         if (used != 0u &&
             !sw_body(w, th->stack_mem, used * (nj_u4)sizeof(nj_value))) {
             return 0;
         }
-        for (f = 0; f < th->nframes; f++) {
+        for (f = 0; f < nfr; f++) {
             nj_frame *fr = &th->frames[f];
             nj_u2 ci = class_index_of(vm, fr->m ? fr->m->owner : NULL);
             nj_u2 mi = 0u;
@@ -1369,6 +1429,19 @@ int nj_vm_save(nj_vm *vm, FILE *f)
         return NJ_ERR;
     }
     return NJ_OK;
+}
+
+int nj_vm_save_file_boundary(nj_vm *vm, const char *path)
+{
+    int rc;
+
+    if (!vm) {
+        return NJ_ERR;
+    }
+    vm->boundary_save = 1;
+    rc = nj_vm_save_file(vm, path);
+    vm->boundary_save = 0;
+    return rc;
 }
 
 int nj_vm_save_mem(nj_vm *vm, nj_u1 **out_blob, nj_size *out_size)

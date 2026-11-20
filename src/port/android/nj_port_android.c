@@ -1643,7 +1643,15 @@ static int android_input_poll(void *ud, nj_event *ev)
         s->save_busy = 1;
         pthread_mutex_unlock(&s->lock);
         {
-            int rc = s->vm ? nj_vm_save_file(s->vm, s->save_path) : NJ_ERR_STATE;
+            /*
+             * Boundary save: this runs from the frame hook (android_input_poll
+             * is called inside nj_midp_frame), so a thread parked in
+             * serviceRepaints()/paint would make nj_vm_save_file() refuse.
+             * The boundary variant stores that thread as resumed after the
+             * parked call, which is exactly what a restored game should do.
+             */
+            int rc = s->vm ? nj_vm_save_file_boundary(s->vm, s->save_path)
+                           : NJ_ERR_STATE;
             __android_log_print(rc == NJ_OK ? ANDROID_LOG_INFO : ANDROID_LOG_WARN,
                                 "nj2me", "state: save to %s -> %d", s->save_path, rc);
             pthread_mutex_lock(&s->lock);

@@ -1769,6 +1769,14 @@ int main(void)
     CHECK(nj_vm_save_file(vm_a, STATE_PATH) == NJ_OK, "nj_vm_save_file()");
     CHECK(nj_vm_save_file(vm_a, "/nonexistent-dir/nope.bin") != NJ_OK,
           "saving into a missing directory fails cleanly");
+    /*
+     * The boundary variant is what the Android launcher calls from its frame
+     * hook.  On an idle VM there is nothing to normalise, so it must produce
+     * a loadable blob exactly like the plain file save (the blob loaded below
+     * was written this way).
+     */
+    CHECK(nj_vm_save_file_boundary(vm_a, STATE_PATH) == NJ_OK,
+          "nj_vm_save_file_boundary() on an idle VM");
 
     /* ---- VM B: a fresh VM, same JAR, load --------------------------- */
     vm_b = nj_vm_create(&port, HEAP_BYTES);

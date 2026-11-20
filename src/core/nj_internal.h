@@ -716,6 +716,13 @@ struct nj_vm {
     void       *frame_hook_ud;
     int         in_frame_hook;  /* re-entrancy guard: the hook may call back in */
     int         in_call_pump;   /* re-entrancy guard: a blocked C call is pumping */
+    /*
+     * Set only around nj_vm_save_file_boundary(): the port asks for a snapshot
+     * from the frame hook, so the hook re-entrancy guard is expected and a
+     * thread parked in a frame-wait native is normalised in the blob (see
+     * save_threads).
+     */
+    int         boundary_save;
 
     /* seeded identity hash */
     nj_u4      hash_seed;
