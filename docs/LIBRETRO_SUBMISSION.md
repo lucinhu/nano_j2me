@@ -1666,5 +1666,6 @@ frames PASS; Windows x86_64 under Wine 4/4 at 300 frames; submission bundle
 3,299,690 B `676ba4ee…`; legacy 704,323 B `cfab9365…`).  Release zip
 `nj2me-0.5.21-libretro-cores.zip` 11,709,796 B `e385253f…` (128 entries).
 Tag `v0.5.21` + GitHub release; super fork branch rebuilt on master `55e50a81`
-with the 0.5.21 `.info` (PR #2204 body refreshed); docs PR #1239 unchanged
-(page version-independent).  No merge claimed.
+as commit `863af5d5` with the 0.5.21 `.info` (PR #2204 body refreshed, head
+`863af5d5`, OPEN/MERGEABLE); docs PR #1239 unchanged (head `3316299`, page
+version-independent, OPEN/MERGEABLE).  No merge claimed.

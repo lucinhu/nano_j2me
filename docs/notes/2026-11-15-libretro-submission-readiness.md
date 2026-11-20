@@ -1410,5 +1410,6 @@ frames PASS, Wine 4/4, bundle 32/32, full CTest 199/199 (363.96 s).  APKs 0.5.21
 (versionCode 521, 3,299,690 B; legacy 704,323 B), release zip 11,709,796 B
 `e385253f…`.  Highlights: Android in-app save-state boundary API plus the
 single-pointer drag fix; `test_pointer` now tests the built CLI.  Tag `v0.5.21`
-+ GitHub release; super fork branch rebuilt on master `55e50a81`, PR #2204 body
-refreshed; docs PR #1239 unchanged.  No merge claimed.
++ GitHub release; super fork branch rebuilt on master `55e50a81` as `863af5d5`,
+PR #2204 body refreshed (head `863af5d5`); docs PR #1239 unchanged (head
+`3316299`).  No merge claimed.
