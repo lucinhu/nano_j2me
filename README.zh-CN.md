@@ -4,7 +4,7 @@
 
 [![最新版本](https://img.shields.io/github/v/release/lucinhu/nano_j2me?sort=semver&label=release&color=blue)](https://github.com/lucinhu/nano_j2me/releases/latest)
 [![许可证](https://img.shields.io/badge/licence-MIT-blue)](LICENSE)
-[![测试](https://img.shields.io/badge/ctest-196%20passing-brightgreen)](docs/VERIFICATION.md)
+[![测试](https://img.shields.io/badge/ctest-199%20passing-brightgreen)](docs/VERIFICATION.md)
 [![sanitized](https://img.shields.io/badge/sanitized-ASan%20%2B%20UBSan%20%2B%20LSan-brightgreen)](tools/run_sanitized_tests.sh)
 [![C99](https://img.shields.io/badge/C99-no%20dependencies-informational)](#设计承诺)
 
@@ -31,7 +31,7 @@
   回调）。运行时不保存任何可写全局状态；同一进程可以共存多个 VM，
   `nj_vm_destroy()` 会返回它释放的字节数。
 - **可作弊。** libretro 内核接受针对已暴露 Java arena 的 `<arena 偏移>:<十六进制字节>` 作弊码，并在每帧重新写入（偏移来自前端作弊搜索）；Android APK 用同一套引擎，游戏内面板既能编辑作弊码，也能**搜索数值**、缩小候选并一键生成代码，两边读写同一种文件格式。详见 [作弊说明](docs/notes/2026-11-19-android-cheat-editor.md) 与 [搜索说明](docs/notes/2026-11-19-cheat-search.md)。
-- **可验证。** `ctest` 里 196 个测试全部通过；400 个真实游戏的兼容性语料中 398 个
+- **可验证。** `ctest` 里 199 个测试全部通过；404 个真实游戏的兼容性语料中 399 个
   可运行；下面每一条说法都有测试、检查脚本或可回放的记录作为依据。
 
 ## 截图
@@ -217,8 +217,9 @@ tools/build_libretro_cores.sh --list    # 交叉编译 libretro 核心
 | 软件光栅器、点阵字体、图像解码器、DEFLATE/ZIP | 完成 |
 | 执行引擎 | 解释器，另有可选的 RV32/ARM64 JIT |
 
-兼容性是测出来的，不是声称的：[docs/CORPUS.md](docs/CORPUS.md) 的 400 个游戏语料
-中 **398 个可运行**，两个失败来自游戏本身（一个截断的 JAR 和一个授权检查）。
+兼容性是测出来的，不是声称的：[docs/CORPUS.md](docs/CORPUS.md) 的 404 个游戏语料
+中 **399 个可运行**；其余行都是游戏自身原因（一个在自己的线程里抛异常，两个自行退出，
+两个不显示画面，一个包是截断的 ZIP）。
 各平台的实测结果、测试清单和已知限制见
 [docs/PLATFORM_SUPPORT.md](docs/PLATFORM_SUPPORT.md) 与
 [docs/VERIFICATION.md](docs/VERIFICATION.md)。

@@ -1646,6 +1646,12 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
         }
         if (rc == 0) {
             toast("已保存进度，下次在游戏卡片里选「恢复进度」");
+        } else if (rc == -8) {
+            /* NJ_ERR_STATE: the frame boundary landed while the MIDlet thread
+             * was parked inside a native call (serviceRepaints-driven loops),
+             * which a snapshot cannot encode.  Retrying does not help for
+             * those titles, so say what is going on instead of a bare error. */
+            toast("这次没能保存：游戏线程正忙，这类游戏暂不支持中途存档");
         } else {
             toast("这次没能保存（错误 " + rc + "）");
         }

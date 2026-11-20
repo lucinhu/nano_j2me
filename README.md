@@ -4,7 +4,7 @@
 
 [![latest release](https://img.shields.io/github/v/release/lucinhu/nano_j2me?sort=semver&label=release&color=blue)](https://github.com/lucinhu/nano_j2me/releases/latest)
 [![licence](https://img.shields.io/badge/licence-MIT-blue)](LICENSE)
-[![tests](https://img.shields.io/badge/ctest-196%20passing-brightgreen)](docs/VERIFICATION.md)
+[![tests](https://img.shields.io/badge/ctest-199%20passing-brightgreen)](docs/VERIFICATION.md)
 [![sanitized](https://img.shields.io/badge/sanitized-ASan%20%2B%20UBSan%20%2B%20LSan-brightgreen)](tools/run_sanitized_tests.sh)
 [![C99](https://img.shields.io/badge/C99-no%20dependencies-informational)](#design-commitments)
 
@@ -31,7 +31,7 @@ browser — the same runtime everywhere, with one small `nj_port` per platform.
   (about ten callbacks). The runtime keeps zero mutable global state; several VMs
   can coexist in one process, and `nj_vm_destroy()` returns the bytes it released.
 - **Cheatable.** The libretro core accepts `<arena offset>:<hex bytes>` cheat codes over the exposed Java arena and re-applies them every frame (frontend cheat search gives the offsets); the Android APK has the same engine with an in-game panel that also **searches** for a value, narrows the candidate list and generates the code, and both read the same file format. See [the cheat note](docs/notes/2026-11-19-android-cheat-editor.md) and [the search note](docs/notes/2026-11-19-cheat-search.md).
-- **Verifiable.** 196 registered tests pass under `ctest`; 398 of the 400 real-game
+- **Verifiable.** 199 registered tests pass under `ctest`; 399 of the 404 real-game
   corpus titles run; every claim below is checked by a test, a gate or a
   recorded playback.
 
@@ -241,9 +241,10 @@ that way:
 | Software rasterizer, bitmap fonts, image decoders, DEFLATE/ZIP | complete |
 | Execution engines | interpreter, plus opt-in RV32/ARM64 JITs |
 
-Compatibility is measured, not claimed: of the 400-title corpus in
-[docs/CORPUS.md](docs/CORPUS.md), **398 run**; the two failures are the titles'
-own (a truncated JAR and a licence check). Per-platform results, the
+Compatibility is measured, not claimed: of the 404-title corpus in
+[docs/CORPUS.md](docs/CORPUS.md), **399 run**; the remaining rows are game-side
+(one game throws inside its own thread, two exit by themselves, two never show
+a frame, one archive is a truncated ZIP). Per-platform results, the
 test ledger and known limits are in
 [docs/PLATFORM_SUPPORT.md](docs/PLATFORM_SUPPORT.md) and
 [docs/VERIFICATION.md](docs/VERIFICATION.md).
