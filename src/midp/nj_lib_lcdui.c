@@ -125,6 +125,8 @@
 #define F_C_HEIGHT   NJ_F_C_HEIGHT
 #define F_C_KEYS     NJ_F_C_KEYS
 #define F_C_VISIBLE  NJ_F_C_VISIBLE
+#define F_C_SIZEDW   NJ_F_C_SIZEDW
+#define F_C_SIZEDH   NJ_F_C_SIZEDH
 #define F_C_PRESSED  NJ_F_C_PRESSED
 
 #define F_GC_SUPPRESS NJ_F_GC_SUPPRESS
@@ -5370,6 +5372,51 @@ static int canvas_call_paint(nj_vm *vm, nj_ref canvas, nj_ref g, int *why)
  *
  * src/core/nj_internal.h states the rule this call site was breaking.
  */
+/*
+ * Deliver sizeChanged(w, h) for a Canvas as soon as it becomes the current
+ * screen, not on its first paint.
+ *
+ * MIDP delivers sizeChanged() when the Canvas gets its size, which on the
+ * handsets these titles target happens while Display.setCurrent() is still on
+ * the stack for the MIDlet thread; the first paint follows later.  Delivering
+ * it from the paint path instead let a title's own animation thread run first
+ * and install its renderer, and then had sizeChanged() overwrite it with the
+ * still-null "previous screen" slot (NeonRunner: `sizeChanged` does
+ * `this.a = this.b; hideNotify()` for a 240-wide canvas, and `b` is only
+ * filled by hideNotify()/later code, so the first paint saw a null renderer
+ * and threw NullPointerException forever while the game looked black).
+ *
+ * showNotify() is still deferred to the paint path on purpose: setCurrent()
+ * must return before a Canvas counts as visible, otherwise
+ * `setCurrent(canvas); canvas.setFullScreenMode(true)` throws
+ * (开心农场 relies on that sequence).  Only sizeChanged() moves here.
+ */
+static void canvas_deliver_size(nj_vm *vm, nj_ref canvas)
+{
+    nj_surface *scr;
+    nj_value a[2];
+
+    if (!isa(vm, canvas, NJ_C_CANVAS)) {
+        return;
+    }
+    scr = nj_midp_screen(vm);
+    if (!scr) {
+        return;
+    }
+    if (fget(vm, canvas, NJ_C_CANVAS, F_C_SIZEDW, D_INT) == (nj_s4)scr->width &&
+        fget(vm, canvas, NJ_C_CANVAS, F_C_SIZEDH, D_INT) == (nj_s4)scr->height) {
+        return;
+    }
+    a[0].i = (nj_s4)scr->width;
+    a[1].i = (nj_s4)scr->height;
+    (void)canvas_call(vm, canvas, "sizeChanged", 2, a);
+    if (vm->exception) {
+        return;
+    }
+    fput(vm, canvas, NJ_C_CANVAS, F_C_SIZEDW, D_INT, (nj_s4)scr->width);
+    fput(vm, canvas, NJ_C_CANVAS, F_C_SIZEDH, D_INT, (nj_s4)scr->height);
+}
+
 static int canvas_visible(nj_vm *vm, nj_ref canvas);
 
 /*
@@ -5426,10 +5473,11 @@ static int canvas_visible(nj_vm *vm, nj_ref canvas)
              * ever shown, so that test is false exactly when sizeChanged()
              * matters most.
              */
-            if (!fget(vm, canvas, NJ_C_CANVAS, F_C_VISIBLE, D_BOOL)) {
+            if (fget(vm, canvas, NJ_C_CANVAS, F_C_SIZEDW, D_INT) != (nj_s4)scr->width ||
+                fget(vm, canvas, NJ_C_CANVAS, F_C_SIZEDH, D_INT) != (nj_s4)scr->height) {
                 need = 1;
             } else if (!buf) {
-                need = 1;
+                need = 0;
             } else if (nj_midp_image_size(vm, buf, &bw, &bh)) {
                 need = (bw != scr->width || bh != scr->height);
             }
@@ -5441,6 +5489,8 @@ static int canvas_visible(nj_vm *vm, nj_ref canvas)
                 if (vm->exception) {
                     return 0;
                 }
+                fput(vm, canvas, NJ_C_CANVAS, F_C_SIZEDW, D_INT, scr->width);
+                fput(vm, canvas, NJ_C_CANVAS, F_C_SIZEDH, D_INT, scr->height);
             }
         }
     }
@@ -6164,6 +6214,7 @@ static void displayable_hide(nj_vm *vm, nj_ref d)
 nj_status nj_midp_set_current(nj_vm *vm, nj_ref d)
 {
     nj_ref disp;
+    nj_ref old;
 
     if (!vm) {
         return NJ_ERR;
@@ -6172,20 +6223,28 @@ nj_status nj_midp_set_current(nj_vm *vm, nj_ref d)
     if (!disp) {
         return NJ_ERR;
     }
-    {
-        nj_ref old = nj_midp_current(vm);
-        if (old && old != d) {
-            displayable_hide(vm, old);
-        }
-        if (old != d) {
-            /* A new screen must not inherit the previous game's flush rate. */
-            vm->app_painted = 0u;
-            vm->app_paint_idle = 0u;
-            vm->app_paint_period = 0u;
-        }
+    old = nj_midp_current(vm);
+    if (old && old != d) {
+        displayable_hide(vm, old);
+    }
+    if (old != d) {
+        /* A new screen must not inherit the previous game's flush rate. */
+        vm->app_painted = 0u;
+        vm->app_paint_idle = 0u;
+        vm->app_paint_period = 0u;
     }
     rput(vm, disp, NJ_C_DISPLAY, F_DISP_CUR, D_DISPLAY, d);
     vm->current_displayable = d;
+    /*
+     * sizeChanged() has to reach a Canvas before its MIDlet thread gets to run
+     * the first frame; MIDP delivers it while setCurrent() still executes.
+     * showNotify() stays deferred (see the comment below) - only the size
+     * notification moves here.  canvas_deliver_size() remembers what it sent
+     * so the first paint does not send it a second time.
+     */
+    if (d && old != d) {
+        canvas_deliver_size(vm, d);
+    }
     /*
      * showNotify() is deliberately NOT delivered here.
      *
@@ -11730,6 +11789,8 @@ static const nj_builtin_field canvas_fields[] = {
     FLD(F_C_KEYS,    D_INT,   0),
     FLD(NJ_F_C_HELD, D_INT,   0),
     FLD(F_C_VISIBLE, D_BOOL,  0),
+    FLD(F_C_SIZEDW,  D_INT,   0),
+    FLD(F_C_SIZEDH,  D_INT,   0),
     FLD(F_C_PRESSED, D_BOOL,  0),
     FLD("KEY_NUM0",   D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
     FLD("KEY_NUM1",   D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),

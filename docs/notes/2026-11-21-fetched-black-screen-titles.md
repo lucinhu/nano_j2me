@@ -119,3 +119,45 @@ handler filtered on offset 216 plus a breakpoint on `b()` entry, and check
 whether the constructor of `k` at b()+630 throws; if it throws, why the thread
 keeps running (the MIDlet thread is still inside `j.k()/j.j()/j.run()` per
 `--where`).
+
+### Round 144 fix: deliver sizeChanged() from setCurrent(), not from paint
+
+Root cause of the NeonRunner black screen (now fixed):
+
+* `canvas_visible()` in `src/midp/nj_lib_lcdui.c` delivered `sizeChanged(w,h)`
+  from the first **paint**, because `nj_midp_set_current()` deliberately defers
+  `showNotify()` (so `setCurrent(canvas); canvas.setFullScreenMode(true)` still
+  works for 开心农场).  The deferral was correct for `showNotify()` but
+  `sizeChanged()` travelled with it.
+* NeonRunner's MIDlet thread installs its first `k` renderer in `run()` and
+  then enters the animation loop.  Its `sizeChanged()` for width 240 does
+  `this.a = this.b; hideNotify();` and `b` is only filled by a later
+  `hideNotify()` cycle.  Delivered at paint time, that assignment overwrote the
+  renderer the thread had just installed, so every `paint()` case 6 read a null
+  renderer and threw (`NullPointerException at j.paint pc=290`) - 600 throws,
+  zero draw calls, black screen.  On a handset `sizeChanged()` arrives while
+  `setCurrent()` is still running, i.e. before the MIDlet thread's `run()`.
+
+The fix:
+
+* `src/midp/nj_midp.h`: `NJ_F_C_SIZEDW` / `NJ_F_C_SIZEDH` runtime Canvas fields.
+* `src/midp/nj_lib_lcdui.c`: `canvas_deliver_size()` sends `sizeChanged()` and
+  records the delivered size; `nj_midp_set_current()` calls it when the current
+  Displayable actually changes, and only for a Canvas.  `showNotify()` stays
+  deferred exactly as before.  `canvas_visible()` now delivers `sizeChanged()`
+  only when the recorded size differs from the screen (first show or resize),
+  so the first paint does not repeat it.
+
+Measured outcome (`--port headless --size 240x320 --heap 32 --fps 30`):
+
+| | before | after |
+|---|---|---|
+| NeonRunner `NullPointerException at j.paint` | 120 / 120 frames | **0** |
+| NeonRunner draw calls (120 frames) | 0 | **3000** |
+| NeonRunner frame colour count | 1 (black) | 5, non-black 8,312 px - identical to FreeJ2ME-Plus |
+| `test_game` visibility phases (sizeChanged -> showNotify -> paint) | n/a | still green |
+
+`GoldenSolitaire` and the 128x128 Tomb Raider build stay black: their causes are
+unrelated (RMS read path and title-specific init), so the libretro visual probe
+now reports 2 known black titles instead of 3.  `tools/sweep_compat.py`'s
+blank-canvas note (`paints > 0`, `gfx == 0`) still flags both.
