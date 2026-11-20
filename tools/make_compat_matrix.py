@@ -64,7 +64,10 @@ def detect(row):
             for info in jar.infolist():
                 if not info.filename.endswith(".class"):
                     continue
-                data = jar.read(info)          # entries are deflated: search the bytes
+                try:
+                    data = jar.read(info)      # entries are deflated: search the bytes
+                except Exception:              # damaged archive entry: skip it
+                    continue
                 if b"javax/microedition/m3g/" in data:
                     found.add("m3g")
                 if b"com/mascotcapsule/micro3d/" in data:

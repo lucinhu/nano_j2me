@@ -32,6 +32,31 @@ KEYS = ["30:fire", "55:soft1", "80:53", "140:left", "165:right", "190:48",
         "215:up", "240:down", "290:5", "320:fire", "375:star", "400:6",
         "430:fire", "470:soft1", "545:fire", "575:left"]
 
+def jar_integrity(path):
+    """Pre-flight archive check.
+
+    A JAR whose compressed entries fail to inflate (or that is not a ZIP at
+    all) cannot be loaded by any runtime: classify it `bad-jar` instead of
+    blaming compatibility for a later NoClassDefFoundError.  DiamondTwister
+    from the fetched corpus is the case that motivated this: the archived file
+    is byte-identical to archive.org's md5, and unzip itself reports
+    "invalid compressed data to inflate e.class".
+    """
+    try:
+        with zipfile.ZipFile(path) as z:
+            try:
+                bad = z.testzip()
+            except Exception as exc:      # zlib.error, CRC checks, ...
+                return False, "archive entry is corrupt (%s)" % exc
+            if bad is not None:
+                return False, "archive entry %s is corrupt (inflate/CRC)" % bad
+    except zipfile.BadZipFile:
+        return False, "not a zip file"
+    except OSError as exc:
+        return False, "archive cannot be read: %s" % exc
+    return True, ""
+
+
 def manifest(path):
     try:
         with zipfile.ZipFile(path) as z:
@@ -64,6 +89,11 @@ def one(job):
                 "profile": attrs.get("MicroEdition-Profile", ""),
                 "config": attrs.get("MicroEdition-Configuration", ""),
                 "apis": sorted(apis), "classes": nclass})
+    ok, why = jar_integrity(path)
+    if not ok:
+        row.update({"verdict": "bad-jar", "rc": 2, "heap": 16,
+                    "frames": 0, "paints": 0, "note": why})
+        return row
     keys = resolve_keys(base, os.path.join(OUT, "keys.txt"))
     if os.path.basename(os.path.dirname(keys)) == "corpus_keys":
         row["keys"] = os.path.basename(keys)

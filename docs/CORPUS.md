@@ -674,3 +674,31 @@ round 107 still holds.
 Fetcher helpers (`tools/fetch_corpus.py`) now retry with backoff, fall back to
 `curl` for archive.org's flaky TLS and skip files already on disk; the motion,
 audio and deep probes all accept `NJ_SWEEP_DIRS` so fetched titles replay.
+
+## Round 134: re-sweep with the Boolean fix, and corrupt archives are now `bad-jar` (2026-11-20)
+
+Full re-sweep on the fixed binary (`/tmp/vault4:/tmp/vault5:/tmp/vault6`, 862
+rows, 600 frames @ 30 fps, 10 jobs):
+
+    ok 845 | bad-jar 3 | failure 4 | timeout 3 | title-exception 3
+    title-exit 2 | no-frame 2
+
+Compared with round 133 (827 ok / 6 failure / 20 title-exception):
+
+* `vault/Alco Bench.jar` is `ok` (600 frames, 872,875 bytecodes): the
+  `Boolean.TRUE`/`FALSE` fix unblocked it.
+* The seventeen `Tomb Raider Anniversary` device builds and
+  `JBenchmark3D.jar` are `ok` in this run; the round-133 `title-exception`
+  verdicts really were parallel-load timing flakes, matching the solo rechecks.
+* `vault/DiamondTwister.jar` is now classified **`bad-jar`** with the note
+  "archive entry is corrupt (Error -3 while decompressing data: invalid block
+  type)". `tools/sweep_compat.py` gained a pre-flight `jar_integrity()` check
+  (ZIP open + `testzip()`), so a damaged archive is reported as an unusable
+  package instead of a compatibility failure; non-ZIP files get "not a zip
+  file". `tools/make_compat_matrix.py`'s constant-pool `detect()` also skips
+  damaged entries instead of aborting the whole table.
+
+`docs/COMPATIBILITY_MATRIX.md` was regenerated from the merged history
+(2026-10-25 snapshot + round-134 measurements): **1414 titles, 1398 运行正常**;
+regeneration is byte-deterministic.  `docs/CORPUS.md` provenance sentence and
+the matrix header now name 0.5.19 and the round-134 batch.
