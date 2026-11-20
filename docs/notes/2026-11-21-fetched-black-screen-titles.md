@@ -38,3 +38,29 @@ language screen (RMS/config load path for GoldenSolitaire, the `k` renderer
 construction for NeonRunner) and decide title-by-title whether the runtime is
 missing an API or the port needs a device profile.  Until then the visual
 probe keeps reporting them as failures rather than suppressing them.
+
+## NeonRunner: the run() thread is alive but its renderer slot is cleared
+
+`--where` (round 137) shows the game thread parked exactly where it should be
+for a frame-paced title:
+
+    where: thread 2 running depth=3
+    where:   j.k()V pc=12
+    where:   j.j()V pc=634
+    where:   j.run()V pc=228
+
+`j.k()` is `repaint(); serviceRepaints();` (`pc=12` is the return past the
+service call), called from the screen animation loop `j.j()` which `run()`
+reaches after setting the state byte to 6 and installing the first renderer
+(`this.a = new k(...)` at bytecode 220-221).  Yet every paint in state 6
+throws `NullPointerException` at `getfield a:Lk` (pc≈290), i.e. `j.a` is null
+again by paint time.  The class reassigns `j.a` from several pre-built screen
+renderers (`j.c`, `j.e`, `j.f`, `j.g`, `j.j`, `j.b`) inside its screen-switch
+methods, so one of those slots is null; the renderer construction path
+(`j.a(int...)` / `k.<init>`) either threw into a game-side catch or never ran.
+The thread is not dead (no uncaught-exception line, and `--where` reports it
+running every time), so this is a game-initialisation ordering issue under the
+runtime, not a scheduler hang.  Next step would be a runtime trace of the
+`k` constructor / `j.a` helper to see which side throws; `--where` plus the
+sweep's new blank-canvas note is enough to find titles like this without a
+visual probe.
