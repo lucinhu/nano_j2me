@@ -130,6 +130,14 @@ def one(job):
         if rc == 0 and row["frames"] >= RUN // 2:
             if uncaught == 0:
                 row["verdict"] = "ok"
+                if row["gfx"] == 0 and row["paints"] > 0:
+                    # Frames were presented but the title never issued a
+                    # draw call: the screen stays whatever canvas init left
+                    # there.  Not a runtime crash, but worth flagging instead
+                    # of letting "ok" hide a blank title (rounds 135/136 found
+                    # three such fetched titles by visual probing).
+                    row["note"] = ("painted %d frames but made no draw calls"
+                                   " (blank canvas)" % row["paints"])
                 break
             if heap == 16 and "OutOfMemoryError" in err:
                 # The thread that died was the title exhausting the heap, not a

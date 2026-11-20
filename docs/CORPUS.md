@@ -702,3 +702,19 @@ Compared with round 133 (827 ok / 6 failure / 20 title-exception):
 (2026-10-25 snapshot + round-134 measurements): **1414 titles, 1398 运行正常**;
 regeneration is byte-deterministic.  `docs/CORPUS.md` provenance sentence and
 the matrix header now name 0.5.19 and the round-134 batch.
+
+### Round 136: the sweep flags a blank canvas as a note
+
+A row can reach `ok` while the title never draws anything: `paints` counts
+presentations, not draw calls, and a title whose renderer thread died before
+installing its canvas state presents an untouched screen forever.  The sweep
+now appends the note **`painted <paints> frames but made no draw calls (blank
+canvas)`** whenever a row finishes `ok` with `gfx == 0` and `paints > 0`.
+Verified on the two fetched titles found by the round-135 visual probe
+(`NeonRunner.jar`, `GoldenSolitaire.jar` -> both `ok`, `gfx=0`, note present)
+and on two normal rows (`loopdemo.jar` `gfx=2400`, `3D城市桌球_8299.jar`
+`gfx=1156` -> no note).  The visual probe keeps reporting these titles as
+failures; the note makes them visible from a plain sweep as well, which is
+what a future batch of fetched titles needs (`tools/run-freej2me-headless.sh`
+shows `NeonRunner`/`GoldenSolitaire` reaching a language-select screen, so
+their blank canvas is a title/renderer init gap, not a core crash).
