@@ -64,3 +64,35 @@ runtime, not a scheduler hang.  Next step would be a runtime trace of the
 `k` constructor / `j.a` helper to see which side throws; `--where` plus the
 sweep's new blank-canvas note is enough to find titles like this without a
 visual probe.
+
+## Round 142: the NeonRunner renderer field goes null between a write and a read
+
+Temporary interpreter tracing (a `NRDUMP=1` guard around the `putfield` /
+`getfield` handlers in `src/core/nj_interp.c`, reverted immediately) produced a
+concrete anomaly for `NeonRunner.jar`:
+
+```
+NRDBG putfield pc=224 field=a desc=Lk; op=181
+NRDBG put  aLk recv=0x7fda35e021b0 val=0x7fda35e02620   <- non-null renderer
+NRDBG get  aLk recv=0x7fda35e021b0 val=(nil)            <- same object, null
+NRDBG putfield pc=75 field=a desc=Lk; op=181
+NRDBG put  aLk recv=0x7fda35e021b0 val=(nil)            <- this.a = this.c, c was null
+NRDBG get  aLk recv=0x7fda35e021b0 val=(nil)
+```
+
+Class `j` is heavily obfuscated and legally keeps many duplicate field *names*
+with different descriptors (`private k a; private static j a; static Graphics a;
+private e a; private k c; public int c; ...`), so field resolution has to match
+on name **and** descriptor.  The write and the read above hit the same receiver
+address with the same resolved field, yet the value read back is null, and the
+game thread then copies the null `c:Lk` over `a:Lk` (run() bytecode 358-361).
+`c:Lk` is only assigned inside method `b()` (bytecode 642), which run() calls
+earlier (234) - the trace never shows that `putfield #136`(c:Lk), so `b()` is
+returning/branching before it.  A direct `javap -p -c` read of the class is the
+reference for the expected sequence: `run()` sets `c:B = 6` at 213-216, builds a
+`k` and stores it into `a:Lk` at 219-221, then enters `j()`.
+
+Next step for this title: check whether a GC cycle runs between the write and the
+read (GDB watchpoint on the field slot, or run with GC tracing) - if the arena
+slot is overwritten by a sweep/clear, that is a runtime bug, not a title bug;
+otherwise trace method `b()` to see which branch skips the `c:Lk` assignment.
