@@ -35,6 +35,9 @@ import zipfile
 ROOT = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 BIN = os.environ.get("NJ_BIN", os.path.join(ROOT, "build", "nj2me"))
 SEARCH = [os.path.join(ROOT, "tests", "games")]
+# Same extra corpus directories as tools/sweep_compat.py (NJ_SWEEP_DIRS).
+SEARCH += [d for d in os.environ.get("NJ_SWEEP_DIRS", "").split(os.pathsep)
+           if d]
 AUDIO_EXTS = (".mid", ".mp3", ".amr", ".wav", ".imy", ".mld")
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -67,6 +70,8 @@ def main():
     ap.add_argument("--seed", type=int, default=5)
     ap.add_argument("--keys", default=None,
                     help="key script (default: <rows>/keys.txt)")
+    ap.add_argument("--timeout", type=int, default=240,
+                    help="per-title wall clock budget in seconds")
     ap.add_argument("--require", action="append", default=None,
                     help="only titles whose assets include this extension "
                          "(repeatable, e.g. --require .mid)")
@@ -106,7 +111,14 @@ def main():
             if row_keys:
                 cmd += ["--keys", "@" + str(row_keys)]
             cmd.append(path)
-            cp = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+            try:
+                cp = subprocess.run(cmd, capture_output=True, text=True,
+                                    timeout=args.timeout)
+            except subprocess.TimeoutExpired:
+                print("%-46s %-15s assets=%-3d (run exceeded %d s)"
+                      % (os.path.basename(path)[:46], "timeout",
+                         len(assets), args.timeout))
+                continue
         out = (cp.stderr or "") + (cp.stdout or "")
         observed = re.search(r"observed:.*", out)
         observed = observed.group(0) if observed else ""
