@@ -73,8 +73,9 @@ containing all eight targets with `.info`, licenses and notices.  Metadata:
 * emulator (Android 16/API 36, headless AVD): 保存状态 -> 330,016-byte file,
   force-stop + 恢复进度 -> `resumed LoopDemo from …loopdemo.jar.state`, normal
   game screen rendered
-* whole-corpus libretro visual probe on the released core: see
-  `docs/LIBRETRO_SUBMISSION.md` round-141 entry
+* libretro visual probe sample on the released r40 core (200 of the 845
+  renderable rows, 300 frames, 8 jobs): 200 passed / 0 known limitations /
+  0 failed
 
 ## Upgrade notes
 

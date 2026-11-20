@@ -1412,4 +1412,5 @@ frames PASS, Wine 4/4, bundle 32/32, full CTest 199/199 (363.96 s).  APKs 0.5.21
 single-pointer drag fix; `test_pointer` now tests the built CLI.  Tag `v0.5.21`
 + GitHub release; super fork branch rebuilt on master `55e50a81` as `863af5d5`,
 PR #2204 body refreshed (head `863af5d5`); docs PR #1239 unchanged (head
-`3316299`).  No merge claimed.
+`3316299`).  No merge claimed.  Sample probe on the r40 core: 200/200 renderable
+titles passed (0 known limitations, 0 failed).

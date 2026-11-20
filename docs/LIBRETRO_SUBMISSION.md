@@ -1669,3 +1669,9 @@ Tag `v0.5.21` + GitHub release; super fork branch rebuilt on master `55e50a81`
 as commit `863af5d5` with the 0.5.21 `.info` (PR #2204 body refreshed, head
 `863af5d5`, OPEN/MERGEABLE); docs PR #1239 unchanged (head `3316299`, page
 version-independent, OPEN/MERGEABLE).  No merge claimed.
+
+Release evidence on the r40 core: 200-title sample of the whole-corpus libretro
+visual probe (300 frames, 8 jobs, subset of the 845 renderable rows) ->
+**200 passed, 0 known limitations, 0 failed**; the full 862-row probe on the
+r39 core was 840/845 renderable with 2 known limitations and 3 fetched-title
+black screens (unchanged titles, not core regressions).
