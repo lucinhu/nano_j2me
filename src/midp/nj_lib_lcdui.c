@@ -5600,6 +5600,16 @@ int nj_midp_pointer_multi(nj_vm *vm, int id, int x, int y, int kind)
         }
         primary = (owner == id);
     } else {
+        /*
+         * A move/lift without a recorded down still belongs to the single
+         * pointer: desktop mouse ports and the scripted fixtures send bare
+         * drags, and before multi-touch every pointer event reached the
+         * Canvas.  Only a second finger (an id that never owned the canvas)
+         * is filtered out.
+         */
+        if (owner < 0) {
+            owner = id;
+        }
         primary = (owner == id);
     }
     if (primary && id >= 0 && id < 255) {

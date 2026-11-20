@@ -14,12 +14,17 @@
 # with the bug in place, because the old code called pointerPressed *and* the
 # fixture's drag body printed nothing - absence of proof either way.
 #
-# Usage: check_pointer.sh <keysdemo.jar>
+# Usage: check_pointer.sh <keysdemo.jar> [nj2me-binary]
+#
+# The binary is an argument (and NJ_BIN is accepted too) so the check tests the
+# tree it belongs to.  It used to hardcode build/nj2me, a shared build tree, and
+# silently stayed green against a binary that predated the multi-touch change it
+# was meant to guard.
 set -u
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 JAR=${1:-$ROOT/tests/fixtures/keysdemo.jar}
-BIN=$ROOT/build/nj2me
+BIN=${NJ_BIN:-${2:-$ROOT/build/nj2me}}
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 

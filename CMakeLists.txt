@@ -2204,7 +2204,7 @@ nj_add_test(test_fullscreen tests/test_fullscreen.c ${NJ_FIXTURES}/fsorder.jar)
     # what it did until the event kind stopped being tested for truthiness.
     add_test(NAME test_pointer
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_pointer.sh
-              ${NJ_FIXTURES}/keysdemo.jar)
+              ${NJ_FIXTURES}/keysdemo.jar $<TARGET_FILE:nj2me-cli>)
     set_tests_properties(test_pointer PROPERTIES TIMEOUT 180)
     # ... and the third question, which neither of the two above can ask: not
     # "did a key arrive" but "did the RIGHT key arrive".  Every arrow and FIRE
