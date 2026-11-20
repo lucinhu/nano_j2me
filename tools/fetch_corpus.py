@@ -26,6 +26,20 @@ DEFAULT_ITEMS = ["NokiaJavaGames", "J2ME-games", "the-promise-funy",
 MIN_BYTES = 20000
 
 
+def fetch_bytes(url, attempts=4):
+    """Download one URL, retrying transient network errors with backoff."""
+    import time
+    last = None
+    for attempt in range(attempts):
+        try:
+            return urllib.request.urlopen(url, timeout=120).read()
+        except Exception as exc:                     # retry, then report
+            last = exc
+            if attempt + 1 < attempts:
+                time.sleep(1 + 2 * attempt)
+    raise last
+
+
 def known_hashes():
     seen = set()
     for root in KNOWN:
@@ -51,8 +65,8 @@ def main(argv):
     added = 0
     for ident in items:
         try:
-            meta = json.load(urllib.request.urlopen(
-                "https://archive.org/metadata/" + ident, timeout=60))
+            meta = json.loads(fetch_bytes(
+                "https://archive.org/metadata/" + ident).decode("utf-8"))
         except Exception as exc:                     # network: report and go on
             print("skip collection", ident, exc, flush=True)
             continue
@@ -62,7 +76,7 @@ def main(argv):
                 url = "https://archive.org/download/%s/%s" % (
                     ident, urllib.parse.quote(name))
                 try:
-                    blob = urllib.request.urlopen(url, timeout=120).read()
+                    blob = fetch_bytes(url)
                 except Exception as exc:             # one bad file is not fatal
                     print("skip", name, exc, flush=True)
                     continue
@@ -84,7 +98,7 @@ def main(argv):
             url = "https://archive.org/download/%s/%s" % (
                 ident, urllib.parse.quote(name))
             try:
-                data = urllib.request.urlopen(url, timeout=120).read()
+                data = fetch_bytes(url)
             except Exception as exc:                 # one bad zip is not fatal
                 print("skip", name, exc, flush=True)
                 continue
