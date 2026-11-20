@@ -96,3 +96,26 @@ Next step for this title: check whether a GC cycle runs between the write and th
 read (GDB watchpoint on the field slot, or run with GC tracing) - if the arena
 slot is overwritten by a sweep/clear, that is a runtime bug, not a title bug;
 otherwise trace method `b()` to see which branch skips the `c:Lk` assignment.
+
+### Round 143 correction: which fields the trace actually touched
+
+The second, more precise trace printed the resolved `nj_field` pointer and
+offset, and the two "aLk" labels were not the same field:
+
+```
+NRDBG put aLk recv=...1b0 val=...620 f=...b7a0 off=208   <- this.a:Lk  (run 221)
+NRDBG get aLk recv=...1b0 val=(nil) f=...b7c0 off=216    <- this.c:Lk  (never written)
+NRDBG put aLk recv=...1b0 val=(nil) f=...b7a0 off=208    <- this.a = this.c (run 361)
+```
+
+So there is no same-field write/read inconsistency: `c:Lk` (offset 216) is
+simply never written.  According to `javap -p -c`, the only `putfield #136
+(c:Lk)` is inside method `b()` at bytecode 642, and `run()` calls `b()` at
+bytecode 234 before the 358-361 `this.a = this.c` copy.  Either `b()` never
+completes that assignment (its only `return` is at 1004; the exception table
+covers only 264-268 and 278-324) or it unwinds early in a way we do not see in
+the log.  Next step: gdb breakpoint on `nj_field_write_ref_fast`/the putfield
+handler filtered on offset 216 plus a breakpoint on `b()` entry, and check
+whether the constructor of `k` at b()+630 throws; if it throws, why the thread
+keeps running (the MIDlet thread is still inside `j.k()/j.j()/j.run()` per
+`--where`).
