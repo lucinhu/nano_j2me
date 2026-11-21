@@ -1089,3 +1089,59 @@ the check to the class level only (package-private classes still throw — the
 `excdemo` gate covers it), the title runs 600 frames / 553 paints and paints
 its "Snake EX2" menu.  Re-measured row: `ok`; the merged matrix is now
 1502 titles with 1483 running normally and 2 failures left (both game-side).
+
+### Round 170: `sizeChanged()` delivered at `setCurrent()` fixes NeonRunner (2026-11-22)
+
+The last black `vault` title with a real runtime cause was `NeonRunner.jar`.
+The boot trace had shown the game thread in its loading animation while every
+paint threw `NullPointerException at j.paint(Graphics) pc=290` (the paint
+state's renderer field `j.a` was null even though `j.c` had reached 6).  Round
+166 tested the theory that the first `sizeChanged()` arrived too late and
+delivered it after `startApp()` returned - still too late, because this
+runtime's `Thread.start()` runs the new thread's `run()` before the caller gets
+the CPU back.
+
+A temporary interpreter trace of writes to `j.a:Lk` settled it:
+
+    NRDBG write a:Lk pc=224 … in j.run          (boot renderer installed)
+    NRDBG write a:Lk pc=72  … (nil) in j.sizeChanged
+    NRDBG paint 0 … a=(nil) c=6
+
+`j.sizeChanged(240, 320)` takes its 240-wide "restore" path (`a = this.b`) and
+the backup field is not set yet.  Our runtime delivered that callback lazily
+from `canvas_visible()` on the first paint, i.e. *after* the game thread had
+stored its renderer, so the title's own callback destroyed it.  On a handset
+the Canvas is shown before the game thread's `run()` body gets going.
+
+The fix delivers the first `sizeChanged()` from `nj_midp_set_current()` while
+the MIDlet thread still owns the stack, remembers the delivered size in two
+new Canvas fields (`cSizeW`/`cSizeH`), and keeps `canvas_visible()` as the
+resize + exception-retry path.  `showNotify()` keeps its old first-paint
+timing, so the `setCurrent(); setFullScreenMode(true)` constructor sequence
+that 开心农场 needs still works.
+
+Evidence:
+
+* `NeonRunner` 600 frames with the sweep's key script: rc=0, 476 paints,
+  **gfx=77,655**, 0 thrown, no uncaught exceptions (was 600 paints, gfx=0,
+  33317447 bytecodes, 600 `NullPointerException`).  The frame dump shows the
+  language menu (ENGLISH / ČEŠTINA / DEUTSCH / FRANÇAIS / ITALIANO / ESPAÑOL),
+  matching the FreeJ2ME-Plus reference.  The matrix row was re-measured and
+  the matrix regenerated (1502 titles / 1483 ok / matrix line only changed for
+  this title).
+* A/B against build `dada347` with identical flags: `家园5汉化版` 600 frames
+  68,263 → 67,790 gfx (0.7%, scheduling noise); `开心农场_240` 1,200 → 1,198
+  gfx with one fewer first-frame paint.  No regressions.
+* New `tests/sizeorderdemo` fixture + `test_sizeorder` gate: fails on the
+  pre-fix build (all-black, no `paint renderer` line), passes after it.  Full
+  serial CTest **204/204 PASS in 365.58 s**.
+* Libretro validation with the rebuilt core: mock matrix **20/20**, real
+  RetroArch loopdemo 120 frames **PASS**.
+* Whole-corpus libretro visual probe over the round-167 rows (300 frames,
+  8 jobs): **719 titles → 716 passed, 2 known limitations, 1 failed**; the
+  only failure is `GoldenSolitaire` (its own `InvalidRecordIDException` boot
+  bug).  `NeonRunner` is now a passing title.
+
+Commit `24cc847` "fix(lcdui): deliver the first sizeChanged() while
+setCurrent() still owns the stack".  `GoldenSolitaire` stays a documented
+black title pending its own game-side boot exception.

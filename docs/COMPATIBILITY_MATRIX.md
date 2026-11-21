@@ -694,7 +694,7 @@ Built from `HEAD`, 2026-11-22 (recorded by `tools/sweep_compat.py`).
 | vault/Need for Speed - The Run.jar | 518 | Need for Speed The Run | - | 4.9.7 | MIDP-2.0 | - | 38 | 16 | 600 | 11411748 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
 | vault/Need for Speed - Undercover Velocity 3D.jar | 1125 | Need for Speed Undercover Ve | - | 1.0.0 | MIDP-2.0 | - | 46 | 16 | 600 | 4383476 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
 | vault/Need for Speed - Undercover.jar | 485 | Need for Speed Undercover | - | 4.4.0 | MIDP-2.0 | - | 29 | 16 | 600 | 5010016 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
-| vault/NeonRunner.jar | 330 | Neon Runner | - | 1.0.1 | MIDP-2.0 | nokia-ui | 21 | 16 | 600 | 33317447 | 0 | java/lang/NullPointerException | 运行正常 | painted 600 frames but made no draw calls (b |
+| vault/NeonRunner.jar | 330 | Neon Runner | - | 1.0.1 | MIDP-2.0 | nokia-ui | 21 | 16 | 600 | 1896569172 | 0 | - | 运行正常 |  |
 | vault/New York Nights.v1.00.jar | 190 | NYNights | - | 0.0.75 | MIDP-1.0 | nokia-ui | 7 | 16 | 600 | 5267290247 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
 | vault/Nightmare Creatures.jar | 160 | NightmareCreatures | - | 0.3.2 | MIDP-1.0 | nokia-ui | 4 | 16 | 600 | 2274857443 | 0 | - | 运行正常 |  |
 | vault/Ninja Prophecy.jar | 1021 | Ninja Prophecy | - | 1.1.5 | MIDP-2.0 | - | 54 | 16 | 600 | 160199619 | 0 | java/lang/NullPointerException | 运行正常 |  |
