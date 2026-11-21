@@ -157,3 +157,31 @@ runtime-controlled point that is after `startApp()` returns but before any game
 thread can install UI state; that is a `nj_run`/VM-level pacing change, not a
 Canvas-class change, and it is deferred until it can be done with the same
 A/B evidence this round used.
+
+## Round 166: sizeChanged() after startApp() does not fix NeonRunner
+
+The round-144 attempt delivered `sizeChanged()` from `setCurrent()` (inside
+`startApp()`) and fixed NeonRunner but broke Townsmen5.  The documented safe
+point was "after startApp() returns, before any game thread runs", so round 166
+implemented exactly that as an experiment:
+
+* a new Canvas field `cSizeReady` and a public
+  `nj_midp_deliver_pending_size(vm)` delivered `sizeChanged(screen_w,
+  screen_h)` for the current Canvas from the runner right after the
+  synchronous `startApp()` returned, before the cooperative scheduler ran a
+  game thread; `canvas_visible()` then used the flag so the first paint did not
+  deliver it a second time;
+* debug output confirmed the call happened: `SZDBG current=… canvas=1`,
+  `SZDBG delivered 240x320 exc=0`.
+
+Result: **NeonRunner stayed black** (`frames=300 paints=300 gfx=0`, the same
+`NullPointerException at j.paint(Graphics) pc=290` on every paint, renderer
+field still null), while Townsmen5 was unaffected (`gfx=79988`, non-black
+pixels 76,800/76,311 at 150/300 frames).  The experiment was reverted.
+
+Conclusion: NeonRunner's renderer-null is not a sizeChanged() delivery-order
+problem after all — the callback runs before the game's paint thread and the
+game still copies a null `c:Lk` over `a:Lk`.  The remaining lead is the game's
+own swallowed initialisation path (`run()` calls `b()`, which should write
+`c:Lk` at bytecode 642; the trace never sees it).  Chasing it needs an
+exception-trace of `b()`'s catch range, not another Canvas-ordering change.

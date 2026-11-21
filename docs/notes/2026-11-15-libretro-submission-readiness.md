@@ -1532,8 +1532,9 @@ OPEN/MERGEABLE, no merge claimed.
   ok** (Wizardry/Dig Dug fixed); compatibility matrix merged to **1502 titles,
   1482 ok**.
 - Release: version 0.5.25 (`.info` `057df4d9…`), r44 built from clean worktree
-  `285cfe2`; validation mock **20/20**, real RetroArch PASS, Wine **4/4 @300**,
-  bundle **32/32**, full serial CTest **203/203 in 370.74 s** on the bumped
+  `285cfe2`; validation mock **20/20**, real RetroArch PASS, real-RetroArch
+  corpus probe **8/8** (8 titles x 600 frames), Wine **4/4 @300**, bundle
+  **32/32**, full serial CTest **203/203 in 370.74 s** on the bumped
   tree, whole-corpus visual probe **717 -> 711 passed / 3 known / 3 failed**
   (two documented black titles + one non-reproducible save-check flake);
   APKs split per ABI (versionCode 525), cores zip 11,623,703 B; GitHub release

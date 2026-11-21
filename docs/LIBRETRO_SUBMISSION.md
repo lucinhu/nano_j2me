@@ -1862,11 +1862,12 @@ r44 package built from clean worktree `/var/tmp/nj2me-r44-tree` at `285cfe2`:
 | windows-x86_64 | 3,329,024 | `de97ec787d28b342fdb825b07c82ca311806c57dad0fc593fffe96b90c4c70e1` |
 
 Validation of the installed `build/libretro-dist`: mock matrix **20/20**, real
-RetroArch 1.22.2 LoopDemo 120 frames **PASS**, Windows x86_64 Wine **4/4 at
-300 frames**, submission bundle **32/32**, full serial CTest **203/203** on the
-release tree (370.74 s) including the new `test_siemens` gate, whole-corpus
-libretro visual probe **717 titles -> 711 passed, 3 known limitations, 3
-failed** (the failures are the two documented black titles plus one non-
+RetroArch 1.22.2 LoopDemo 120 frames **PASS**, real-RetroArch corpus probe
+(8 titles 2D/3D/audio/save-state, 600 frames each) **8/8 PASS**, Windows x86_64
+Wine **4/4 at 300 frames**, submission bundle **32/32**, full serial CTest
+**203/203** on the release tree (370.74 s) including the new `test_siemens`
+gate, whole-corpus libretro visual probe **717 titles -> 711 passed, 3 known
+limitations, 3 failed** (the failures are the two documented black titles plus one non-
 reproducible save-check flake).  Android releases keep the per-ABI split APKs
 (versionCode 525): `arm64-v8a` 1,005,724 B, `armeabi-v7a` 1,013,918 B, `x86`
 989,334 B, `x86_64` 1,005,721 B, `legacy` 729,500 B; cores zip

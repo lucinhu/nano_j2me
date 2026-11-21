@@ -51,8 +51,10 @@ frames) and **Dig Dug** (`Dig_Dug_240x400`).
   including `test_siemens` (LayerManager/Sprite/ExtendedImage/`resource:`
   stream fixture, pixel-checked) and all previous gates.
 * Release-core checks on the r44 binaries: mock frontend matrix **20/20**;
-  real RetroArch 1.22.2 `LoopDemo` 120 frames **PASS**; Windows x86_64 core
-  under Wine **4/4** at 300 frames; submission bundle **32/32**.
+  real RetroArch 1.22.2 `LoopDemo` 120 frames **PASS**; the real-RetroArch
+  corpus probe (8 titles, 2D/3D/audio/save-state users, 600 frames each)
+  **8/8 PASS**; Windows x86_64 core under Wine **4/4** at 300 frames;
+  submission bundle **32/32**.
 * Whole-corpus libretro visual probe (300 frames, 8 jobs, paced 16.67 ms):
   **717 titles → 711 passed, 3 known limitations, 3 failed**. The two render
   failures are the documented black titles (`NeonRunner`, `GoldenSolitaire`);
