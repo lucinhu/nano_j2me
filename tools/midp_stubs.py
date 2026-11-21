@@ -1564,6 +1564,47 @@ CLASSES = {
             "public static void removeProximityListener(ProximityListener)",
         ],
     },
+    "javax/microedition/location/LandmarkException": {
+        "extends": "Exception",
+        "methods": ["public LandmarkException()",
+                    "public LandmarkException(String)"],
+    },
+    "javax/microedition/location/Landmark": {
+        "methods": [
+            "public Landmark(String, String, QualifiedCoordinates, AddressInfo, byte[])",
+            "public String getName()",
+            "public String getDescription()",
+            "public QualifiedCoordinates getQualifiedCoordinates()",
+            "public AddressInfo getAddressInfo()",
+            "public byte[] getExtraInfo()",
+            "public void setName(String)",
+            "public void setDescription(String)",
+            "public void setQualifiedCoordinates(QualifiedCoordinates)",
+            "public void setAddressInfo(AddressInfo)",
+            "public void setExtraInfo(byte[])",
+            "public boolean equals(Object)",
+            "public int hashCode()",
+        ],
+    },
+    "javax/microedition/location/LandmarkStore": {
+        "methods": [
+            "public static LandmarkStore getInstance(String)",
+            "public static void createLandmarkStore(String) throws java.io.IOException, LandmarkException",
+            "public static void deleteLandmarkStore(String) throws java.io.IOException, LandmarkException",
+            "public static java.util.Enumeration listLandmarkStores() throws java.io.IOException",
+            "public void addLandmark(Landmark, String) throws java.io.IOException, LandmarkException",
+            "public java.util.Enumeration getLandmarks() throws java.io.IOException",
+            "public java.util.Enumeration getLandmarks(String) throws java.io.IOException",
+            "public java.util.Enumeration getLandmarks(String, String) throws java.io.IOException",
+            "public java.util.Enumeration getLandmarks(String, double, double, double, double) throws java.io.IOException",
+            "public void removeLandmarkFromCategory(Landmark, String) throws java.io.IOException, LandmarkException",
+            "public void updateLandmark(Landmark) throws java.io.IOException, LandmarkException",
+            "public void deleteLandmark(Landmark) throws java.io.IOException, LandmarkException",
+            "public java.util.Enumeration getCategories()",
+            "public void addCategory(String) throws java.io.IOException, LandmarkException",
+            "public void deleteCategory(String) throws java.io.IOException, LandmarkException",
+        ],
+    },
 }
 
 RETURNING = {

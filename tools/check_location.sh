@@ -45,6 +45,13 @@ have 'LOCATION address=Main Street 1/Helsinki/+358 0 000 000/demo@example.org' \
 have 'LOCATION invalid=caught' || fail "invalid coordinate was accepted"
 have 'LOCATION proximity=caught' || fail "proximity monitoring did not throw"
 have 'LOCATION updated=1 valid=true' || fail "location listener not called"
+# Phase 2: Landmark/LandmarkStore through real bytecode.
+have 'LOCATION lm name=Cafe Moi desc=coffee' || fail "landmark round-trip failed"
+have 'LOCATION lm category_count=1' || fail "getLandmarks(category) wrong"
+have 'LOCATION lm stores=1' || fail "listLandmarkStores wrong"
+have 'LOCATION lm categories=1' || fail "getCategories wrong"
+have 'LOCATION lm left_after_remove=1' || fail "removeLandmarkFromCategory wrong"
+have 'LOCATION lm deleted=true' || fail "landmark/store teardown failed"
 printf '%s\n' "$ALL" | grep -q 'LOCATION failed=' && fail "a location call failed"
 printf '%s\n' "$ALL" | grep -q 'NoSuchMethodError' && fail "NoSuchMethodError"
 printf '%s\n' "$ALL" | grep -q 'NoClassDefFoundError' && fail "NoClassDefFoundError"

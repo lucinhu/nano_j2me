@@ -1450,6 +1450,724 @@ static const nj_builtin_method provider_i_methods[] = {
     M("reset", "()V", 0)
 };
 
+
+/* ------------------------------------------------------------------ */
+/* JSR-179 phase 2: Landmark, LandmarkStore (in-memory, per-VM)        */
+/* ------------------------------------------------------------------ */
+#define NJ_C_LANDMARK   "javax/microedition/location/Landmark"
+#define NJ_C_LSTORE     "javax/microedition/location/LandmarkStore"
+#define NJ_C_LMEXC      "javax/microedition/location/LandmarkException"
+
+#define F_LM_NAME       "lmName"
+#define F_LM_DESC       "lmDesc"
+#define F_LM_COORD      "lmCoord"
+#define F_LM_ADDR       "lmAddr"
+#define F_LM_EXTRA      "lmExtra"
+#define F_LS_NAME       "lsName"
+#define F_LS_RECORDS    "lsRecords"
+#define LS_VEC          "java/util/Vector"
+
+/* Store records live in a per-VM static Vector of Object[3] entries:
+ *   [0] String   store name
+ *   [1] Landmark landmark (NULL for a store/category marker)
+ *   [2] String   category (NULL for "uncategorised")
+ * A record with landmark == NULL and category == NULL is the store marker;
+ * a record with landmark == NULL and a category is the category marker.
+ * The VM's GC sees the vector through the class's static slot, so nothing
+ * here is a C global. */
+static nj_ref ls_vec_new(nj_vm *vm);
+
+/* The registry is created lazily on the first store call: creating it from
+ * nj_location_late_init() would need a Java call during builtin setup, and
+ * the native-call machinery only exists once the VM is running. */
+static nj_ref ls_records(nj_vm *vm)
+{
+    nj_field *f = NJ_FS(vm, NJ_C_LSTORE, F_LS_RECORDS, "Ljava/util/Vector;");
+    nj_ref vec;
+    if (!f) {
+        return 0;
+    }
+    vec = nj_field_read_ref(vm, NULL, f);
+    if (!vec) {
+        vec = ls_vec_new(vm);
+        if (vec) {
+            nj_field_write_ref(vm, NULL, f, vec);
+        }
+    }
+    return vec;
+}
+
+static nj_ref ls_store_name(nj_vm *vm, nj_ref store)
+{
+    return fget_r(vm, store, NJ_C_LSTORE, F_LS_NAME, "Ljava/lang/String;");
+}
+
+static int ls_str_eq(nj_vm *vm, nj_ref a, nj_ref b)
+{
+    nj_value arg;
+    if (a == b) {
+        return 1;
+    }
+    if (!a || !b) {
+        return 0;
+    }
+    arg.r = b;
+    return nj_call_int(vm, a, "java/lang/String", "equals",
+                       "(Ljava/lang/Object;)Z", &arg) != 0;
+}
+
+static nj_ref ls_vec_new(nj_vm *vm)
+{
+    nj_ref v = nj_object_new(vm, LS_VEC);
+    if (!v) {
+        return 0;
+    }
+    if (nj_call_special(vm, v, LS_VEC, "<init>", "()V", NULL, NULL) != NJ_OK) {
+        return 0;
+    }
+    return v;
+}
+
+static void ls_vec_add(nj_vm *vm, nj_ref v, nj_ref o)
+{
+    nj_value a;
+    a.r = o;
+    nj_call(vm, v, LS_VEC, "addElement", "(Ljava/lang/Object;)V", &a, NULL);
+}
+
+static nj_s4 ls_vec_size(nj_vm *vm, nj_ref v)
+{
+    return nj_call_int(vm, v, LS_VEC, "size", "()I", NULL);
+}
+
+static nj_ref ls_vec_get(nj_vm *vm, nj_ref v, nj_s4 i)
+{
+    nj_value a;
+    a.i = i;
+    return nj_call_ref(vm, v, LS_VEC, "elementAt",
+                       "(I)Ljava/lang/Object;", &a);
+}
+
+static void ls_vec_remove(nj_vm *vm, nj_ref v, nj_s4 i)
+{
+    nj_value a;
+    a.i = i;
+    nj_call(vm, v, LS_VEC, "removeElementAt", "(I)V", &a, NULL);
+}
+
+static nj_ref ls_enum(nj_vm *vm, nj_ref v)
+{
+    return nj_call_ref(vm, v, LS_VEC, "elements", "()Ljava/util/Enumeration;",
+                       NULL);
+}
+
+static nj_ref ls_rec_new(nj_vm *vm, nj_ref store_name, nj_ref lm, nj_ref cat)
+{
+    nj_ref rec = nj_object_array_new(vm, "java/lang/Object", 3u);
+    if (!rec) {
+        return 0;
+    }
+    nj_array_set_ref(rec, 0u, store_name);
+    nj_array_set_ref(rec, 1u, lm);
+    nj_array_set_ref(rec, 2u, cat);
+    return rec;
+}
+
+static int ls_rec_in_store(nj_vm *vm, nj_ref rec, nj_ref store_name)
+{
+    return ls_str_eq(vm, nj_array_get_ref(rec, 0u), store_name);
+}
+
+static int ls_store_exists(nj_vm *vm, nj_ref name)
+{
+    nj_ref vec = ls_records(vm);
+    nj_s4 n;
+    nj_s4 i;
+
+    if (!vec) {
+        return 0;
+    }
+    n = ls_vec_size(vm, vec);
+    for (i = 0; i < n; i++) {
+        if (ls_rec_in_store(vm, ls_vec_get(vm, vec, i), name)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static void ls_add_store_marker(nj_vm *vm, nj_ref name)
+{
+    nj_ref vec = ls_records(vm);
+    if (vec) {
+        ls_vec_add(vm, vec, ls_rec_new(vm, name, 0, 0));
+    }
+}
+
+static nj_ref ls_new_store(nj_vm *vm, nj_ref name)
+{
+    nj_ref store = nj_object_new(vm, NJ_C_LSTORE);
+    if (!store) {
+        return 0;
+    }
+    fput_r(vm, store, NJ_C_LSTORE, F_LS_NAME, "Ljava/lang/String;", name);
+    return store;
+}
+
+/* Returns the instance field for a Landmark, validated. */
+static nj_ref landmark_name(nj_vm *vm, nj_ref lm)
+{
+    return fget_r(vm, lm, NJ_C_LANDMARK, F_LM_NAME, "Ljava/lang/String;");
+}
+
+static int landmark_matches(nj_vm *vm, nj_ref a, nj_ref b)
+{
+    nj_value arg;
+    if (a == b) {
+        return 1;
+    }
+    if (!a || !b) {
+        return 0;
+    }
+    arg.r = b;
+    return nj_call_int(vm, a, NJ_C_LANDMARK, "equals",
+                       "(Ljava/lang/Object;)Z", &arg) != 0;
+}
+
+static nj_ref ls_landmarks_vec(nj_vm *vm, nj_ref store, nj_ref category,
+                               int has_category, nj_ref name, int has_name)
+{
+    nj_ref vec = ls_records(vm);
+    nj_ref out = ls_vec_new(vm);
+    nj_s4 n;
+    nj_s4 i;
+
+    if (!vec || !out) {
+        return 0;
+    }
+    n = ls_vec_size(vm, vec);
+    for (i = 0; i < n; i++) {
+        nj_ref rec = ls_vec_get(vm, vec, i);
+        nj_ref lm = nj_array_get_ref(rec, 1u);
+        nj_ref cat = nj_array_get_ref(rec, 2u);
+        if (!ls_rec_in_store(vm, rec, ls_store_name(vm, store)) || !lm) {
+            continue;
+        }
+        if (has_category && !ls_str_eq(vm, cat, category)) {
+            continue;
+        }
+        if (has_name && name && !ls_str_eq(vm, landmark_name(vm, lm), name)) {
+            continue;
+        }
+        ls_vec_add(vm, out, lm);
+    }
+    return out;
+}
+
+NJFN(lm_init)
+{
+    nj_ref name = NJ_ARG_REF(args, 0);
+    nj_ref desc = NJ_ARG_REF(args, 1);
+    nj_ref coords = NJ_ARG_REF(args, 2);
+    nj_ref addr = NJ_ARG_REF(args, 3);
+    nj_ref extra = NJ_ARG_REF(args, 4);
+    nj_ref self = NJ_THIS(args);
+
+    if (!name) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException",
+                        "landmark name must not be null");
+    }
+    fput_r(vm, self, NJ_C_LANDMARK, F_LM_NAME, "Ljava/lang/String;", name);
+    fput_r(vm, self, NJ_C_LANDMARK, F_LM_DESC, "Ljava/lang/String;", desc);
+    fput_r(vm, self, NJ_C_LANDMARK, F_LM_COORD, "L" NJ_C_QCOORD ";", coords);
+    fput_r(vm, self, NJ_C_LANDMARK, F_LM_ADDR, "L" NJ_C_ADDR ";", addr);
+    fput_r(vm, self, NJ_C_LANDMARK, F_LM_EXTRA, "[B", extra);
+    return NJ_OK;
+}
+
+NJFN(lm_get_name)
+{
+    ret->r = fget_r(vm, NJ_THIS(args), NJ_C_LANDMARK, F_LM_NAME,
+                    "Ljava/lang/String;");
+    return NJ_OK;
+}
+
+NJFN(lm_get_desc)
+{
+    ret->r = fget_r(vm, NJ_THIS(args), NJ_C_LANDMARK, F_LM_DESC,
+                    "Ljava/lang/String;");
+    return NJ_OK;
+}
+
+NJFN(lm_get_coords)
+{
+    ret->r = fget_r(vm, NJ_THIS(args), NJ_C_LANDMARK, F_LM_COORD,
+                    "L" NJ_C_QCOORD ";");
+    return NJ_OK;
+}
+
+NJFN(lm_get_addr)
+{
+    ret->r = fget_r(vm, NJ_THIS(args), NJ_C_LANDMARK, F_LM_ADDR,
+                    "L" NJ_C_ADDR ";");
+    return NJ_OK;
+}
+
+NJFN(lm_get_extra)
+{
+    ret->r = fget_r(vm, NJ_THIS(args), NJ_C_LANDMARK, F_LM_EXTRA, "[B");
+    return NJ_OK;
+}
+
+NJFN(lm_set_name)
+{
+    nj_ref name = NJ_ARG_REF(args, 0);
+    if (!name) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException",
+                        "landmark name must not be null");
+    }
+    fput_r(vm, NJ_THIS(args), NJ_C_LANDMARK, F_LM_NAME, "Ljava/lang/String;",
+           name);
+    return NJ_OK;
+}
+
+NJFN(lm_set_desc)
+{
+    fput_r(vm, NJ_THIS(args), NJ_C_LANDMARK, F_LM_DESC, "Ljava/lang/String;",
+           NJ_ARG_REF(args, 0));
+    return NJ_OK;
+}
+
+NJFN(lm_set_coords)
+{
+    fput_r(vm, NJ_THIS(args), NJ_C_LANDMARK, F_LM_COORD, "L" NJ_C_QCOORD ";",
+           NJ_ARG_REF(args, 0));
+    return NJ_OK;
+}
+
+NJFN(lm_set_addr)
+{
+    fput_r(vm, NJ_THIS(args), NJ_C_LANDMARK, F_LM_ADDR, "L" NJ_C_ADDR ";",
+           NJ_ARG_REF(args, 0));
+    return NJ_OK;
+}
+
+NJFN(lm_set_extra)
+{
+    fput_r(vm, NJ_THIS(args), NJ_C_LANDMARK, F_LM_EXTRA, "[B", NJ_ARG_REF(args, 0));
+    return NJ_OK;
+}
+
+NJFN(lm_equals)
+{
+    ret->i = landmark_matches(vm, NJ_THIS(args), NJ_ARG_REF(args, 0));
+    return NJ_OK;
+}
+
+NJFN(lm_hash_code)
+{
+    nj_ref name = landmark_name(vm, NJ_THIS(args));
+    ret->i = name ? nj_call_int(vm, name, "java/lang/String", "hashCode",
+                                "()I", NULL) : 0;
+    return NJ_OK;
+}
+
+NJFN(ls_get_instance)
+{
+    nj_ref name = NJ_ARG_REF(args, 0);
+    nj_ref store;
+
+    if (!name) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException",
+                        "store name must not be null");
+    }
+    /* JSR-179: opening a store that does not exist yet creates it. */
+    if (!ls_store_exists(vm, name)) {
+        ls_add_store_marker(vm, name);
+    }
+    store = ls_new_store(vm, name);
+    ret->r = store;
+    return store ? NJ_OK : NJ_ERR;
+}
+
+NJFN(ls_create)
+{
+    nj_ref name = NJ_ARG_REF(args, 0);
+    if (!name) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException",
+                        "store name must not be null");
+    }
+    if (ls_store_exists(vm, name)) {
+        return nj_throw(vm, NJ_C_LMEXC, "store already exists");
+    }
+    ls_add_store_marker(vm, name);
+    return NJ_OK;
+}
+
+NJFN(ls_delete_store)
+{
+    nj_ref name = NJ_ARG_REF(args, 0);
+    nj_ref vec;
+    nj_s4 i;
+    int removed = 0;
+
+    if (!name) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException",
+                        "store name must not be null");
+    }
+    vec = ls_records(vm);
+    if (!vec) {
+        return nj_throw(vm, "java/io/IOException", "no landmark store");
+    }
+    for (i = ls_vec_size(vm, vec) - 1; i >= 0; i--) {
+        if (ls_rec_in_store(vm, ls_vec_get(vm, vec, i), name)) {
+            ls_vec_remove(vm, vec, i);
+            removed++;
+        }
+    }
+    if (!removed) {
+        return nj_throw(vm, "java/io/IOException", "no such landmark store");
+    }
+    return NJ_OK;
+}
+
+NJFN(ls_list_stores)
+{
+    nj_ref vec = ls_records(vm);
+    nj_ref out = ls_vec_new(vm);
+    nj_s4 n;
+    nj_s4 i;
+
+    if (!vec || !out) {
+        return NJ_ERR;
+    }
+    n = ls_vec_size(vm, vec);
+    for (i = 0; i < n; i++) {
+        nj_ref rec = ls_vec_get(vm, vec, i);
+        nj_ref name = nj_array_get_ref(rec, 0u);
+        nj_ref lm = nj_array_get_ref(rec, 1u);
+        nj_ref cat = nj_array_get_ref(rec, 2u);
+        int seen = 0;
+        nj_s4 j;
+
+        if (!name || lm || cat) {
+            continue;               /* only store markers name a store */
+        }
+        for (j = 0; j < ls_vec_size(vm, out); j++) {
+            if (ls_str_eq(vm, ls_vec_get(vm, out, j), name)) {
+                seen = 1;
+                break;
+            }
+        }
+        if (!seen) {
+            ls_vec_add(vm, out, name);
+        }
+    }
+    ret->r = ls_enum(vm, out);
+    return ret->r ? NJ_OK : NJ_ERR;
+}
+
+NJFN(ls_add_landmark)
+{
+    nj_ref lm = NJ_ARG_REF(args, 0);
+    nj_ref cat = NJ_ARG_REF(args, 1);
+    nj_ref store = NJ_THIS(args);
+    nj_ref name = ls_store_name(vm, store);
+    nj_ref vec = ls_records(vm);
+    nj_s4 n;
+    nj_s4 i;
+
+    if (!lm) {
+        return nj_throw(vm, "java/lang/NullPointerException", "landmark");
+    }
+    if (!vec) {
+        return nj_throw(vm, "java/io/IOException", "no landmark store");
+    }
+    n = ls_vec_size(vm, vec);
+    for (i = 0; i < n; i++) {
+        nj_ref rec = ls_vec_get(vm, vec, i);
+        if (ls_rec_in_store(vm, rec, name) &&
+            nj_array_get_ref(rec, 1u) == lm) {
+            return nj_throw(vm, NJ_C_LMEXC, "landmark already added");
+        }
+    }
+    ls_vec_add(vm, vec, ls_rec_new(vm, name, lm, cat));
+    return NJ_OK;
+}
+
+NJFN(ls_get_landmarks)
+{
+    nj_ref store = NJ_THIS(args);
+    nj_ref lm = ls_landmarks_vec(vm, store, 0, 0, 0, 0);
+    ret->r = lm ? ls_enum(vm, lm) : 0;
+    return ret->r ? NJ_OK : NJ_ERR;
+}
+
+NJFN(ls_get_landmarks_cat)
+{
+    nj_ref store = NJ_THIS(args);
+    nj_ref lm = ls_landmarks_vec(vm, store, NJ_ARG_REF(args, 0), 1, 0, 0);
+    ret->r = lm ? ls_enum(vm, lm) : 0;
+    return ret->r ? NJ_OK : NJ_ERR;
+}
+
+NJFN(ls_get_landmarks_cat_name)
+{
+    nj_ref store = NJ_THIS(args);
+    nj_ref lm = ls_landmarks_vec(vm, store, NJ_ARG_REF(args, 0), 1,
+                                 NJ_ARG_REF(args, 1), 1);
+    ret->r = lm ? ls_enum(vm, lm) : 0;
+    return ret->r ? NJ_OK : NJ_ERR;
+}
+
+NJFN(ls_get_landmarks_area)
+{
+    nj_ref store = NJ_THIS(args);
+    nj_ref vec = ls_records(vm);
+    nj_ref out = ls_vec_new(vm);
+    nj_ref name = ls_store_name(vm, store);
+    double min_lat = NJ_ARG_DOUBLE(args, 1);
+    double max_lat = NJ_ARG_DOUBLE(args, 3);
+    double min_lon = NJ_ARG_DOUBLE(args, 5);
+    double max_lon = NJ_ARG_DOUBLE(args, 7);
+    nj_s4 n;
+    nj_s4 i;
+
+    if (!vec || !out) {
+        return NJ_ERR;
+    }
+    n = ls_vec_size(vm, vec);
+    for (i = 0; i < n; i++) {
+        nj_ref rec = ls_vec_get(vm, vec, i);
+        nj_ref lm = nj_array_get_ref(rec, 1u);
+        nj_ref coord;
+        double lat;
+        double lon;
+
+        if (!ls_rec_in_store(vm, rec, name) || !lm) {
+            continue;
+        }
+        coord = fget_r(vm, lm, NJ_C_LANDMARK, F_LM_COORD, "L" NJ_C_QCOORD ";");
+        if (!coord) {
+            continue;
+        }
+        lat = fget_d(vm, coord, NJ_C_COORD, F_LAT);
+        lon = fget_d(vm, coord, NJ_C_COORD, F_LON);
+        if (lat >= min_lat && lat <= max_lat && lon >= min_lon &&
+            lon <= max_lon) {
+            ls_vec_add(vm, out, lm);
+        }
+    }
+    ret->r = ls_enum(vm, out);
+    return ret->r ? NJ_OK : NJ_ERR;
+}
+
+NJFN(ls_remove_landmark_cat)
+{
+    nj_ref lm = NJ_ARG_REF(args, 0);
+    nj_ref cat = NJ_ARG_REF(args, 1);
+    nj_ref store = NJ_THIS(args);
+    nj_ref vec = ls_records(vm);
+    nj_s4 i;
+    int found = 0;
+
+    for (i = 0; i < ls_vec_size(vm, vec); i++) {
+        nj_ref rec = ls_vec_get(vm, vec, i);
+        if (ls_rec_in_store(vm, rec, ls_store_name(vm, store)) &&
+            nj_array_get_ref(rec, 1u) == lm &&
+            ls_str_eq(vm, nj_array_get_ref(rec, 2u), cat)) {
+            /* Leave the landmark in the store, uncategorised: removing it
+             * from a category is not the same as deleting it. */
+            nj_array_set_ref(rec, 2u, 0);
+            found = 1;
+            break;
+        }
+    }
+    if (!found) {
+        return nj_throw(vm, NJ_C_LMEXC, "landmark is not in that category");
+    }
+    return NJ_OK;
+}
+
+NJFN(ls_update_landmark)
+{
+    nj_ref lm = NJ_ARG_REF(args, 0);
+    nj_ref store = NJ_THIS(args);
+    nj_ref vec = ls_records(vm);
+    nj_s4 i;
+
+    for (i = 0; i < ls_vec_size(vm, vec); i++) {
+        nj_ref rec = ls_vec_get(vm, vec, i);
+        if (ls_rec_in_store(vm, rec, ls_store_name(vm, store)) &&
+            nj_array_get_ref(rec, 1u) == lm) {
+            return NJ_OK;
+        }
+    }
+    return nj_throw(vm, NJ_C_LMEXC, "landmark is not in the store");
+}
+
+NJFN(ls_delete_landmark)
+{
+    nj_ref lm = NJ_ARG_REF(args, 0);
+    nj_ref store = NJ_THIS(args);
+    nj_ref vec = ls_records(vm);
+    nj_s4 i;
+    int found = 0;
+
+    for (i = ls_vec_size(vm, vec) - 1; i >= 0; i--) {
+        nj_ref rec = ls_vec_get(vm, vec, i);
+        if (ls_rec_in_store(vm, rec, ls_store_name(vm, store)) &&
+            nj_array_get_ref(rec, 1u) == lm) {
+            ls_vec_remove(vm, vec, i);
+            found = 1;
+        }
+    }
+    if (!found) {
+        return nj_throw(vm, NJ_C_LMEXC, "landmark is not in the store");
+    }
+    return NJ_OK;
+}
+
+NJFN(ls_get_categories)
+{
+    nj_ref store = NJ_THIS(args);
+    nj_ref vec = ls_records(vm);
+    nj_ref out = ls_vec_new(vm);
+    nj_ref name = ls_store_name(vm, store);
+    nj_s4 n;
+    nj_s4 i;
+
+    if (!vec || !out) {
+        return NJ_ERR;
+    }
+    n = ls_vec_size(vm, vec);
+    for (i = 0; i < n; i++) {
+        nj_ref rec = ls_vec_get(vm, vec, i);
+        nj_ref cat = nj_array_get_ref(rec, 2u);
+        int seen = 0;
+        nj_s4 j;
+
+        if (!ls_rec_in_store(vm, rec, name) || !cat) {
+            continue;
+        }
+        for (j = 0; j < ls_vec_size(vm, out); j++) {
+            if (ls_str_eq(vm, ls_vec_get(vm, out, j), cat)) {
+                seen = 1;
+                break;
+            }
+        }
+        if (!seen) {
+            ls_vec_add(vm, out, cat);
+        }
+    }
+    ret->r = ls_enum(vm, out);
+    return ret->r ? NJ_OK : NJ_ERR;
+}
+
+NJFN(ls_add_category)
+{
+    nj_ref cat = NJ_ARG_REF(args, 0);
+    nj_ref store = NJ_THIS(args);
+    nj_ref vec = ls_records(vm);
+    nj_ref name = ls_store_name(vm, store);
+    nj_s4 i;
+
+    if (!cat) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException",
+                        "category must not be null");
+    }
+    for (i = 0; i < ls_vec_size(vm, vec); i++) {
+        nj_ref rec = ls_vec_get(vm, vec, i);
+        if (ls_rec_in_store(vm, rec, name) &&
+            !nj_array_get_ref(rec, 1u) &&
+            ls_str_eq(vm, nj_array_get_ref(rec, 2u), cat)) {
+            return nj_throw(vm, NJ_C_LMEXC, "category already exists");
+        }
+    }
+    ls_vec_add(vm, vec, ls_rec_new(vm, name, 0, cat));
+    return NJ_OK;
+}
+
+NJFN(ls_delete_category)
+{
+    nj_ref cat = NJ_ARG_REF(args, 0);
+    nj_ref store = NJ_THIS(args);
+    nj_ref vec = ls_records(vm);
+    nj_ref name = ls_store_name(vm, store);
+    nj_s4 i;
+    int found = 0;
+
+    for (i = ls_vec_size(vm, vec) - 1; i >= 0; i--) {
+        nj_ref rec = ls_vec_get(vm, vec, i);
+        if (!ls_rec_in_store(vm, rec, name)) {
+            continue;
+        }
+        if (!nj_array_get_ref(rec, 1u) &&
+            ls_str_eq(vm, nj_array_get_ref(rec, 2u), cat)) {
+            ls_vec_remove(vm, vec, i);
+            found = 1;
+        } else if (nj_array_get_ref(rec, 1u) &&
+                   ls_str_eq(vm, nj_array_get_ref(rec, 2u), cat)) {
+            nj_array_set_ref(rec, 2u, 0);   /* uncategorised, landmark stays */
+            found = 1;
+        }
+    }
+    if (!found) {
+        return nj_throw(vm, NJ_C_LMEXC, "no such category");
+    }
+    return NJ_OK;
+}
+
+/* ------------------------------------------------------------------ */
+/* Landmark / LandmarkStore field and method tables                    */
+/* ------------------------------------------------------------------ */
+static const nj_builtin_field landmark_fields[] = {
+    FLD(F_LM_NAME, "Ljava/lang/String;", NJ_ACC_PRIVATE),
+    FLD(F_LM_DESC, "Ljava/lang/String;", NJ_ACC_PRIVATE),
+    FLD(F_LM_COORD, "L" NJ_C_QCOORD ";", NJ_ACC_PRIVATE),
+    FLD(F_LM_ADDR, "L" NJ_C_ADDR ";", NJ_ACC_PRIVATE),
+    FLD(F_LM_EXTRA, "[B", NJ_ACC_PRIVATE)
+};
+
+static const nj_builtin_method landmark_methods[] = {
+    M("<init>", "(Ljava/lang/String;Ljava/lang/String;L" NJ_C_QCOORD ";L" NJ_C_ADDR ";[B)V", 0),
+    M("getName", "()Ljava/lang/String;", 0),
+    M("getDescription", "()Ljava/lang/String;", 0),
+    M("getQualifiedCoordinates", "()L" NJ_C_QCOORD ";", 0),
+    M("getAddressInfo", "()L" NJ_C_ADDR ";", 0),
+    M("getExtraInfo", "()[B", 0),
+    M("setName", "(Ljava/lang/String;)V", 0),
+    M("setDescription", "(Ljava/lang/String;)V", 0),
+    M("setQualifiedCoordinates", "(L" NJ_C_QCOORD ";)V", 0),
+    M("setAddressInfo", "(L" NJ_C_ADDR ";)V", 0),
+    M("setExtraInfo", "([B)V", 0),
+    M("equals", "(Ljava/lang/Object;)Z", 0),
+    M("hashCode", "()I", 0)
+};
+
+static const nj_builtin_field lstore_fields[] = {
+    FLD(F_LS_NAME, "Ljava/lang/String;", NJ_ACC_PRIVATE),
+    FLD(F_LS_RECORDS, "Ljava/util/Vector;", NJ_ACC_PRIVATE | NJ_ACC_STATIC)
+};
+
+static const nj_builtin_method lstore_methods[] = {
+    M("getInstance", "(Ljava/lang/String;)L" NJ_C_LSTORE ";", NJ_ACC_STATIC),
+    M("createLandmarkStore", "(Ljava/lang/String;)V", NJ_ACC_STATIC),
+    M("deleteLandmarkStore", "(Ljava/lang/String;)V", NJ_ACC_STATIC),
+    M("listLandmarkStores", "()Ljava/util/Enumeration;", NJ_ACC_STATIC),
+    M("addLandmark", "(L" NJ_C_LANDMARK ";Ljava/lang/String;)V", 0),
+    M("getLandmarks", "()Ljava/util/Enumeration;", 0),
+    M("getLandmarks", "(Ljava/lang/String;)Ljava/util/Enumeration;", 0),
+    M("getLandmarks", "(Ljava/lang/String;Ljava/lang/String;)Ljava/util/Enumeration;", 0),
+    M("getLandmarks", "(Ljava/lang/String;DDDD)Ljava/util/Enumeration;", 0),
+    M("removeLandmarkFromCategory", "(L" NJ_C_LANDMARK ";Ljava/lang/String;)V", 0),
+    M("updateLandmark", "(L" NJ_C_LANDMARK ";)V", 0),
+    M("deleteLandmark", "(L" NJ_C_LANDMARK ";)V", 0),
+    M("getCategories", "()Ljava/util/Enumeration;", 0),
+    M("addCategory", "(Ljava/lang/String;)V", 0),
+    M("deleteCategory", "(Ljava/lang/String;)V", 0)
+};
+
 const nj_builtin_class nj_lib_location_classes[] = {
     { NJ_C_LOCEXC, "java/lang/Exception", NJ_ACC_PUBLIC,
       NULL, 0u, NULL, 0u },
@@ -1485,7 +2203,14 @@ const nj_builtin_class nj_lib_location_classes[] = {
       provider_methods, (nj_u2)(sizeof(provider_methods) / sizeof(provider_methods[0])) },
     { NJ_C_PROVIDER_I, NJ_C_PROVIDER, NJ_ACC_PUBLIC,
       provider_i_fields, (nj_u2)(sizeof(provider_i_fields) / sizeof(provider_i_fields[0])),
-      provider_i_methods, (nj_u2)(sizeof(provider_i_methods) / sizeof(provider_i_methods[0])) }
+      provider_i_methods, (nj_u2)(sizeof(provider_i_methods) / sizeof(provider_i_methods[0])) },
+    { NJ_C_LMEXC, "java/lang/Exception", NJ_ACC_PUBLIC, NULL, 0u, NULL, 0u },
+    { NJ_C_LANDMARK, "java/lang/Object", NJ_ACC_PUBLIC,
+      landmark_fields, (nj_u2)(sizeof(landmark_fields) / sizeof(landmark_fields[0])),
+      landmark_methods, (nj_u2)(sizeof(landmark_methods) / sizeof(landmark_methods[0])) },
+    { NJ_C_LSTORE, "java/lang/Object", NJ_ACC_PUBLIC,
+      lstore_fields, (nj_u2)(sizeof(lstore_fields) / sizeof(lstore_fields[0])),
+      lstore_methods, (nj_u2)(sizeof(lstore_methods) / sizeof(lstore_methods[0])) }
 };
 const int nj_lib_location_class_count =
     (int)(sizeof(nj_lib_location_classes) / sizeof(nj_lib_location_classes[0]));
@@ -1578,7 +2303,55 @@ const nj_native_entry nj_lib_location_table[] = {
     { NJ_C_PROVIDER_I, "setLocationListener",
       "(L" NJ_C_LOCLISTEN ";" "III)V", loc_provider_set_listener },
     { NJ_C_PROVIDER_I, "getState", "()I", loc_provider_state },
-    { NJ_C_PROVIDER_I, "reset", "()V", loc_provider_reset }
+    { NJ_C_PROVIDER_I, "reset", "()V", loc_provider_reset },
+
+    { NJ_C_LANDMARK, "<init>",
+      "(Ljava/lang/String;Ljava/lang/String;L" NJ_C_QCOORD ";L" NJ_C_ADDR ";[B)V",
+      lm_init },
+    { NJ_C_LANDMARK, "getName", "()Ljava/lang/String;", lm_get_name },
+    { NJ_C_LANDMARK, "getDescription", "()Ljava/lang/String;", lm_get_desc },
+    { NJ_C_LANDMARK, "getQualifiedCoordinates", "()L" NJ_C_QCOORD ";",
+      lm_get_coords },
+    { NJ_C_LANDMARK, "getAddressInfo", "()L" NJ_C_ADDR ";", lm_get_addr },
+    { NJ_C_LANDMARK, "getExtraInfo", "()[B", lm_get_extra },
+    { NJ_C_LANDMARK, "setName", "(Ljava/lang/String;)V", lm_set_name },
+    { NJ_C_LANDMARK, "setDescription", "(Ljava/lang/String;)V", lm_set_desc },
+    { NJ_C_LANDMARK, "setQualifiedCoordinates", "(L" NJ_C_QCOORD ";)V",
+      lm_set_coords },
+    { NJ_C_LANDMARK, "setAddressInfo", "(L" NJ_C_ADDR ";)V", lm_set_addr },
+    { NJ_C_LANDMARK, "setExtraInfo", "([B)V", lm_set_extra },
+    { NJ_C_LANDMARK, "equals", "(Ljava/lang/Object;)Z", lm_equals },
+    { NJ_C_LANDMARK, "hashCode", "()I", lm_hash_code },
+
+    { NJ_C_LSTORE, "getInstance", "(Ljava/lang/String;)L" NJ_C_LSTORE ";",
+      ls_get_instance },
+    { NJ_C_LSTORE, "createLandmarkStore", "(Ljava/lang/String;)V", ls_create },
+    { NJ_C_LSTORE, "deleteLandmarkStore", "(Ljava/lang/String;)V",
+      ls_delete_store },
+    { NJ_C_LSTORE, "listLandmarkStores", "()Ljava/util/Enumeration;",
+      ls_list_stores },
+    { NJ_C_LSTORE, "addLandmark", "(L" NJ_C_LANDMARK ";Ljava/lang/String;)V",
+      ls_add_landmark },
+    { NJ_C_LSTORE, "getLandmarks", "()Ljava/util/Enumeration;",
+      ls_get_landmarks },
+    { NJ_C_LSTORE, "getLandmarks", "(Ljava/lang/String;)Ljava/util/Enumeration;",
+      ls_get_landmarks_cat },
+    { NJ_C_LSTORE, "getLandmarks",
+      "(Ljava/lang/String;Ljava/lang/String;)Ljava/util/Enumeration;",
+      ls_get_landmarks_cat_name },
+    { NJ_C_LSTORE, "getLandmarks",
+      "(Ljava/lang/String;DDDD)Ljava/util/Enumeration;", ls_get_landmarks_area },
+    { NJ_C_LSTORE, "removeLandmarkFromCategory",
+      "(L" NJ_C_LANDMARK ";Ljava/lang/String;)V", ls_remove_landmark_cat },
+    { NJ_C_LSTORE, "updateLandmark", "(L" NJ_C_LANDMARK ";)V",
+      ls_update_landmark },
+    { NJ_C_LSTORE, "deleteLandmark", "(L" NJ_C_LANDMARK ";)V",
+      ls_delete_landmark },
+    { NJ_C_LSTORE, "getCategories", "()Ljava/util/Enumeration;",
+      ls_get_categories },
+    { NJ_C_LSTORE, "addCategory", "(Ljava/lang/String;)V", ls_add_category },
+    { NJ_C_LSTORE, "deleteCategory", "(Ljava/lang/String;)V",
+      ls_delete_category }
 };
 const int nj_lib_location_count =
     (int)(sizeof(nj_lib_location_table) / sizeof(nj_lib_location_table[0]));
@@ -1640,5 +2413,6 @@ nj_status nj_location_late_init(nj_vm *vm)
     loc_const_int(vm, NJ_C_ADDR, "CROSSING2", ADDR_CROSSING2);
     loc_const_int(vm, NJ_C_ADDR, "URL", ADDR_URL);
     loc_const_int(vm, NJ_C_ADDR, "PHONE_NUMBER", ADDR_PHONE);
+
     return NJ_OK;
 }

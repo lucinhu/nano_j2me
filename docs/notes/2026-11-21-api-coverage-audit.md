@@ -108,3 +108,36 @@ Roadmap item 1 is in: `src/midp/nj_lib_location.c` adds
 * Phase 2 (next): `Landmark`, `LandmarkStore` (in-memory registry, no RMS
   persistence claimed for now), `AddressInfo` `EXTRA_FIELD_*` round-trip
   through `byte[]`.
+
+## Round 153 (2026-11-21): JSR-179 phase 2 -- Landmark and LandmarkStore
+
+`Landmark`, `LandmarkStore` and `LandmarkException` are implemented in the
+same file, making the roadmap item complete enough for titles that keep
+favourite places.
+
+* `Landmark`: standard constructor (name required, description/coordinates/
+  address/extra info optional), getters/setters, `equals`/`hashCode`.
+* `LandmarkStore`: `getInstance` (creates the store when it does not exist
+  yet, per JSR-179), `createLandmarkStore`, `deleteLandmarkStore`,
+  `listLandmarkStores`, `addLandmark`, `getLandmarks()` / by category /
+  by category+name / by coordinate rectangle, `updateLandmark`,
+  `deleteLandmark`, `removeLandmarkFromCategory`, `getCategories`,
+  `addCategory`, `deleteCategory`.  Enumeration results are real
+  `java.util.Enumeration` objects (Vector enumerators).
+* Storage is a per-VM in-memory registry: a static `java/util/Vector` field
+  on `LandmarkStore` holding `Object[3]{store, landmark, category}` records
+  (NULL landmark + NULL category = store marker, NULL landmark + category =
+  category marker).  It is a Java field, so the GC and save states see it;
+  nothing is a C global and nothing is persisted to RMS yet (documented
+  limitation - a fresh VM starts with empty stores).
+* The registry is created lazily on the first store call, not in
+  `nj_location_late_init()`: a Java call during builtin setup fails
+  (`nj_call_special` on `Vector.<init>` reports no exception and no action),
+  which is the same constraint that made the Boolean boxed singletons be
+  materialised directly.  Lazy creation sidesteps it.
+* Fixture now covers: create store, add category, add landmark, enumerate
+  by category, `listLandmarkStores`, `getCategories`, `updateLandmark`,
+  `removeLandmarkFromCategory` (the landmark stays in the store,
+  uncategorised - removing from a category is not deleting it),
+  `deleteLandmark`, `deleteCategory`, `deleteLandmarkStore`;
+  `tools/check_location.sh` asserts all of it.

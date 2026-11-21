@@ -12,6 +12,8 @@ import javax.microedition.location.Location;
 import javax.microedition.location.LocationException;
 import javax.microedition.location.LocationListener;
 import javax.microedition.location.LocationProvider;
+import javax.microedition.location.Landmark;
+import javax.microedition.location.LandmarkStore;
 import javax.microedition.location.Orientation;
 import javax.microedition.location.QualifiedCoordinates;
 import javax.microedition.midlet.MIDlet;
@@ -84,6 +86,52 @@ public class LocationDemo extends MIDlet implements LocationListener {
             updates = 0;
             p.setLocationListener(this, -1, -1, -1);
             System.out.println("LOCATION listener=" + updates);
+
+            // Phase 2: Landmark / LandmarkStore, in-memory but fully usable.
+            LandmarkStore store = LandmarkStore.getInstance("demo");
+            store.addCategory("cafe");
+            QualifiedCoordinates qc2 = new QualifiedCoordinates(
+                    60.1699, 24.9384, 10.0f, 30.0f, 10.0f);
+            AddressInfo addr2 = new AddressInfo("Cafe Moi", "Helsinki",
+                    "+358 0 000 001", "cafe@example.org");
+            Landmark lm = new Landmark("Cafe Moi", "coffee", qc2, addr2, null);
+            store.addLandmark(lm, "cafe");
+            int nlm = 0;
+            java.util.Enumeration e = store.getLandmarks("cafe");
+            while (e.hasMoreElements()) {
+                Landmark got = (Landmark) e.nextElement();
+                nlm++;
+                System.out.println("LOCATION lm name=" + got.getName()
+                        + " desc=" + got.getDescription());
+            }
+            System.out.println("LOCATION lm category_count=" + nlm);
+            java.util.Enumeration st = LandmarkStore.listLandmarkStores();
+            int nstores = 0;
+            while (st.hasMoreElements()) {
+                st.nextElement();
+                nstores++;
+            }
+            System.out.println("LOCATION lm stores=" + nstores);
+            int ncats = 0;
+            java.util.Enumeration ce = store.getCategories();
+            while (ce.hasMoreElements()) {
+                ce.nextElement();
+                ncats++;
+            }
+            System.out.println("LOCATION lm categories=" + ncats);
+            store.updateLandmark(lm);
+            store.removeLandmarkFromCategory(lm, "cafe");
+            int left = 0;
+            java.util.Enumeration le = store.getLandmarks();
+            while (le.hasMoreElements()) {
+                le.nextElement();
+                left++;
+            }
+            System.out.println("LOCATION lm left_after_remove=" + left);
+            store.deleteLandmark(lm);
+            store.deleteCategory("cafe");
+            LandmarkStore.deleteLandmarkStore("demo");
+            System.out.println("LOCATION lm deleted=true");
             p.reset();
         } catch (Exception e) {
             System.out.println("LOCATION failed=" + e);
