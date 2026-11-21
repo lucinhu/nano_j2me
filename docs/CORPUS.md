@@ -1265,3 +1265,20 @@ The unusable JARs (`AMF_Xtreme_Bowling`, `DiamondTwister` corrupt entry,
 `bounce_tale_qy5sf1si` and `鲁宾逊漂流记汉化BT版` not ZIPs) and the three
 timeout rows (self-paced `assassins_creed`, game-side `gangstar_2`, and
 `uno_gameloft` explained in round 173) are all accounted for.
+
+### Round 174: corpus growth from new archive.org items (2026-11-22)
+
+archive.org became reachable again, so the curated item list gained 28 more
+identifiers (`tools/corpus_items.txt`): a 17-build Transformers collection,
+the Pac-Man mobile archive, the Nokia Asha 302 preservation page (a 151 MB
+"GoodSortedJavaGames" backup), and a batch of single-title `j2me-game-*`
+items (Doom RPG, FIFA 2007 3D, Real Football 2014, Asphalt 3, Splinter Cell:
+Double Agent, King Kong, Tetris Revolution, ...).
+
+`tools/fetch_corpus.py --items-file tools/corpus_items.txt` added **316 JARs**
+in one pass: the persistent cache grew **332 -> 646 JARs** (314 MB on disk).
+Transient archive.org TLS errors skipped one item (`immortals.zip`), and the
+unsupported `.7z`/`.rar` members were skipped with a message as designed.
+
+A sweep of just the 315 new JARs is running; its rows will be merged into the
+compatibility matrix once complete.
