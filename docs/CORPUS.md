@@ -1235,3 +1235,7 @@ before accepting the verdict (same pattern as the existing title-exit
 fallback).  A title that reaches the frame budget that way is recorded as `ok`
 with the note "runs without input; the generic key script drives a slow
 wall-clock wait", so key-recipe artifacts cannot masquerade as hangs.
+
+Re-measuring the three rows with the new fallback gives `uno_gameloft` -> `ok`
+(600 frames without input) while `assassins_creed` and `gangstar_2` stay
+`timeout`; the merged matrix is now **1502 titles / 1484 ok / 3 timeout**.

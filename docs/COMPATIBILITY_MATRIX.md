@@ -20,11 +20,11 @@ Built from `HEAD`, 2026-11-22 (recorded by `tools/sweep_compat.py`).
 
 | verdict | titles |
 | --- | --- |
-| 运行正常 | 1483 |
+| 运行正常 | 1484 |
 | 标题自身异常 | 4 |
 | 非可用包 | 4 |
-| 超时 | 4 |
 | 标题自行退出 | 3 |
+| 超时 | 3 |
 | 失败 | 2 |
 | 未呈现画面 | 2 |
 
@@ -1176,7 +1176,7 @@ Built from `HEAD`, 2026-11-22 (recorded by `tools/sweep_compat.py`).
 | vault/tron_snowboarding_240x320_192401.jar | 922 | TRON-mod by SL280296 | - | 1.0.1 | MIDP-2.0 | m3g | 135 | 16 | 600 | 70323740 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
 | vault/ultimate_brick_break_260584.jar | 399 | Ultimate Brick Breaker | - | 1.0.0 | MIDP-2.0 | - | 31 | 16 | 600 | 75035214 | 0 | java/lang/ClassCastException,jav | 运行正常 |  |
 | vault/ultimate_brick_break_260678.jar | 404 | Ultimate Brick Breaker 2 | - | 1.1.3 | MIDP-2.0 | - | 31 | 16 | 600 | 74973999 | 0 | java/lang/ClassCastException,jav | 运行正常 |  |
-| vault/uno_gameloft.jar | 816 | UNO | - | 1.0.3 | MIDP-2.0 | nokia-ui | 14 | 16 | 0 | 0 | 0 | - | 超时 |  |
+| vault/uno_gameloft.jar | 816 | UNO | - | 1.0.3 | MIDP-2.0 | nokia-ui | 14 | 16 | 600 | 352863873 | 0 | - | 运行正常 | runs without input; the generic key script d |
 | vault/vampiresas_46oqnqm4.jar | 562 | Vampire's Assistant | - | 0.0.58 | MIDP-2.0 | - | 72 | 16 | 600 | 7901818 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
 | vault/virus-240x320-namobilu.com.jar | 157 | Virus | - | 1.0.0 | MIDP-2.0 | nokia-ui | 33 | 16 | 600 | 713620 | 0 | java/io/EOFException,java/lang/A | 运行正常 |  |
 | vault/wolf-moon-240x320-namobilu.com.jar | 217 | WolfMoon | - | 1.06 | MIDP-1.0 | - | 17 | 16 | 600 | 1709957722 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
