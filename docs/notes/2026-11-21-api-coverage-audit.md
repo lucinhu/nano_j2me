@@ -67,3 +67,44 @@ Every added class needs a unit test (class availability + documented
 behaviour) and, when it changes runtime code, a full CTest run.  KEmulator is
 used as behavioural reference only (no code copied; it is a Java emulator and
 this is a C runtime).
+
+## Round 152 (2026-11-21): JSR-179 phase 1 shipped
+
+Roadmap item 1 is in: `src/midp/nj_lib_location.c` adds
+`javax.microedition.location` with value classes and an emulated provider.
+
+* Classes: `Coordinates` (+`DD_MM_SS`/`DD_MM`, both `convert` overloads,
+  `azimuthTo`, `distance`, equals/hashCode), `QualifiedCoordinates`,
+  `AddressInfo` (standard 4-string constructor, line/phone/email getters and
+  the JSR-179 field codes 1..17), `Orientation`, `Criteria`, `Location`,
+  `LocationException`, and the `LocationListener` / `ProximityListener`
+  interfaces.  `LocationProvider` is an abstract builtin with the emulated
+  `LocationProviderImpl` behind the static factories.
+* Provider behaviour: always one available provider; every fix is
+  `60.1699 N, 24.9384 E`, altitude 10 m, horizontal/vertical accuracy 30/10 m,
+  speed 0, course 0, method 0.  `setLocationListener` delivers one immediate
+  `locationUpdated()` from the caller's thread; proximity monitoring throws
+  `LocationException` (no radio to tell us the user moved) and `reset()`
+  clears the listener.  Deliberately no invented movement: a game polling
+  `getLocation()` sees a stationary device, which is honest.
+* `convert(double, int)` now matches the reference colon format
+  (`24:56.304` for `DD_MM`, `dd:mm:ss.ss` for `DD_MM_SS`, leading `-` for
+  negative coordinates); `convert(String)` accepts the same colon forms plus
+  space-separated D/M/S and plain decimal degrees.
+* Two bugs found while wiring the runtime: JVM argument slots for
+  `double`/`float` parameters were read one slot too low (slot 0/1 instead of
+  0/2 when a double is in front), which made the first fixture run report
+  `accuracy=0/10`; and the boolean field helpers looked fields up with
+  descriptor `I` instead of `Z`, so `Criteria`/`Orientation` booleans read
+  `false` no matter what was written.  Both fixed; a first run that only
+  checked class availability would have missed them, which is why the fixture
+  asserts concrete values.
+* Coverage: `tests/locationdemo/LocationDemo.java` (MIDlet implementing
+  `LocationListener`) exercises provider state, last known fix, criteria,
+  distance/azimuth, both `convert` forms, orientation, address info, an
+  invalid coordinate (caught), proximity (caught), a listener update and
+  `reset`; `tools/check_location.sh` asserts every marker and runs as CTest
+  `test_location` (200th test, TIMEOUT 120).
+* Phase 2 (next): `Landmark`, `LandmarkStore` (in-memory registry, no RMS
+  persistence claimed for now), `AddressInfo` `EXTRA_FIELD_*` round-trip
+  through `byte[]`.

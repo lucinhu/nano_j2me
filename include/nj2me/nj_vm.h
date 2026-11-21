@@ -919,6 +919,14 @@ extern const int nj_lib_mascot_class_count;
 extern const nj_native_entry nj_lib_mascot_table[];
 extern const int nj_lib_mascot_count;
 
+/* Built by nj_lib_location.c (JSR 179, javax.microedition.location).  There is
+ * no GPS radio: one emulated provider answers a fixed Helsinki fix and a
+ * listener gets one immediate update; landmark stores are in-memory per VM. */
+extern const nj_builtin_class nj_lib_location_classes[];
+extern const int nj_lib_location_class_count;
+extern const nj_native_entry nj_lib_location_table[];
+extern const int nj_lib_location_count;
+
 /* Built by nj_lib_fc.c, used by Connector.open() in nj_lib_io.c.  Returns a new
  * FileConnection, or NULL with an exception pending. */
 nj_ref nj_fc_new(nj_vm *vm, const char *url);

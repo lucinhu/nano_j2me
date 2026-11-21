@@ -289,6 +289,7 @@ set(NJ_SOURCES
   src/midp/nj_lib_wireless.c
   src/midp/nj_lib_m3g.c
   src/midp/nj_lib_mascot.c
+  src/midp/nj_lib_location.c
   src/midp/nj_mascot_model.c
   src/midp/nj_mascot_anim.c
   src/midp/nj_mascot_raster.c
@@ -859,6 +860,7 @@ if(NJ_BUILD_TESTS)
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_flushdemo_jar.sh
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_multitouch_jar.sh
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_nokiademo_jar.sh
+      COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_location_jar.sh
       WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
       COMMENT "keysdemo.jar, blockdemo.jar (input-effect fixtures)")
   endif()
@@ -2216,6 +2218,12 @@ nj_add_test(test_fullscreen tests/test_fullscreen.c ${NJ_FIXTURES}/fsorder.jar)
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_key_codes.sh
               ${NJ_FIXTURES}/keysdemo.jar)
     set_tests_properties(test_key_codes PROPERTIES TIMEOUT 180)
+    # JSR 179: the location fixture drives the emulated provider and every
+    # value class through real bytecode, and the check asserts the markers.
+    add_test(NAME test_location
+      COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_location.sh
+              ${NJ_FIXTURES}/locationdemo.jar $<TARGET_FILE:nj2me-cli>)
+    set_tests_properties(test_location PROPERTIES TIMEOUT 120)
   endif()
     set_tests_properties(test_play PROPERTIES TIMEOUT 120)
   endif()

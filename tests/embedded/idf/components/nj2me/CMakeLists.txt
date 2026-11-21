@@ -63,6 +63,7 @@ idf_component_register(
         "${NJ_ROOT}/src/midp/nj_lib_wireless.c"
         "${NJ_ROOT}/src/midp/nj_lib_m3g.c"
         "${NJ_ROOT}/src/midp/nj_lib_mascot.c"
+        "${NJ_ROOT}/src/midp/nj_lib_location.c"
         "${NJ_ROOT}/src/midp/nj_mascot_model.c"
         "${NJ_ROOT}/src/midp/nj_mascot_anim.c"
         "${NJ_ROOT}/src/midp/nj_mascot_raster.c"
