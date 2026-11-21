@@ -120,7 +120,12 @@ int main(void)
     }
 #endif
 
-    /* 4. The counters report the memo at work. */
+    /* 4. The counters report the memo at work.  Prime the slot first: the
+     * memo is keyed by the string pointer, and an earlier test (or ASLR
+     * changing the literal's address) can leave a colliding class in the
+     * slot, which makes the very first loop iteration a miss.  Warm it once,
+     * then the loop itself must not miss. */
+    (void)nj_class_lookup(vm, CLS_STRING);
     nj_vm_get_stats(vm, &before);
     for (i = 0; i < 100; i++) {
         (void)nj_class_lookup(vm, CLS_STRING);
