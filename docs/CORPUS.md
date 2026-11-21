@@ -1077,3 +1077,15 @@ NPE and installs no Displayable — game-side).  Wizardry and Dig Dug are now
 `docs/COMPATIBILITY_MATRIX.md` re-generated from the merged rows: 1502 titles,
 1482 running normally, 4 title exceptions (incl. ArcadePark2), 4 unusable
 packages (incl. AMF), 4 timeouts, 3 self-exits, 3 failures, 2 no-frame.
+
+### Round 168: `Class.newInstance()` leniency fixes `snake_2` (2026-11-22)
+
+`vault/snake_2.jar` was the single remaining `failure` in the round-167 sweep
+(`Snake.startApp()` NPE, no Displayable).  Root cause was our `Class.newInstance()`
+enforcing that the *nullary constructor* be public: Snake's `ToneDevice` is a
+public class with a package-private constructor, handsets instantiate it, and
+our `IllegalAccessException` left the game's device field null.  After relaxing
+the check to the class level only (package-private classes still throw — the
+`excdemo` gate covers it), the title runs 600 frames / 553 paints and paints
+its "Snake EX2" menu.  Re-measured row: `ok`; the merged matrix is now
+1502 titles with 1483 running normally and 2 failures left (both game-side).

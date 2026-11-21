@@ -301,3 +301,27 @@ packaging bug that a real handset hits the same way, so it is no longer
 reported as a runtime `failure`: the sweep now detects a `NoClassDefFoundError`
 naming a class absent from the title's own JAR and records
 `title-exception: title references a class it does not bundle`.
+
+### Round 168: `Class.newInstance()` access rules match the handsets (2026-11-22)
+
+`snake_2.jar` (Nokia Snake EX2) failed with `Snake.startApp()` NPE at the
+`SnakeDevice.initialise()` call: the MIDlet resolves
+`com.nokia.mid.appl.snake.MidiDevice` (not bundled, caught), then
+`ToneDevice`, then instantiates it via `Class.newInstance()`.  Our
+implementation enforced the strict CLDC rule that *the nullary constructor*
+must be public as well; `ToneDevice` is a public class with a package-private
+`ToneDevice()` constructor, so reflection returned `IllegalAccessException`,
+the game swallowed it, `f` stayed null and `startApp()` threw.
+
+Real handsets do not check the constructor's access flags for
+`Class.newInstance()` (they resolve `<init>()V` and call it), so the runtime now
+only requires the *class* to be public.  The package-private class case is
+still `IllegalAccessException`, which `tests/excdemo/ExcDemo.java` +
+`tools/check_stack_trace.sh` assert (PASS after the change).  `1945空战英雄`
+(needs `--device nokia6230`) and `CS反恐精英` are unchanged.
+
+Result: `snake_2.jar` runs 600 frames / 553 paints (Snake EX2 menu renders:
+"New game / High scores / Settings / Instructions"), the sweep row moved
+`failure -> ok`, and `docs/COMPATIBILITY_MATRIX.md` now has 1483 running
+titles.  The one remaining corpus `failure` in the round-167 sweep was exactly
+this title.

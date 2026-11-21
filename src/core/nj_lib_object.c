@@ -426,7 +426,15 @@ NJFN(class_newInstance)
      * threw it after our newInstance() had wrongly succeeded.  Naming the
      * class is what makes the report actionable.
      */
-    if (!(c->flags & NJ_ACC_PUBLIC) || !(m->flags & NJ_ACC_PUBLIC)) {
+    /*
+     * Only the class itself has to be public.  Handsets do not check the
+     * constructor's access flags here: Nokia's Snake (snake_2.jar) is
+     * `public class ToneDevice` with a package-private `ToneDevice()` and
+     * Class.newInstance() is how the MIDlet reaches it.  Refusing that made
+     * startApp() NPE in `f.initialise()`.  A package-private *class* still
+     * gets IllegalAccessException (tests/excdemo/ExcDemo.java covers it).
+     */
+    if (!(c->flags & NJ_ACC_PUBLIC)) {
         return nj_throw(vm, "java/lang/IllegalAccessException", c->name);
     }
     mark = nj_root_mark(vm);

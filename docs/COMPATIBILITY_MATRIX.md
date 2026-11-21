@@ -20,12 +20,12 @@ Built from `HEAD`, 2026-11-22 (recorded by `tools/sweep_compat.py`).
 
 | verdict | titles |
 | --- | --- |
-| 运行正常 | 1482 |
+| 运行正常 | 1483 |
 | 标题自身异常 | 4 |
 | 非可用包 | 4 |
 | 超时 | 4 |
 | 标题自行退出 | 3 |
-| 失败 | 3 |
+| 失败 | 2 |
 | 未呈现画面 | 2 |
 
 | 3D API used | titles |
@@ -1143,7 +1143,7 @@ Built from `HEAD`, 2026-11-22 (recorded by `tools/sweep_compat.py`).
 | vault/silent-hill-mobile-2-352x416-s60-namobilu.com.jar | 482 | Silent Hill Mobile 2 | - | 1.0.0 | MIDP-2.0 | - | 12 | 16 | 600 | 7940321 | 0 | java/io/IOException,java/lang/Nu | 运行正常 |  |
 | vault/silent-hill-mobile-3-320x240-mot-namobilu.com.jar | 580 | Silent Hill 3 | - | 1.1.0 | MIDP-2.0 | - | 13 | 16 | 600 | 3110690 | 0 | java/lang/NumberFormatException, | 运行正常 |  |
 | vault/silent-hill-orphan-352x416-s60-namobilu.com.jar | 487 | Silent Hill | - | 0.1.0 | MIDP-2.0 | - | 10 | 16 | 600 | 3859596 | 0 | java/io/IOException,javax/microe | 运行正常 |  |
-| vault/snake_2.jar | 42 | Snake EX2 | - | 1.19 | MIDP-1.0 | nokia-ui | 10 | 16 | 60 | 911 | 0 | java/lang/ClassNotFoundException | 失败 | installed no Displayable |
+| vault/snake_2.jar | 42 | Snake EX2 | - | 1.19 | MIDP-1.0 | nokia-ui | 10 | 16 | 600 | 107962 | 0 | java/lang/ClassNotFoundException | 运行正常 | runs without input; the generic key script m |
 | vault/snake_3.jar | 260 | Snake III | - | 3.07.2 | MIDP-2.0 | m3g | 49 | 16 | 600 | 133916 | 0 | java/util/EmptyStackException,ja | 运行正常 | runs without input; the generic key script m |
 | vault/snowboardh_zmu8yadv.jar | 795 | Snowboard Hero | - | 1.0.1 | MIDP-2.0 | mascot | 133 | 16 | 600 | 87045975 | 0 | java/io/IOException,java/lang/Nu | 运行正常 |  |
 | vault/snowboardr_m6km8xw5.jar | 374 | Pro Snowboard | - | 1.02 | MIDP-2.0 | m3g,nokia-ui | 26 | 16 | 600 | 2931573 | 0 | java/lang/AbstractMethodError,ja | 运行正常 |  |
