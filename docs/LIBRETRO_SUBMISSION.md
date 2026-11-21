@@ -1798,5 +1798,6 @@ Windows x86_64 Wine **4/4 at 300 frames**, submission bundle **32/32**, full
 serial CTest **201/201 in 351.22 s**.  Android APKs rebuilt at versionCode 523
 (`nj2me.apk` 3,381,610 B, `nj2me-legacy.apk` 720,763 B); release zip
 `nj2me-0.5.23-libretro-cores.zip` 11,959,521 B.  PRs refreshed for 0.5.23:
-`libretro/libretro-super#2204` (head rebuilt on parent `55e50a81`) and
-`libretro/docs#1239`; no merge claimed.
+`libretro/libretro-super#2204` (branch rebuilt on parent `55e50a81`, head
+`312198f7`, body updated) and `libretro/docs#1239` (head `3316299b`, page is
+version-independent); both OPEN/MERGEABLE, no merge claimed.

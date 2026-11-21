@@ -1470,5 +1470,6 @@ OPEN/MERGEABLE, no merge claimed.
   PASS, Wine 4/4 @300, bundle 32/32, full serial CTest 201/201 in 351.22 s;
   APKs versionCode 523.
 - PR refresh: super fork branch rebuilt on `55e50a81` with the 0.5.23 `.info`
-  and PR #2204 body updated; docs PR #1239 unchanged (page is
-  version-independent).  Both OPEN/MERGEABLE, no merge claimed.
+  (head `312198f7`) and PR #2204 body updated; docs PR #1239 unchanged
+  (head `3316299b`, page is version-independent).  Both OPEN/MERGEABLE, no
+  merge claimed.
