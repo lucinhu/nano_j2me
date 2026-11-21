@@ -1473,3 +1473,14 @@ OPEN/MERGEABLE, no merge claimed.
   (head `312198f7`) and PR #2204 body updated; docs PR #1239 unchanged
   (head `3316299b`, page is version-independent).  Both OPEN/MERGEABLE, no
   merge claimed.
+
+## Round 158 (2026-11-21): 0.5.23 core replayed over the whole in-repo corpus
+
+- The released r42 core replayed every in-repo `ok` row through the mock
+  libretro frontend at 300 frames: **397 titles, 396 passed, 1 known
+  limitation (Doom3 slow loader), 0 failed**.
+- The same set went through the 900-frame deep CLI probe: **397/397 passed,
+  0 early exit, 0 failed** - no late crash or hang introduced by 0.5.23.
+- PR evidence refreshed: `libretro/libretro-super#2204` head `312198f7`
+  (branch on `55e50a81`, body updated for 0.5.23) and `libretro/docs#1239`
+  head `3316299b`; both OPEN/MERGEABLE, no merge claimed.

@@ -916,3 +916,34 @@ slow/self-exiting/defective titles listed in the round-150 section.
 The compatibility table was regenerated from this batch (899 fresh rows plus
 560 historical rows not re-measured): **1459 titles, 1438 `运行正常`**
 (`docs/COMPATIBILITY_MATRIX.md`, deterministic across two runs).
+
+## Round 158 (2026-11-21): whole in-repo corpus on the 0.5.23 libretro core
+
+The released r42 core (`build/libretro-dist/linux-x86_64/nano_j2me_libretro.so`,
+0.5.23, the same bytes as the GitHub release zip) was replayed over every
+in-repo title the latest sweep marked `ok` (404 rows, their recorded per-title
+key scripts): **397 titles rendered through the mock libretro frontend, 396
+passed, 1 known limitation, 0 failed**.  The known limitation is the
+documented `毁灭战士3_10598.jar` slow loader (the frontend budget cannot wait
+out the 190-pass loading animation).  No `visual_nonblack` failure, no crash,
+no timeout - the 0.5.23 API-surface additions did not disturb any rendered
+title.
+
+The external vault rows (`/tmp/vault4` … `/tmp/vault7`) were no longer on disk, so
+this pass covers the committed corpus only; fetched titles keep their round-150
+evidence in `docs/COMPATIBILITY_MATRIX.md`.
+
+### Round 158 also: 900-frame deep probe on 0.5.23
+
+The same in-repo `ok` set was replayed for 900 paced frames (30 fps, 240 s
+budget, per-title key scripts, heap/device replayed from the row): **397
+titles, 397 passed, 0 early exit, 0 failed** - every title reached the full
+frame budget without a late crash, hang, or new uncaught exception.  This is
+the first deep pass that covers the 0.5.23 tree (the round-125 pass ran on
+0.5.18).
+
+Audio sample on the same tree (40 titles, 240 frames, recorded key scripts):
+**19 delivered audio, 21 `silent-nostart`, 0 uncaught/0 timeout**.  The silent
+rows are menu-bound or have no started Player at 240 frames (the same class of
+row as the round-149 sample); no row regressed to a crash, and the audio
+invariant (no `silent-started`) still holds.
