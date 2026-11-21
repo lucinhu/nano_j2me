@@ -284,7 +284,7 @@ Built from `HEAD`, 2026-11-22 (recorded by `tools/sweep_compat.py`).
 | vault/3dbrickbre_lcdvclkl.jar | 566 | 3DBrickBreak2 by Stox | - | 1.0.4 | MIDP-2.0 | m3g | 29 | 16 | 601 | 87359874 | 0 | java/io/EOFException,javax/micro | 运行正常 |  |
 | vault/4 Wheel Xtreme 3D.jar | 313 | 4 Wheel Xtreme 3D | - | 0.5.15 | MIDP-2.0 | - | 56 | 16 | 600 | 18317558 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
 | vault/4 Wheel Xtreme.jar | 237 | 4 Wheel Xtreme | - | 0.7.0 | MIDP-2.0 | - | 19 | 16 | 600 | 1441541 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
-| vault/4in1 Memory.jar | 213 | 4 in 1 | - | 1.0 | MIDP-2.0 | - | 6 | 16 | 600 | 842877 | 1 | java/io/EOFException,java/lang/N | 标题自身异常 | game code threw java.lang.NullPointerExcepti |
+| vault/4in1 Memory.jar | 213 | 4 in 1 | - | 1.0 | MIDP-2.0 | - | 6 | 16 | 600 | 842877 | 1 | java/io/EOFException,java/lang/N | 标题自身异常 | game-side: its own save data is absent (EOFE |
 | vault/4x4 Extreme Offroad-Lite.jar | 214 | 4x4 Extreme OffRoad | - | 1.0.0 | MIDP-2.0 | - | 80 | 16 | 600 | 2283006761 | 0 | java/io/IOException,java/lang/Nu | 运行正常 |  |
 | vault/4x4 Extreme Rally - World Tour.jar | 378 | 4x4 Extreme Rally World Tour | - | 1.0.2 | MIDP-2.0 | - | 9 | 16 | 600 | 614280 | 0 | java/io/IOException,java/lang/Nu | 运行正常 |  |
 | vault/4x4 Extreme Rally 2006.jar | 154 | 4x4 Extreme Rally 2006 | - | 1.0.3 | MIDP-2.0 | - | 10 | 16 | 600 | 10220652 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
@@ -608,7 +608,7 @@ Built from `HEAD`, 2026-11-22 (recorded by `tools/sweep_compat.py`).
 | vault/JewelQuest.jar | 164 | Jewel Quest | - | 1.0.5 | MIDP-1.0 | - | 19 | 16 | 600 | 440266 | 0 | java/io/IOException | 运行正常 |  |
 | vault/JewelQuest2.jar | 315 | JewelQuest2 | - | 0.3.2 | MIDP-1.0 | - | 14 | 16 | 600 | 1153567 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
 | vault/JewelQuest3.jar | 585 | Jewel Quest III World Advent | - | 4.2.84 | MIDP-2.0 | - | 25 | 16 | 600 | 2667124 | 0 | - | 运行正常 |  |
-| vault/JewelQuestDeluxe.jar | 743 | Jewel Quest Deluxe | - | 1.1.2 | MIDP-2.0 | - | 5 | 16 | 600 | 402167 | 1 | java/io/IOException,java/lang/Cl | 标题自身异常 | game code threw an exception in a thread whi |
+| vault/JewelQuestDeluxe.jar | 743 | Jewel Quest Deluxe | - | 1.1.2 | MIDP-2.0 | - | 5 | 16 | 600 | 402167 | 1 | java/io/IOException,java/lang/Cl | 标题自身异常 | game-side: the JAR ships no /title.png (caug |
 | vault/Jurassic Park.jar | 1102 | Jurassic Park | - | 1.1.2 | MIDP-2.0 | - | 12 | 16 | 600 | 141527149 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/K.O. Legends.jar | 1024 | K.O. Legends | - | 1.0.6 | MIDP-2.0 | - | 23 | 16 | 600 | 226749888 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/Kartmania 3D.jar | 934 | Kartmania3D | - | 1.0.2 | MIDP-2.0 | - | 123 | 16 | 600 | 4141190 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
@@ -1068,7 +1068,7 @@ Built from `HEAD`, 2026-11-22 (recorded by `tools/sweep_compat.py`).
 | vault/bounce_water_dash_240x320_191284.jar | 93 | Bounce Water Dash v0.3 TEGOS | - | 1.0.0 | MIDP-2.0 | - | 25 | 16 | 600 | 873156 | 0 | java/lang/ClassNotFoundException | 运行正常 |  |
 | vault/bounceback_64b1jou2.jar | 96 | Bounce Back | - | 1.13 | MIDP-1.0 | nokia-ui | 10 | 16 | 600 | 101498 | 0 | - | 运行正常 |  |
 | vault/bouncedash_shItN4ur.jar | 153 | Bounce Dash | - | 1.0.0 | MIDP-2.0 | - | 26 | 16 | 600 | 3349149483 | 0 | java/lang/ClassNotFoundException | 运行正常 |  |
-| vault/bouncetale_9s1otkmz.jar | 368 | Bounce Tales | - | 2.0.3 | MIDP-2.0 | nokia-ui | 19 | 16 | 1 | 37056 | 0 | - | 标题自行退出 | exited itself (notifyDestroyed) after 1 fram |
+| vault/bouncetale_9s1otkmz.jar | 368 | Bounce Tales | - | 2.0.3 | MIDP-2.0 | nokia-ui | 19 | 16 | 1 | 37056 | 0 | - | 标题自行退出 | valid JAR; the title exits itself after one  |
 | vault/bouncetale_e568o65n.jar | 356 | Bounce Tales 2 | - | 2.0.3 | MIDP-2.0 | nokia-ui | 19 | 16 | 600 | 71374299 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
 | vault/bouncetale_xzz6ksx6.jar | 1027 | Bounce Tales mod by Gamemen | - | 2.0.3 | MIDP-2.0 | nokia-ui | 19 | 16 | 600 | 71554929 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
 | vault/brick_breaker_explos_131333.jar | 99 | Brick Breaker Explosive | - | 1.0.0 | MIDP-2.0 | - | 14 | 16 | 600 | 2677610397 | 0 | java/lang/NullPointerException | 运行正常 |  |
@@ -1210,7 +1210,7 @@ Built from `HEAD`, 2026-11-22 (recorded by `tools/sweep_compat.py`).
 | 中华麻将馆－极限胡牌版_244.jar | 310 | 中华麻将馆-极限胡牌版 | - | 1.0 | MIDP-1.0 | - | 18 | 16 | 600 | 3421903630 | 0 | java/io/IOException,java/lang/Nu | 运行正常 |  |
 | 中国象棋_10893.jar | 293 | 中国象棋三国经典版 | - | 1.0 | MIDP-2.0 | - | 9 | 16 | 600 | 920080 | 0 | javax/microedition/rms/InvalidRe | 运行正常 |  |
 | 中国象棋之水墨珍藏版_871.jar | 375 | 中国象棋之水墨珍藏版 | - | 1.0.0 | MIDP-2.0 | - | 12 | 16 | 624 | 3887766484 | 0 | java/lang/ArrayIndexOutOfBoundsE | 运行正常 |  |
-| 乱世Q三国_1649.jar | 977 | 乱世Q三国 | - | 1.0 | MIDP-1.0 | - | 232 | 16 | 0 | 128 | 0 | javax/microedition/rms/RecordSto | 未呈现画面 | exited itself (notifyDestroyed) without pain |
+| 乱世Q三国_1649.jar | 977 | 乱世Q三国 | - | 1.0 | MIDP-1.0 | - | 232 | 16 | 0 | 128 | 0 | javax/microedition/rms/RecordSto | 未呈现画面 | exits itself (notifyDestroyed) after RecordS |
 | 乱舞三国之群英会_2972.jar | 817 | 乱舞三国之群英会 | - | 1.0 | MIDP-1.0 | - | 35 | 16 | 600 | 303452589 | 0 | java/io/IOException,java/lang/Nu | 运行正常 |  |
 | 五子棋_10940.jar | 42 | XOXO | - | 1.0 | MIDP-1.0 | - | 24 | 16 | 600 | 284270 | 0 | - | 运行正常 |  |
 | 仙剑奇侠传(2008)_12406.jar | 695 | pal | - | 1.0 | MIDP-1.0 | nokia-ui | 3 | 16 | 600 | 201979 | 0 | - | 运行正常 |  |
@@ -1356,7 +1356,7 @@ Built from `HEAD`, 2026-11-22 (recorded by `tools/sweep_compat.py`).
 | 星辰变S60V5完整版_3364.jar | 926 | 星辰变(盛大正版) | - | 1.0.0 | MIDP-1.0 | nokia-ui | 40 | 16 | 600 | 3456330874 | 0 | java/io/IOException | 运行正常 |  |
 | 是男人就下100层_1882.jar | 636 | 是男人就下100层 | - | 2.01 | MIDP-1.0 | nokia-ui | 75 | 16 | 600 | 54392214 | 0 | java/io/IOException,java/lang/Nu | 运行正常 |  |
 | 暗黑启示录2－黑暗王朝_888.jar | 1268 | 暗黑启示录2黑暗王朝 | - | 1.0 | MIDP-1.0 | - | 214 | 16 | 600 | 2937516994 | 0 | java/io/EOFException | 运行正常 |  |
-| 有女倾城破解版_11525.jar | 258 | 有女倾城 | - | 1.0 | MIDP-1.0 | - | 9 | 16 | 0 | 44358 | 0 | - | 未呈现画面 | exited itself (notifyDestroyed) without pain |
+| 有女倾城破解版_11525.jar | 258 | 有女倾城 | - | 1.0 | MIDP-1.0 | - | 9 | 16 | 0 | 44358 | 0 | - | 未呈现画面 | exits itself via notifyDestroyed() during st |
 | 机甲风暴_7888.jar | 673 | 机甲风暴 | - | 1.0 | MIDP-2.0 | nokia-ui | 41 | 16 | 600 | 146994 | 0 | - | 运行正常 |  |
 | 杀戮机器-纳粹僵尸_3610.jar | 995 | 杀戮机器-纳粹僵尸 | - | 1.0 | MIDP-2.0 | m3g | 37 | 16 | 600 | 706444 | 0 | java/lang/NumberFormatException | 运行正常 |  |
 | 杀鬼子-敌后武工队_2185.jar | 515 | 杀鬼子-敌后武工队 | - | 1.0.0 | MIDP-1.0 | nokia-ui | 37 | 16 | 432 | 2004548531 | 0 | java/io/IOException,java/lang/Nu | 运行正常 | exited itself (notifyDestroyed) |
@@ -1495,7 +1495,7 @@ Built from `HEAD`, 2026-11-22 (recorded by `tools/sweep_compat.py`).
 | 超级马里奥_10283.jar | 534 | 超级马里奥 | - | 1.0.0 | MIDP-2.0 | - | 11 | 16 | 600 | 3540507772 | 0 | - | 运行正常 |  |
 | 足球经理2010汉化版_4756.jar | 517 | CM-2010 | - | 1.2.1 | MIDP-2.0 | nokia-ui | 21 | 16 | 600 | 5813535 | 0 | - | 运行正常 |  |
 | 跑跑卡丁车-经典中秋版_2117.jar | 623 | 跑跑卡丁车 | - | 1.0.0 | MIDP-2.0 | - | 21 | 16 | 691 | 715256 | 0 | javax/microedition/rms/RecordSto | 运行正常 | runs without input; the generic key script m |
-| 蹦球传说_7801.jar | 375 | Bounce Tales | - | 2.0.3 | MIDP-2.0 | nokia-ui | 21 | 16 | 91 | 56862 | 0 | - | 标题自行退出 | exited itself (notifyDestroyed) after 91 fra |
+| 蹦球传说_7801.jar | 375 | Bounce Tales | - | 2.0.3 | MIDP-2.0 | nokia-ui | 21 | 16 | 91 | 56862 | 0 | - | 标题自行退出 | exits itself via System.exit() inside an emb |
 | 蹦球传说美化版_2959.jar | 416 | Bounce Tales | - | 2.0.3 | MIDP-2.0 | nokia-ui | 19 | 16 | 600 | 71801409 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
 | 轩辕神剑_2419.jar | 1324 | 轩辕神剑 | - | 1.0 | MIDP-2.0 | - | 71 | 16 | 600 | 3409103 | 0 | java/io/EOFException,java/lang/N | 运行正常 |  |
 | 迈阿密之夜_9566.jar | 315 | MiamiNights | - | 1.0.2 | MIDP-2.0 | - | 6 | 16 | 600 | 180398616 | 0 | javax/microedition/rms/InvalidRe | 运行正常 |  |

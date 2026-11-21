@@ -1239,3 +1239,29 @@ wall-clock wait", so key-recipe artifacts cannot masquerade as hangs.
 Re-measuring the three rows with the new fallback gives `uno_gameloft` -> `ok`
 (600 frames without input) while `assassins_creed` and `gangstar_2` stay
 `timeout`; the merged matrix is now **1502 titles / 1484 ok / 3 timeout**.
+
+### Round 174: the remaining non-ok rows are title-side (2026-11-22)
+
+Each of the rows that stayed non-ok after round 173 was re-run with verbose
+diagnostics and the notes now say what actually happens:
+
+* `vault/4in1 Memory.jar` — its own saved data is absent (`EOFException` while
+  reading it) and it throws a `NullPointerException` in a worker thread; the
+  MIDlet keeps painting, so the runtime is fine.
+* `vault/JewelQuestDeluxe.jar` — the JAR ships no `/title.png` (the title
+  catches that `IOException`), then its own code throws `ClassCastException`
+  (`[C` at `b.a+528`) in a thread.
+* `vault/乱世Q三国_1649.jar` — `RecordStoreNotFoundException` at startup and
+  then `notifyDestroyed()`: it expects preinstalled RMS store data that this
+  JAR does not carry.
+* `vault/有女倾城破解版_11525.jar` — `notifyDestroyed()` after 44 kB of
+  startup bytecode with no exception (title-side licence/trial check).
+* `蹦球传说_7801.jar` — `System.exit()` inside an embedded ad/DRM loader
+  (`ExtendTorpedoMidlet.startOriginApp()`), i.e. the repacked distribution
+  wraps the game and gives up.
+* `vault/bouncetale_9s1otkmz.jar` — valid JAR; exits itself after one frame.
+
+The unusable JARs (`AMF_Xtreme_Bowling`, `DiamondTwister` corrupt entry,
+`bounce_tale_qy5sf1si` and `鲁宾逊漂流记汉化BT版` not ZIPs) and the three
+timeout rows (self-paced `assassins_creed`, game-side `gangstar_2`, and
+`uno_gameloft` explained in round 173) are all accounted for.
