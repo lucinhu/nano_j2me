@@ -1870,6 +1870,10 @@ failed** (the failures are the two documented black titles plus one non-
 reproducible save-check flake).  Android releases keep the per-ABI split APKs
 (versionCode 525): `arm64-v8a` 1,005,724 B, `armeabi-v7a` 1,013,918 B, `x86`
 989,334 B, `x86_64` 1,005,721 B, `legacy` 729,500 B; cores zip
-`nj2me-0.5.25-libretro-cores.zip` 11,623,703 B.  PRs refreshed for 0.5.25
-(super branch on `55e50a81`, docs page version-independent); both remain
+`nj2me-0.5.25-libretro-cores.zip` 11,623,703 B.  PRs refreshed for 0.5.25:
+`libretro/libretro-super#2204` (fork branch rebuilt on master `55e50a81`, head
+`78dba588d6c75a6eaea5f6a7ecd49ea6435028bc`) and `libretro/libretro/docs#1239`
+(page refresh against master `96ee874e010a33b3fb1a79cf3cf833fc17189cfc`, head
+`95a1d0a83df4ce749ba7c8d4ea3784ab0cbf9924`; the patch was regenerated because
+the previous baseline `9399ee32` no longer accepted it); both remain
 OPEN/MERGEABLE, no merge claimed.

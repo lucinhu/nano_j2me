@@ -1539,5 +1539,9 @@ OPEN/MERGEABLE, no merge claimed.
   APKs split per ABI (versionCode 525), cores zip 11,623,703 B; GitHub release
   with tag `v0.5.25`.
 - Upstream: super patch regenerated against `55e50a81`; super fork branch
-  rebuilt with the 0.5.25 `.info`; PR #2204 body refreshed.  Docs PR #1239 page
-  is version-independent.  Both OPEN/MERGEABLE, no merge claimed.
+  rebuilt with the 0.5.25 `.info` and PR #2204 body refreshed (head `78dba58`).
+  Docs PR #1239 became CONFLICTING because libretro/docs master moved; the docs
+  patch was regenerated on master `96ee874`, the branch force-pushed (head
+  `95a1d0a`) and the PR body rewritten; it is MERGEABLE again.  Both PRs
+  OPEN/MERGEABLE, no merge claimed; bundle validator with clean clones 39/39
+  (mkdocs site build skipped, no mkdocs binary on this host).

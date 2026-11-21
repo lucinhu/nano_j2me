@@ -16,7 +16,7 @@
 #   --dist DIR        also check a release tree (default: build/libretro-dist
 #                     when it exists)
 #   --super-clone DIR local libretro-super clone (reset to fb15e63 and apply)
-#   --docs-clone DIR  local libretro/docs clone (reset to d83b34b and apply)
+#   --docs-clone DIR  local libretro/docs clone (reset to 96ee874 and apply)
 #   --apply-clones    reset/clean the given clones and apply the patches
 #   --mkdocs PATH     mkdocs binary for the docs site build (requires
 #                     --docs-clone; with --apply-clones the site is built)
@@ -37,7 +37,7 @@ SUPER_PATCH=$BUNDLE/libretro-super-nano_j2me-info.patch
 DOCS_PATCH=$BUNDLE/libretro-docs-nano_j2me.patch
 BUNDLE_INFO=$BUNDLE/nano_j2me_libretro.info
 SUPER_BASE=55e50a81195eaf8dd1b7720a601282459832ced1
-DOCS_BASE=9399ee32829094ab6f2ea51add4bb1562312412e
+DOCS_BASE=96ee874e010a33b3fb1a79cf3cf833fc17189cfc
 
 DIST=
 SUPER_CLONE=

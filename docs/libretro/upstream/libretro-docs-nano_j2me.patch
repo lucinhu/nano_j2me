@@ -1,27 +1,27 @@
 diff --git a/docs/development/licenses.md b/docs/development/licenses.md
-index 213a90b..2ee38cb 100644
+index 668c7ec..dde4193 100644
 --- a/docs/development/licenses.md
 +++ b/docs/development/licenses.md
 @@ -178,6 +178,7 @@ See below for a summary of the licenses behind RetroArch and its cores:
+ | Mupen64Plus                                               		           | [GPLv3](https://github.com/libretro/mupen64plus-libretro/blob/master/LICENSE)             |                |
  | Mupen64Plus GLES3                                         		           | [GPLv3](https://github.com/libretro/mupen64plus-libretro/blob/master/LICENSE)             |                |
  | [Native32Emu](../library/native32emu.md)                                         | [BSD-3-Clause](https://github.com/jiangxincode/Native32Emu/blob/master/LICENSE)           |                |
- | [CoolbarEmu](../library/coolbaremu.md)                                               | [BSD-3-Clause](https://github.com/AloysHF/CoolbarEmu/blob/master/LICENSE)              |                |
 +| nano_j2me | [MIT](https://github.com/lucinhu/nano_j2me/blob/main/LICENSE), [OFL 1.1](https://github.com/lucinhu/nano_j2me/blob/main/docs/licenses/Liberation-Fonts-OFL.txt), [Apache-2.0](https://github.com/lucinhu/nano_j2me/blob/main/docs/licenses/AMR-Apache-2.0.txt) | |
+ | [CoolbarEmu](../library/coolbaremu.md)                                               | [BSD-3-Clause](https://github.com/AloysHF/CoolbarEmu/blob/master/LICENSE)              |                |
  | Neko Project II                                           		           |                                                                                           |                |
  | Neko Project II Kai                                                              | [MIT](https://github.com/AZO234/NP2kai/blob/master/LICENSE)                               |                |
- | [Nestopia](../library/nestopia.md)                                               | [GPLv2](https://github.com/libretro/nestopia/blob/master/COPYING)                         |                |
 diff --git a/docs/guides/core-list.md b/docs/guides/core-list.md
-index 89026d6..0e7d8b5 100644
+index 1f51b8a..4164110 100644
 --- a/docs/guides/core-list.md
 +++ b/docs/guides/core-list.md
-@@ -157,6 +157,7 @@
+@@ -158,6 +158,7 @@
  | [Mupen64Plus-Next](https://docs.libretro.com/library/mupen64plus/)          | Nintendo 64            | An up-to-date port of the Mupen64Plus N64 emulator, ported to libretro |
  | [Mupen64Plus-Next GLES2](https://docs.libretro.com/library/mupen64plus/)    | Nintendo 64            | An up-to-date port of the Mupen64Plus N64 emulator, ported to libretro |
  | [Mupen64Plus-Next GLES3](https://docs.libretro.com/library/mupen64plus/)    | Nintendo 64            | An up-to-date port of the Mupen64Plus N64 emulator, ported to libretro |
 +| [nano_j2me](../library/nano_j2me.md) | J2ME | A native C99 J2ME runtime with M3G 3D, MIDI/MP3/AMR/MPEG-4 media and manual save states |
+ | [n64emu](../library/n64emu.md) | Nintendo 64 | An cycle-based Nintendo 64 emulator focusing on game/homebrew emulation accuracy. |
  | [Native32Emu](../library/native32emu.md) | Sunplus Native32 | An emulator for the Sunplus Native32 game format used by DVD player and TV chipsets |
  | [CoolbarEmu](../library/coolbaremu.md) | Coolbar/CBE | An emulator for Coolbar/CBE applications on feature phones |
- | [Neko Project II](../library/nekop2.md) | NEC PC-98              | An emulator for NEC's PC-9801 (aka PC-98) personal computer platform, ported to libretro |
 diff --git a/docs/library/nano_j2me.md b/docs/library/nano_j2me.md
 new file mode 100644
 index 0000000..86ef1ac
@@ -280,12 +280,12 @@ index 0000000..86ef1ac
 +specific tested content and environment details; no commercial JARs are supplied
 +by this page.
 diff --git a/docs/meta/see-also.md b/docs/meta/see-also.md
-index d277cc9..53a892f 100644
+index 2221354..2424792 100644
 --- a/docs/meta/see-also.md
 +++ b/docs/meta/see-also.md
-@@ -71,6 +71,13 @@ This is a list of cores that are related to each other in some way.
- - [Microsoft - MSX (fMSX)](../library/fmsx.md)
- - [MSX/SVI/ColecoVision/SG-1000 (blueMSX)](../library/bluemsx.md)
+@@ -66,6 +66,13 @@ This is a list of cores that are related to each other in some way.
+ - [Atari - Lynx (Handy)](../library/handy.md)
+ - [Atari - Lynx (Holani)](../library/holani.md)
  
 +## J2ME
 +
@@ -294,14 +294,14 @@ index d277cc9..53a892f 100644
 +- [Mobile - J2ME (nano_j2me)](../library/nano_j2me.md)
 +- [Mobile - J2ME (SquirrelJME)](../library/squirreljme.md)
 +
- ## GB
+ ## MSX
  
- - [Nintendo - Game Boy / Color (Emux GB)](../library/emux_gb.md)
+ - [Microsoft - MSX (fMSX)](../library/fmsx.md)
 diff --git a/mkdocs.yml b/mkdocs.yml
-index 67d4526..9980a7e 100644
+index 6e31d38..8dbc120 100644
 --- a/mkdocs.yml
 +++ b/mkdocs.yml
-@@ -223,6 +223,7 @@ nav:
+@@ -224,6 +224,7 @@ nav:
        - 'Mobile Emulation':
          - 'Mobile - J2ME (FreeJ2ME)': 'library/freej2me.md'
          - 'Mobile - J2ME (FreeJ2ME-Plus)': 'library/freej2me_plus.md'
