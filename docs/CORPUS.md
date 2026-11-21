@@ -744,23 +744,3 @@ three blank-canvas titles already tracked in
 Lesson: "same pixels at three sample points" is not the same question as
 "does this title ever draw two different frames" - put the early frames in
 the window before calling a title static.
-
-## Round 144: sizeChanged() ordering fixes a black fetched title (2026-11-21)
-
-`canvas_visible()` used to deliver a Canvas's `sizeChanged()` from the first
-paint, together with the (correctly deferred) `showNotify()`.  For a title
-whose MIDlet thread builds its renderer in `run()` and whose `sizeChanged()`
-copies a not-yet-populated renderer field, that ordering overwrote the
-renderer and every paint threw.  `sizeChanged()` now goes out from
-`Display.setCurrent()` (MIDP ordering: setCurrent -> sizeChanged -> first
-paint/showNotify) while `showNotify()` stays deferred.
-
-Evidence (`/tmp/vault6/NeonRunner.jar`, `--port headless --size 240x320
---heap 32 --fps 30 --run-frames 120`): before 120/120 paints threw
-`NullPointerException at j.paint` and `gfx=0`; after 0 throws, `gfx=3000`,
-frame has 5 colours and 8,312 non-black pixels - identical to the FreeJ2ME-Plus
-reference.  The libretro core check on the same title reports
-`visual_nonblack: max non-black pixels=8312` (`[result] PASS`).  The other two
-fetched black titles (GoldenSolitaire and the 128x128 Tomb Raider build) have
-unrelated causes and remain documented in
-`docs/notes/2026-11-21-fetched-black-screen-titles.md`.

@@ -110,8 +110,6 @@
 #define NJ_F_C_KEYS      "cKeys"       /* I  latched presses since last poll */
 #define NJ_F_C_HELD      "cHeld"       /* I  keys still physically down */
 #define NJ_F_C_VISIBLE   "cVisible"    /* Z  showNotify/drawNotify delivered */
-#define NJ_F_C_SIZEDW    "cSizedW"     /* I  width passed to sizeChanged */
-#define NJ_F_C_SIZEDH    "cSizedH"     /* I  height passed to sizeChanged */
 #define NJ_F_C_PRESSED   "cPressed"    /* Z  a key is currently down */
 
 /* GameCanvas */
