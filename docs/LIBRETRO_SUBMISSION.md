@@ -1699,3 +1699,31 @@ worktree with the release flags; both binaries pass the same conformance gates,
 so the hash difference is build provenance, not a functional drift.  Material:
 `docs/libretro/upstream/{nano_j2me.md,libretro-super-nano_j2me-info.patch,libretro-docs-nano_j2me.patch}`,
 `.info` sha256 `e974a5c6…` (0.5.21).
+
+## Round-148 (2026-11-21): post-revert rehearsal and 862-title visual probe
+
+After the round-146 revert (`c6a823d`, "Revert \"fix(lcdui): deliver
+sizeChanged() from setCurrent() before the first paint\""), the source tree is
+byte-identical to the released r40 source (`git diff --stat 4ac5381 HEAD --
+src include apps tests CMakeLists.txt tools` is empty), so the published 0.5.21
+artifacts remain the authoritative build.  A fresh rehearsal at `11a6e2f`
+confirmed that from a clean clone (`/tmp/r148/clone`):
+
+| Step | Result |
+| --- | --- |
+| `tools/simulate_ci_builds.sh --out /tmp/r148-ci --jobs 8` | **3/3 contracts PASS** (linux `.so` 4,008,416 B, windows `.dll` 3,569,902 B, android `.so` 11,717,720 B) |
+| clone core `tools/build_libretro_cores.sh linux-x86_64 --out /tmp/r148-dist` | 3,856,264 B, sha256 `91d3ce89c0103473fcfc3cee5a385c36c15882c1d7a95d425dfec48d0aa0d583` |
+| mock frontend conformance | **20 passed, 0 failed, 0 skipped** |
+| real RetroArch 1.22.2 LoopDemo 120 frames | **PASS** |
+| `tools/check_libretro_submission_bundle.sh --dist /var/tmp/nj2me-submission-dist-r40b` (baselines `55e50a81`/`9399ee32`, mkdocs) | **41 passed, 0 failed** |
+
+The whole 862-row corpus was then rendered through the released r40 core
+(300 frames, 8 jobs, `compat-20261121-r145` rows): **844 titles -> 837 passed,
+3 known limitations, 4 failed**.  The three black fetched titles remain
+(`NeonRunner.jar`, `GoldenSolitaire.jar`, one 128x128 Tomb Raider build - the
+documented title-init limitations in
+`docs/notes/2026-11-21-fetched-black-screen-titles.md`), and the fourth failure
+is the known parallel-load state flake on `杀鬼子-敌后武工队_2185.jar`
+(`unserialize_restores_state` returned 0, passes 3/3 standalone; rounds
+78/95/99/124 class).  `家园5汉化版_10376.jar` (Townsmen5) renders again with
+72,592 non-black pixels after the revert.

@@ -1426,3 +1426,13 @@ LoopDemo 120 frames PASS, bundle 25/25 in the clone and 32/32 with
 `55e50a81`/`9399ee32` + mkdocs -> 25/25 with the docs page rendered.  No
 functional drift found; PR heads unchanged (#2204 `863af5d5`, #1239
 `3316299`, both OPEN/MERGEABLE, no merge claimed).
+
+Round-148 (2026-11-21, post-revert): clean clone at `11a6e2f` rehearsed again -
+CI 3/3 (4,008,416 / 3,569,902 / 11,717,720 B), clone core 3,856,264 B
+`91d3ce89…`, mock 20/20, real RetroArch LoopDemo 120 PASS, bundle 41/41 with
+`--dist /var/tmp/nj2me-submission-dist-r40b` and baselines `55e50a81` /
+`9399ee32`.  Whole corpus (862 rows, 844 renderable) through the released r40
+core: 837 passed, 3 known black fetched titles, 1 known parallel-load state
+flake (`杀鬼子-敌后武工队_2185`, passes standalone); Townsmen5 renders again
+after the round-146 revert.  PRs #2204 (`863af5d5`) / #1239 (`3316299`) still
+OPEN/MERGEABLE, no merge claimed.
