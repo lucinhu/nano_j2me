@@ -79,3 +79,10 @@ changes; the meaningful invariant is **0 `silent-started` rows**.
   committed as `5fd5f3b`.
 * Full serial CTest after the gate: **198/198 passed in 351.76 s**
   (`/tmp/r107-ctest.log`).
+
+## Round-149 revalidation on 0.5.21 (2026-11-21)
+
+40-title sample from `compat-20261121-r145`, 1200 frames, seed 7, timeout 240:
+27 delivered audio, 12 `silent-nostart`, 1 timeout (`时光樱花册－遗失之心_1009`,
+documented heavy loader), 0 `silent-started`.  Same invariant, no audio
+regression: silence only ever comes from a title that never starts a Player.

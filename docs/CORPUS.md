@@ -793,3 +793,39 @@ NeonRunner returns to the documented black state (0 px, `gfx=0`).  A safe fix
 needs a delivery point that is after `startApp()` returns but before any game
 thread can install UI state - i.e. runtime work outside the Canvas class, and
 it is tracked in `docs/notes/2026-11-21-fetched-black-screen-titles.md`.
+
+### Round 149: five more archive.org collections fetched (vault7)
+
+The hardened fetcher (`tools/fetch_corpus.py`, curl fallback + skip-saved) was
+pointed at five more loose-JAR/archive items: `j2me_game_collection_vol1`,
+`j2me_20230404_202304`, `j2me-horror-games-collection`, `pvz-j2me` and
+`nokia35103g2017gamepack`.  It added **280 JARs** to `/tmp/vault7` (many are
+variant builds of titles already in vault4-6 - the collector keeps them as
+separate rows because each archive entry is a different file).
+
+Sweep of just the new directory (`NJ_SWEEP_DIRS=/tmp/vault7`,
+`compat-20261121-r149-vault7`, 10 jobs, 600 frames):
+
+| verdict | rows |
+|---|---:|
+| ok | 276 |
+| title-exception | 3 |
+| failure | 3 |
+| bad-jar | 1 |
+
+All seven non-ok rows are already-known titles/variants: `4 in 1` and
+`Jewel Quest Deluxe` and `Plants vs Zombies` throw a game-side NPE in a thread
+while the MIDlet keeps painting; `AMF_Xtreme_Bowling` (manifest without a
+MIDlet class) and `Plant vs Zombies by ayarde09` fail to install a Displayable;
+`ArcadePark2` installs no Displayable; `Diamond Twister (mobilegamesarena.net)`
+is corrupt in the archive (`Error -3 while decompressing data: invalid block
+type`).  No new crash, hang or uncaught-exception class appeared, so the new
+batch is compatible with the current reverted tree.
+
+### Round 149: audio revalidation on 0.5.21
+
+40-title sample from the round-145 sweep rows (`--frames 1200 --seed 7
+--timeout 240`): **27 delivered audio, 12 silent (`silent-nostart`), 1 timeout**
+(`时光樱花册－遗失之心_1009`, the documented heavy loader) and **0
+`silent-started` rows** - the round-107 invariant still holds: no title starts
+a Player and then fails to deliver PCM to the mixer.
