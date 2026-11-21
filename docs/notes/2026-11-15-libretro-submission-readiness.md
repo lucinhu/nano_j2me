@@ -1484,3 +1484,18 @@ OPEN/MERGEABLE, no merge claimed.
 - PR evidence refreshed: `libretro/libretro-super#2204` head `312198f7`
   (branch on `55e50a81`, body updated for 0.5.23) and `libretro/docs#1239`
   head `3316299b`; both OPEN/MERGEABLE, no merge claimed.
+
+## Round 159 (2026-11-21): fresh rehearsal and coverage audit correction
+
+- Clean-clone submission rehearsal against the current upstream baselines
+  (`libretro-super` `55e50a81`, `libretro/docs` `9399ee32`): bundle validator
+  **39/39 passed** with `--apply-clones` (patch and page both apply cleanly;
+  the mkdocs site-build check is the two additional checks and needs a
+  `mkdocs` binary that this host does not have installed now - earlier rounds
+  ran the full 41/41 with it).
+- CI template command simulation: **3/3 contracts** (linux `.so` 4,101,968 B,
+  windows `.dll` 3,640,930 B, android `.so` 12,026,504 B).
+- API audit corrected: bundled handset classes are no longer counted as gaps
+  (`tools/check_api_coverage.py`); the in-repo corpus now shows **402/403
+  JARs with no external optional API gap**, the only reference being Doom3's
+  unused JSR-226 SVG wrapper. See `docs/notes/2026-11-21-api-coverage-audit.md`.
