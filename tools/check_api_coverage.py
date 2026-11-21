@@ -3,8 +3,10 @@
 
 Implemented classes come from the builtin class tables (`nj_builtin_class`)
 and the `NJ_C_*` name macros.  A reference is "missing" when a class the JAR
-names is in an optional/vendor namespace and not in that set — exactly the
-kind of gap that ends in `NoClassDefFoundError` at run time.
+names is in an optional/vendor namespace, not in that set, and not shipped by
+the JAR itself — exactly the kind of gap that ends in `NoClassDefFoundError`
+at run time.  (Retail ports often bundle handset classes such as
+`com/nokia/mid/ui/r.class`; those are not gaps.)
 
 Usage: tools/check_api_coverage.py [--rows ROWS.jsonl|--dirs LIST] [--top N]
 
@@ -85,6 +87,26 @@ def jar_class_refs(path):
     except Exception:
         return None
     return refs
+
+
+def jar_provided_classes(path):
+    """Return the class names a JAR itself ships (own or bundled .class files).
+
+    A JAR may bundle its dependencies (retail ports ship handset classes such as
+    com/nokia/mid/ui/r.class); such a reference is not an API gap for that
+    title, because the runtime will load the class from the JAR.
+    """
+    names = set()
+    try:
+        with zipfile.ZipFile(path) as z:
+            for info in z.infolist():
+                name = info.filename
+                if not name.endswith(".class") or name.startswith("META-INF/"):
+                    continue
+                names.add(name[:-len(".class")])
+    except Exception:
+        return None
+    return names
 
 
 def u2(b, i):
@@ -219,7 +241,8 @@ def main():
         if refs is None:
             continue
         total_refs += 1
-        miss = sorted(n for n in refs if wanted(n, impl))
+        provided = jar_provided_classes(jar) or set()
+        miss = sorted(n for n in refs if wanted(n, impl) and n not in provided)
         if miss:
             per_jar[jar] = miss
             for n in miss:

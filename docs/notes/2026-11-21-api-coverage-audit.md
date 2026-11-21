@@ -196,3 +196,24 @@ bringing the fixture up.  `tools/check_field_descs.py` now also compares the
 lookup's static/instance kind against the declaration, so that mistake is a
 hard failure instead of a silent zero (`NJ_F`/`NJ_FS` and the trailing 0/1 of a
 direct `nj_field_lookup()` are all checked).
+
+## Round 159 correction: JAR-bundled classes are not API gaps
+
+The first audit counted every optional-namespace class a JAR *references*, so
+retail ports that bundle handset compatibility classes were reported as
+"missing API" gaps: `Boun_*.jar` ships `com/nokia/mid/appl/boun/*`,
+`Vime_*.jar` ships `com/nokia/mid/appl/vime/*`, and `3D滚球`/`兔子波比2` ship
+`com/nokia/mid/ui/r.class`; those classes load from the JAR, not the runtime.
+`tools/check_api_coverage.py` now also collects the class names each JAR
+provides (`jar_provided_classes()`) and ignores references satisfied that way.
+
+Recomputed on the in-repo corpus (403 JARs, 598 implemented classes):
+**402 of 403 JARs have no external optional API gap at all.**  The only real
+remaining reference is `毁灭战士3_10598.jar` -> `javax/microedition/m2g/SVG*`
+(JSR-226), and the title runs 240 frames without `NoClassDefFoundError` (its
+NetBeans SVG splash wrapper is never instantiated on the path the game takes),
+so JSR-226 stays deferred rather than faked with a blank renderer.
+
+The earlier "19 of 897" figure mixed corpus generations and counted bundled
+classes; the corrected statement is the one above.  `--kemulator` mode is
+unaffected (it diffs a reference source tree, not JARs).
