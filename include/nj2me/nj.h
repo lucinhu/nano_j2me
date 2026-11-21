@@ -44,7 +44,7 @@ extern "C" {
 #define NJ_VERSION_MAJOR 0
 #define NJ_VERSION_MINOR 5
 #define NJ_VERSION_PATCH 10
-#define NJ_VERSION_STRING "0.5.24"
+#define NJ_VERSION_STRING "0.5.25"
 
 /*
  * Run an embedded JAR with a caller-provided port, using a MIDlet class name
