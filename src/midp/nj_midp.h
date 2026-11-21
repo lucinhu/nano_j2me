@@ -111,6 +111,7 @@
 #define NJ_F_C_HELD      "cHeld"       /* I  keys still physically down */
 #define NJ_F_C_VISIBLE   "cVisible"    /* Z  showNotify/drawNotify delivered */
 #define NJ_F_C_PRESSED   "cPressed"    /* Z  a key is currently down */
+#define NJ_F_C_ITEMS     "cItems"      /* Vector of Nokia CanvasItem overlays */
 
 /* GameCanvas */
 #define NJ_F_GC_SUPPRESS "gcSuppress"  /* Z  suppressKeyEvents */
@@ -269,8 +270,23 @@ int nj_media_video_overlay(nj_vm *vm);
 nj_u4 nj_media_movie_amr_decode(nj_vm *vm, const nj_u1 *data, nj_u4 size,
                                 nj_u1 *pcm, nj_u4 pcm_cap);
 
+/* A Graphics that draws into `image`, even for the read-only backing image a
+ * Displayable paints into (Image.getGraphics() refuses those). */
+nj_ref nj_midp_image_graphics(nj_vm *vm, nj_ref image);
+
+/* 1 when `o` is a Canvas or a subclass of it (GameCanvas included). */
+int nj_midp_is_canvas(nj_vm *vm, nj_ref o);
+
 /* Request a repaint of the current Displayable on the next frame. */
 void nj_midp_repaint(nj_vm *vm);
+
+/*
+ * Composite the Nokia UI `CanvasItem` overlays attached to `canvas` onto its
+ * backing image after the MIDlet's paint() has run.  Called by the LCDUI paint
+ * path; does nothing when the canvas has no overlay items.  Exceptions raised
+ * by an item's paint() are cleared, so a broken overlay cannot abort the frame.
+ */
+void nj_nokia_paint_canvas_items(nj_vm *vm, nj_ref canvas, nj_ref buffer);
 
 /* Deliver a key event (NJ_KEY_*) to the current Canvas/GameCanvas.
  * `down` is 1 for press, 0 for release.  Returns 1 if it was consumed. */

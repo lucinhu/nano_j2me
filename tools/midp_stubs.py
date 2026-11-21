@@ -1430,6 +1430,33 @@ CLASSES = {
         "methods": ["L2CAPConnection acceptAndOpen()"],
     },
     # ---- Nokia UI extras (round 154) ----------------------------------
+    "com/nokia/mid/ui/CanvasItem": {
+        "abstract": True,
+        "methods": [
+            "public void setParent(Object)",
+            "public Object getParent()",
+            "public void setSize(int, int)",
+            "public int getWidth()",
+            "public int getHeight()",
+            "public void setPosition(int, int)",
+            "public int getPositionX()",
+            "public int getPositionY()",
+            "public void setVisible(boolean)",
+            "public boolean isVisible()",
+            "public void setZPosition(int)",
+            "public int getZPosition()",
+        ],
+    },
+    "com/nokia/mid/ui/CanvasGraphicsItem": {
+        "abstract": True,
+        "extends": "com.nokia.mid.ui.CanvasItem",
+        "methods": [
+            "public CanvasGraphicsItem(int, int)",
+            "public void repaint()",
+            "public void repaint(int, int, int, int)",
+            "protected abstract void paint(javax.microedition.lcdui.Graphics)",
+        ],
+    },
     "com/nokia/mid/ui/DirectGraphicsImplemented": {
         "interface": True,
         "methods": [],

@@ -217,3 +217,43 @@ so JSR-226 stays deferred rather than faked with a blank renderer.
 The earlier "19 of 897" figure mixed corpus generations and counted bundled
 classes; the corrected statement is the one above.  `--kemulator` mode is
 unaffected (it diffs a reference source tree, not JARs).
+
+## Round 162: CanvasItem / CanvasGraphicsItem overlay compositing
+
+KEmulator implements `CanvasItem` as a state holder and leaves the canvas hook
+`_addNokiaCanvasItem` unimplemented, so its overlay items never render.  That
+is enough for class resolution, but HUD overlays built on the API would stay
+invisible. The runtime now composites them for real:
+
+* `src/midp/nj_lib_nokia.c` adds `com/nokia/mid/ui/CanvasItem` (abstract state:
+  parent, size, position, visibility, z) and `CanvasGraphicsItem`
+  (`(II)` constructor validating width/height >= 1, `setParent` validating the
+  parent is a Canvas, `setSize`, `setPosition`, `setZPosition` rejecting
+  negative z, `repaint`, abstract `paint(Graphics)` and the final
+  `_invokePaint` hook that dispatches virtually).
+* Attached items live in a package-private `cItems` Vector field on the
+  `Canvas` builtin (`src/midp/nj_lib_lcdui.c`), created lazily on the first
+  attach. Keeping the list in the object graph means the GC sees the items;
+  no side table can leak them.
+* After the canvas paint, `nj_nokia_paint_canvas_items()` walks the list,
+  skips detached/invisible items, and for each visible item takes a Graphics
+  onto the canvas backing image (`nj_midp_image_graphics()`, because
+  `Image.getGraphics()` refuses the deliberately non-mutable backing image),
+  translates by the item position, clips to the item rectangle, and calls
+  `_invokePaint`. An exception raised by an item clears and stops the overlay
+  pass instead of aborting the frame.
+* Painting happens after the canvas paint, so items appear on top of it, as
+  on a device.
+
+Verification: `tests/canvasitemdemo/CanvasItemDemo.java` paints a blue canvas
+and attaches a green 40x30 item at (10,20); `tools/check_canvasitem.sh` runs it,
+dumps the last frame and asserts green inside the item rectangle and blue
+everywhere around it (including one pixel left of the item), plus the
+`getParent`/position/size values seen from Java and both documented
+`IllegalArgumentException` paths. Wired as `test_canvasitem`
+(`tools/make_canvasitem_jar.sh` is part of `nj_fixtures`).
+
+`FullCanvas` was already present with the key constants; `TextEditor` is a
+substantial canvas-item editor (caret, focus, listener actions 0x1-0x800,
+touch-control interfaces) with no corpus usage yet, so it stays on the roadmap
+rather than being faked.

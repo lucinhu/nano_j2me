@@ -1537,6 +1537,448 @@ NJFN(nokia_gest_register)
 }
 NJFN(nokia_gest_setlistener) { return NJ_OK; }
 
+
+/* ------------------------------------------------------------------ */
+/* CanvasItem / CanvasGraphicsItem                                      */
+/* ------------------------------------------------------------------ */
+/*
+ * Nokia's overlay items.  A midlet creates a CanvasGraphicsItem subclass,
+ * attaches it to a Canvas and draws into it from its own paint(); the device
+ * composites the items on top of the canvas.  KEmulator leaves the canvas
+ * registration hook empty, but a real handset (and games that use the API for
+ * HUD overlays) expects the item's paint() to run, so the runtime composites
+ * the attached, visible items onto the canvas backing image right after the
+ * canvas paint.
+ *
+ * CanvasItem itself is abstract; it only carries state.  The list of attached
+ * items lives in the Canvas builtin as the package-private `cItems` Vector
+ * (created lazily on the first attach), which keeps the ownership in the
+ * object graph instead of a side table the GC would not see.
+ */
+#define NJ_C_CANVASITEM    "com/nokia/mid/ui/CanvasItem"
+#define NJ_C_CANVASGFXITEM "com/nokia/mid/ui/CanvasGraphicsItem"
+
+static const nj_builtin_field canvasitem_fields[] = {
+    { "ciParent",  "Ljava/lang/Object;", NJ_ACC_PRIVATE },
+    { "ciW",       "I", NJ_ACC_PRIVATE },
+    { "ciH",       "I", NJ_ACC_PRIVATE },
+    { "ciX",       "I", NJ_ACC_PRIVATE },
+    { "ciY",       "I", NJ_ACC_PRIVATE },
+    { "ciZ",       "I", NJ_ACC_PRIVATE },
+    { "ciVisible", "Z", NJ_ACC_PRIVATE }
+};
+
+static const nj_builtin_method canvasitem_methods[] = {
+    M("setParent",    "(Ljava/lang/Object;)V", NJ_ACC_PUBLIC),
+    M("getParent",    "()Ljava/lang/Object;",  NJ_ACC_PUBLIC),
+    M("setSize",      "(II)V",                 NJ_ACC_PUBLIC),
+    M("getWidth",     "()I",                   NJ_ACC_PUBLIC),
+    M("getHeight",    "()I",                   NJ_ACC_PUBLIC),
+    M("setPosition",  "(II)V",                 NJ_ACC_PUBLIC),
+    M("getPositionX", "()I",                   NJ_ACC_PUBLIC),
+    M("getPositionY", "()I",                   NJ_ACC_PUBLIC),
+    M("setVisible",   "(Z)V",                  NJ_ACC_PUBLIC),
+    M("isVisible",    "()Z",                   NJ_ACC_PUBLIC),
+    M("setZPosition", "(I)V",                  NJ_ACC_PUBLIC),
+    M("getZPosition", "()I",                   NJ_ACC_PUBLIC)
+};
+
+static const nj_builtin_method canvasgfx_methods[] = {
+    M("<init>",       "(II)V", NJ_ACC_PUBLIC),
+    M("setParent",    "(Ljava/lang/Object;)V", NJ_ACC_PUBLIC),
+    M("setSize",      "(II)V",                 NJ_ACC_PUBLIC),
+    M("repaint",      "()V",                   NJ_ACC_PUBLIC | NJ_ACC_FINAL),
+    M("repaint",      "(IIII)V",               NJ_ACC_PUBLIC | NJ_ACC_FINAL),
+    M("setZPosition", "(I)V",                  NJ_ACC_PUBLIC),
+    M("getZPosition", "()I",                   NJ_ACC_PUBLIC),
+    M("paint",        "(L" NJ_C_GRAPHICS ";)V",
+       NJ_ACC_PROTECTED | NJ_ACC_ABSTRACT),
+    M("_invokePaint", "(L" NJ_C_GRAPHICS ";)V",
+       NJ_ACC_PUBLIC | NJ_ACC_FINAL)
+};
+
+static nj_field *ci_field(nj_vm *vm, const char *name, const char *desc)
+{
+    return NJ_F(vm, NJ_C_CANVASITEM, name, desc);
+}
+
+static nj_ref ci_parent(nj_vm *vm, nj_ref item)
+{
+    nj_field *f = ci_field(vm, "ciParent", "Ljava/lang/Object;");
+    return f ? nj_field_read_ref(vm, item, f) : NULL;
+}
+
+static void ci_set_parent(nj_vm *vm, nj_ref item, nj_ref parent)
+{
+    nj_field *f = ci_field(vm, "ciParent", "Ljava/lang/Object;");
+    if (f) {
+        nj_field_write_ref(vm, item, f, parent);
+    }
+}
+
+static nj_s4 ci_int(nj_vm *vm, nj_ref item, const char *name)
+{
+    nj_field *f = ci_field(vm, name, "I");
+    return f ? nj_field_read_int(vm, item, f) : 0;
+}
+
+static void ci_set_int(nj_vm *vm, nj_ref item, const char *name, nj_s4 v)
+{
+    nj_field *f = ci_field(vm, name, "I");
+    if (f) {
+        nj_field_write_int(vm, item, f, v);
+    }
+}
+
+static int ci_visible(nj_vm *vm, nj_ref item)
+{
+    nj_field *f = ci_field(vm, "ciVisible", "Z");
+    return f ? (nj_field_read_int(vm, item, f) != 0) : 0;
+}
+
+static void ci_set_visible(nj_vm *vm, nj_ref item, int visible)
+{
+    nj_field *f = ci_field(vm, "ciVisible", "Z");
+    if (f) {
+        nj_field_write_int(vm, item, f, visible ? 1 : 0);
+    }
+}
+
+/* The Canvas `cItems` Vector, optionally created on first use. */
+static nj_ref canvas_item_vector(nj_vm *vm, nj_ref canvas, int create)
+{
+    nj_field *f = NJ_F(vm, NJ_C_CANVAS, NJ_F_C_ITEMS, "Ljava/util/Vector;");
+    nj_ref vec;
+
+    if (!f) {
+        return NULL;
+    }
+    vec = nj_field_read_ref(vm, canvas, f);
+    if (!vec && create) {
+        vec = nj_object_new(vm, "java/util/Vector");
+        if (!vec) {
+            return NULL;
+        }
+        vec = nj_root(vm, vec);
+        (void)nj_call_special(vm, vec, "java/util/Vector", "<init>", "()V",
+                              NULL, NULL);
+        if (vm->exception) {
+            nj_clear_exception(vm);
+            return NULL;
+        }
+        nj_field_write_ref(vm, canvas, f, vec);
+    }
+    return vec;
+}
+
+static void canvas_item_detach(nj_vm *vm, nj_ref item)
+{
+    nj_ref parent = ci_parent(vm, item);
+    nj_ref vec;
+    nj_value a[1];
+
+    if (!parent) {
+        return;
+    }
+    vec = canvas_item_vector(vm, parent, 0);
+    if (vec) {
+        a[0].r = item;
+        (void)nj_call(vm, vec, "java/util/Vector", "removeElement",
+                      "(Ljava/lang/Object;)Z", a, NULL);
+        if (vm->exception) {
+            nj_clear_exception(vm);
+        }
+    }
+    ci_set_parent(vm, item, NULL);
+}
+
+static int canvas_item_attach(nj_vm *vm, nj_ref item, nj_ref parent)
+{
+    nj_ref old = ci_parent(vm, item);
+    nj_ref vec;
+    nj_value a[1];
+
+    if (old == parent) {
+        return 0;
+    }
+    if (old) {
+        canvas_item_detach(vm, item);
+    }
+    if (parent) {
+        vec = canvas_item_vector(vm, parent, 1);
+        if (!vec) {
+            return -1;
+        }
+        a[0].r = item;
+        if (nj_call(vm, vec, "java/util/Vector", "addElement",
+                    "(Ljava/lang/Object;)V", a, NULL) != NJ_OK) {
+            nj_clear_exception(vm);
+            return -1;
+        }
+        ci_set_parent(vm, item, parent);
+    }
+    return 0;
+}
+
+static void ci_throw_arg(nj_vm *vm, const char *what)
+{
+    (void)nj_throw(vm, "java/lang/IllegalArgumentException", what);
+}
+
+/* ---- CanvasItem natives (state accessors) ---- */
+NJFN(nokia_ci_set_parent)
+{
+    nj_ref item = NJ_THIS(args);
+    nj_ref parent = NJ_ARG_REF(args, 0);
+
+    if (parent && !nj_midp_is_canvas(vm, parent)) {
+        ci_throw_arg(vm, "parent is not a Canvas");
+        return NJ_ERR;
+    }
+    if (canvas_item_attach(vm, item, parent) != 0) {
+        (void)nj_throw(vm, "java/lang/IllegalStateException",
+                       "could not attach the canvas item");
+        return NJ_ERR;
+    }
+    return NJ_OK;
+}
+
+NJFN(nokia_ci_get_parent)
+{
+    ret->r = ci_parent(vm, NJ_THIS(args));
+    return NJ_OK;
+}
+
+NJFN(nokia_ci_set_size)
+{
+    nj_ref item = NJ_THIS(args);
+    nj_s4 w = NJ_ARG_INT(args, 0);
+    nj_s4 h = NJ_ARG_INT(args, 1);
+
+    if (w < 1 || h < 1) {
+        ci_throw_arg(vm, "width and height must be positive");
+        return NJ_ERR;
+    }
+    ci_set_int(vm, item, "ciW", w);
+    ci_set_int(vm, item, "ciH", h);
+    return NJ_OK;
+}
+
+NJFN(nokia_ci_get_width)
+{
+    ret->i = ci_int(vm, NJ_THIS(args), "ciW");
+    return NJ_OK;
+}
+
+NJFN(nokia_ci_get_height)
+{
+    ret->i = ci_int(vm, NJ_THIS(args), "ciH");
+    return NJ_OK;
+}
+
+NJFN(nokia_ci_set_position)
+{
+    nj_ref item = NJ_THIS(args);
+
+    ci_set_int(vm, item, "ciX", NJ_ARG_INT(args, 0));
+    ci_set_int(vm, item, "ciY", NJ_ARG_INT(args, 1));
+    return NJ_OK;
+}
+
+NJFN(nokia_ci_get_position_x)
+{
+    ret->i = ci_int(vm, NJ_THIS(args), "ciX");
+    return NJ_OK;
+}
+
+NJFN(nokia_ci_get_position_y)
+{
+    ret->i = ci_int(vm, NJ_THIS(args), "ciY");
+    return NJ_OK;
+}
+
+NJFN(nokia_ci_set_visible)
+{
+    ci_set_visible(vm, NJ_THIS(args), NJ_ARG_INT(args, 0) != 0);
+    return NJ_OK;
+}
+
+NJFN(nokia_ci_is_visible)
+{
+    ret->i = ci_visible(vm, NJ_THIS(args));
+    return NJ_OK;
+}
+
+NJFN(nokia_ci_set_z)
+{
+    nj_ref item = NJ_THIS(args);
+    nj_s4 z = NJ_ARG_INT(args, 0);
+
+    if (z < 0) {
+        ci_throw_arg(vm, "z position must not be negative");
+        return NJ_ERR;
+    }
+    ci_set_int(vm, item, "ciZ", z);
+    return NJ_OK;
+}
+
+NJFN(nokia_ci_get_z)
+{
+    ret->i = ci_int(vm, NJ_THIS(args), "ciZ");
+    return NJ_OK;
+}
+
+/* ---- CanvasGraphicsItem natives ---- */
+NJFN(nokia_cgi_init)
+{
+    nj_ref item = NJ_THIS(args);
+    nj_s4 w = NJ_ARG_INT(args, 0);
+    nj_s4 h = NJ_ARG_INT(args, 1);
+
+    if (w < 1 || h < 1) {
+        ci_throw_arg(vm, "width and height must be positive");
+        return NJ_ERR;
+    }
+    ci_set_int(vm, item, "ciW", w);
+    ci_set_int(vm, item, "ciH", h);
+    ci_set_visible(vm, item, 0);
+    return NJ_OK;
+}
+
+NJFN(nokia_cgi_set_parent)
+{
+    nj_ref item = NJ_THIS(args);
+    nj_ref parent = NJ_ARG_REF(args, 0);
+
+    if (parent && !nj_midp_is_canvas(vm, parent)) {
+        ci_throw_arg(vm, "parent is not a Canvas");
+        return NJ_ERR;
+    }
+    canvas_item_detach(vm, item);
+    if (parent) {
+        nj_ref vec = canvas_item_vector(vm, parent, 1);
+        nj_value a[1];
+        if (!vec) {
+            (void)nj_throw(vm, "java/lang/OutOfMemoryError",
+                           "could not create the canvas item list");
+            return NJ_ERR;
+        }
+        a[0].r = item;
+        if (nj_call(vm, vec, "java/util/Vector", "addElement",
+                    "(Ljava/lang/Object;)V", a, NULL) != NJ_OK) {
+            nj_clear_exception(vm);
+            (void)nj_throw(vm, "java/lang/IllegalStateException",
+                           "could not attach the canvas item");
+            return NJ_ERR;
+        }
+        ci_set_parent(vm, item, parent);
+    }
+    return NJ_OK;
+}
+
+NJFN(nokia_cgi_set_size)
+{
+    return nokia_ci_set_size(vm, th, args, ret);
+}
+
+NJFN(nokia_cgi_repaint)
+{
+    nj_ref item = NJ_THIS(args);
+
+    if (ci_parent(vm, item)) {
+        nj_midp_repaint(vm);
+    }
+    return NJ_OK;
+}
+
+NJFN(nokia_cgi_invoke_paint)
+{
+    nj_value a[1];
+
+    a[0].r = NJ_ARG_REF(args, 0);
+    return nj_call(vm, NJ_THIS(args), NJ_C_CANVASGFXITEM, "paint",
+                   "(L" NJ_C_GRAPHICS ";)V", a, NULL);
+}
+
+void nj_nokia_paint_canvas_items(nj_vm *vm, nj_ref canvas, nj_ref buffer)
+{
+    nj_ref vec;
+    nj_u4 mark;
+    int n, idx;
+
+    if (!canvas || !buffer) {
+        return;
+    }
+    vec = canvas_item_vector(vm, canvas, 0);
+    if (!vec) {
+        return;
+    }
+    mark = nj_root_mark(vm);
+    vec = nj_root(vm, vec);
+    buffer = nj_root(vm, buffer);
+    n = nj_call_int(vm, vec, "java/util/Vector", "size", "()I", NULL);
+    if (vm->exception) {
+        nj_clear_exception(vm);
+        n = 0;
+    }
+    for (idx = 0; idx < n; idx++) {
+        nj_ref item;
+        nj_ref g;
+        nj_value a[4];
+        nj_s4 w, h;
+        int st;
+
+        a[0].i = idx;
+        item = nj_call_ref(vm, vec, "java/util/Vector", "elementAt",
+                           "(I)Ljava/lang/Object;", a);
+        if (vm->exception) {
+            nj_clear_exception(vm);
+            break;
+        }
+        if (!item) {
+            continue;
+        }
+        item = nj_root(vm, item);
+        if (ci_parent(vm, item) != canvas || !ci_visible(vm, item)) {
+            continue;
+        }
+        w = ci_int(vm, item, "ciW");
+        h = ci_int(vm, item, "ciH");
+        if (w < 1 || h < 1) {
+            continue;
+        }
+        g = nj_midp_image_graphics(vm, buffer);
+        if (!g) {
+            break;
+        }
+        g = nj_root(vm, g);
+        a[0].i = ci_int(vm, item, "ciX");
+        a[1].i = ci_int(vm, item, "ciY");
+        if (nj_call(vm, g, NJ_C_GRAPHICS, "translate", "(II)V", a, NULL) !=
+            NJ_OK) {
+            nj_clear_exception(vm);
+            break;
+        }
+        a[0].i = 0;
+        a[1].i = 0;
+        a[2].i = w;
+        a[3].i = h;
+        if (nj_call(vm, g, NJ_C_GRAPHICS, "setClip", "(IIII)V", a, NULL) !=
+            NJ_OK) {
+            nj_clear_exception(vm);
+            break;
+        }
+        a[0].r = g;
+        st = nj_call(vm, item, NJ_C_CANVASGFXITEM, "_invokePaint",
+                     "(L" NJ_C_GRAPHICS ";)V", a, NULL);
+        if (st != NJ_OK) {
+            nj_clear_exception(vm);
+            break;
+        }
+    }
+    nj_root_release(vm, mark);
+}
+
 const nj_builtin_class nj_lib_nokia_classes[] = {
     { NJ_C_VKEYBOARD, "java/lang/Object", NJ_ACC_PUBLIC,
       NULL, 0u, vkeyboard_methods,
@@ -1656,6 +2098,16 @@ const nj_builtin_class nj_lib_nokia_classes[] = {
     { NJ_C_GESTMGR, "java/lang/Object", NJ_ACC_PUBLIC | NJ_ACC_FINAL,
       NULL, 0u, gestmgr_methods,
       (nj_u2)(sizeof(gestmgr_methods) / sizeof(gestmgr_methods[0])) },
+    { NJ_C_CANVASITEM, "java/lang/Object",
+      NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT,
+      canvasitem_fields,
+      (nj_u2)(sizeof(canvasitem_fields) / sizeof(canvasitem_fields[0])),
+      canvasitem_methods,
+      (nj_u2)(sizeof(canvasitem_methods) / sizeof(canvasitem_methods[0])) },
+    { NJ_C_CANVASGFXITEM, NJ_C_CANVASITEM,
+      NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT,
+      NULL, 0u, canvasgfx_methods,
+      (nj_u2)(sizeof(canvasgfx_methods) / sizeof(canvasgfx_methods[0])) },
     { NULL, NULL, 0u, NULL, 0u, NULL, 0u }
 };
 const int nj_lib_nokia_class_count =
@@ -1770,6 +2222,28 @@ const nj_native_entry nj_lib_nokia_table[] = {
       "(Ljava/lang/Object;L" NJ_C_GESTZONE ";)Z", nokia_gest_register },
     { NJ_C_GESTMGR, "setListener",
       "(Ljava/lang/Object;L" NJ_C_GESTLISTEN ";)V", nokia_gest_setlistener },
+    { NJ_C_CANVASITEM, "setParent",    "(Ljava/lang/Object;)V", nokia_ci_set_parent },
+    { NJ_C_CANVASITEM, "getParent",    "()Ljava/lang/Object;",  nokia_ci_get_parent },
+    { NJ_C_CANVASITEM, "setSize",      "(II)V",                 nokia_ci_set_size },
+    { NJ_C_CANVASITEM, "getWidth",     "()I",                   nokia_ci_get_width },
+    { NJ_C_CANVASITEM, "getHeight",    "()I",                   nokia_ci_get_height },
+    { NJ_C_CANVASITEM, "setPosition",  "(II)V",                 nokia_ci_set_position },
+    { NJ_C_CANVASITEM, "getPositionX", "()I",                   nokia_ci_get_position_x },
+    { NJ_C_CANVASITEM, "getPositionY", "()I",                   nokia_ci_get_position_y },
+    { NJ_C_CANVASITEM, "setVisible",   "(Z)V",                  nokia_ci_set_visible },
+    { NJ_C_CANVASITEM, "isVisible",    "()Z",                   nokia_ci_is_visible },
+    { NJ_C_CANVASITEM, "setZPosition", "(I)V",                  nokia_ci_set_z },
+    { NJ_C_CANVASITEM, "getZPosition", "()I",                   nokia_ci_get_z },
+    { NJ_C_CANVASGFXITEM, "<init>",       "(II)V", nokia_cgi_init },
+    { NJ_C_CANVASGFXITEM, "setParent",    "(Ljava/lang/Object;)V",
+      nokia_cgi_set_parent },
+    { NJ_C_CANVASGFXITEM, "setSize",      "(II)V", nokia_cgi_set_size },
+    { NJ_C_CANVASGFXITEM, "repaint",      "()V",   nokia_cgi_repaint },
+    { NJ_C_CANVASGFXITEM, "repaint",      "(IIII)V", nokia_cgi_repaint },
+    { NJ_C_CANVASGFXITEM, "setZPosition", "(I)V", nokia_ci_set_z },
+    { NJ_C_CANVASGFXITEM, "getZPosition", "()I",  nokia_ci_get_z },
+    { NJ_C_CANVASGFXITEM, "_invokePaint", "(L" NJ_C_GRAPHICS ";)V",
+      nokia_cgi_invoke_paint },
     { NULL, NULL, NULL, NULL }
 };
 const int nj_lib_nokia_count =

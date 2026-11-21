@@ -259,6 +259,12 @@ static int isa(nj_vm *vm, nj_ref o, const char *cls)
     return c ? nj_class_is_subclass_of(o->cls, c) : 0;
 }
 
+/* Public wrapper used by other libraries (Nokia CanvasItem parent checks). */
+int nj_midp_is_canvas(nj_vm *vm, nj_ref o)
+{
+    return isa(vm, o, NJ_C_CANVAS);
+}
+
 /* ------------------------------------------------------------------ */
 /* Image                                                               */
 /* ------------------------------------------------------------------ */
@@ -2686,6 +2692,17 @@ NJFN(img_getGraphics)
     }
     ret->r = g;
     return NJ_OK;
+}
+
+/* A Graphics onto `image` without the mutable-image check: the LCDUI paint
+ * path draws into backing images that are deliberately not exposed as mutable
+ * Images, and the Nokia CanvasItem compositor needs the same facility. */
+nj_ref nj_midp_image_graphics(nj_vm *vm, nj_ref image)
+{
+    if (!image) {
+        return NULL;
+    }
+    return gfx_new(vm, image);
 }
 
 NJFN(img_getRGB)
@@ -6049,6 +6066,11 @@ static nj_status nj_midp_paint_body(nj_vm *vm)
             }
         }
         /*
+         * Nokia CanvasItem overlays are composited onto the same backing
+         * image after the canvas paint, so items draw on top of it.
+         */
+        nj_nokia_paint_canvas_items(vm, d, buf);
+        /*
          * No blit here.  The buffer is mirrored onto the screen by
          * nj_midp_present() at the frame boundary, because a title may keep
          * drawing through the Graphics paint() was given after it returns.
@@ -6064,6 +6086,7 @@ static nj_status nj_midp_paint_body(nj_vm *vm)
             if (g) {
                 (void)canvas_call_paint_rooted(vm, d, g, NULL);
                 nj_clear_exception(vm);
+                nj_nokia_paint_canvas_items(vm, d, buf);
             }
             if (nj_midp_surface(vm, buf, &buf_surf)) {
                 nj_gfx blit;
@@ -11731,6 +11754,7 @@ static const nj_builtin_field canvas_fields[] = {
     FLD(NJ_F_C_HELD, D_INT,   0),
     FLD(F_C_VISIBLE, D_BOOL,  0),
     FLD(F_C_PRESSED, D_BOOL,  0),
+    FLD(NJ_F_C_ITEMS, D_VECTOR, 0),
     FLD("KEY_NUM0",   D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
     FLD("KEY_NUM1",   D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
     FLD("KEY_NUM2",   D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),

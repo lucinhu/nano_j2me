@@ -862,6 +862,7 @@ if(NJ_BUILD_TESTS)
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_nokiademo_jar.sh
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_location_jar.sh
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_nokiaext_jar.sh
+      COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_canvasitem_jar.sh
       WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
       COMMENT "keysdemo.jar, blockdemo.jar (input-effect fixtures)")
   endif()
@@ -2232,6 +2233,10 @@ nj_add_test(test_fullscreen tests/test_fullscreen.c ${NJ_FIXTURES}/fsorder.jar)
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_nokiaext.sh
               ${NJ_FIXTURES}/nokiaextdemo.jar $<TARGET_FILE:nj2me-cli>)
     set_tests_properties(test_nokiaext PROPERTIES TIMEOUT 120)
+    add_test(NAME test_canvasitem
+      COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_canvasitem.sh
+              $<TARGET_FILE:nj2me-cli>)
+    set_tests_properties(test_canvasitem PROPERTIES TIMEOUT 120)
   endif()
     set_tests_properties(test_play PROPERTIES TIMEOUT 120)
   endif()
