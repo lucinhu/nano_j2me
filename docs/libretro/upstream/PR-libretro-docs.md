@@ -39,7 +39,7 @@ Files changed (5 files, +261 lines):
 - `docs/development/licenses.md` — MIT / OFL-1.1 / Apache-2.0 split, matching the core's shipped notices.
 - `docs/meta/see-also.md` — new `## J2ME` section listing FreeJ2ME, FreeJ2ME-Plus, nano_j2me and SquirrelJME.
 
-Feature statements are the behaviour implemented by the current core (0.5.21): M3G software 3D, MIDI/MP3/AMR/WAV/ADPCM media, MPEG-4 Part 2 and H.263 video playback, manual save states, frontend rewind sizing guidance, multi-touch pointer delivery (`RETRO_DEVICE_ID_POINTER_COUNT`, fed to the Nokia `MultipointTouch` API, up to four concurrent fingers), cheat search over the exposed JVM arena (`SYSTEM_RAM` memory map) plus arena-offset `retro_cheat_set()` codes re-applied every frame. It makes no determinism/netplay/runahead claim, and states that the exposed memory is a debugging window, not a save channel.
+Feature statements are the behaviour implemented by the current core (0.5.22): M3G software 3D, MIDI/MP3/AMR/WAV/ADPCM media, MPEG-4 Part 2 and H.263 video playback, manual save states, frontend rewind sizing guidance, multi-touch pointer delivery (`RETRO_DEVICE_ID_POINTER_COUNT`, fed to the Nokia `MultipointTouch` API, up to four concurrent fingers), cheat search over the exposed JVM arena (`SYSTEM_RAM` memory map) plus arena-offset `retro_cheat_set()` codes re-applied every frame. It makes no determinism/netplay/runahead claim, and states that the exposed memory is a debugging window, not a save channel.
 
 Companion `.info` PR: libretro/libretro-super#2204.
 
