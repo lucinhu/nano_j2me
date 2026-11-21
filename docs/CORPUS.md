@@ -1012,7 +1012,9 @@ per title, per-title key scripts, job `bash-a9d569da09ed47d5`):
 | **total** | **735** |
 
 The non-ok rows are the known/slow set plus four fetched titles: `ArcadePark2`
-(Gameloft GlomoReg billing API, see the API audit note), `DiamondTwister`
+(references `GlomoReg/GlomoCountry`, which its own JAR does not bundle — a
+title-side packaging bug, classified `title-exception` since round 167),
+`DiamondTwister`
 (corrupt archive entry), `AMF_Xtreme_Bowling` (manifest names no MIDlet class)
 and the game-code thread exceptions in `4in1 Memory` / `JewelQuestDeluxe`
 (titles keep painting).  Two titles from this set were fixed immediately after
@@ -1039,3 +1041,16 @@ VibeTonz) now runs past its `GameCanvas` static initialiser - both were
 
 The scratch rows directory stays in `.local-tools/debug-runs/compat-matrix-r163`
 (untracked), as with every matrix refresh.
+
+### Round 167: the sweep tells title-side packaging bugs apart from runtime gaps (2026-11-22)
+
+The round-163 triage read `ArcadePark2.jar`'s `NoClassDefFoundError:
+GlomoReg/GlomoCountry` as a missing runtime API.  It is not: the JAR does not
+contain that class either (`GlomoCountryShort` is there, `GlomoCountry` is
+not), while the other two Glomo users bundle their billing stack and run fine
+(600 frames each).  `tools/sweep_compat.py` now checks a `NoClassDefFoundError`
+against the JAR's own class list: when the title references a class it does not
+ship, the row becomes `title-exception` with the note "title references a
+class it does not bundle (<name>)" instead of `failure`, because a real handset
+fails the same way.  Re-running that one title through the tool produced
+exactly that row, and the full 0.5.24 re-sweep records the corrected verdicts.

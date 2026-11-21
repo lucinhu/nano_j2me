@@ -32,6 +32,27 @@ KEYS = ["30:fire", "55:soft1", "80:53", "140:left", "165:right", "190:48",
         "215:up", "240:down", "290:5", "320:fire", "375:star", "400:6",
         "430:fire", "470:soft1", "545:fire", "575:left"]
 
+def jar_bundles_class(path, cls):
+    """True when the JAR itself contains the named class (inner classes count).
+
+    Round 167: GlomoConfig.<clinit> in ArcadePark2 resolves GlomoCountry, but
+    that class is simply not in the JAR - a title-side packaging problem that a
+    real handset hits too.  Without this check it looked like a runtime failure
+    (the title installed no Displayable), which sent the audit down a wrong
+    path: the two other Glomo users bundle their billing classes and run fine.
+    """
+    want = cls.replace(".", "/") + ".class"
+    try:
+        with zipfile.ZipFile(path) as z:
+            names = set(z.namelist())
+    except Exception:
+        return False
+    if want in names:
+        return True
+    prefix = want[:-len(".class")] + "$"
+    return any(n.startswith(prefix) and n.endswith(".class") for n in names)
+
+
 def jar_integrity(path):
     """Pre-flight archive check.
 
@@ -167,7 +188,19 @@ def one(job):
                     row["verdict"] = "no-frame"
                     row["note"] = ("exited itself (notifyDestroyed) without painting a frame")
             else:
-                row["verdict"] = ("oom" if "OutOfMemoryError" in err else "failure")
+                if "OutOfMemoryError" in err:
+                    row["verdict"] = "oom"
+                else:
+                    missing = re.search(r"NoClassDefFoundError: ([\w/$]+)", err)
+                    if missing and not jar_bundles_class(path, missing.group(1)):
+                        # The title references a class it does not ship: a real
+                        # handset fails the same way, so this is not a runtime
+                        # compatibility defect (round 167, ArcadePark2/GlomoCountry).
+                        row["verdict"] = "title-exception"
+                        row["note"] = ("title references a class it does not bundle (%s)"
+                                       % missing.group(1).replace("/", "."))
+                    else:
+                        row["verdict"] = "failure"
             break
         row["verdict"] = "retry-heap32"
     if row.get("verdict") == "title-exit":

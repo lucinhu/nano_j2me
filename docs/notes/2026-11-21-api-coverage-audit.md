@@ -292,10 +292,12 @@ aborted the game.  Three fixes, all verified against the actual titles:
   runs (`paints=121 gfx=13.7k`) instead of aborting before installing a
   Displayable.
 
-Remaining known limitation from this round: the Gameloft **GlomoReg** billing
-and registration stack (`GlomoRegistrator`, `GlomoConfig`, `GlomoCountry`,
-`GlomoDistributer`, `GlomoConstants` plus registration forms, 60+ members) used
-by ArcadePark2, 3D孤胆枪手2010 and 急速狂飙完美破解版.  Faking a registration
-result would change what those titles do, so it is documented rather than
-stubbed; ArcadePark2 fails in `GlomoConfig.<clinit>` and installs no
-Displayable.
+Correction (round 167): the Gameloft **GlomoReg** billing stack is *not* a
+runtime gap. `3D孤胆枪手2010` and `急速狂飙完美破解版` bundle their own
+Glomo classes and run `ok` in the sweep (600 frames each).  The one failing
+Glomo user, `ArcadePark2`, resolves `GlomoReg/GlomoCountry` in
+`GlomoConfig.<clinit>` but its JAR ships only `GlomoCountryShort` — a title
+packaging bug that a real handset hits the same way, so it is no longer
+reported as a runtime `failure`: the sweep now detects a `NoClassDefFoundError`
+naming a class absent from the title's own JAR and records
+`title-exception: title references a class it does not bundle`.
