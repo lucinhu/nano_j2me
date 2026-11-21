@@ -1515,3 +1515,29 @@ OPEN/MERGEABLE, no merge claimed.
 - Upstream: super patch regenerated against `55e50a81`; super fork branch
   rebuilt with the 0.5.24 `.info`; PR #2204 body refreshed.  Docs PR #1239 page
   is version-independent.  Both OPEN/MERGEABLE, no merge claimed.
+
+## Round 163 (2026-11-22): 0.5.25 / r44 - resource streams, Siemens/Immersion APIs
+
+- Features: `resource:` Connector streams (JAR entries; new
+  `nano_j2me/ResourceStream` class keeps the Siemens chunk-read contract,
+  returning 0 on an exhausted ranged read while byte reads keep standard -1
+  EOF), Siemens `color_game`/`game` API family (`Layer`, `LayerManager`,
+  `Sprite`, `ExtendedImage`, `Light` in `src/midp/nj_lib_siemens.c`) and
+  Immersion VibeTonz (`src/midp/nj_lib_immersion.c`).  Wizardry and Dig Dug
+  now run; gate `test_siemens` + `tests/siemensdemo/` +
+  `tools/check_siemens.sh`, full serial CTest **203/203 in 357.89 s**.
+- Tooling/corpus: curated `tools/corpus_items.txt`, `fetch_corpus.py
+  --items-file`, persistent cache `~/.cache/nano_j2me/corpus` (auto-swept),
+  `--help` guards on the sweep/matrix tools; round-163 sweep **735 rows -> 717
+  ok** (Wizardry/Dig Dug fixed); compatibility matrix merged to **1502 titles,
+  1482 ok**.
+- Release: version 0.5.25 (`.info` `057df4d9…`), r44 built from clean worktree
+  `285cfe2`; validation mock **20/20**, real RetroArch PASS, Wine **4/4 @300**,
+  bundle **32/32**, full serial CTest **203/203 in 370.74 s** on the bumped
+  tree, whole-corpus visual probe **717 -> 711 passed / 3 known / 3 failed**
+  (two documented black titles + one non-reproducible save-check flake);
+  APKs split per ABI (versionCode 525), cores zip 11,623,703 B; GitHub release
+  with tag `v0.5.25`.
+- Upstream: super patch regenerated against `55e50a81`; super fork branch
+  rebuilt with the 0.5.25 `.info`; PR #2204 body refreshed.  Docs PR #1239 page
+  is version-independent.  Both OPEN/MERGEABLE, no merge claimed.

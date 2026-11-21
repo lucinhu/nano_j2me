@@ -1834,3 +1834,42 @@ releases keep the per-ABI split APKs (versionCode 524): `arm64-v8a` 993,436 B,
 723,496 B; cores zip `nj2me-0.5.24-libretro-cores.zip` 11,978,113 B.  PRs
 refreshed for 0.5.24 (super branch on `55e50a81`, docs page unchanged in
 content); both remain OPEN/MERGEABLE, no merge claimed.
+
+## Round 163 (2026-11-22): 0.5.25 / r44 - resource streams and vendor APIs
+
+0.5.25 adds the `resource:` Connector scheme (JAR-entry InputStreams with the
+Siemens chunk-read contract implemented by `nano_j2me/ResourceStream`), the
+Siemens `color_game`/`game` APIs (`Layer`, `LayerManager`, `Sprite`,
+`ExtendedImage`, `Light`) and the Immersion VibeTonz stub; the libretro core
+feature set is otherwise unchanged.  Version metadata is 0.5.25 in
+`CMakeLists.txt`, `include/nj2me/nj.h`, both `.info` copies and
+`tools/windows/README.txt`; the `.info` SHA-256 is
+`057df4d930ca66d145e6e1e8c2ee395eed77814af8d352daa852df63d3dfd7bf` (both copies
+identical).  The tracked `libretro-super` patch was regenerated against master
+`55e50a81` (one added file, `git apply --check` OK).
+
+r44 package built from clean worktree `/var/tmp/nj2me-r44-tree` at `285cfe2`:
+
+| target | size | sha256 |
+|---|---:|---|
+| linux-x86_64 | 3,983,280 | `d11eb5ce7434b413df877d2e1c9fed06ee887e86afb170a17c69e965ced150df` |
+| linux-aarch64 | 3,461,520 | `1ee7ed7126176952a90a53b506eaa7aed0d3fd843d68c4be125ff8730bc9b9f9` |
+| linux-armv7 | 3,133,388 | `ddcc7eee2eca525b8ccf3164de381edc24d04da2afa70a395a56b95e3bfeedf7` |
+| android-arm64 | 3,702,792 | `c3e981d35c923619bb1d3695c856e87074ff99db82c7efff71547dace94dae75` |
+| android-armv7 | 2,828,572 | `9c512d5b70aabfe7442bdddf4cc80491e7620fab920ac710d747b0834f885a65` |
+| android-x86_64 | 3,734,224 | `91f0e0be437ffbef4363a22a751c6738b65d37bc03e14e98c0d93d83c43080d1` |
+| windows-i686 | 3,557,376 | `ee06234d2a32a22037939b6806374515c59e03899094f47a87b84249cc29c583` |
+| windows-x86_64 | 3,329,024 | `de97ec787d28b342fdb825b07c82ca311806c57dad0fc593fffe96b90c4c70e1` |
+
+Validation of the installed `build/libretro-dist`: mock matrix **20/20**, real
+RetroArch 1.22.2 LoopDemo 120 frames **PASS**, Windows x86_64 Wine **4/4 at
+300 frames**, submission bundle **32/32**, full serial CTest **203/203** on the
+release tree (370.74 s) including the new `test_siemens` gate, whole-corpus
+libretro visual probe **717 titles -> 711 passed, 3 known limitations, 3
+failed** (the failures are the two documented black titles plus one non-
+reproducible save-check flake).  Android releases keep the per-ABI split APKs
+(versionCode 525): `arm64-v8a` 1,005,724 B, `armeabi-v7a` 1,013,918 B, `x86`
+989,334 B, `x86_64` 1,005,721 B, `legacy` 729,500 B; cores zip
+`nj2me-0.5.25-libretro-cores.zip` 11,623,703 B.  PRs refreshed for 0.5.25
+(super branch on `55e50a81`, docs page version-independent); both remain
+OPEN/MERGEABLE, no merge claimed.

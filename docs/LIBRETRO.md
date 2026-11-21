@@ -69,8 +69,13 @@ Outputs go to `build/libretro-dist/<target>/`, with a library and its metadata.
 Use `--no-strip` to retain symbols. `all` selects the script's supported targets
 and requires all of their toolchains.
 
-The eight candidates currently in `build/libretro-dist/` are the r43 package
-(the 0.5.24 release) built on 2026-11-22 from revision `81da824`.  r43 renders
+The eight candidates currently in `build/libretro-dist/` are the r44 package
+(the 0.5.25 release) built on 2026-11-22 from revision `285cfe2`.  r44 adds
+runtime API support that previously failed to link: the `resource:` Connector
+scheme (with a `nano_j2me/ResourceStream` that keeps the handset chunk-read
+contract), the Siemens `color_game`/`game` family (`Layer`, `LayerManager`,
+`Sprite`, `ExtendedImage`, `Light`) and the Immersion VibeTonz vibration
+stub; Wizardry and Dig Dug became playable as a result.  r43 rendered
 Nokia's overlay items: a `CanvasGraphicsItem` attached to a `Canvas` is
 composited after the canvas paint (translate + clip onto the backing image, per
 visible item, exceptions in an item's paint stop only the overlay pass) instead
