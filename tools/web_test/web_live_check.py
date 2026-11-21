@@ -16,6 +16,11 @@ access, a deployed site and Python Playwright (the Node harness may run
 without Playwright in CI).  Run it by hand after a deployment, or from
 check_web.sh with --live [URL].
 
+The boot step is retried with a cache-busting URL (`--boot-retries`, default
+3): GitHub Pages can keep serving the previous deployment for a short while
+after `deploy-pages` reports success, and a job that opens the old index
+against the new chunk hashes hangs without a useful error.
+
 Requires: python3 -m playwright (with the Firefox browser installed), or a
 system playwright.  The module is resolved from the normal Python import path.
 
@@ -64,6 +69,14 @@ def main():
     ap.add_argument("--jar", default=None, help="JAR to import (skipped when absent)")
     ap.add_argument("--evidence", default=None)
     ap.add_argument("--timeout", type=float, default=120.0)
+    ap.add_argument(
+        "--boot-retries",
+        type=int,
+        default=3,
+        help="how often to reload the page when the deployed shell does not "
+             "boot (GitHub Pages can serve the previous deployment for a "
+             "short while after 'deploy' reports success)",
+    )
     args = ap.parse_args()
 
     evidence = os.path.abspath(args.evidence or default_evidence())
@@ -111,62 +124,92 @@ def main():
             lambda m: errors.append("console.error: " + m.text) if m.type == "error" else None,
         )
         try:
-            page.goto(url, wait_until="load", timeout=args.timeout * 1000)
-            page.wait_for_function(
-                "() => window.__nj2me && window.__nj2me.ready === true",
-                timeout=args.timeout * 1000,
-            )
-            kind = page.evaluate("() => window.__nj2me.runtime && window.__nj2me.runtime.kind")
-            check("shell boots and loads the wasm engine", kind == "wasm", "engine kind=%s" % kind)
+            # GitHub Pages sometimes keeps serving the previous deployment
+            # for a minute after deploy-pages reports success.  A single
+            # reload test then times out on the OLD bundle (whose shell also
+            # boots, but whose chunk hashes no longer match the new index), so
+            # retry with a cache-busted URL before failing the job.
+            boot_ok = False
+            boot_error = None
+            for attempt in range(1, max(1, args.boot_retries) + 1):
+                try:
+                    page.goto(url + "?boot-retry=" + str(attempt),
+                              wait_until="load", timeout=args.timeout * 1000)
+                    page.wait_for_function(
+                        "() => window.__nj2me && window.__nj2me.ready === true",
+                        timeout=args.timeout * 1000,
+                    )
+                    boot_ok = True
+                    break
+                except Exception as exc:  # noqa: BLE001 - retried below
+                    boot_error = exc
+                    print("RETRY shell boot attempt %d/%d failed: %r"
+                          % (attempt, max(1, args.boot_retries), exc))
+                    try:
+                        page.screenshot(path=os.path.join(
+                            evidence, "boot-fail-%d.png" % attempt))
+                    except Exception:  # noqa: BLE001
+                        pass
+            check("shell boots and loads the wasm engine", boot_ok,
+                  "booted" if boot_ok else "not ready after %d attempt(s): %r"
+                  % (max(1, args.boot_retries), boot_error))
+            if boot_ok:
+                kind = page.evaluate(
+                    "() => window.__nj2me.runtime && window.__nj2me.runtime.kind")
+                check("active runtime is the wasm engine", kind == "wasm",
+                      "engine kind=%s" % kind)
 
-            manifest_ok = page.evaluate(
-                """async () => {
-                    const link = document.querySelector('link[rel="manifest"]');
-                    if (!link) { return 'no manifest link'; }
-                    const resp = await fetch(link.href, { cache: 'no-store' });
-                    if (!resp.ok) { return 'manifest HTTP ' + resp.status; }
-                    const data = await resp.json();
-                    return data && data.name ? 'ok' : 'manifest has no name';
-                }"""
-            )
-            check("web app manifest is served and parses", manifest_ok == "ok", manifest_ok)
+                manifest_ok = page.evaluate(
+                    """async () => {
+                        const link = document.querySelector('link[rel="manifest"]');
+                        if (!link) { return 'no manifest link'; }
+                        const resp = await fetch(link.href, { cache: 'no-store' });
+                        if (!resp.ok) { return 'manifest HTTP ' + resp.status; }
+                        const data = await resp.json();
+                        return data && data.name ? 'ok' : 'manifest has no name';
+                    }"""
+                )
+                check("web app manifest is served and parses", manifest_ok == "ok", manifest_ok)
 
-            if jar:
-                page.set_input_files("#file-input", jar)
-                page.wait_for_function(
-                    "() => document.querySelectorAll('.game-tile').length >= 1",
-                    timeout=args.timeout * 1000,
-                )
-                title = page.evaluate(
-                    "() => (document.querySelector('.game-tile__title') || {}).textContent || ''"
-                )
-                check("importing a JAR adds a library tile", bool(title.strip()),
-                      "tile title=%r" % title)
-                page.locator(".game-tile").first.click()
-                page.wait_for_selector("#game-view:not([hidden])", timeout=60000)
-                page.wait_for_function(
-                    "() => window.__nj2me.game && window.__nj2me.game.game",
-                    timeout=args.timeout * 1000,
-                )
-                time.sleep(1.2)
-                first = page.evaluate(_FRAME_STATE_JS)
-                time.sleep(1.0)
-                second = page.evaluate(_FRAME_STATE_JS)
-                check("game canvas is 240x320 and painted",
-                      first.get("width") == SCREEN_W
-                      and first.get("height") == SCREEN_H
-                      and first.get("nonBlack", 0) > 1000,
-                      "canvas %sx%s, nonBlack=%s"
-                      % (first.get("width"), first.get("height"), first.get("nonBlack")))
-                check("frames advance while the game runs",
-                      second.get("frames", 0) > first.get("frames", 0),
-                      "frames %s -> %s" % (first.get("frames"), second.get("frames")))
-                page.screenshot(path=os.path.join(evidence, "live-game.png"))
-            else:
-                print("SKIP game checks: no JAR available (tests/games/ is git-ignored)")
-                page.screenshot(path=os.path.join(evidence, "live-library.png"))
+                if jar:
+                    page.set_input_files("#file-input", jar)
+                    page.wait_for_function(
+                        "() => document.querySelectorAll('.game-tile').length >= 1",
+                        timeout=args.timeout * 1000,
+                    )
+                    title = page.evaluate(
+                        "() => (document.querySelector('.game-tile__title') || {}).textContent || ''"
+                    )
+                    check("importing a JAR adds a library tile", bool(title.strip()),
+                          "tile title=%r" % title)
+                    page.locator(".game-tile").first.click()
+                    page.wait_for_selector("#game-view:not([hidden])", timeout=60000)
+                    page.wait_for_function(
+                        "() => window.__nj2me.game && window.__nj2me.game.game",
+                        timeout=args.timeout * 1000,
+                    )
+                    time.sleep(1.2)
+                    first = page.evaluate(_FRAME_STATE_JS)
+                    time.sleep(1.0)
+                    second = page.evaluate(_FRAME_STATE_JS)
+                    check("game canvas is 240x320 and painted",
+                          first.get("width") == SCREEN_W
+                          and first.get("height") == SCREEN_H
+                          and first.get("nonBlack", 0) > 1000,
+                          "canvas %sx%s, nonBlack=%s"
+                          % (first.get("width"), first.get("height"), first.get("nonBlack")))
+                    check("frames advance while the game runs",
+                          second.get("frames", 0) > first.get("frames", 0),
+                          "frames %s -> %s" % (first.get("frames"), second.get("frames")))
+                    page.screenshot(path=os.path.join(evidence, "live-game.png"))
+                else:
+                    print("SKIP game checks: no JAR available (tests/games/ is git-ignored)")
+                    page.screenshot(path=os.path.join(evidence, "live-library.png"))
 
-            check("no page or console errors", len(errors) == 0, "; ".join(errors[:3]))
+                check("no page or console errors", len(errors) == 0, "; ".join(errors[:3]))
+        except Exception as exc:  # noqa: BLE001 - a broken run must still leave evidence
+            errors.append("harness: %r" % exc)
+            check("page loads and boots the wasm shell", False, str(exc))
         finally:
             try:
                 ctx.close()

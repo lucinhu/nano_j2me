@@ -115,8 +115,11 @@ jobs:
 
       - name: Open the deployed demo in a real browser
         run: |
+          # Pages may still serve the previous deployment for a moment; the
+          # script reloads with cache-busting URLs before it fails.
           python3 tools/web_test/web_live_check.py \
             --url "${{ needs.deploy.outputs.page_url }}" \
+            --boot-retries 5 \
             --evidence .local-tools/debug-runs/web-live-ci
 
       - name: Upload live-demo evidence
