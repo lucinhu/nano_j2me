@@ -1801,3 +1801,36 @@ serial CTest **201/201 in 351.22 s**.  Android APKs rebuilt at versionCode 523
 `libretro/libretro-super#2204` (branch rebuilt on parent `55e50a81`, head
 `312198f7`, body updated) and `libretro/docs#1239` (head `3316299b`, page is
 version-independent); both OPEN/MERGEABLE, no merge claimed.
+
+## Round 162 (2026-11-22): 0.5.24 / r43 - CanvasItem overlays
+
+0.5.24 adds rendering for the Nokia overlay-item API; the libretro core feature
+set is otherwise unchanged.  Version metadata is 0.5.24 in `CMakeLists.txt`,
+`include/nj2me/nj.h`, both `.info` copies and `tools/windows/README.txt`; the
+`.info` SHA-256 is
+`a269624270a26cf37fffb6348126a8119b8ed629777bf9872c8eeb98082d02ea` (both copies
+identical).  The tracked `libretro-super` patch was regenerated against master
+`55e50a81` (one added file, `git apply --check` OK).
+
+r43 package built from clean worktree `/var/tmp/nj2me-r43-tree` at `81da824`:
+
+| target | size | sha256 |
+|---|---:|---|
+| linux-x86_64 | 3,950,512 | `28364b9e8d56d4077a29bb39fffa000a91e89405f8fbc806a5c80e9185baf6cd` |
+| linux-aarch64 | 3,429,568 | `2fba2d79281642d3307f4299893c99c3dbe1bde8d81db418ce6a0d85b61a2da7` |
+| linux-armv7 | 3,109,356 | `1ab7bf29ad817a3dc7a02dfb99cd5114b6b576ac9401bd05c4e7e1795a6a3043` |
+| android-arm64 | 3,668,744 | `d06d349822c465a727133775abf611a17d8e8fc59e3912f64ed30b9d332902c1` |
+| android-armv7 | 2,809,764 | `f2413c66bc3e7c11c5f39b40884704dfb5a9fe9d038b5005b825263417757966` |
+| android-x86_64 | 3,703,040 | `d58f29e7ab35f6f42c4f93817766209ad881e291ac973308e3b7b68b78cb93e5` |
+| windows-i686 | 3,533,312 | `91e0c58b9e8c1ec0ef00ca4b9d80c4f825bcb965563b19384ec33d4d02df53f6` |
+| windows-x86_64 | 3,305,984 | `efde0e2a60eb5d52645b05d5f23ee87a990d07549eecd574cd475f786193ff4e` |
+
+Validation of the installed `build/libretro-dist`: mock matrix **20/20**, real
+RetroArch 1.22.2 LoopDemo 120 frames **PASS**, Windows x86_64 Wine **4/4 at
+300 frames**, submission bundle **32/32**, full serial CTest **202/202** on the
+release tree (357.96 s) including the new `test_canvasitem` gate.  Android
+releases keep the per-ABI split APKs (versionCode 524): `arm64-v8a` 993,436 B,
+`armeabi-v7a` 1,005,726 B, `x86` 981,142 B, `x86_64` 997,529 B, `legacy`
+723,496 B; cores zip `nj2me-0.5.24-libretro-cores.zip` 11,978,113 B.  PRs
+refreshed for 0.5.24 (super branch on `55e50a81`, docs page unchanged in
+content); both remain OPEN/MERGEABLE, no merge claimed.

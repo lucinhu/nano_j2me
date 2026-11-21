@@ -69,14 +69,18 @@ Outputs go to `build/libretro-dist/<target>/`, with a library and its metadata.
 Use `--no-strip` to retain symbols. `all` selects the script's supported targets
 and requires all of their toolchains.
 
-The eight candidates currently in `build/libretro-dist/` are the r42 package
-(the 0.5.23 release) built on 2026-11-21 from revision `457a48c`.  r42 adds
-API surface only: `javax.microedition.location` (JSR-179) with a fixed Helsinki
-provider and the in-memory `LandmarkStore`, plus the remaining small Nokia UI
-classes (`Clipboard`, `GlobalIndicators`, `TactileFeedback`, `SoftNotification`,
-the gestures family, `JoystickEventListener`, `DirectGraphicsImplemented`) -
-classes behave per spec where the emulated handset can and are honest no-ops
-where it has no hardware; nothing existing changes.  r41 raises
+The eight candidates currently in `build/libretro-dist/` are the r43 package
+(the 0.5.24 release) built on 2026-11-22 from revision `81da824`.  r43 renders
+Nokia's overlay items: a `CanvasGraphicsItem` attached to a `Canvas` is
+composited after the canvas paint (translate + clip onto the backing image, per
+visible item, exceptions in an item's paint stop only the overlay pass) instead
+of staying invisible.  r42 added API surface only:
+`javax.microedition.location` (JSR-179) with a fixed Helsinki provider and the
+in-memory `LandmarkStore`, plus the remaining small Nokia UI classes
+(`Clipboard`, `GlobalIndicators`, `TactileFeedback`, `SoftNotification`, the
+gestures family, `JoystickEventListener`, `DirectGraphicsImplemented`) - classes
+behave per spec where the emulated handset can and are honest no-ops where it
+has no hardware.  r41 raises
 the default static field area (`NJ_MAX_STATICS` 4096 -> 16384) so class-heavy
 titles link instead of silently half-rendering (`Plants vs Zombies (240x320)`);
 an exhausted area now throws an explicit `OutOfMemoryError` naming the knob,

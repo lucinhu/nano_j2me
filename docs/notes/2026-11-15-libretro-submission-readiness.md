@@ -1499,3 +1499,19 @@ OPEN/MERGEABLE, no merge claimed.
   (`tools/check_api_coverage.py`); the in-repo corpus now shows **402/403
   JARs with no external optional API gap**, the only reference being Doom3's
   unused JSR-226 SVG wrapper. See `docs/notes/2026-11-21-api-coverage-audit.md`.
+
+## Round 162 (2026-11-22): 0.5.24 / r43 - CanvasItem overlays and the release refresh
+
+- Feature: Nokia `CanvasItem`/`CanvasGraphicsItem` overlays now composite onto
+  the canvas after its paint (`src/midp/nj_lib_nokia.c`,
+  `nj_nokia_paint_canvas_items` hook in `src/midp/nj_lib_lcdui.c`); the attached
+  list is the lazy `cItems` Vector field on the Canvas builtin.  Gate
+  `test_canvasitem` + `tests/canvasitemdemo/` + `tools/check_canvasitem.sh`.
+  Full serial CTest **202/202 in 359.12 s**.
+- Release: version 0.5.24 (`.info` `a2696242…`), r43 built from clean worktree
+  `81da824`; validation mock **20/20**, real RetroArch PASS, Wine **4/4 @300**,
+  bundle **32/32**; APKs split per ABI (versionCode 524), cores zip
+  11,978,113 B; GitHub release with tag `v0.5.24`.
+- Upstream: super patch regenerated against `55e50a81`; super fork branch
+  rebuilt with the 0.5.24 `.info`; PR #2204 body refreshed.  Docs PR #1239 page
+  is version-independent.  Both OPEN/MERGEABLE, no merge claimed.
