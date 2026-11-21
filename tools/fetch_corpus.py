@@ -91,7 +91,15 @@ def known_hashes():
 
 
 def main(argv):
+    if len(argv) > 1 and argv[1] in ("-h", "--help"):
+        print("usage: tools/fetch_corpus.py OUT_DIR [ARCHIVE_ITEM ...]\n"
+              "  downloads loose JARs/zips for the named items (default: built-in list)")
+        return
     out = argv[1] if len(argv) > 1 else "/tmp/vault3"
+    if any(a.startswith("-") for a in argv[1:]):
+        print("fetch_corpus: option-like argument in OUT_DIR/items; usage: "
+              "tools/fetch_corpus.py OUT_DIR [ARCHIVE_ITEM ...]")
+        return 2
     items = argv[2:] or DEFAULT_ITEMS
     os.makedirs(out, exist_ok=True)
     seen = known_hashes()
