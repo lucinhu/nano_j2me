@@ -867,6 +867,7 @@ if(NJ_BUILD_TESTS)
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_canvasitem_jar.sh
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_siemens_jar.sh
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_sizeorder_jar.sh
+      COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_classinit_jar.sh
       WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
       COMMENT "keysdemo.jar, blockdemo.jar (input-effect fixtures)")
   endif()
@@ -2256,6 +2257,14 @@ nj_add_test(test_fullscreen tests/test_fullscreen.c ${NJ_FIXTURES}/fsorder.jar)
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_sizeorder.sh
               $<TARGET_FILE:nj2me-cli>)
     set_tests_properties(test_sizeorder PROPERTIES TIMEOUT 120)
+    # Round 171: Class.forName() must initialise the class (JVMS 5.5).
+    # GoldenSolitaire's resource manager depends on it to size its archive
+    # tables before the first paint; without it every paint threw AIOOBE.
+    add_test(NAME test_classinit
+      COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_classinit.sh
+              $<TARGET_FILE:nj2me-cli>
+              ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/classinitdemo.jar)
+    set_tests_properties(test_classinit PROPERTIES TIMEOUT 120)
   endif()
     set_tests_properties(test_play PROPERTIES TIMEOUT 120)
   endif()

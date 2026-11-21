@@ -535,6 +535,15 @@ NJFN(class_forName)
     if (!c) {
         return nj_throw(vm, "java/lang/ClassNotFoundException", buf);
     }
+    /* JVMS 5.5 / CLDC: Class.forName initialises the class.  Some titles rely
+     * on that: GoldenSolitaire's resource manager calls Class.forName("p") to
+     * make the interface's static fields allocate their handles before the
+     * archive tables are sized.  Without the initialisation the tables were
+     * sized without those slots and the first indexed store in the game's
+     * resource manager threw ArrayIndexOutOfBoundsException on every paint. */
+    if (nj_class_init(vm, c) != NJ_OK) {
+        return NJ_ERR;
+    }
     ret->r = nj_class_object(vm, c->name);
     return NJ_OK;
 }
