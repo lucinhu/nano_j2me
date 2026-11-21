@@ -122,6 +122,11 @@ accepted as the destination for backwards compatibility.  The cache is never
 committed (it is downloaded content); the content-hash duplicate check makes
 re-runs and interrupted runs cheap, and the cache also counts as already-known
 so a repeated run skips everything it has.
+
+`tools/sweep_compat.py` follows the same rule: when `NJ_SWEEP_DIRS` is unset it
+appends the cache automatically (labelled `vault/...`), so a plain sweep covers
+the repository titles plus everything fetched so far.  Set `NJ_SWEEP_DIRS`
+explicitly to sweep somewhere else or to disable the cache.
   The first run of this
 round added seven Gameloft titles (Brother in Arms, Midnight Bowling, Mystery
 Mansion Pinball, Medieval Combat, New York Nights, and two more) - one zip in

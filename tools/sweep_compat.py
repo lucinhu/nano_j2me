@@ -227,9 +227,25 @@ def one(job):
             pass
     return row
 
+def default_corpus_cache():
+    """Same persistent cache tools/fetch_corpus.py fills."""
+    override = os.environ.get("NJ_CORPUS_CACHE", "").strip()
+    if override:
+        return os.path.abspath(os.path.expanduser(override))
+    base = os.environ.get("XDG_CACHE_HOME", "").strip()
+    if not base:
+        base = os.path.join(os.path.expanduser("~"), ".cache")
+    return os.path.join(base, "nano_j2me", "corpus")
+
+
 def main():
     dirs = [(ROOT + "/tests/games", "")]
     extra = os.environ.get("NJ_SWEEP_DIRS", "")
+    if not extra:
+        cache = default_corpus_cache()
+        if os.path.isdir(cache):
+            extra = cache
+            print("sweep dirs: tests/games + fetched cache %s" % cache)
     for d in [x for x in extra.split(":") if x]:
         dirs.append((d, "vault/"))
     jobs = []
