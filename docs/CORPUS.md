@@ -829,3 +829,63 @@ batch is compatible with the current reverted tree.
 (`时光樱花册－遗失之心_1009`, the documented heavy loader) and **0
 `silent-started` rows** - the round-107 invariant still holds: no title starts
 a Player and then fails to deliver PCM to the mixer.
+
+### Round 150: combined sweep of tests/games + vault4-7 (1141 rows)
+
+Full sweep with `NJ_SWEEP_DIRS=/tmp/vault4:/tmp/vault5:/tmp/vault6:/tmp/vault7`
+(`compat-20261121-r150`, 10 jobs, 600 frames): 1141 rows measured, **899
+unique files** (each extra corpus dir is flattened into the same `vault/`
+namespace, so 242 identical basenames from different collections were measured
+twice; the counts below are per unique file).
+
+| verdict | unique rows |
+|---|---:|
+| ok | 878 |
+| title-exception | 5 |
+| failure | 5 |
+| bad-jar | 3 |
+| timeout | 4 |
+| title-exit | 2 |
+| no-frame | 2 |
+
+Compared with the round-145 rows only 45 files are new (all from vault7); 43
+of them are ok and the two new non-ok rows are Plants vs Zombies variants
+(below).  Triage of the new rows:
+
+* `JBenchmark3D.jar` (title-exception in the sweep) runs 600 frames, 0
+  uncaught exceptions and 29.3 s standalone (49.1 M triangles) - the parallel
+  sweep caught a thread exception window that does not reproduce alone.
+* `SoulOfDarkness_HTC_P3450_EN_IGPL_EU_101_S8000.jar` times out in the sweep
+  but completes 600 frames standalone in 142 s (4.2 fps, 829 M bytecodes):
+  a genuinely slow title over the 90 s sweep budget, not a hang.
+* `Plants vs Zombies (240x320, ayarde09 v4.2.61).jar` has a manifest with no
+  `MIDlet-1` entry (only `MIDlet-Name`/`MIDlet-Icon`), so the loader rejects
+  it: package defect.
+* `Plants vs Zombies (240x320).jar` runs 600 frames and keeps painting while
+  a thread throws `java.lang.NoClassDefFoundError: Layer @ Graphic.<init>` -
+  see the static-field-area fix below.
+
+### Round 150: NJ_MAX_STATICS was too small for class-heavy titles
+
+The Plants vs Zombies triage found a real runtime limit: `Graphic.<init>`
+calls `Layer.getLayerProperty()`, which forces Layer's `<clinit>`, whose
+static fields push the VM past **4096 static slots**.  Class linking then
+returned `NJ_ERR_NOMEM` without recording a reason, so callers reported a bare
+`NoClassDefFoundError: Layer` (naming a class that is demonstrably present)
+and the game silently half-ran: `gfx=132` for 300 frames, most layers missing.
+
+Fix:
+
+* `include/nj2me/nj_config.h`: default `NJ_MAX_STATICS` **4096 -> 16384**
+  (128 KB of `nj_value`, harmless on desktop and on the 16 MB default heap).
+* `src/core/nj_class.c` + `src/core/nj_internal.h`: a new `vm->link_oom`
+  flag is set when the static area is exhausted during linking, and
+  `nj_class_link()` then throws
+  `java/lang/OutOfMemoryError: static field area exhausted: increase
+  NJ_MAX_STATICS in nj_config.h` instead of the misleading link error.
+
+Verification: PvZ CLI 300 frames now `paints=227 gfx=13,479` with zero
+`NoClassDefFoundError` lines (was `gfx=132`); the libretro core renders it
+(harness `PASS visual_nonblack: max non-black pixels=779`); full serial CTest
+**199/199 in 376.34 s**; libretro mock matrix 20/20; real RetroArch LoopDemo
+120 frames PASS.

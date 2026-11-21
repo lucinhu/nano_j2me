@@ -588,6 +588,7 @@ struct nj_vm {
      */
     const char *link_cls;          /* the class that failed to link */
     const char *link_missing;      /* what it could not resolve, or NULL */
+    int         link_oom;      /* static/field area exhausted while linking */
     nj_u1       link_cycle;        /* the failure was a class-hierarchy cycle */
 
     /*

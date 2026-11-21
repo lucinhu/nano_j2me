@@ -396,9 +396,12 @@
 #  define NJ_MAX_CLASSES 512
 #endif
 
-/* Maximum number of static fields across all classes (single flat block). */
+/* Maximum number of static fields across all classes (single flat block).
+ * 16384 slots keep a title with a few hundred classes (each carrying many
+ * static finals and caches) linkable; 4096 used to reject such JARs with a
+ * bare NoClassDefFoundError naming a class that is demonstrably present. */
 #ifndef NJ_MAX_STATICS
-#  define NJ_MAX_STATICS 4096
+#  define NJ_MAX_STATICS 16384
 #endif
 
 /* Maximum number of registered native methods. */

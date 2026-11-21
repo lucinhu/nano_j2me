@@ -1050,6 +1050,7 @@ static nj_status class_link_step(nj_vm *vm, nj_class *c)
      * against the class that failed this time. */
     vm->link_cls = NULL;
     vm->link_missing = NULL;
+    vm->link_oom = 0;
     vm->link_cycle = 0u;
     if (c->state >= NJ_CLASS_LINKED) {
         return NJ_OK;
@@ -1130,6 +1131,10 @@ static nj_status class_link_step(nj_vm *vm, nj_class *c)
         if ((f->flags & NJ_ACC_STATIC) != 0u) {
             nj_u4 need = (nj_u4)f->width;
             if ((nj_u4)vm->nstatics + need > (nj_u4)NJ_MAX_STATICS) {
+                /* A bare NoClassDefFoundError here would name the class being
+                 * linked, not the exhausted resource; remember why. */
+                vm->link_cls = c->name;
+                vm->link_oom = 1;
                 return NJ_ERR_NOMEM;
             }
             f->offset = (nj_u2)vm->nstatics;
@@ -1204,6 +1209,14 @@ nj_status nj_class_link(nj_vm *vm, nj_class *c)
                        ": circular superclass or interface chain");
             buf[n] = '\0';
             (void)nj_throw(vm, "java/lang/VerifyError", buf);
+            return st;
+        }
+        if (vm->link_oom) {
+            append_str(buf, &n, sizeof(buf), "static field area exhausted: ");
+            append_str(buf, &n, sizeof(buf),
+                       "increase NJ_MAX_STATICS in nj_config.h");
+            buf[n] = '\0';
+            (void)nj_throw(vm, "java/lang/OutOfMemoryError", buf);
             return st;
         }
         if (vm->link_cls != NULL) {
