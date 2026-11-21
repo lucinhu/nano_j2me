@@ -579,7 +579,7 @@ Built from `HEAD`, 2026-11-22 (recorded by `tools/sweep_compat.py`).
 | vault/GianaSisters.jar | 103 | Super Mario | - | 1.0.2 | MIDP-2.0 | nokia-ui | 23 | 16 | 600 | 2332762 | 0 | java/io/IOException,java/lang/Nu | 运行正常 |  |
 | vault/God of War - Betrayal.jar | 488 | God Of War | - | 1.4.46 | MIDP-2.0 | - | 6 | 16 | 600 | 142966717 | 0 | java/lang/NumberFormatException, | 运行正常 |  |
 | vault/GoldDigger.jar | 924 | Gold Digger | - | 1.0 | MIDP-2.0 | nokia-ui | 23 | 16 | 600 | 420056230 | 0 | java/lang/IllegalArgumentExcepti | 运行正常 |  |
-| vault/GoldenSolitaire.jar | 233 | Golden Solitaire | - | 1.0.3 | MIDP-2.0 | - | 17 | 16 | 600 | 262490 | 0 | java/lang/ArrayIndexOutOfBoundsE | 运行正常 | painted 600 frames but made no draw calls (b |
+| vault/GoldenSolitaire.jar | 233 | Golden Solitaire | - | 1.0.3 | MIDP-2.0 | - | 17 | 16 | 600 | 34909698 | 0 | javax/microedition/rms/InvalidRe | 运行正常 |  |
 | vault/Gorilla Rampage.jar | 957 | GorillaAngriff | - | 1.0.1 | MIDP-2.0 | - | 38 | 16 | 600 | 742024 | 0 | java/io/EOFException,javax/micro | 运行正常 |  |
 | vault/Green Farm 3.jar | 1435 | Green Farm 3 | - | 1.0.7 | MIDP-2.0 | - | 22 | 16 | 600 | 63728788 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/Guitar Hero - Warriors of Rock Mobile More Music.jar | 615 | Guitar Hero Warriors of Rock | - | 3.1.0 | MIDP-2.0 | - | 25 | 16 | 600 | 20853841 | 0 | java/lang/ArrayIndexOutOfBoundsE | 运行正常 |  |

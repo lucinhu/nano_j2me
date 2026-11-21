@@ -282,3 +282,20 @@ Lesson: a "deliver it after startApp returns, before game threads" theory can
 still be too late because `Thread.start()` in this runtime is not deferred to
 the next scheduler pass; only delivery *inside* `setCurrent()` matches the
 handset ordering.
+
+## Round 171: GoldenSolitaire resolved - `Class.forName()` did not initialise
+
+The last black title from the round-135 table was a runtime bug after all:
+the game's resource manager calls `Class.forName("p")` to force interface
+`p`'s static initialiser (its fields allocate archive handles), and our
+`Class.forName` returned without running `<clinit>`, so the archive tables
+were sized without those slots and every paint threw a caught
+`ArrayIndexOutOfBoundsException` in `a.Code(ILjava/lang/Object;)V`.
+
+With the fix (`2c4b62d`, same details as the round-171 section of
+`2026-11-21-api-coverage-audit.md`), GoldenSolitaire paints its language
+selection screen (73,978 non-black pixels, reference 73,983), the sweep row
+reads 600 frames / 599 paints / gfx=18,875 / ok, and the libretro visual probe
+passes.  Of the original three black titles, NeonRunner (round 170) and
+GoldenSolitaire (this round) are now fixed; the 128x128 Tomb Raider device
+build is still to investigate.

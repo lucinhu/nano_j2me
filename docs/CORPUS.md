@@ -1145,3 +1145,26 @@ Evidence:
 Commit `24cc847` "fix(lcdui): deliver the first sizeChanged() while
 setCurrent() still owns the stack".  `GoldenSolitaire` stays a documented
 black title pending its own game-side boot exception.
+
+### Round 171: GoldenSolitaire unblocked by the `Class.forName()` initialisation fix (2026-11-22)
+
+`GoldenSolitaire.jar` (fetched cache) was the last corpus title with a
+runtime-caused black screen.  Root cause: the game's obfuscated resource
+manager calls `Class.forName("p")` purely to force an interface
+initialiser whose static fields allocate archive handles; the runtime's
+`Class.forName` returned without running `<clinit>`, so the archive lookup
+table was sized without those slots and the first indexed store threw a
+caught `ArrayIndexOutOfBoundsException` on every paint.  The fix makes
+`Class.forName(String)` initialise the class (JVMS 5.5).
+
+| evidence | before | after |
+|---|---|---|
+| CLI 300 frames | gfx=0, 219k bytecodes, AIOOBE every paint | gfx=13,859, 8.9M bytecodes, clean |
+| frame dump | all black | language-selection screen, 73,978 non-black px (reference 73,983) |
+| sweep row | 600 paints, gfx=0, AIOOBE | 600 frames / 599 paints / gfx=18,875 / ok |
+| libretro visual probe | black | PASS |
+
+New regression gate `tests/classinitdemo` + `tools/check_classinit.sh`
+(CTest `test_classinit`) asserts the initialiser runs during `Class.forName`
+and not when the field is first read; it fails on the pre-fix build and passes
+afterwards.

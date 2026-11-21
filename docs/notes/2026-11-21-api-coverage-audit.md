@@ -325,3 +325,52 @@ Result: `snake_2.jar` runs 600 frames / 553 paints (Snake EX2 menu renders:
 `failure -> ok`, and `docs/COMPATIBILITY_MATRIX.md` now has 1483 running
 titles.  The one remaining corpus `failure` in the round-167 sweep was exactly
 this title.
+
+## Round 171: `Class.forName()` must initialise the class (GoldenSolitaire)
+
+`GoldenSolitaire.jar` was the last fetched title that painted nothing.  It ran
+600 frames and 600 paints with `gfx=0`; the only runtime lines were a caught
+`InvalidRecordIDException` (expected on a fresh RecordStore) and a caught
+`ArrayIndexOutOfBoundsException at a.Code(ILjava/lang/Object;)V pc=11`.
+
+The game ships an obfuscated resource manager (`a`) with a deliberate
+initialisation hook: its archive loader begins with
+
+    Class.forName("p")        // a.Code(): force the interface's <clinit>
+
+because interface `p`'s non-constant static fields are *handles* handed out by
+`a.Exceptions(int)`.  That helper increments the global `V` slot counter; the
+archive then sizes its lookup table as `code_count + base_count + V`.  The
+handles' low 16 bits are absolute slot numbers (`V + base + code | (n-1)<<16`).
+
+Our `java/lang/Class.forName` only looked the class up and returned its
+mirror - it never ran `<clinit>`.  So the "force init" call did nothing, the
+table was sized with `V == 0`, and the first indexed store from the resource
+manager (`Exceptions[handle & 0xFFFF]`) was out of range.  Every paint then
+threw from a game-side catch handler and the canvas stayed black.
+
+Fix (commit `2c4b62d`): `class_forName()` now calls `nj_class_init(vm, c)` after
+the lookup, exactly like `Class.newInstance()` already did.  JVMS 5.5 makes
+that a language contract, so this is a runtime bug, not a game quirk.
+
+Evidence:
+
+* `GoldenSolitaire` CLI 300 frames: `gfx=13,859` (was 0), bytecodes 8.9M (was
+  219k), no uncaught exceptions; the frame dump is the language-selection
+  screen with **73,978 non-black pixels**, matching the FreeJ2ME-Plus
+  reference (73,983).
+* Sweep row re-measured: 600 frames / 599 paints / **gfx=18,875** /
+  34,909,698 bytecodes / 1 expected RMS exception / `ok` (was gfx=0 / 262,490
+  bytecodes / AIOOBE).  Matrix regenerated deterministically (1502 titles).
+* Libretro visual probe on the rebuilt core: **PASS** (300 frames).
+* New regression fixture `tests/classinitdemo` (+ `tools/make_classinit_jar.sh`
+  and `tools/check_classinit.sh`, CTest `test_classinit`): an `InitProbe` class
+  prints a marker from its static initialiser, the MIDlet calls
+  `Class.forName("InitProbe")` and then prints the value.  The gate asserts the
+  initialiser line appears *between* "before" and "forName returned"; it FAILS
+  on build `c192f46` and PASSES with the fix.
+
+This is the second title fixed by making a lazy reference point match MIDP
+semantics (`Class.newInstance()` in round 168).  Neither was an API the game
+called explicitly for its result: the titles call these reflection entry
+points purely for their side effects, so "look up and return" is not enough.
