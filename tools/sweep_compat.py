@@ -136,7 +136,7 @@ def one(job):
             row["note"] = "exited itself (notifyDestroyed)"
         elif "the MIDlet installed no Displayable" in err:
             row["note"] = "installed no Displayable"
-        elif "not a usable MIDlet suite" in err:
+        elif "not a usable MIDlet suite" in err or "manifest names no MIDlet" in err:
             row["note"] = "not a usable MIDlet suite (bad JAR or no MIDlet-1)"
         thrown = re.findall(r"thrown:\s*([\w/$]+)", err)
         uncaught = len(re.findall(r"uncaught exception in thread \d+:", err))
@@ -170,7 +170,8 @@ def one(job):
             row["note"] = ("game code threw %s in a thread while the MIDlet kept painting"
                            % (m.group(1) if m else "an exception"))
             break
-        if "not a usable MIDlet suite" in err or "bad JAR" in err:
+        if ("not a usable MIDlet suite" in err or "bad JAR" in err
+                or "manifest names no MIDlet" in err):
             row.update({"verdict": "bad-jar"})
             break
         if heap == 32 or "OutOfMemoryError" not in err:

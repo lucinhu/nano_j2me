@@ -1054,3 +1054,26 @@ ship, the row becomes `title-exception` with the note "title references a
 class it does not bundle (<name>)" instead of `failure`, because a real handset
 fails the same way.  Re-running that one title through the tool produced
 exactly that row, and the full 0.5.24 re-sweep records the corrected verdicts.
+
+The same pass also caught a second packaging case: `AMF_Xtreme_Bowling` has a
+manifest with no MIDlet attributes at all, so it is now `bad-jar` ("manifest
+names no MIDlet class") instead of a runtime `failure`.
+
+Round-167 sweep result (735 titles, 0.5.24 CLI, tests/games + fetched cache):
+
+| verdict | rows |
+| --- | --- |
+| ok | 719 |
+| title-exception | 4 |
+| bad-jar | 4 |
+| timeout | 3 |
+| title-exit | 2 |
+| no-frame | 2 |
+| failure | 1 |
+
+The one remaining `failure` is `snake_2.jar` (its `Snake.startApp()` throws an
+NPE and installs no Displayable — game-side).  Wizardry and Dig Dug are now
+`ok` (they were `title-exception`/`failure` in the round-163 sweep).
+`docs/COMPATIBILITY_MATRIX.md` re-generated from the merged rows: 1502 titles,
+1482 running normally, 4 title exceptions (incl. ArcadePark2), 4 unusable
+packages (incl. AMF), 4 timeouts, 3 self-exits, 3 failures, 2 no-frame.
