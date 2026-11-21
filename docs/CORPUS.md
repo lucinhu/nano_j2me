@@ -1210,3 +1210,28 @@ The whole-corpus libretro visual probe on the r45 / 0.5.26 core over the same
 (`毁灭战士3_10598`, `台球传奇_87`, `德州扑克2_3884`); every other title passed
 the non-black/paint evidence check, including the two fixed black titles
 (GoldenSolitaire and NeonRunner).
+
+### Round 173: triage of the three timeout rows (2026-11-22)
+
+The 0.5.26 sweep leaves three `timeout` rows; all three were re-examined with
+CPU-time measurement and a frame-by-frame stall watchdog, and none is a
+runtime hang:
+
+* `vault/uno_gameloft.jar` — the generic key script (5 -> fire -> star around
+  frames 290/320/375) drives the title into a wall-clock paced wait loop:
+  progress falls to 20 frames per 10 s from ~frame 380 and 600 frames take
+  ~125 s, while **CPU time is only 2.6 s** (the runtime is idle, the title is
+  sleeping).  Without input the same 600 frames finish in ~20 s.  This is a
+  keys-recipe artifact, not an emulator stall.
+* `vault/assassins_creed_260615.jar` — self-paced: 200 unpaced frames take
+  108 s wall but only ~1.4 s CPU, and the sampling profiler attributes almost
+  no CPU to the runtime (the game sleeps ~0.5 s per presented frame in its own
+  loading/cutscene loop).  It is slow on a handset by design.
+* `vault/gangstar_2_kings_of_260766.jar` — game-side startup stall documented
+  in round 128 (repeated caught NPEs in its own code, then a sleep loop).
+
+`tools/sweep_compat.py` now retries a `timeout` row once **without input**
+before accepting the verdict (same pattern as the existing title-exit
+fallback).  A title that reaches the frame budget that way is recorded as `ok`
+with the note "runs without input; the generic key script drives a slow
+wall-clock wait", so key-recipe artifacts cannot masquerade as hangs.

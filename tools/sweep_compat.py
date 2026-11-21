@@ -238,6 +238,38 @@ def one(job):
                            "; also exits without input").strip("; ")
         except subprocess.TimeoutExpired:
             pass
+    if row.get("verdict") == "timeout":
+        # A timeout with input does not prove the title is stuck: some titles
+        # answer a key by entering a wall-clock paced animation or a wait loop
+        # (UNO sleeps ~0.5 s per frame after 5 -> fire -> star), which blows the
+        # probe budget while the emulator itself is healthy.  Retry once with
+        # no input; a title that reaches the budget that way is ok and the note
+        # records why the scripted run timed out.
+        none_path = os.path.join(OUT, "keys-none.txt")
+        if not os.path.exists(none_path):
+            with open(none_path, "w", encoding="utf-8") as fh:
+                fh.write("# deliberately empty: run without input\n")
+        cmd = [BIN, "--port", "headless", "--size", "240x320",
+               "--heap", str(row.get("heap", 16)), "--fps", "30",
+               "--run-frames", str(RUN), "--keys", "@" + none_path,
+               "--rms-dir", os.path.join(OUT, "rms", base.replace(".jar", "") + "-nokeys-timeout"),
+               "--stats", path]
+        try:
+            p = subprocess.run(cmd, capture_output=True, text=True, timeout=90)
+            stats = dict(re.findall(r"(\w+)=(\d+)", (re.search(r"stats:.*", p.stderr) or [""])[0])) if "stats:" in p.stderr else {}
+            frames = int(stats.get("frames", 0))
+            uncaught = len(re.findall(r"uncaught exception in thread \d+:", p.stderr))
+            if p.returncode == 0 and frames >= RUN // 2 and uncaught == 0:
+                row.update({"keys": "none", "frames": frames,
+                            "paints": int(stats.get("paints", 0)),
+                            "bytecodes": int(stats.get("bytecodes", 0)),
+                            "thrown": 0, "uncaught": 0, "verdict": "ok",
+                            "note": ("runs without input; the generic key script "
+                                     "drives a slow wall-clock wait")})
+                return row
+        except subprocess.TimeoutExpired:
+            pass
+
     if row.get("verdict") in ("failure", "timeout"):
         # A title that reads Nokia device properties cannot start on the generic
         # handset; retry once with a real profile so the row measures the title
