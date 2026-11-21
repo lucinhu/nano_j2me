@@ -1168,3 +1168,38 @@ New regression gate `tests/classinitdemo` + `tools/check_classinit.sh`
 (CTest `test_classinit`) asserts the initialiser runs during `Class.forName`
 and not when the field is first read; it fails on the pre-fix build and passes
 afterwards.
+
+### Round 172: full 735-title re-sweep on 0.5.26 (2026-11-22)
+
+After the two black-screen fixes (NeonRunner `sizeChanged` delivery, round 170;
+GoldenSolitaire `Class.forName` initialisation, round 171), the complete corpus
+(`tests/games` + the 332-file fetched cache) was re-swept on the 0.5.26 CLI.
+
+| verdict | count |
+|---|---|
+| ok | **720** |
+| title-exception | 4 |
+| bad-jar | 4 |
+| timeout | 3 |
+| title-exit | 2 |
+| no-frame | 2 |
+| failure | 0 |
+
+Compared with the round-167 sweep (735 rows) there are **no regressions**: all
+previously ok titles stay ok, and two rows improved:
+
+* `vault/snake_2.jar`: `failure` -> `ok` (round-168 `Class.newInstance()`
+  constructor-access fix; the game now installs its menu).
+* `vault/AMF_Xtreme_Bowling.jar`: `failure` -> `bad-jar` (the JAR genuinely
+  names no MIDlet class; the sweep's packaging rule now reports it as such
+  instead of a runtime failure).
+
+The two black titles now draw real content: `vault/GoldenSolitaire.jar`
+gfx 0 -> 19,274 and `vault/NeonRunner.jar` gfx 0 -> 77,656 in the 600-frame
+runs.  The remaining non-ok rows are the previously adjudicated set: 4
+game-side title exceptions, 4 unusable JARs, 3 known slow/stalling titles
+(`assassins_creed`, `gangstar_2`, `uno_gameloft`), 2 titles that exit
+themselves, 2 that never install a Displayable, and 0 runtime failures.
+
+The compatibility matrix was merged with the 735 fresh rows (1502 titles,
+1483 ok) and regenerated deterministically.
