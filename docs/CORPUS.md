@@ -101,7 +101,28 @@ output directory:
         python3 tools/sweep_compat.py .local-tools/debug-runs/compat-matrix-20261025
 
 A run can be interrupted and resumed: duplicates are detected by content, so a
-second invocation only fetches what is still missing.  The first run of this
+second invocation only fetches what is still missing.
+
+### Round 160: the fetched corpus lives in a persistent cache
+
+Earlier rounds downloaded into `/tmp/vaultN`, which the system cleared between
+work sessions - probes could then not replay fetched rows and the data had to
+be downloaded again.  `tools/fetch_corpus.py` now defaults to a persistent
+cache:
+
+    python3 tools/fetch_corpus.py                       # default items -> cache
+    python3 tools/fetch_corpus.py my-top-95-mobile-java-games
+    python3 tools/fetch_corpus.py -d /tmp/somewhere item-name
+    NJ_SWEEP_DIRS="$HOME/.cache/nano_j2me/corpus" tools/sweep_compat.py OUT
+
+The destination is `$NJ_CORPUS_CACHE` when set, otherwise
+`$XDG_CACHE_HOME/nano_j2me/corpus` (default `~/.cache/nano_j2me/corpus`).  A
+bare word argument is an archive.org item; a path-looking argument is still
+accepted as the destination for backwards compatibility.  The cache is never
+committed (it is downloaded content); the content-hash duplicate check makes
+re-runs and interrupted runs cheap, and the cache also counts as already-known
+so a repeated run skips everything it has.
+  The first run of this
 round added seven Gameloft titles (Brother in Arms, Midnight Bowling, Mystery
 Mansion Pinball, Medieval Combat, New York Nights, and two more) - one zip in
 the collection failed with an SSL EOF and was skipped, which the script reports
