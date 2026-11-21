@@ -36,6 +36,12 @@ the Android builds are per-ABI APKs.
   frame dump language screen 73,978 non-black px (reference 73,983);
   libretro visual probe passes.
 * Compatibility matrix regenerated deterministically (1502 titles / 1483 ok).
+* Whole-corpus re-sweep on 0.5.26 (735 titles): **720 ok / 4 title-exception /
+  4 bad-jar / 3 timeout / 2 title-exit / 2 no-frame / 0 failure**, no
+  regressions against the previous sweep; the two fixed titles now draw real
+  content (GoldenSolitaire gfx 19,274, NeonRunner gfx 77,656).
+* Whole-corpus libretro visual probe on the released r45 core (720 ok rows,
+  300 frames): **717 passed, 3 known limitations, 0 failed**.
 
 ## Core artifacts
 

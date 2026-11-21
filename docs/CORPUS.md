@@ -1203,3 +1203,10 @@ themselves, 2 that never install a Displayable, and 0 runtime failures.
 
 The compatibility matrix was merged with the 735 fresh rows (1502 titles,
 1483 ok) and regenerated deterministically.
+
+The whole-corpus libretro visual probe on the r45 / 0.5.26 core over the same
+720 `ok` rows (300 frames, 8 jobs) finished **717 passed, 3 known limitations,
+0 failed**.  The known limitations are the three blocking/slow-load titles
+(`毁灭战士3_10598`, `台球传奇_87`, `德州扑克2_3884`); every other title passed
+the non-black/paint evidence check, including the two fixed black titles
+(GoldenSolitaire and NeonRunner).

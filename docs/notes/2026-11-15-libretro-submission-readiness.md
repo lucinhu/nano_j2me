@@ -1563,3 +1563,15 @@ OPEN/MERGEABLE, no merge claimed.
 * Title fixes carried by this release: NeonRunner (`sizeChanged` delivery
   ordering, round 170) and GoldenSolitaire (`Class.forName` initialisation,
   round 171), each with a CTest gate.
+
+## Round 172: post-release corpus revalidation of 0.5.26 (2026-11-22)
+
+* Full 735-title re-sweep on the 0.5.26 CLI: **720 ok / 4 title-exception /
+  4 bad-jar / 3 timeout / 2 title-exit / 2 no-frame / 0 failure**; no
+  regressions vs the previous sweep, and the two black-screen fixes produced
+  real content (GoldenSolitaire gfx=19,274, NeonRunner gfx=77,656).
+* Whole-corpus libretro visual probe on the r45 core (720 `ok` rows, 300
+  frames, 8 jobs): **717 passed, 3 known limitations, 0 failed** (known:
+  毁灭战士3 slow loader, 台球传奇 and 德州扑克2 blocking loads).
+* Compatibility matrix merged with the fresh rows and regenerated
+  deterministically (1502 titles / 1483 ok).
