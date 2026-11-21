@@ -1548,3 +1548,18 @@ OPEN/MERGEABLE, no merge claimed.
   `95a1d0a`) and the PR body rewritten; it is MERGEABLE again.  Both PRs
   OPEN/MERGEABLE, no merge claimed; bundle validator with clean clones 39/39
   (mkdocs site build skipped, no mkdocs binary on this host).
+
+## Round 171: 0.5.26 / r45 (2026-11-22)
+
+* `.info` for 0.5.26: SHA-256
+  `390991aaf9d767b425ccb7b2f5533246f151de058dbd66fcfab84005fa73b252`;
+  super patch regenerated against `libretro-super` master `55e50a81`.
+* r45 cores built from clean worktree at `effbe13`; validation on the release
+  tree: CTest **205/205** (366.94 s), mock **20/20**, RetroArch loopdemo **PASS**,
+  Wine x86_64 **4/4** at 300 frames, bundle **32/32**.
+* Per-ABI APKs built with `tools/build_android_apks.sh` (`versionCode 526`).
+* Submission PRs refreshed: super head `68bccb1` (parent `55e50a8`), docs head
+  `95a1d0a` (baseline `96ee874`); both MERGEABLE, no merge claimed.
+* Title fixes carried by this release: NeonRunner (`sizeChanged` delivery
+  ordering, round 170) and GoldenSolitaire (`Class.forName` initialisation,
+  round 171), each with a CTest gate.

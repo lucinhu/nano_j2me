@@ -1878,3 +1878,29 @@ reproducible save-check flake).  Android releases keep the per-ABI split APKs
 `95a1d0a83df4ce749ba7c8d4ea3784ab0cbf9924`; the patch was regenerated because
 the previous baseline `9399ee32` no longer accepted it); both remain
 OPEN/MERGEABLE, no merge claimed.
+
+### 0.5.26 / r45 (2026-11-22)
+
+Release: https://github.com/lucinhu/nano_j2me/releases/tag/v0.5.26 - tag
+`v0.5.26` (metadata commit `9d1cfb7`, docs commit `effbe13`), eight libretro
+targets plus five per-ABI APKs (`versionCode 526`).  `.info` SHA-256
+`390991aaf9d767b425ccb7b2f5533246f151de058dbd66fcfab84005fa73b252`
+(`display_version = "0.5.26"`); the tracked super patch applies to
+`libretro-super` master `55e50a81195eaf8dd1b7720a601282459832ced1`.
+
+Behavioural changes vs 0.5.25: NeonRunner renders (first `sizeChanged()` is
+delivered from `Display.setCurrent()` rather than lazily on the first paint -
+the title's own 240-wide handler used to overwrite its boot renderer) and
+GoldenSolitaire renders (the resource manager calls `Class.forName("p")` for
+the side effect of running an interface static initialiser; the runtime now
+initialises classes from `Class.forName()` per JVMS 5.5).  Both have new CTest
+gates (`test_sizeorder`, `test_classinit`) and passed whole-corpus validation.
+PR **libretro/libretro-super#2204** head is commit `68bccb1` (branch
+`add-nano_j2me` on fork `lucinhu/libretro-super`, parent master `55e50a8`);
+PR **libretro/docs#1239** head is `95a1d0a` (patch regenerated against docs
+master `96ee874`), both OPEN/MERGEABLE, no merge claimed.
+
+Validation: full serial CTest **205/205** (366.94 s), mock matrix **20/20**,
+real RetroArch loopdemo 120 frames PASS, Windows x86_64 Wine **4/4** at 300
+frames, submission bundle **32/32**; GoldenSolitaire and NeonRunner pass the
+libretro visual probe (300 frames).

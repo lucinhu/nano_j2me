@@ -69,8 +69,15 @@ Outputs go to `build/libretro-dist/<target>/`, with a library and its metadata.
 Use `--no-strip` to retain symbols. `all` selects the script's supported targets
 and requires all of their toolchains.
 
-The eight candidates currently in `build/libretro-dist/` are the r44 package
-(the 0.5.25 release) built on 2026-11-22 from revision `285cfe2`.  r44 adds
+The eight candidates currently in `build/libretro-dist/` are the r45 package
+(the 0.5.26 release) built on 2026-11-22 from revision `effbe13`.  r45 fixes
+two black-screen titles by making lazy reference points match MIDP/JVMS
+semantics: the first `Canvas.sizeChanged()` is now delivered from
+`Display.setCurrent()` while the MIDlet thread still owns the stack (NeonRunner
+lost its boot renderer to a late delivery), and `Class.forName()` now
+initialises the class (GoldenSolitaire's resource manager sizes its archive
+tables from an interface static initialiser forced that way).  Both have CTest
+gates (`test_sizeorder`, `test_classinit`).  r44 adds
 runtime API support that previously failed to link: the `resource:` Connector
 scheme (with a `nano_j2me/ResourceStream` that keeps the handset chunk-read
 contract), the Siemens `color_game`/`game` family (`Layer`, `LayerManager`,
