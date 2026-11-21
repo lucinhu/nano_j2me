@@ -1761,3 +1761,42 @@ RetroArch 1.22.2 LoopDemo 120 frames **PASS**, Windows x86_64 Wine **4/4 at
 The libretro core renders PvZ (`PASS visual_nonblack: max non-black
 pixels=779`).  PRs refreshed for 0.5.22: `libretro/libretro-super#2204` (head
 `e09c08e`, parent `55e50a81`) and `libretro/docs#1239`; no merge claimed.
+
+## Round 157 (2026-11-21): 0.5.23 / r42 - JSR-179 and the Nokia UI extras
+
+0.5.23 is an API-surface release; the libretro core feature set is unchanged
+from r41.  `javax.microedition.location` (JSR-179) now exists with the value
+classes and an emulated provider fixed at Helsinki (60.1699 N, 24.9384 E, one
+immediate listener callback), plus `Landmark`/`LandmarkStore` on a per-VM
+in-memory registry (no RMS persistence yet).  The remaining small Nokia UI
+classes are implemented in `src/midp/nj_lib_nokia.c`: `Clipboard`,
+`GlobalIndicators` (+exception), `TactileFeedback`, abstract `SoftNotification`
++ impl (+exception/listener), `JoystickEventListener`, the
+`com.nokia.mid.ui.gestures` family and the `DirectGraphicsImplemented` marker;
+hardware-less features are honest no-ops.  Both families are driven through
+real bytecode by `tests/locationdemo/LocationDemo.java` and
+`tests/nokiaextdemo/NokiaExtDemo.java` (`test_location`, `test_nokiaext`).
+
+r42 package built from the clean worktree `/var/tmp/nj2me-r42-tree` at
+`457a48c` (`.info` SHA-256
+`cff3cdd3459e83c544d18e07b0ac8c52a53b0a69c61629197cb27dc2c43c9ca1`):
+
+| target | size | sha256 |
+|---|---:|---|
+| linux-x86_64 | 3,942,296 | `1316a3c7a1737121d1cf087eefcbb59a463ca0b7eee081dfc548af2114fba361` |
+| linux-aarch64 | 3,418,472 | `d06e186269d0fbc679fdbbeba1c13ae64c8437f514f9d8f30752ba461f9e28e3` |
+| linux-armv7 | 3,101,404 | `48f413d41d4226530dae424d72e1341e6f1c0383db14f106cab00c09165eaf71` |
+| android-arm64 | 3,657,104 | `dbd4d9cfd51e844eab70a382d6788dae77f3681ef6ca4518727d7d8bb5dfc583` |
+| android-armv7 | 2,803,300 | `99f5f85a96a6ebf0601467d60142fbc2e231358112503fe1abbef9fa6787ba8f` |
+| android-x86_64 | 3,692,176 | `2805957eef45d295125b88c145cdc780aca873e02a5bc3883665ababd98330a6` |
+| windows-i686 | 3,525,632 | `47d0ebe7073dc4361e825f955e99a7ef408dbff9703e9a62a0ad5ff4e0747b08` |
+| windows-x86_64 | 3,298,304 | `1e74752a1be7cd8d3dd51814a13bc81ff0d8a80ac2f5ca0ca5f8bb7221671d3e` |
+
+Validation of the installed `build/libretro-dist`: mock matrix **20/20**,
+option matrix **88/88**, real RetroArch 1.22.2 LoopDemo 120 frames **PASS**,
+Windows x86_64 Wine **4/4 at 300 frames**, submission bundle **32/32**, full
+serial CTest **201/201 in 351.22 s**.  Android APKs rebuilt at versionCode 523
+(`nj2me.apk` 3,381,610 B, `nj2me-legacy.apk` 720,763 B); release zip
+`nj2me-0.5.23-libretro-cores.zip` 11,959,521 B.  PRs refreshed for 0.5.23:
+`libretro/libretro-super#2204` (head rebuilt on parent `55e50a81`) and
+`libretro/docs#1239`; no merge claimed.

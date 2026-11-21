@@ -1452,3 +1452,23 @@ OPEN/MERGEABLE, no merge claimed.
 - PR refresh: super fork branch rebuilt on `55e50a81` as `e09c08e` with the
   0.5.22 `.info`; PR #2204 body updated.  Docs PR #1239 unchanged (page is
   version-independent).  Both OPEN/MERGEABLE, no merge claimed.
+
+## Round 157 (2026-11-21): 0.5.23 / r42 - JSR-179 and Nokia UI extras
+
+- Version 0.5.23 metadata: `.info` SHA-256
+  `cff3cdd3459e83c544d18e07b0ac8c52a53b0a69c61629197cb27dc2c43c9ca1` (both
+  copies byte-identical); super patch regenerated against `libretro-super`
+  master `55e50a81` and verified with `git apply --check`; commit `457a48c`.
+- Content: JSR-179 location provider + LandmarkStore, and the remaining small
+  Nokia UI classes (Clipboard, GlobalIndicators, TactileFeedback,
+  SoftNotification, gestures, JoystickEventListener, DirectGraphicsImplemented).
+  Gates: `test_location`, `test_nokiaext`; CTest **201/201**.
+- r42 package built from `/var/tmp/nj2me-r42-tree` (8 targets, 128-file release
+  zip 11,959,521 B); installed over `build/libretro-dist` (backup
+  `/var/tmp/libretro-dist-20261121-pre-r42-backup.tgz`).
+- Validation: mock 20/20, option matrix 88/88, real RetroArch LoopDemo 120
+  PASS, Wine 4/4 @300, bundle 32/32, full serial CTest 201/201 in 351.22 s;
+  APKs versionCode 523.
+- PR refresh: super fork branch rebuilt on `55e50a81` with the 0.5.23 `.info`
+  and PR #2204 body updated; docs PR #1239 unchanged (page is
+  version-independent).  Both OPEN/MERGEABLE, no merge claimed.
