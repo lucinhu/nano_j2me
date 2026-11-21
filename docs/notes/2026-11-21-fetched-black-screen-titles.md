@@ -119,3 +119,41 @@ handler filtered on offset 216 plus a breakpoint on `b()` entry, and check
 whether the constructor of `k` at b()+630 throws; if it throws, why the thread
 keeps running (the MIDlet thread is still inside `j.k()/j.j()/j.run()` per
 `--where`).
+
+## Round 146: the sizeChanged() ordering fix was attempted and reverted
+
+The round-143 trace explained the NeonRunner mechanism, and round 144 tried the
+obvious fix: deliver `sizeChanged(w,h)` from `Display.setCurrent()` instead of
+from the first paint.  That worked for NeonRunner (8,312 non-black pixels on
+the CLI and through the libretro core, matching FreeJ2ME-Plus) but the round-145
+libretro corpus probe caught a regression on an in-repo game:
+
+```
+家园5汉化版_10376.jar (Townsmen5)
+  released r40 core: PASS, 72,592 non-black pixels (3/3 runs)
+  fixed core:        startApp() failed:
+                     java.lang.ArrayIndexOutOfBoundsException @ Townsmen5.LA+8
+```
+
+`Townsmen5.LA(int)` indexes `g:[[S` and is reached from the game's
+`Canvas.sizeChanged()` -> `Townsmen5.F(I)`; the game expects `sizeChanged()` to
+arrive after `startApp()` has finished initialising its tables.  The new
+delivery point is inside `startApp()`, so the game's own initialisation code
+runs against half-built state and throws.
+
+Two follow-up variants were tried and neither kept both titles working:
+
+1. skip delivery when the surface is zero-sized - Townsmen5 still failed;
+2. defer delivery to the next frame boundary (a pending-canvas slot flushed at
+   the top of `nj_midp_frame()`) - Townsmen5 passed, but NeonRunner went black
+   again because its MIDlet thread installs the renderer before the boundary,
+   so the late `sizeChanged()` overwrites it with a still-null slot.
+
+Decision: revert the ordering change (`c6a823d`) instead of shipping a
+regression.  After the revert a rebuilt core renders Townsmen5 with 72,592
+non-black pixels again, and NeonRunner is back to the documented limitation
+(0 non-black pixels, `gfx=0`).  A safe fix has to deliver `sizeChanged()` at a
+runtime-controlled point that is after `startApp()` returns but before any game
+thread can install UI state; that is a `nj_run`/VM-level pacing change, not a
+Canvas-class change, and it is deferred until it can be done with the same
+A/B evidence this round used.

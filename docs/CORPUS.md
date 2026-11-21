@@ -744,3 +744,52 @@ three blank-canvas titles already tracked in
 Lesson: "same pixels at three sample points" is not the same question as
 "does this title ever draw two different frames" - put the early frames in
 the window before calling a title static.
+
+### Round 145: 862-row sweep on 0.5.21
+
+`NJ_SWEEP_DIRS=/tmp/vault4:/tmp/vault5:/tmp/vault6`, `compat-20261121-r145`,
+ten workers, 600 frames at 30 fps:
+
+| verdict | rows |
+|---|---:|
+| ok | 844 |
+| title-exception | 3 |
+| failure | 4 |
+| bad-jar | 3 |
+| timeout | 4 |
+| title-exit | 2 |
+| no-frame | 2 |
+
+Compared with the 845 ok of round 134 the only verdict change is
+`丧尸危机2-自由之翼BT版_997.jar` (ok -> timeout).  It is not a regression: ten
+standalone runs with the curated script `tools/corpus_keys/丧尸危机2-自由之翼BT版_997.txt`
+(and the generic recipe, and fresh RMS dirs) all finish 600 frames rc=0, so the
+sweep hit a parallel-load stall.  Every other non-ok row is a documented slow,
+stalled or defective fetched title from rounds 133-134.
+
+### Round 146: the NeonRunner fix was reverted (Townsmen5 regression)
+
+`07a0a5c` delivered `sizeChanged()` from `Display.setCurrent()` (before the
+first paint) and fixed the NeonRunner black screen on the CLI and through the
+libretro core (8,312 non-black pixels, matching FreeJ2ME-Plus).  The round-145
+libretro probe then showed it broke `家园5汉化版_10376.jar` (Townsmen5): the
+core went black with `startApp() failed: java.lang.ArrayIndexOutOfBoundsException
+@ Townsmen5.LA+8`, because the game's own `Canvas.sizeChanged()` runs game logic
+that assumes `startApp()` has returned, and the new delivery point is inside
+`startApp()`.
+
+A/B isolation: the released r40 core (`build/libretro-dist/linux-x86_64`) renders
+Townsmen5 with 72,592 non-black pixels 3/3 times; the fixed core failed 3/3.
+Trying to keep both orderings failed too: a zero-sized-surface guard did not
+help, and deferring the delivery to the next frame boundary fixed Townsmen5 but
+made NeonRunner black again (its MIDlet thread installs its renderer before the
+frame boundary, so the later `sizeChanged()` overwrote it).  No delivery point
+in the current runtime satisfies both patterns, so the fix was reverted in
+`c6a823d` ("Revert \"fix(lcdui): deliver sizeChanged() from setCurrent() before
+the first paint\"") rather than ship a regression in an in-repo title.
+
+After the revert, a rebuilt core renders Townsmen5 again (PASS, 72,592 px) and
+NeonRunner returns to the documented black state (0 px, `gfx=0`).  A safe fix
+needs a delivery point that is after `startApp()` returns but before any game
+thread can install UI state - i.e. runtime work outside the Canvas class, and
+it is tracked in `docs/notes/2026-11-21-fetched-black-screen-titles.md`.
