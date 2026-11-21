@@ -1538,7 +1538,9 @@ OPEN/MERGEABLE, no merge claimed.
   tree, whole-corpus visual probe **717 -> 711 passed / 3 known / 3 failed**
   (two documented black titles + one non-reproducible save-check flake);
   APKs split per ABI (versionCode 525), cores zip 11,623,703 B; GitHub release
-  with tag `v0.5.25`.
+  with tag `v0.5.25`.  Published-APK smoke on Android 15/API 36: x86_64 split
+  installs as 0.5.25 (versionCode 525), library + LoopDemo + in-game panel
+  all work.
 - Upstream: super patch regenerated against `55e50a81`; super fork branch
   rebuilt with the 0.5.25 `.info` and PR #2204 body refreshed (head `78dba58`).
   Docs PR #1239 became CONFLICTING because libretro/docs master moved; the docs

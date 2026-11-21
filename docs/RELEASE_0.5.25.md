@@ -61,6 +61,11 @@ frames) and **Dig Dug** (`Dig_Dug_240x400`).
   the third row failed only its save check under 8-job load and passes all
   45 checks in 11 repeated isolated/parallel runs, so it is recorded as a
   probe-time flake, not a save-state regression.
+* Published-APK smoke on an Android 15/API 36 emulator: the x86_64 split APK
+  installs as versionCode 525 / versionName 0.5.25, the library screen lists
+  the installed JAR, LoopDemo launches (canvas + on-screen keypad) and the
+  in-game panel opens.  Screenshots recorded under
+  `.local-tools/debug-runs/r166/` (not committed).
 * CLI smoke: `loopdemo`, `alphademo`, Wizardry and Dig Dug run clean; the
   Wizardry menu was captured as frame evidence during the round.
 
