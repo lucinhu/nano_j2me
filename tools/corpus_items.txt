@@ -61,3 +61,34 @@ j2me-game-yetisports-part-2
 j2me-game-zed-grease-nokia
 gumballjttm
 istan-bul-j2me
+
+# Round 174 additions: a 17-build Transformers item plus a batch of single-title
+# archive.org items (one retail JAR each) and two larger collections.
+transformers-bayverse-j2me
+pac-man-j-2-me-stuff
+preservation-page-for-nokia-asha-302-java-phone_202503
+j2me-game-doom-rpg
+j2me-game-fifa2007-3d
+j2me-game-real-football-2014
+j2me-game-asbr-127
+j2me-game-sc-double-agent
+j2me-game-brothers-in-arms-art-of-war
+j2me-game-king-kong
+j2me-game-batmanbegins
+j2me-game-ice-age-village
+j2me-game-predators-depredadores
+j2me-game-prison-break
+j2me-game-kingdoms-lords
+j2me-game-tna-impact
+j2me-game-thq-ridgeracerdrift
+j2me-game-gogamz-wordcrafter
+j2me-game-tikitowers2-monkeyrepublic
+j2me-game-uno-spin
+j2me-game-katamarimobile
+j2me-game-platinumsudoku
+j2me-game-f-katamarimobile
+j2me-game-luxor
+j2me-game-annocreateanewworld
+j2me-game-digital-chocolate-party-night-casanova
+j2me-game-chucknorris
+j2me-game-tetrisrevolution
