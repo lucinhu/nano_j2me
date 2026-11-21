@@ -239,7 +239,9 @@ def default_corpus_cache():
 
 
 def main():
-    dirs = [(ROOT + "/tests/games", "")]
+    dirs = []
+    if os.environ.get("NJ_SWEEP_REPO", "1") != "0":
+        dirs.append((ROOT + "/tests/games", ""))
     extra = os.environ.get("NJ_SWEEP_DIRS", "")
     if not extra:
         cache = default_corpus_cache()

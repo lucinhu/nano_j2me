@@ -123,6 +123,25 @@ committed (it is downloaded content); the content-hash duplicate check makes
 re-runs and interrupted runs cheap, and the cache also counts as already-known
 so a repeated run skips everything it has.
 
+### Round 161: sweeping the cache with the released CLI
+
+The default-cache wiring was validated end to end on the 0.5.23 CLI (built from
+the release tree): a cache-only sweep (`NJ_SWEEP_REPO=0`, `NJ_SWEEP_DIRS` set
+to the cache) measured **108 fetched titles -> 103 ok / 2 timeout / 1
+non-usable package / 1 self-exit / 1 failure**, exactly the known set from the
+round-128 adjudication (slow `assassins_creed`, stalled `gangstar_2`, non-ZIP
+`bounce_tale`, self-exiting `bouncetale`, S60-platform `snake_2`), so the cache
+round trip is compatible with the release binary.
+
+`NJ_SWEEP_REPO=0` skips the in-repository corpus and is the way to re-measure
+only fetched titles (useful after re-downloading or when testing a suspected
+client-side change against the vault rows).
+
+Download note: archive.org throttled this host hard on 2026-11-21
+(~20 kB/s sustained, so the 161 MB `1000_J2ME_Games_Pack` would have taken
+hours); the persistent cache means the 108 titles fetched earlier stay
+available while larger collections wait for a better window.
+
 `tools/sweep_compat.py` follows the same rule: when `NJ_SWEEP_DIRS` is unset it
 appends the cache automatically (labelled `vault/...`), so a plain sweep covers
 the repository titles plus everything fetched so far.  Set `NJ_SWEEP_DIRS`
