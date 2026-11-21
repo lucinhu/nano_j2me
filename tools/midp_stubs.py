@@ -1429,6 +1429,114 @@ CLASSES = {
         "extends": "javax.microedition.io.Connection",
         "methods": ["L2CAPConnection acceptAndOpen()"],
     },
+    # ---- Nokia UI extras (round 154) ----------------------------------
+    "com/nokia/mid/ui/DirectGraphicsImplemented": {
+        "interface": True,
+        "methods": [],
+    },
+    "com/nokia/mid/ui/Clipboard": {
+        "abstract": True,
+        "methods": [
+            "public static void copyToClipboard(String)",
+            "public static String copyFromClipboard()",
+        ],
+    },
+    "com/nokia/mid/ui/GlobalIndicatorsException": {
+        "extends": "Exception",
+        "methods": [
+            "protected GlobalIndicatorsException()",
+            "public GlobalIndicatorsException(String)",
+            "public GlobalIndicatorsException(String, int)",
+            "public int getErrorCode()",
+        ],
+    },
+    "com/nokia/mid/ui/GlobalIndicators": {
+        "final": True,
+        "constants": {"MAIL_INDICATOR": "274", "CHAT_INDICATOR": "260",
+                      "INDICATOR_UNINITIALIZED": "0", "INDICATOR_HIDE": "1",
+                      "INDICATOR_SHOW": "2"},
+        "methods": [
+            "public static int setGlobalIndicator(int, int) throws com.nokia.mid.ui.GlobalIndicatorsException",
+            "public static int getGlobalIndicator(int) throws com.nokia.mid.ui.GlobalIndicatorsException",
+        ],
+    },
+    "com/nokia/mid/ui/TactileFeedback": {
+        "constants": {"FEEDBACK_STYLE_BASIC": "1",
+                      "FEEDBACK_STYLE_SENSITIVE": "2"},
+        "methods": [
+            "public TactileFeedback()",
+            "public void directFeedback(int) throws IllegalArgumentException",
+            "public boolean isTouchFeedbackSupported()",
+            "public void registerFeedbackArea(Object, int, int, int, int, int, int)",
+            "public void unregisterFeedbackArea(Object, int) throws IllegalArgumentException",
+            "public void removeFeedbackForComponent(Object)",
+            "public void moveFeedbackAreaToFirstPriority(Object, int)",
+        ],
+    },
+    "com/nokia/mid/ui/SoftNotificationException": {
+        "extends": "Exception",
+        "methods": [
+            "protected SoftNotificationException()",
+            "public SoftNotificationException(String)",
+            "public SoftNotificationException(String, int)",
+            "public int getErrorCode()",
+        ],
+    },
+    "com/nokia/mid/ui/SoftNotificationListener": {
+        "interface": True,
+        "methods": [
+            "void notificationSelected(SoftNotification)",
+            "void notificationDismissed(SoftNotification)",
+        ],
+    },
+    "com/nokia/mid/ui/SoftNotification": {
+        "abstract": True,
+        "methods": [
+            "public static SoftNotification newInstance(int)",
+            "public static SoftNotification newInstance()",
+            "public abstract int getId()",
+            "public abstract void post() throws com.nokia.mid.ui.SoftNotificationException",
+            "public abstract void remove() throws com.nokia.mid.ui.SoftNotificationException",
+            "public abstract void setListener(SoftNotificationListener)",
+            "public abstract void setText(String, String) throws com.nokia.mid.ui.SoftNotificationException",
+            "public abstract void setSoftkeyLabels(String, String) throws com.nokia.mid.ui.SoftNotificationException",
+            "public abstract void setImage(byte[]) throws com.nokia.mid.ui.SoftNotificationException",
+        ],
+    },
+    "com/nokia/mid/ui/JoystickEventListener": {
+        "interface": True,
+        "methods": ["void joystickEvent(int, int)"],
+    },
+    "com/nokia/mid/ui/gestures/GestureListener": {
+        "interface": True,
+        "methods": [],
+    },
+    "com/nokia/mid/ui/gestures/GestureEvent": {
+        "interface": True,
+        "methods": [
+            "int getType()",
+            "int getStartX()",
+            "int getStartY()",
+            "float getFlickDirection()",
+        ],
+    },
+    "com/nokia/mid/ui/gestures/GestureInteractiveZone": {
+        "constants": {"GESTURE_TAP": "1", "GESTURE_LONG_PRESS": "2",
+                      "GESTURE_LONG_PRESS_REP": "4", "GESTURE_DRAG": "8",
+                      "GESTURE_FLICK": "16", "GESTURE_PINCH": "32",
+                      "GESTURE_DOUBLE_TAP": "64"},
+        "methods": [
+            "public GestureInteractiveZone(int)",
+            "public int getType()",
+        ],
+    },
+    "com/nokia/mid/ui/gestures/GestureRegistrationManager": {
+        "final": True,
+        "methods": [
+            "public static boolean register(Object, com.nokia.mid.ui.gestures.GestureInteractiveZone)",
+            "public static void setListener(Object, com.nokia.mid.ui.gestures.GestureListener)",
+        ],
+    },
     # ---- JSR 179: javax.microedition.location -------------------------
     "javax/microedition/location/LocationException": {
         "extends": "Exception",

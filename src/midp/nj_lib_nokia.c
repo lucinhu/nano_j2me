@@ -44,6 +44,20 @@
 #define NJ_C_SVIB      "com/samsung/util/Vibration"
 #define NJ_C_MVIB      "com/motorola/multimedia/Vibrator"
 #define NJ_C_SLISTEN   "com/nokia/mid/sound/SoundListener"
+#define NJ_C_DGIMPL   "com/nokia/mid/ui/DirectGraphicsImplemented"
+#define NJ_C_CLIPBOARD "com/nokia/mid/ui/Clipboard"
+#define NJ_C_GLOBIND   "com/nokia/mid/ui/GlobalIndicators"
+#define NJ_C_GLOBINDEXC "com/nokia/mid/ui/GlobalIndicatorsException"
+#define NJ_C_TACTILE   "com/nokia/mid/ui/TactileFeedback"
+#define NJ_C_SOFTNOTIF "com/nokia/mid/ui/SoftNotification"
+#define NJ_C_SNIMPL    "com/nokia/mid/ui/SoftNotificationImpl"
+#define NJ_C_SNEXC     "com/nokia/mid/ui/SoftNotificationException"
+#define NJ_C_SNLISTEN  "com/nokia/mid/ui/SoftNotificationListener"
+#define NJ_C_JOYLISTEN "com/nokia/mid/ui/JoystickEventListener"
+#define NJ_C_GESTLISTEN "com/nokia/mid/ui/gestures/GestureListener"
+#define NJ_C_GESTEVENT "com/nokia/mid/ui/gestures/GestureEvent"
+#define NJ_C_GESTZONE  "com/nokia/mid/ui/gestures/GestureInteractiveZone"
+#define NJ_C_GESTMGR   "com/nokia/mid/ui/gestures/GestureRegistrationManager"
 
 /*
  * MultipointTouch.
@@ -327,6 +341,22 @@ nj_status nj_nokia_late_init(nj_vm *vm)
     nokia_const_int(vm, NJ_C_MPTOUCH, "POINTER_PRESSED",  MPT_PRESSED);
     nokia_const_int(vm, NJ_C_MPTOUCH, "POINTER_DRAGGED",  MPT_DRAGGED);
     nokia_const_int(vm, NJ_C_MPTOUCH, "POINTER_RELEASED", MPT_RELEASED);
+    /* Round 154 families. */
+    nokia_const_int(vm, NJ_C_GLOBIND, "MAIL_INDICATOR", 274);
+    nokia_const_int(vm, NJ_C_GLOBIND, "CHAT_INDICATOR", 260);
+    nokia_const_int(vm, NJ_C_GLOBIND, "INDICATOR_UNINITIALIZED", 0);
+    nokia_const_int(vm, NJ_C_GLOBIND, "INDICATOR_HIDE", 1);
+    nokia_const_int(vm, NJ_C_GLOBIND, "INDICATOR_SHOW", 2);
+    nokia_const_int(vm, NJ_C_TACTILE, "FEEDBACK_STYLE_BASIC", 1);
+    nokia_const_int(vm, NJ_C_TACTILE, "FEEDBACK_STYLE_SENSITIVE", 2);
+    nokia_const_int(vm, NJ_C_GESTZONE, "GESTURE_TAP", 1);
+    nokia_const_int(vm, NJ_C_GESTZONE, "GESTURE_LONG_PRESS", 2);
+    nokia_const_int(vm, NJ_C_GESTZONE, "GESTURE_LONG_PRESS_REP", 4);
+    nokia_const_int(vm, NJ_C_GESTZONE, "GESTURE_DRAG", 8);
+    nokia_const_int(vm, NJ_C_GESTZONE, "GESTURE_FLICK", 16);
+    nokia_const_int(vm, NJ_C_GESTZONE, "GESTURE_PINCH", 32);
+    nokia_const_int(vm, NJ_C_GESTZONE, "GESTURE_DOUBLE_TAP", 64);
+
 
     /*
      * These numbers come from Nokia's own class library rather than from a
@@ -1167,6 +1197,346 @@ static const nj_builtin_method mvib_methods[] = {
     M("setupVibration",         "(III)V", NJ_ACC_PUBLIC | NJ_ACC_STATIC)
 };
 
+/* ------------------------------------------------------------------ *
+ * Round 154: the last small Nokia UI families (Clipboard, global
+ * indicators, tactile feedback, soft notifications, gestures, joystick
+ * events and the DirectGraphicsImplemented marker).  KEmulator ships the
+ * same surface; where it is a desktop stub (AWT clipboard, indicators
+ * always 0) this file keeps spec behaviour on top of per-VM Java state,
+ * and documents where the hardware simply does not exist (tactile
+ * feedback, gesture and joystick events never fire).
+ * ------------------------------------------------------------------ */
+static const nj_builtin_field clipboard_fields[] = {
+    { "cbText", "Ljava/lang/String;", NJ_ACC_PRIVATE | NJ_ACC_STATIC }
+};
+static const nj_builtin_method clipboard_methods[] = {
+    M("copyToClipboard",   "(Ljava/lang/String;)V", NJ_ACC_PUBLIC | NJ_ACC_STATIC),
+    M("copyFromClipboard", "()Ljava/lang/String;",  NJ_ACC_PUBLIC | NJ_ACC_STATIC)
+};
+
+static const nj_builtin_field globind_fields[] = {
+    { "MAIL_INDICATOR",          "I", NJ_ACC_PUBLIC | NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "CHAT_INDICATOR",          "I", NJ_ACC_PUBLIC | NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "INDICATOR_UNINITIALIZED", "I", NJ_ACC_PUBLIC | NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "INDICATOR_HIDE",          "I", NJ_ACC_PUBLIC | NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "INDICATOR_SHOW",          "I", NJ_ACC_PUBLIC | NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "giMail", "I", NJ_ACC_PRIVATE | NJ_ACC_STATIC },
+    { "giChat", "I", NJ_ACC_PRIVATE | NJ_ACC_STATIC }
+};
+static const nj_builtin_method globind_methods[] = {
+    M("setGlobalIndicator", "(II)I", NJ_ACC_PUBLIC | NJ_ACC_STATIC),
+    M("getGlobalIndicator", "(I)I",  NJ_ACC_PUBLIC | NJ_ACC_STATIC)
+};
+
+static const nj_builtin_field globindexc_fields[] = {
+    { "geCode", "I", NJ_ACC_PRIVATE }
+};
+static const nj_builtin_method globindexc_methods[] = {
+    M("<init>",         "()V",                NJ_ACC_PUBLIC),
+    M("<init>",         "(Ljava/lang/String;)V", NJ_ACC_PUBLIC),
+    M("<init>",         "(Ljava/lang/String;I)V", NJ_ACC_PUBLIC),
+    M("getErrorCode",   "()I",                NJ_ACC_PUBLIC)
+};
+
+static const nj_builtin_field tactile_fields[] = {
+    { "FEEDBACK_STYLE_BASIC",     "I", NJ_ACC_PUBLIC | NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "FEEDBACK_STYLE_SENSITIVE", "I", NJ_ACC_PUBLIC | NJ_ACC_STATIC | NJ_ACC_FINAL }
+};
+static const nj_builtin_method tactile_methods[] = {
+    M("<init>",                       "()V",           NJ_ACC_PUBLIC),
+    M("directFeedback",               "(I)V",          NJ_ACC_PUBLIC),
+    M("isTouchFeedbackSupported",     "()Z",           NJ_ACC_PUBLIC),
+    M("registerFeedbackArea",         "(Ljava/lang/Object;IIIIII)V", NJ_ACC_PUBLIC),
+    M("unregisterFeedbackArea",       "(Ljava/lang/Object;I)V",      NJ_ACC_PUBLIC),
+    M("removeFeedbackForComponent",   "(Ljava/lang/Object;)V",       NJ_ACC_PUBLIC),
+    M("moveFeedbackAreaToFirstPriority", "(Ljava/lang/Object;I)V",   NJ_ACC_PUBLIC)
+};
+
+static const nj_builtin_method softnotif_methods[] = {
+    M("newInstance",          "(I)L" NJ_C_SOFTNOTIF ";", NJ_ACC_PUBLIC | NJ_ACC_STATIC),
+    M("newInstance",          "()L" NJ_C_SOFTNOTIF ";",  NJ_ACC_PUBLIC | NJ_ACC_STATIC),
+    M("getId",                "()I",                     NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT),
+    M("post",                 "()V",                     NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT),
+    M("remove",               "()V",                     NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT),
+    M("setListener",          "(L" NJ_C_SNLISTEN ";)V",  NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT),
+    M("setText",              "(Ljava/lang/String;Ljava/lang/String;)V",
+                                                          NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT),
+    M("setSoftkeyLabels",     "(Ljava/lang/String;Ljava/lang/String;)V",
+                                                          NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT),
+    M("setImage",             "([B)V",                   NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT)
+};
+
+static const nj_builtin_field snimpl_fields[] = {
+    { "snId",   "I",                    NJ_ACC_PRIVATE },
+    { "snTitle","Ljava/lang/String;",   NJ_ACC_PRIVATE },
+    { "snBody", "Ljava/lang/String;",   NJ_ACC_PRIVATE },
+    { "snLeft", "Ljava/lang/String;",   NJ_ACC_PRIVATE },
+    { "snRight","Ljava/lang/String;",   NJ_ACC_PRIVATE },
+    { "snImg",  "[B",                   NJ_ACC_PRIVATE },
+    { "snList", "L" NJ_C_SNLISTEN ";",  NJ_ACC_PRIVATE }
+};
+static const nj_builtin_method snimpl_methods[] = {
+    M("<init>",            "()V",   NJ_ACC_PUBLIC),
+    M("<init>",            "(I)V",  NJ_ACC_PUBLIC),
+    M("getId",             "()I",   NJ_ACC_PUBLIC),
+    M("post",              "()V",   NJ_ACC_PUBLIC),
+    M("remove",            "()V",   NJ_ACC_PUBLIC),
+    M("setListener",       "(L" NJ_C_SNLISTEN ";)V", NJ_ACC_PUBLIC),
+    M("setText",           "(Ljava/lang/String;Ljava/lang/String;)V", NJ_ACC_PUBLIC),
+    M("setSoftkeyLabels",  "(Ljava/lang/String;Ljava/lang/String;)V", NJ_ACC_PUBLIC),
+    M("setImage",          "([B)V", NJ_ACC_PUBLIC)
+};
+
+static const nj_builtin_field snexc_fields[] = {
+    { "seCode", "I", NJ_ACC_PRIVATE }
+};
+static const nj_builtin_method snexc_methods[] = {
+    M("<init>",       "()V",                    NJ_ACC_PUBLIC),
+    M("<init>",       "(Ljava/lang/String;)V",  NJ_ACC_PUBLIC),
+    M("<init>",       "(Ljava/lang/String;I)V", NJ_ACC_PUBLIC),
+    M("getErrorCode", "()I",                    NJ_ACC_PUBLIC)
+};
+
+static const nj_builtin_method snlisten_methods[] = {
+    M("notificationSelected",  "(L" NJ_C_SOFTNOTIF ";)V",
+       NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT),
+    M("notificationDismissed", "(L" NJ_C_SOFTNOTIF ";)V",
+       NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT)
+};
+
+static const nj_builtin_method joylisten_methods[] = {
+    M("joystickEvent", "(II)V", NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT)
+};
+
+static const nj_builtin_field gestzone_fields[] = {
+    { "GESTURE_TAP",           "I", NJ_ACC_PUBLIC | NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "GESTURE_LONG_PRESS",    "I", NJ_ACC_PUBLIC | NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "GESTURE_LONG_PRESS_REP","I", NJ_ACC_PUBLIC | NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "GESTURE_DRAG",          "I", NJ_ACC_PUBLIC | NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "GESTURE_FLICK",         "I", NJ_ACC_PUBLIC | NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "GESTURE_PINCH",         "I", NJ_ACC_PUBLIC | NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "GESTURE_DOUBLE_TAP",    "I", NJ_ACC_PUBLIC | NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "gzType",                "I", NJ_ACC_PRIVATE }
+};
+static const nj_builtin_method gestzone_methods[] = {
+    M("<init>",  "(I)V", NJ_ACC_PUBLIC),
+    M("getType", "()I",  NJ_ACC_PUBLIC)
+};
+static const nj_builtin_method gestevent_methods[] = {
+    M("getType",          "()I", NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT),
+    M("getStartX",        "()I", NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT),
+    M("getStartY",        "()I", NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT),
+    M("getFlickDirection","()F", NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT)
+};
+static const nj_builtin_method gestmgr_methods[] = {
+    M("register",    "(Ljava/lang/Object;L" NJ_C_GESTZONE ";)Z",
+       NJ_ACC_PUBLIC | NJ_ACC_STATIC),
+    M("setListener", "(Ljava/lang/Object;L" NJ_C_GESTLISTEN ";)V",
+       NJ_ACC_PUBLIC | NJ_ACC_STATIC)
+};
+
+NJFN(nokia_clip_copy)
+{
+    nj_field *f = NJ_FS(vm, NJ_C_CLIPBOARD, "cbText", "Ljava/lang/String;");
+    nj_ref text = NJ_ARG_REF(args, 0);
+    if (f) {
+        nj_field_write_ref(vm, NULL, f, text);
+    }
+    return NJ_OK;
+}
+NJFN(nokia_clip_paste)
+{
+    nj_field *f = NJ_FS(vm, NJ_C_CLIPBOARD, "cbText", "Ljava/lang/String;");
+    ret->r = f ? nj_field_read_ref(vm, NULL, f) : 0;
+    return NJ_OK;
+}
+
+static nj_field *globind_field(nj_vm *vm, nj_s4 indicator)
+{
+    if (indicator == 274) {
+        return NJ_FS(vm, NJ_C_GLOBIND, "giMail", "I");
+    }
+    if (indicator == 260) {
+        return NJ_FS(vm, NJ_C_GLOBIND, "giChat", "I");
+    }
+    return NULL;
+}
+NJFN(nokia_globind_set)
+{
+    nj_s4 indicator = NJ_ARG_INT(args, 0);
+    nj_s4 value = NJ_ARG_INT(args, 1);
+    nj_field *f = globind_field(vm, indicator);
+    nj_s4 old;
+    if (!f) {
+        return nj_throw(vm, NJ_C_GLOBINDEXC, "unknown global indicator");
+    }
+    if (value != 0 && value != 1 && value != 2) {
+        return nj_throw(vm, NJ_C_GLOBINDEXC, "unknown indicator value");
+    }
+    old = nj_iget(vm, NULL, f);
+    nj_iput(vm, NULL, f, value);
+    ret->i = old;
+    return NJ_OK;
+}
+NJFN(nokia_globind_get)
+{
+    nj_field *f = globind_field(vm, NJ_ARG_INT(args, 0));
+    if (!f) {
+        return nj_throw(vm, NJ_C_GLOBINDEXC, "unknown global indicator");
+    }
+    ret->i = nj_iget(vm, NULL, f);
+    return NJ_OK;
+}
+NJFN(nokia_gex_init0) { return NJ_OK; }
+NJFN(nokia_gex_init_msg) { return NJ_OK; }
+NJFN(nokia_gex_init_msg_code)
+{
+    nj_field *f = NJ_F(vm, NJ_C_GLOBINDEXC, "geCode", "I");
+    if (f) {
+        nj_iput(vm, NJ_THIS(args), f, NJ_ARG_INT(args, 1));
+    }
+    return NJ_OK;
+}
+NJFN(nokia_gex_code)
+{
+    nj_field *f = NJ_F(vm, NJ_C_GLOBINDEXC, "geCode", "I");
+    ret->i = f ? nj_iget(vm, NJ_THIS(args), f) : 0;
+    return NJ_OK;
+}
+
+NJFN(nokia_tactile_init) { return NJ_OK; }
+NJFN(nokia_tactile_direct)
+{
+    nj_s4 style = NJ_ARG_INT(args, 0);
+    if (style != 1 && style != 2) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException",
+                        "unknown tactile feedback style");
+    }
+    return NJ_OK;
+}
+NJFN(nokia_tactile_supported)
+{
+    ret->i = 0;     /* no haptics on the emulated device */
+    return NJ_OK;
+}
+NJFN(nokia_tactile_register)   { return NJ_OK; }
+NJFN(nokia_tactile_unregister) { return NJ_OK; }
+NJFN(nokia_tactile_remove)     { return NJ_OK; }
+NJFN(nokia_tactile_move)       { return NJ_OK; }
+
+NJFN(nokia_snex_init0) { return NJ_OK; }
+NJFN(nokia_snex_init_msg) { return NJ_OK; }
+NJFN(nokia_snex_init_msg_code)
+{
+    nj_field *f = NJ_F(vm, NJ_C_SNEXC, "seCode", "I");
+    if (f) {
+        nj_iput(vm, NJ_THIS(args), f, NJ_ARG_INT(args, 1));
+    }
+    return NJ_OK;
+}
+NJFN(nokia_snex_code)
+{
+    nj_field *f = NJ_F(vm, NJ_C_SNEXC, "seCode", "I");
+    ret->i = f ? nj_iget(vm, NJ_THIS(args), f) : 0;
+    return NJ_OK;
+}
+
+static nj_ref snimpl_new(nj_vm *vm, nj_s4 id)
+{
+    nj_ref inst = nj_object_new(vm, NJ_C_SNIMPL);
+    nj_value a[1];
+    if (!inst) {
+        return 0;
+    }
+    a[0].i = id;
+    if (nj_call_special(vm, inst, NJ_C_SNIMPL, "<init>", "(I)V", a, NULL) != NJ_OK) {
+        return 0;
+    }
+    return inst;
+}
+NJFN(nokia_sn_new1) { ret->r = snimpl_new(vm, NJ_ARG_INT(args, 0)); return NJ_OK; }
+NJFN(nokia_sn_new0) { ret->r = snimpl_new(vm, 0); return NJ_OK; }
+
+NJFN(nokia_sn_init0) { return NJ_OK; }
+NJFN(nokia_sn_init1)
+{
+    nj_field *f = NJ_F(vm, NJ_C_SNIMPL, "snId", "I");
+    if (f) {
+        nj_iput(vm, NJ_THIS(args), f, NJ_ARG_INT(args, 0));
+    }
+    return NJ_OK;
+}
+NJFN(nokia_sn_getid)
+{
+    nj_field *f = NJ_F(vm, NJ_C_SNIMPL, "snId", "I");
+    ret->i = f ? nj_iget(vm, NJ_THIS(args), f) : 0;
+    return NJ_OK;
+}
+NJFN(nokia_sn_post)   { return NJ_OK; }     /* no system notification centre */
+NJFN(nokia_sn_remove) { return NJ_OK; }
+NJFN(nokia_sn_setlistener)
+{
+    nj_field *f = NJ_F(vm, NJ_C_SNIMPL, "snList", "L" NJ_C_SNLISTEN ";");
+    if (f) {
+        nj_field_write_ref(vm, NJ_THIS(args), f, NJ_ARG_REF(args, 0));
+    }
+    return NJ_OK;
+}
+NJFN(nokia_sn_settext)
+{
+    nj_field *t = NJ_F(vm, NJ_C_SNIMPL, "snTitle", "Ljava/lang/String;");
+    nj_field *b = NJ_F(vm, NJ_C_SNIMPL, "snBody", "Ljava/lang/String;");
+    if (t) {
+        nj_field_write_ref(vm, NJ_THIS(args), t, NJ_ARG_REF(args, 0));
+    }
+    if (b) {
+        nj_field_write_ref(vm, NJ_THIS(args), b, NJ_ARG_REF(args, 1));
+    }
+    return NJ_OK;
+}
+NJFN(nokia_sn_setsoftkeys)
+{
+    nj_field *l = NJ_F(vm, NJ_C_SNIMPL, "snLeft", "Ljava/lang/String;");
+    nj_field *r = NJ_F(vm, NJ_C_SNIMPL, "snRight", "Ljava/lang/String;");
+    if (l) {
+        nj_field_write_ref(vm, NJ_THIS(args), l, NJ_ARG_REF(args, 0));
+    }
+    if (r) {
+        nj_field_write_ref(vm, NJ_THIS(args), r, NJ_ARG_REF(args, 1));
+    }
+    return NJ_OK;
+}
+NJFN(nokia_sn_setimage)
+{
+    nj_field *f = NJ_F(vm, NJ_C_SNIMPL, "snImg", "[B");
+    if (f) {
+        nj_field_write_ref(vm, NJ_THIS(args), f, NJ_ARG_REF(args, 0));
+    }
+    return NJ_OK;
+}
+
+NJFN(nokia_gz_init)
+{
+    nj_field *f = NJ_F(vm, NJ_C_GESTZONE, "gzType", "I");
+    if (f) {
+        nj_iput(vm, NJ_THIS(args), f, NJ_ARG_INT(args, 0));
+    }
+    return NJ_OK;
+}
+NJFN(nokia_gz_type)
+{
+    nj_field *f = NJ_F(vm, NJ_C_GESTZONE, "gzType", "I");
+    ret->i = f ? nj_iget(vm, NJ_THIS(args), f) : 0;
+    return NJ_OK;
+}
+NJFN(nokia_gest_register)
+{
+    /* No gesture recogniser: registration is accepted but nothing fires. */
+    ret->i = 0;
+    return NJ_OK;
+}
+NJFN(nokia_gest_setlistener) { return NJ_OK; }
+
 const nj_builtin_class nj_lib_nokia_classes[] = {
     { NJ_C_VKEYBOARD, "java/lang/Object", NJ_ACC_PUBLIC,
       NULL, 0u, vkeyboard_methods,
@@ -1225,6 +1595,67 @@ const nj_builtin_class nj_lib_nokia_classes[] = {
     { NJ_C_DEVCTL, "java/lang/Object", NJ_ACC_PUBLIC,
       NULL, 0u, devctl_methods,
       (nj_u2)(sizeof(devctl_methods) / sizeof(devctl_methods[0])) },
+    { NJ_C_DGIMPL, NULL,
+      NJ_ACC_PUBLIC | NJ_ACC_INTERFACE | NJ_ACC_ABSTRACT,
+      NULL, 0u, NULL, 0u },
+    { NJ_C_CLIPBOARD, "java/lang/Object",
+      NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT,
+      clipboard_fields,
+      (nj_u2)(sizeof(clipboard_fields) / sizeof(clipboard_fields[0])),
+      clipboard_methods,
+      (nj_u2)(sizeof(clipboard_methods) / sizeof(clipboard_methods[0])) },
+    { NJ_C_GLOBIND, "java/lang/Object", NJ_ACC_PUBLIC | NJ_ACC_FINAL,
+      globind_fields,
+      (nj_u2)(sizeof(globind_fields) / sizeof(globind_fields[0])),
+      globind_methods,
+      (nj_u2)(sizeof(globind_methods) / sizeof(globind_methods[0])) },
+    { NJ_C_GLOBINDEXC, "java/lang/Exception", NJ_ACC_PUBLIC,
+      globindexc_fields,
+      (nj_u2)(sizeof(globindexc_fields) / sizeof(globindexc_fields[0])),
+      globindexc_methods,
+      (nj_u2)(sizeof(globindexc_methods) / sizeof(globindexc_methods[0])) },
+    { NJ_C_TACTILE, "java/lang/Object", NJ_ACC_PUBLIC,
+      tactile_fields,
+      (nj_u2)(sizeof(tactile_fields) / sizeof(tactile_fields[0])),
+      tactile_methods,
+      (nj_u2)(sizeof(tactile_methods) / sizeof(tactile_methods[0])) },
+    { NJ_C_SOFTNOTIF, "java/lang/Object",
+      NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT,
+      NULL, 0u, softnotif_methods,
+      (nj_u2)(sizeof(softnotif_methods) / sizeof(softnotif_methods[0])) },
+    { NJ_C_SNIMPL, NJ_C_SOFTNOTIF, 0u,
+      snimpl_fields,
+      (nj_u2)(sizeof(snimpl_fields) / sizeof(snimpl_fields[0])),
+      snimpl_methods,
+      (nj_u2)(sizeof(snimpl_methods) / sizeof(snimpl_methods[0])) },
+    { NJ_C_SNEXC, "java/lang/Exception", NJ_ACC_PUBLIC,
+      snexc_fields,
+      (nj_u2)(sizeof(snexc_fields) / sizeof(snexc_fields[0])),
+      snexc_methods,
+      (nj_u2)(sizeof(snexc_methods) / sizeof(snexc_methods[0])) },
+    { NJ_C_SNLISTEN, NULL,
+      NJ_ACC_PUBLIC | NJ_ACC_INTERFACE | NJ_ACC_ABSTRACT,
+      NULL, 0u, snlisten_methods,
+      (nj_u2)(sizeof(snlisten_methods) / sizeof(snlisten_methods[0])) },
+    { NJ_C_JOYLISTEN, NULL,
+      NJ_ACC_PUBLIC | NJ_ACC_INTERFACE | NJ_ACC_ABSTRACT,
+      NULL, 0u, joylisten_methods,
+      (nj_u2)(sizeof(joylisten_methods) / sizeof(joylisten_methods[0])) },
+    { NJ_C_GESTLISTEN, NULL,
+      NJ_ACC_PUBLIC | NJ_ACC_INTERFACE | NJ_ACC_ABSTRACT,
+      NULL, 0u, NULL, 0u },
+    { NJ_C_GESTEVENT, NULL,
+      NJ_ACC_PUBLIC | NJ_ACC_INTERFACE | NJ_ACC_ABSTRACT,
+      NULL, 0u, gestevent_methods,
+      (nj_u2)(sizeof(gestevent_methods) / sizeof(gestevent_methods[0])) },
+    { NJ_C_GESTZONE, "java/lang/Object", NJ_ACC_PUBLIC,
+      gestzone_fields,
+      (nj_u2)(sizeof(gestzone_fields) / sizeof(gestzone_fields[0])),
+      gestzone_methods,
+      (nj_u2)(sizeof(gestzone_methods) / sizeof(gestzone_methods[0])) },
+    { NJ_C_GESTMGR, "java/lang/Object", NJ_ACC_PUBLIC | NJ_ACC_FINAL,
+      NULL, 0u, gestmgr_methods,
+      (nj_u2)(sizeof(gestmgr_methods) / sizeof(gestmgr_methods[0])) },
     { NULL, NULL, 0u, NULL, 0u, NULL, 0u }
 };
 const int nj_lib_nokia_class_count =
@@ -1297,6 +1728,48 @@ const nj_native_entry nj_lib_nokia_table[] = {
     { NJ_C_DUTILS, "getDirectGraphics",
       "(Ljavax/microedition/lcdui/Graphics;)L" NJ_C_DGRAPHICS ";",
       nokia_du_getDirectGraphics },
+    { NJ_C_CLIPBOARD, "copyToClipboard", "(Ljava/lang/String;)V", nokia_clip_copy },
+    { NJ_C_CLIPBOARD, "copyFromClipboard", "()Ljava/lang/String;", nokia_clip_paste },
+    { NJ_C_GLOBIND, "setGlobalIndicator", "(II)I", nokia_globind_set },
+    { NJ_C_GLOBIND, "getGlobalIndicator", "(I)I",  nokia_globind_get },
+    { NJ_C_GLOBINDEXC, "<init>", "()V",                 nokia_gex_init0 },
+    { NJ_C_GLOBINDEXC, "<init>", "(Ljava/lang/String;)V",   nokia_gex_init_msg },
+    { NJ_C_GLOBINDEXC, "<init>", "(Ljava/lang/String;I)V",  nokia_gex_init_msg_code },
+    { NJ_C_GLOBINDEXC, "getErrorCode", "()I",           nokia_gex_code },
+    { NJ_C_TACTILE, "<init>",                          "()V", nokia_tactile_init },
+    { NJ_C_TACTILE, "directFeedback",                  "(I)V", nokia_tactile_direct },
+    { NJ_C_TACTILE, "isTouchFeedbackSupported",        "()Z", nokia_tactile_supported },
+    { NJ_C_TACTILE, "registerFeedbackArea",            "(Ljava/lang/Object;IIIIII)V",
+      nokia_tactile_register },
+    { NJ_C_TACTILE, "unregisterFeedbackArea",          "(Ljava/lang/Object;I)V",
+      nokia_tactile_unregister },
+    { NJ_C_TACTILE, "removeFeedbackForComponent",      "(Ljava/lang/Object;)V",
+      nokia_tactile_remove },
+    { NJ_C_TACTILE, "moveFeedbackAreaToFirstPriority", "(Ljava/lang/Object;I)V",
+      nokia_tactile_move },
+    { NJ_C_SOFTNOTIF, "newInstance", "(I)L" NJ_C_SOFTNOTIF ";", nokia_sn_new1 },
+    { NJ_C_SOFTNOTIF, "newInstance", "()L" NJ_C_SOFTNOTIF ";",  nokia_sn_new0 },
+    { NJ_C_SNIMPL, "<init>",   "()V",  nokia_sn_init0 },
+    { NJ_C_SNIMPL, "<init>",   "(I)V", nokia_sn_init1 },
+    { NJ_C_SNIMPL, "getId",    "()I",  nokia_sn_getid },
+    { NJ_C_SNIMPL, "post",     "()V",  nokia_sn_post },
+    { NJ_C_SNIMPL, "remove",   "()V",  nokia_sn_remove },
+    { NJ_C_SNIMPL, "setListener", "(L" NJ_C_SNLISTEN ";)V", nokia_sn_setlistener },
+    { NJ_C_SNIMPL, "setText",  "(Ljava/lang/String;Ljava/lang/String;)V",
+      nokia_sn_settext },
+    { NJ_C_SNIMPL, "setSoftkeyLabels", "(Ljava/lang/String;Ljava/lang/String;)V",
+      nokia_sn_setsoftkeys },
+    { NJ_C_SNIMPL, "setImage", "([B)V", nokia_sn_setimage },
+    { NJ_C_SNEXC, "<init>", "()V",                    nokia_snex_init0 },
+    { NJ_C_SNEXC, "<init>", "(Ljava/lang/String;)V",  nokia_snex_init_msg },
+    { NJ_C_SNEXC, "<init>", "(Ljava/lang/String;I)V", nokia_snex_init_msg_code },
+    { NJ_C_SNEXC, "getErrorCode", "()I",              nokia_snex_code },
+    { NJ_C_GESTZONE, "<init>", "(I)V", nokia_gz_init },
+    { NJ_C_GESTZONE, "getType", "()I", nokia_gz_type },
+    { NJ_C_GESTMGR, "register",
+      "(Ljava/lang/Object;L" NJ_C_GESTZONE ";)Z", nokia_gest_register },
+    { NJ_C_GESTMGR, "setListener",
+      "(Ljava/lang/Object;L" NJ_C_GESTLISTEN ";)V", nokia_gest_setlistener },
     { NULL, NULL, NULL, NULL }
 };
 const int nj_lib_nokia_count =

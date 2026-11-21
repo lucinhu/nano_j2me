@@ -143,8 +143,9 @@ class Unit:
             if len(parts) < 2:
                 continue
             fname, fdesc = self.eval(parts[0]), self.eval(parts[1])
+            flags = parts[2] if len(parts) > 2 else ""
             if fname:
-                d.setdefault(fname, fdesc)
+                d.setdefault(fname, (fdesc, "NJ_ACC_STATIC" in flags))
         return d
 
 
@@ -180,15 +181,25 @@ def fields_of(cls, seen=None):
 
 problems, unknown = [], {}
 count = 0
-pat = re.compile(r'nj_field_lookup\s*\(\s*[^,\n]{1,120},\s*([^,\n]{1,120}),\s*([^,\n]{1,120}),\s*([^,\n]{1,120})\s*,\s*\d')
+pat = re.compile(
+    r'(?P<macro>NJ_FS?|nj_field_lookup)\s*\(\s*[^,\n]{1,160},\s*'
+    r'([^,\n]{1,160}),\s*([^,\n]{1,160}),\s*([^,\n]{1,160})')
 for u in units:
     for m in pat.finditer(u.text):
-        fname = u.eval(m.group(2))
+        fname = u.eval(m.group(3))
         if not fname:
             continue
         count += 1
-        cls = u.eval(m.group(1))
-        fdesc = u.eval(m.group(3))
+        cls = u.eval(m.group(2))
+        fdesc = u.eval(m.group(4))
+        macro = m.group("macro")
+        if macro == "NJ_F":
+            want_static = False
+        elif macro == "NJ_FS":
+            want_static = True
+        else:
+            tail = u.text[m.end():m.end() + 12]
+            want_static = True if tail.lstrip().startswith(", 1") else False
         line = u.text[:m.start()].count("\n") + 1
         if cls not in ROWS:
             unknown[cls] = unknown.get(cls, 0) + 1
@@ -196,8 +207,16 @@ for u in units:
         fs = fields_of(cls)
         if fname not in fs:
             problems.append((u.path, line, cls, fname, fdesc, "no such field"))
-        elif fs[fname] != fdesc:
-            problems.append((u.path, line, cls, fname, fdesc, "declared as '%s'" % fs[fname]))
+            continue
+        decl_desc, decl_static = fs[fname]
+        if decl_desc != fdesc:
+            problems.append((u.path, line, cls, fname, fdesc,
+                             "declared as '%s'" % decl_desc))
+        elif want_static is not None and want_static != decl_static:
+            problems.append((u.path, line, cls, fname, fdesc,
+                             "declared %s but looked up as %s"
+                             % ("static" if decl_static else "instance",
+                                "static" if want_static else "instance")))
 
 for path, line, cls, fname, fdesc, why in sorted(set(problems)):
     print("MISMATCH %s:%d: %s.%s asked as '%s', %s" % (path, line, cls, fname, fdesc, why))
