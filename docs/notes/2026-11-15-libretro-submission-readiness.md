@@ -1507,7 +1507,7 @@ OPEN/MERGEABLE, no merge claimed.
   `nj_nokia_paint_canvas_items` hook in `src/midp/nj_lib_lcdui.c`); the attached
   list is the lazy `cItems` Vector field on the Canvas builtin.  Gate
   `test_canvasitem` + `tests/canvasitemdemo/` + `tools/check_canvasitem.sh`.
-  Full serial CTest **202/202 in 359.12 s**.
+  Full serial CTest **202/202 in 357.96 s** on the bumped release tree.
 - Release: version 0.5.24 (`.info` `a2696242…`), r43 built from clean worktree
   `81da824`; validation mock **20/20**, real RetroArch PASS, Wine **4/4 @300**,
   bundle **32/32**; APKs split per ABI (versionCode 524), cores zip
