@@ -185,3 +185,40 @@ game still copies a null `c:Lk` over `a:Lk`.  The remaining lead is the game's
 own swallowed initialisation path (`run()` calls `b()`, which should write
 `c:Lk` at bytecode 642; the trace never sees it).  Chasing it needs an
 exception-trace of `b()`'s catch range, not another Canvas-ordering change.
+
+### Round 169: NeonRunner boot sequence traced further (2026-11-22)
+
+Re-examined `NeonRunner.jar` with the 0.5.25 CLI.  The title never leaves its
+boot/loading loop: `--where` after 600 paced frames (10 s) and after 2400
+frames (80 s) both show the game thread at
+
+    j.b(I)V pc=15
+    j.j()V pc=747 (or pc=634 calling j.k())
+    j.run()V pc=228
+
+i.e. inside `j.run()`'s `j()` loading-animation loop, and every presented frame
+throws `NullPointerException at j.paint(Graphics) pc=290` (600/600 frames).
+`javap` shows paint pc 284 is `getfield a:Lk` (the boot renderer), and pc 290
+compares `k.a` with 127 — so the thrown NPE means `j.a` is null while
+`j.c == 6` (paint's tableswitch case 6).  `j()` itself can null `j.a` at pc 278
+(`a = this.c:Lk`, only when `state == 2 && !e.a`) and later clears it at pc 599
+(`c = 7`).  `j()` exits only when `j.a` exists, `k.a == 15`, and 5 s have passed
+since `j.h`; `run()` only calls the real loader `b()` at bytecode 234 *after*
+`j()` returns, so the loading progress must happen inside the paint state
+machine (paint case 6 writes `j.a` at pc 915).
+
+`static a()Z` (run bytecode 12) checks `RecordStore.openRecordStore("names")`
+and chooses the direct-load path when records exist; a fresh RMS takes the
+animation path above.  FreeJ2ME-Plus renders the game's language menu after
+20–40 s (screenshot: ENGLISH / ČEŠTINA / DEUTSCH / FRANÇAIS / ITALIANO /
+ESPAÑOL), so the title is expected to reach an interactive screen.
+
+A repeated run with a pre-existing `COMMON.rms` still threw the same 300 paint
+NPEs, so this is not just the fresh-RMS branch.  Next lead: instrument the
+first `j()`/paint interaction (the very first `Display.setCurrent()` paint
+happens from `Main.startApp()` before `Thread.start()` sets `j.a` at run
+bytecode 221; determine whether the runtime re-presents a frame while `j.a` is
+null and whether the game relies on a paint-side loader step that our
+synchronous frame pump never re-enters after the exception).  `GoldenSolitaire`
+remains separately blocked on a game-side `InvalidRecordIDException` +
+`ArrayIndexOutOfBoundsException` in `a.Code(ILjava/lang/Object;)` during boot.
