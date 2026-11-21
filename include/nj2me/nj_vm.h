@@ -856,6 +856,20 @@ extern const int nj_lib_samsung_class_count;
 extern const nj_native_entry nj_lib_samsung_table[];
 extern const int nj_lib_samsung_count;
 
+/* Built by nj_lib_siemens.c: the Siemens `com.siemens.mp.color_game` layer
+ * compositor and the `com.siemens.mp.game` helpers (ExtendedImage, Light). */
+extern const nj_builtin_class nj_lib_siemens_classes[];
+extern const int nj_lib_siemens_class_count;
+extern const nj_native_entry nj_lib_siemens_table[];
+extern const int nj_lib_siemens_count;
+
+/* Built by nj_lib_immersion.c: Immersion's com.immersion.VibeTonz vibration
+ * engine, a handset API called from GameCanvas static initialisers. */
+extern const nj_builtin_class nj_lib_immersion_classes[];
+extern const int nj_lib_immersion_class_count;
+extern const nj_native_entry nj_lib_immersion_table[];
+extern const int nj_lib_immersion_count;
+
 /* Built by nj_lib_pim.c (JSR 75's javax.microedition.pim).  The runtime has no
  * contact store: openPIMList(CONTACT_LIST, ...) returns an empty list, a list
  * type it does not have raises PIMException, and every field is unsupported. */

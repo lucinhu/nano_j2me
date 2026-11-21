@@ -280,6 +280,7 @@ static nj_field *fld(nj_vm *vm, const char *cls, const char *name,
 }
 
 #define BAIS "java/io/ByteArrayInputStream"
+#define RS   "nano_j2me/ResourceStream"
 
 NJFN(bais_init)
 {
@@ -424,6 +425,124 @@ NJFN(bais_mark_supported)
 
 NJFN(bais_close)
 {
+    return NJ_OK;
+}
+
+/* ------------------------------------------------------------------ */
+/* nano_j2me.ResourceStream                                            */
+/* ------------------------------------------------------------------ */
+/*
+ * The stream Connector.openInputStream("resource:...") returns.
+ *
+ * Every byte is already in the array this object owns; the class exists only
+ * because the resource stream has one deliberate, documented difference from
+ * ByteArrayInputStream: read(byte[], off, len) returns 0 instead of -1 when it
+ * has no bytes left.  Some Siemens-era games chunk a large asset across several
+ * JAR entries and use "read() == 0" as the signal to open the next
+ * "name.<chunk>" entry (see the Wizardry commentary in resource_stream_open);
+ * they never ask for -1 and misbehave if they get it.  read() itself still
+ * returns -1 so ordinary read-one-byte loops terminate normally, and
+ * Connector.openDataInputStream() keeps the standards-compliant wrapper.
+ */
+NJFN(rs_init)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_ref buf = NJ_ARG_REF(args, 0);
+
+    if (!buf) {
+        return nj_throw(vm, "java/lang/NullPointerException", NULL);
+    }
+    nj_field_write_ref(vm, self, nj_hot_field(vm, NJ_HF_RS_BUF, RS, "buf", "[B"), buf);
+    nj_field_write_int(vm, self, nj_hot_field(vm, NJ_HF_RS_POS, RS, "pos", "I"), 0);
+    nj_field_write_int(vm, self, nj_hot_field(vm, NJ_HF_RS_COUNT, RS, "count", "I"),
+                       (nj_s4)buf->length);
+    return NJ_OK;
+}
+
+NJFN(rs_read)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_ref buf = nj_field_read_ref(vm, self, nj_hot_field(vm, NJ_HF_RS_BUF, RS, "buf", "[B"));
+    nj_s4 pos = nj_field_read_int(vm, self, nj_hot_field(vm, NJ_HF_RS_POS, RS, "pos", "I"));
+    nj_s4 count = nj_field_read_int(vm, self, nj_hot_field(vm, NJ_HF_RS_COUNT, RS, "count", "I"));
+
+    if (!buf || pos >= count || pos >= (nj_s4)buf->length) {
+        ret->i = -1;
+        return NJ_OK;
+    }
+    ret->i = (nj_s4)buf->u.bytes[pos];
+    nj_field_write_int(vm, self, nj_hot_field(vm, NJ_HF_RS_POS, RS, "pos", "I"), pos + 1);
+    return NJ_OK;
+}
+
+NJFN(rs_read_range)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_ref dst = NJ_ARG_REF(args, 0);
+    nj_s4 off = NJ_ARG_INT(args, 1);
+    nj_s4 len = NJ_ARG_INT(args, 2);
+    nj_ref buf;
+    nj_s4 pos, count;
+
+    if (!dst) return nj_throw(vm, "java/lang/NullPointerException", NULL);
+    if (off < 0 || len < 0 || (nj_u4)off > dst->length ||
+        (nj_u4)len > dst->length - (nj_u4)off) {
+        return nj_throw(vm, "java/lang/IndexOutOfBoundsException", NULL);
+    }
+    if (len == 0) {
+        ret->i = 0;
+        return NJ_OK;
+    }
+    buf = nj_field_read_ref(vm, self, nj_hot_field(vm, NJ_HF_RS_BUF, RS, "buf", "[B"));
+    pos = nj_field_read_int(vm, self, nj_hot_field(vm, NJ_HF_RS_POS, RS, "pos", "I"));
+    count = nj_field_read_int(vm, self, nj_hot_field(vm, NJ_HF_RS_COUNT, RS, "count", "I"));
+    if (count > (nj_s4)buf->length) count = (nj_s4)buf->length;
+    if (!buf || pos >= count) {
+        /* See the class comment: 0 here, not -1, is the handset contract the
+         * chunked-resource loaders depend on. */
+        ret->i = 0;
+        return NJ_OK;
+    }
+    if (len > count - pos) len = count - pos;
+    memmove(dst->u.bytes + off, buf->u.bytes + pos, (nj_size)len);
+    nj_field_write_int(vm, self, nj_hot_field(vm, NJ_HF_RS_POS, RS, "pos", "I"), pos + len);
+    ret->i = len;
+    return NJ_OK;
+}
+
+NJFN(rs_available)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_s4 pos = nj_field_read_int(vm, self, nj_hot_field(vm, NJ_HF_RS_POS, RS, "pos", "I"));
+    nj_s4 count = nj_field_read_int(vm, self, nj_hot_field(vm, NJ_HF_RS_COUNT, RS, "count", "I"));
+    ret->i = count > pos ? count - pos : 0;
+    return NJ_OK;
+}
+
+NJFN(rs_skip)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_s8 n = NJ_ARG_INT(args, 0);
+    nj_s4 pos = nj_field_read_int(vm, self, nj_hot_field(vm, NJ_HF_RS_POS, RS, "pos", "I"));
+    nj_s4 count = nj_field_read_int(vm, self, nj_hot_field(vm, NJ_HF_RS_COUNT, RS, "count", "I"));
+    nj_s4 moved = 0;
+
+    if (n < 0) return NJ_OK;
+    if (n > (nj_s8)(count - pos)) n = (nj_s8)(count - pos);
+    moved = (nj_s4)n;
+    nj_field_write_int(vm, self, nj_hot_field(vm, NJ_HF_RS_POS, RS, "pos", "I"), pos + moved);
+    ret->i = moved;
+    return NJ_OK;
+}
+
+NJFN(rs_close)
+{
+    return NJ_OK;
+}
+
+NJFN(rs_mark_supported)
+{
+    ret->i = 0;
     return NJ_OK;
 }
 
@@ -1537,6 +1656,135 @@ NJFN(connector_open_stream)
     return NJ_OK;
 }
 
+/*
+ * Connector.openInputStream("resource:<jar entry>").
+ *
+ * "resource:" is not in the MIDP specification, but Siemens-era and several
+ * other handsets accepted it as a short form for "read this entry from my own
+ * JAR", and games compiled for them call it directly instead of going through
+ * Class.getResourceAsStream().  Wizardry (2003) loads every spell and item
+ * table this way and could not start without it; nine corpus JARs contain the
+ * literal scheme name.  A leading slash is optional ("resource:/icon.png").
+ *
+ * The entry is copied into a byte array and wrapped in the same streams
+ * Class.getResourceAsStream() returns, because the caller closes and skips the
+ * stream and the JAR memory is released here.  A missing entry behaves like
+ * the unsupported-scheme path: ConnectionNotFoundException naming the URL,
+ * which is what the caller (a handset) would have thrown.
+ */
+static nj_ref resource_stream_open(nj_vm *vm, const char *url, int as_data)
+{
+    nj_app *app = (nj_app *)vm->loader_ud;
+    const char *path = url + 9;             /* strlen("resource:") */
+    void *data;
+    nj_u4 len = 0u;
+    nj_u4 mark;
+    nj_ref ba;
+    nj_ref in;
+    nj_value a[2];
+
+    while (*path == '/') {
+        path++;
+    }
+    if (app != NULL && *path != '\0') {
+        data = nj_app_resource(vm, app, path, &len);
+        if (data != NULL && len > 0u) {
+            mark = nj_root_mark(vm);
+            ba = nj_byte_array_new(vm, len);
+            if (!ba) {
+                nj_host_free(vm, data);
+                nj_root_release(vm, mark);
+                return NULL;
+            }
+            ba = nj_root(vm, ba);
+            memcpy(ba->u.bytes, data, (size_t)len);
+            nj_host_free(vm, data);
+            if (as_data) {
+                in = nj_root(vm, nj_object_new(vm, BAIS));
+                if (!in) {
+                    nj_root_release(vm, mark);
+                    return NULL;
+                }
+                a[0].r = ba;
+                if (nj_call_special(vm, in, BAIS,
+                                    "<init>", "([B)V", a, NULL) != NJ_OK) {
+                    nj_root_release(vm, mark);
+                    return NULL;
+                }
+            } else {
+                in = nj_root(vm, nj_object_new(vm, RS));
+                if (!in) {
+                    nj_root_release(vm, mark);
+                    return NULL;
+                }
+                a[0].r = ba;
+                if (nj_call_special(vm, in, RS,
+                                    "<init>", "([B)V", a, NULL) != NJ_OK) {
+                    nj_root_release(vm, mark);
+                    return NULL;
+                }
+            }
+            if (as_data) {
+                nj_ref wrapped = nj_root(vm, nj_object_new(
+                    vm, "java/io/DataInputStream"));
+                if (!wrapped) {
+                    nj_root_release(vm, mark);
+                    return NULL;
+                }
+                a[0].r = in;
+                if (nj_call_special(vm, wrapped, "java/io/DataInputStream",
+                                    "<init>", "(Ljava/io/InputStream;)V",
+                                    a, NULL) != NJ_OK) {
+                    nj_root_release(vm, mark);
+                    return NULL;
+                }
+                in = wrapped;
+            }
+            nj_root_release(vm, mark);
+            return in;
+        }
+        if (data != NULL) {
+            nj_host_free(vm, data);
+        }
+    }
+    nj_throw(vm, "javax/microedition/io/ConnectionNotFoundException", url);
+    return NULL;
+}
+
+NJFN(connector_open_input)
+{
+    nj_ref url = NJ_ARG_REF(args, 0);
+    char u[256];
+
+    if (!url) {
+        return nj_throw(vm, "java/lang/NullPointerException", NULL);
+    }
+    u[0] = '\0';
+    (void)nj_string_to_utf8(url, u, (int)sizeof(u));
+    if (strncmp(u, "resource:", 9u) == 0) {
+        ret->r = resource_stream_open(vm, u, 0);
+        return ret->r ? NJ_OK : NJ_ERR;
+    }
+    return NJ_CALL(connector_open, vm, th, args, ret);
+}
+
+NJFN(connector_open_data_input)
+{
+    nj_ref url = NJ_ARG_REF(args, 0);
+    char u[256];
+
+    if (!url) {
+        return nj_throw(vm, "java/lang/NullPointerException", NULL);
+    }
+    u[0] = '\0';
+    (void)nj_string_to_utf8(url, u, (int)sizeof(u));
+    if (strncmp(u, "resource:", 9u) == 0) {
+        ret->r = resource_stream_open(vm, u, 1);
+        return ret->r ? NJ_OK : NJ_ERR;
+    }
+    return NJ_CALL(connector_open, vm, th, args, ret);
+}
+
 /* ------------------------------------------------------------------ */
 /* Tables                                                             */
 /* ------------------------------------------------------------------ */
@@ -1578,6 +1826,19 @@ static const nj_builtin_method bais_methods[] = {
     M("skip",           "(J)J", 0),
     M("mark",           "(I)V", 0),
     M("reset",          "()V", 0),
+    M("markSupported",  "()Z", 0),
+    M("close",          "()V", 0)
+};
+
+static const nj_builtin_field rs_fields[] = {
+    FLD("buf",   "[B", 0), FLD("pos",  "I", 0), FLD("count","I", 0)
+};
+static const nj_builtin_method rs_methods[] = {
+    M("<init>",         "([B)V", 0),
+    M("read",           "()I", 0),
+    M("read",           "([BII)I", 0),
+    M("available",      "()I", 0),
+    M("skip",           "(J)J", 0),
     M("markSupported",  "()Z", 0),
     M("close",          "()V", 0)
 };
@@ -2895,6 +3156,9 @@ const nj_builtin_class nj_lib_io_classes[] = {
     { "java/io/ByteArrayInputStream", "java/io/InputStream", NJ_ACC_PUBLIC,
       bais_fields, (nj_u2)(sizeof(bais_fields) / sizeof(bais_fields[0])),
       bais_methods, (nj_u2)(sizeof(bais_methods) / sizeof(bais_methods[0])) },
+    { RS, "java/io/InputStream", NJ_ACC_PUBLIC,
+      rs_fields, (nj_u2)(sizeof(rs_fields) / sizeof(rs_fields[0])),
+      rs_methods, (nj_u2)(sizeof(rs_methods) / sizeof(rs_methods[0])) },
     { "java/io/ByteArrayOutputStream", "java/io/OutputStream", NJ_ACC_PUBLIC,
       baos_fields, (nj_u2)(sizeof(baos_fields) / sizeof(baos_fields[0])),
       baos_methods, (nj_u2)(sizeof(baos_methods) / sizeof(baos_methods[0])) },
@@ -2992,6 +3256,14 @@ const nj_native_entry nj_lib_io_table[] = {
     { "java/io/ByteArrayInputStream", "markSupported", "()Z", bais_mark_supported },
     { "java/io/ByteArrayInputStream", "close",         "()V", bais_close },
 
+    { RS, "<init>",        "([B)V", rs_init },
+    { RS, "read",          "()I", rs_read },
+    { RS, "read",          "([BII)I", rs_read_range },
+    { RS, "available",     "()I", rs_available },
+    { RS, "skip",          "(J)J", rs_skip },
+    { RS, "markSupported", "()Z", rs_mark_supported },
+    { RS, "close",         "()V", rs_close },
+
     { "java/io/ByteArrayOutputStream", "<init>",      "()V", baos_init },
     { "java/io/ByteArrayOutputStream", "<init>",      "(I)V", baos_init_cap },
     { "java/io/ByteArrayOutputStream", "write",       "(I)V", baos_write },
@@ -3083,9 +3355,9 @@ const nj_native_entry nj_lib_io_table[] = {
 
     { "javax/microedition/io/Connector", "open", "(Ljava/lang/String;I)Ljavax/microedition/io/Connection;", connector_open_stream },
     { "javax/microedition/io/Connector", "open", "(Ljava/lang/String;IZ)Ljavax/microedition/io/Connection;", connector_open_stream },
-    { "javax/microedition/io/Connector", "openInputStream", "(Ljava/lang/String;)Ljava/io/InputStream;", connector_open },
+    { "javax/microedition/io/Connector", "openInputStream", "(Ljava/lang/String;)Ljava/io/InputStream;", connector_open_input },
     { "javax/microedition/io/Connector", "openOutputStream", "(Ljava/lang/String;)Ljava/io/OutputStream;", connector_open },
-    { "javax/microedition/io/Connector", "openDataInputStream", "(Ljava/lang/String;)Ljava/io/DataInputStream;", connector_open },
+    { "javax/microedition/io/Connector", "openDataInputStream", "(Ljava/lang/String;)Ljava/io/DataInputStream;", connector_open_data_input },
     { "javax/microedition/io/Connector", "openDataOutputStream", "(Ljava/lang/String;)Ljava/io/DataOutputStream;", connector_open },
 
     /*

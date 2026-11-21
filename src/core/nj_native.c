@@ -54,6 +54,8 @@ static const nj_native_table nj_tables[] = {
     { nj_lib_http_table,    &nj_lib_http_count    },
     { nj_lib_pim_table,     &nj_lib_pim_count     },
     { nj_lib_samsung_table, &nj_lib_samsung_count },
+    { nj_lib_siemens_table, &nj_lib_siemens_count },
+    { nj_lib_immersion_table, &nj_lib_immersion_count },
     { nj_lib_socket_table,  &nj_lib_socket_count  },
     { nj_lib_datagram_table, &nj_lib_datagram_count },
     { nj_lib_sensor_table,  &nj_lib_sensor_count  },

@@ -56,6 +56,8 @@ idf_component_register(
         "${NJ_ROOT}/src/midp/nj_lib_http.c"
         "${NJ_ROOT}/src/midp/nj_lib_pim.c"
         "${NJ_ROOT}/src/midp/nj_lib_samsung.c"
+        "${NJ_ROOT}/src/midp/nj_lib_siemens.c"
+        "${NJ_ROOT}/src/midp/nj_lib_immersion.c"
         "${NJ_ROOT}/src/midp/nj_lib_socket.c"
         "${NJ_ROOT}/src/midp/nj_lib_datagram.c"
         "${NJ_ROOT}/src/midp/nj_lib_sensor.c"

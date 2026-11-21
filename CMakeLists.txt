@@ -266,6 +266,8 @@ set(NJ_SOURCES
   src/midp/nj_lib_http.c
   src/midp/nj_lib_pim.c
   src/midp/nj_lib_samsung.c
+  src/midp/nj_lib_siemens.c
+  src/midp/nj_lib_immersion.c
   src/midp/nj_lib_socket.c
   src/midp/nj_lib_datagram.c
   src/midp/nj_lib_sensor.c
@@ -863,6 +865,7 @@ if(NJ_BUILD_TESTS)
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_location_jar.sh
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_nokiaext_jar.sh
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_canvasitem_jar.sh
+      COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_siemens_jar.sh
       WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
       COMMENT "keysdemo.jar, blockdemo.jar (input-effect fixtures)")
   endif()
@@ -2237,6 +2240,13 @@ nj_add_test(test_fullscreen tests/test_fullscreen.c ${NJ_FIXTURES}/fsorder.jar)
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_canvasitem.sh
               $<TARGET_FILE:nj2me-cli>)
     set_tests_properties(test_canvasitem PROPERTIES TIMEOUT 120)
+    # Round 163: the Siemens mobile extended APIs (Layer/LayerManager/Sprite/
+    # ExtendedImage/Light) and Connector.openInputStream("resource:...") -
+    # real bytecode, sprite and layer pixels, and the JAR-own resource read.
+    add_test(NAME test_siemens
+      COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_siemens.sh
+              $<TARGET_FILE:nj2me-cli>)
+    set_tests_properties(test_siemens PROPERTIES TIMEOUT 120)
   endif()
     set_tests_properties(test_play PROPERTIES TIMEOUT 120)
   endif()

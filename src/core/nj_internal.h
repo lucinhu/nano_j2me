@@ -417,6 +417,10 @@ enum {
     NJ_HF_DIS_IN,       /* java/io/DataInputStream.in  Ljava/io/InputStream; */
     NJ_HF_DOS_OUT,      /* java/io/DataOutputStream.out Ljava/io/OutputStream; */
     NJ_HF_DOS_WRITTEN,  /* java/io/DataOutputStream.written I */
+    /* nano_j2me/ResourceStream: the resource: Connector stream. */
+    NJ_HF_RS_BUF,       /* .buf   [B */
+    NJ_HF_RS_POS,       /* .pos   I  */
+    NJ_HF_RS_COUNT,     /* .count I  */
     /* Graphics: gfx_load()/gfx_store() read and write the whole serialised
      * state around every single drawing primitive, so these are the most
      * often resolved fields left in a 2D paint loop. */

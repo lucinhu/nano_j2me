@@ -257,3 +257,45 @@ everywhere around it (including one pixel left of the item), plus the
 substantial canvas-item editor (caret, focus, listener actions 0x1-0x800,
 touch-control interfaces) with no corpus usage yet, so it stays on the roadmap
 rather than being faked.
+
+## Round 163 (2026-11-22): resource streams, Siemens APIs, Immersion VibeTonz
+
+The KEmulator class-presence diff advertised 37 missing Nokia classes, but the
+corpus audit showed only one in-repo JAR referencing a truly missing optional
+API (Doom3 → the unused JSR-226 SVG hooks).  The useful signal came from the
+fetched 330-JAR corpus instead: a handful of titles failed on **vendor APIs and
+non-standard connection schemes**, and each one was a linkage error that
+aborted the game.  Three fixes, all verified against the actual titles:
+
+* `Connector.openInputStream("resource:<jar-entry>")` — nine corpus JARs
+  (Wizardry, 鬼泣3D, 俄罗斯方块, 生化危机3D, 口袋仓鼠, 家园4/5, 疯狂农场2,
+  HeroesLore) carry the literal `resource:` prefix in their own class files.
+  The runtime now implements the scheme: the name is resolved inside the MIDlet
+  JAR, and a missing entry throws `ConnectionNotFoundException`.
+* Wizardry's chunked resource loader expects `read(byte[],int,int)` to return
+  **0** (not the standard -1) at the end of a `resource:` chunk, then opens the
+  next chunk file; with -1 the offset went negative and its sprite sheets stayed
+  zero-filled.  The scheme therefore returns a dedicated
+  `nano_j2me/ResourceStream` whose ranged read answers 0 at EOF, while every
+  other stream keeps standard `InputStream` semantics.  Wizardry now renders
+  its main menu (`paints=180 gfx=5.75M`), where it used to be a black screen.
+* `com.siemens.mp.color_game` / `com.siemens.mp.game` — Layer, LayerManager,
+  Sprite, ExtendedImage and Light, implemented from the KEmulator reference
+  semantics: the manager saves/restores the clip and translate while painting
+  visible layers last-to-first, Sprite draws its frame with `drawRegion`, and
+  ExtendedImage blits into the current canvas backing buffer.  Covered by
+  `tests/siemensdemo` + `tools/check_siemens.sh` (pixel-level: sprite, layer and
+  extended-image rectangles) and gated as `test_siemens`.
+* `com.immersion.VibeTonz` — the vibration engine `Dig_Dug_240x400` links from
+  its `GameCanvas.<clinit>`.  Honest no-motor semantics: `OpenDevice` returns
+  0 (no device) and the play calls return 0 without vibrating.  Dig Dug now
+  runs (`paints=121 gfx=13.7k`) instead of aborting before installing a
+  Displayable.
+
+Remaining known limitation from this round: the Gameloft **GlomoReg** billing
+and registration stack (`GlomoRegistrator`, `GlomoConfig`, `GlomoCountry`,
+`GlomoDistributer`, `GlomoConstants` plus registration forms, 60+ members) used
+by ArcadePark2, 3D孤胆枪手2010 and 急速狂飙完美破解版.  Faking a registration
+result would change what those titles do, so it is documented rather than
+stubbed; ArcadePark2 fails in `GlomoConfig.<clinit>` and installs no
+Displayable.

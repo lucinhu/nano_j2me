@@ -1564,6 +1564,63 @@ CLASSES = {
             "public static void setListener(Object, com.nokia.mid.ui.gestures.GestureListener)",
         ],
     },
+    # ---- Siemens mobile extended APIs (round 163) -------------------------
+    "com/siemens/mp/color_game/Layer": {
+        "methods": [
+            "public Layer(int, int)",
+            "protected Layer()",
+            "public void setPosition(int, int)",
+            "public void move(int, int)",
+            "public int getX()",
+            "public int getY()",
+            "public int getWidth()",
+            "public int getHeight()",
+            "public void setVisible(boolean)",
+            "public boolean isVisible()",
+            "public void setWidth(int)",
+            "public void setHeight(int)",
+            "public void paint(javax.microedition.lcdui.Graphics)",
+        ],
+    },
+    "com/siemens/mp/color_game/LayerManager": {
+        "methods": [
+            "public LayerManager()",
+            "public void append(com.siemens.mp.color_game.Layer)",
+            "public void insert(com.siemens.mp.color_game.Layer, int)",
+            "public void remove(com.siemens.mp.color_game.Layer)",
+            "public com.siemens.mp.color_game.Layer getLayerAt(int)",
+            "public int getSize()",
+            "public void paint(javax.microedition.lcdui.Graphics, int, int)",
+            "public void setViewWindow(int, int, int, int)",
+        ],
+    },
+    "com/siemens/mp/color_game/Sprite": {
+        "extends": "com.siemens.mp.color_game.Layer",
+        "methods": [
+            "public Sprite(javax.microedition.lcdui.Image)",
+            "public Sprite(javax.microedition.lcdui.Image, int, int)",
+            "public void setFrame(int)",
+            "public int getFrame()",
+            "public int getRawFrameCount()",
+            "public int getFrameSequenceLength()",
+            "public void nextFrame()",
+            "public void prevFrame()",
+        ],
+    },
+    "com/siemens/mp/game/ExtendedImage": {
+        "methods": [
+            "public ExtendedImage(javax.microedition.lcdui.Image)",
+            "public void blitToScreen(int, int)",
+            "public void clear(byte)",
+            "public javax.microedition.lcdui.Image getImage()",
+        ],
+    },
+    "com/siemens/mp/game/Light": {
+        "methods": [
+            "public static void setLightOn()",
+            "public static void setLightOff()",
+        ],
+    },
     # ---- JSR 179: javax.microedition.location -------------------------
     "javax/microedition/location/LocationException": {
         "extends": "Exception",

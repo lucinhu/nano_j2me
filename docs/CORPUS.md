@@ -992,3 +992,31 @@ Audio sample on the same tree (40 titles, 240 frames, recorded key scripts):
 rows are menu-bound or have no started Player at 240 frames (the same class of
 row as the round-149 sample); no row regressed to a crash, and the audio
 invariant (no `silent-started`) still holds.
+
+### Round 163: the fetched corpus sweeps as one set (735 rows)
+
+With the persistent cache in place (`~/.cache/nano_j2me/corpus`), the sweep now
+covers the repository corpus and the 332 fetched JARs in one run
+(`.local-tools/debug-runs/compat-20261122-r163`, 0.5.24 CLI, 600 paced frames
+per title, per-title key scripts, job `bash-a9d569da09ed47d5`):
+
+| verdict | rows |
+|---|---|
+| ok | 717 |
+| title-exception | 4 |
+| failure | 4 |
+| bad-jar | 3 |
+| timeout | 3 |
+| title-exit | 2 |
+| no-frame | 2 |
+| **total** | **735** |
+
+The non-ok rows are the known/slow set plus four fetched titles: `ArcadePark2`
+(Gameloft GlomoReg billing API, see the API audit note), `DiamondTwister`
+(corrupt archive entry), `AMF_Xtreme_Bowling` (manifest names no MIDlet class)
+and the game-code thread exceptions in `4in1 Memory` / `JewelQuestDeluxe`
+(titles keep painting).  Two titles from this set were fixed immediately after
+the sweep: **Wizardry** (Siemens color_game APIs + the `resource:` chunk
+contract) now renders its main menu, and **Dig_Dug_240x400** (Immersion
+VibeTonz) now runs past its `GameCanvas` static initialiser - both were
+`failure` rows before the round-163 API work and both show gfx on screen now.
