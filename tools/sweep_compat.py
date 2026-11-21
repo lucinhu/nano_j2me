@@ -239,6 +239,18 @@ def default_corpus_cache():
 
 
 def main():
+    # Accept only a positional output directory: a stray option used to be
+    # taken as a directory name and a "--help" invocation started a full
+    # sweep into a directory literally called "--help".
+    args = [a for a in os.sys.argv[1:]]
+    if args and args[0] in ("-h", "--help"):
+        print("usage: tools/sweep_compat.py [output directory]")
+        print("  env: NJ_BIN, NJ_SWEEP_DIRS, NJ_SWEEP_REPO, NJ_KEYS_DIR")
+        return 0
+    if args and args[0].startswith("-"):
+        print("sweep_compat: unknown option", args[0], file=os.sys.stderr)
+        print("usage: tools/sweep_compat.py [output directory]")
+        return 2
     dirs = []
     if os.environ.get("NJ_SWEEP_REPO", "1") != "0":
         dirs.append((ROOT + "/tests/games", ""))

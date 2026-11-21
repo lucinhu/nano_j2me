@@ -7,6 +7,11 @@ on disk (by SHA-256), tiny files that are not suites, and writes the rest into
 a cache directory.  Point the sweep at that directory with NJ_SWEEP_DIRS.
 
     python3 tools/fetch_corpus.py [output-dir] [collection ...]
+    python3 tools/fetch_corpus.py --items-file tools/corpus_items.txt
+
+The optional ``--items-file`` reads archive.org item identifiers from a text
+file (one per line, ``#`` starts a comment) so a curated corpus can be
+rebuilt without listing every item on the command line.
 
 When no output directory is given the corpus goes to a persistent cache so a
 later sweep does not need to download anything again: $NJ_CORPUS_CACHE when
@@ -119,13 +124,15 @@ def known_hashes():
 
 def main(argv):
     if len(argv) > 1 and argv[1] in ("-h", "--help"):
-        print("usage: tools/fetch_corpus.py [-d DIR] [ARCHIVE_ITEM ...]\n"
+        print("usage: tools/fetch_corpus.py [-d DIR] [--items-file FILE] [ARCHIVE_ITEM ...]\n"
               "  downloads JARs/zips for the named items (default: built-in list)\n"
+              "  --items-file FILE reads item identifiers from FILE (# comments allowed);\n"
               "  -d/--dest DIR selects the output dir (a leading path-looking arg also does);\n"
               "  the default is $NJ_CORPUS_CACHE or %s" % default_cache_dir())
         return
     dest = None
     items = []
+    item_file = None
     args = list(argv[1:])
     while args:
         arg = args.pop(0)
@@ -134,6 +141,11 @@ def main(argv):
                 print("fetch_corpus: --dest needs a directory")
                 return 2
             dest = args.pop(0)
+        elif arg == "--items-file":
+            if not args:
+                print("fetch_corpus: --items-file needs a path")
+                return 2
+            item_file = args.pop(0)
         elif arg.startswith("-"):
             print("fetch_corpus: unknown option", arg)
             return 2
@@ -146,6 +158,16 @@ def main(argv):
             dest = arg
         else:
             items.append(arg)
+    if item_file is not None:
+        try:
+            with open(item_file, encoding="utf-8") as fh:
+                for line in fh:
+                    line = line.split("#", 1)[0].strip()
+                    if line:
+                        items.append(line)
+        except OSError as exc:
+            print("fetch_corpus: cannot read", item_file, exc)
+            return 2
     out = dest if dest is not None else default_cache_dir()
     items = items or DEFAULT_ITEMS
     out = os.path.abspath(os.path.expanduser(out))

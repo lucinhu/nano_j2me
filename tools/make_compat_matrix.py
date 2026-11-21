@@ -80,6 +80,14 @@ def detect(row):
 
 
 def main():
+    if len(os.sys.argv) > 1 and os.sys.argv[1] in ("-h", "--help"):
+        print("usage: tools/make_compat_matrix.py [rows directory]")
+        return 0
+    if len(os.sys.argv) > 1 and os.sys.argv[1].startswith("-"):
+        print("make_compat_matrix: unknown option", os.sys.argv[1],
+              file=os.sys.stderr)
+        print("usage: tools/make_compat_matrix.py [rows directory]")
+        return 2
     rows = load()
     for row in rows:
         detect(row)

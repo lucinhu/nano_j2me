@@ -1,0 +1,63 @@
+# Archive.org items used to grow the compatibility corpus beyond tests/games.
+# Rebuild with:
+#   python3 tools/fetch_corpus.py --items-file tools/corpus_items.txt
+# The fetch is resumable: suites already in the cache are skipped by SHA-256,
+# and the cache is never committed (see docs/CORPUS.md).
+
+# --- multi-game collections -------------------------------------------------
+my-top-95-mobile-java-games
+j2me_game_collection_vol1
+j2me_20230404_202304
+j2me_megaman
+sonic-the-hedgehog-part-one-6280
+SolaRola2007Archive
+
+# --- individual retail / 3D titles ------------------------------------------
+j2me-game-tomb-raider-legend-3d
+electronicarts_tombraiderunderworld_de_en_es_fr_it_Nokia_5530_v1_8_8
+j2me-game-prince-of-persia-las-arenas-olvidadas
+j2me-game-prince-of-persia-two-thrones
+j2me-game-real-football-2007-3d
+j2me-game-real-football-2010
+j2me-game-real-football-2012
+j2me-game-world-rally-championship-3d
+j2me-game-ko-fighters
+j2me-game-soul-calibur-mobile
+j2me-game-the-amazing-spider-man-2
+j2me-game-immortals
+j2me-game-little-big-city-2
+j2me-game-ice-age-scrat-venturas
+j2me-game-worms
+j2me-game-glu-lemmingstribes
+j2me-game-guitar-hero-5
+j2me-game-monopolytycoon
+j2me-game-platinummahjong
+j2me-game-block-breaker-3-unlimited
+j2me-game-megaman-vxxx
+j2me-game-arkanoid-3000-x
+j2me-game-sonic-the-hedgehog
+j2me-game-sonic-advance
+j2me-game-top-trumps-007-the-best-of-bond
+j2me-game-treasuresofmontezuma2
+j2me-game-underworld
+j2me-game-gogamz-star-wars-jedi-mind-tricks
+j2me-game-championship-racing-2012
+j2me-game-championship-racing-2010
+j2me-game-ducati-3d-extreme-6230i
+j2me-game-gogamz-golf-superstars
+j2me-game-gogamz-hamster-homie
+j2me-game-road-raider
+j2me-game-devilsanddemonsk
+3d-attack-chopper-2-j2me-1-01
+3-d-pool
+dig-dug-240x400
+uno-gameloft-j2me-lol
+fifa-23-java
+taiko-no-tatsujin-j2me
+nokia-solitare-128x-160
+wizardry_202208
+PixelineZooJ2ME
+j2me-game-yetisports-part-2
+j2me-game-zed-grease-nokia
+gumballjttm
+istan-bul-j2me
