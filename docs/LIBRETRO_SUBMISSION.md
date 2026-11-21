@@ -1727,3 +1727,37 @@ is the known parallel-load state flake on `杀鬼子-敌后武工队_2185.jar`
 (`unserialize_restores_state` returned 0, passes 3/3 standalone; rounds
 78/95/99/124 class).  `家园5汉化版_10376.jar` (Townsmen5) renders again with
 72,592 non-black pixels after the revert.
+
+## Round 151 (2026-11-21): 0.5.22 / r41 - static-field-area fix
+
+`Plants vs Zombies (240x320)` exposed that the default static field area
+(4096 slots) was too small for class-heavy titles: linking `Layer` exhausted
+it, the caller saw a bare `NoClassDefFoundError` for a class that is present,
+and the game silently half-rendered.  The default is now **16384** slots and an
+exhausted area throws
+`java/lang/OutOfMemoryError: static field area exhausted: increase
+NJ_MAX_STATICS in nj_config.h`.
+
+r41 package built from the clean worktree `/var/tmp/nj2me-r41-tree` at
+`294a2bf` (`.info` SHA-256
+`ceb5330d62247e8b29fef8f718272241ccde09fe73754d909446801d3b563b37`):
+
+| target | size | sha256 |
+|---|---:|---|
+| linux-x86_64 | 3,856,264 | `c86689e430e7160e0dc7362117d93a6f6c72e216b5c397b57ba5e6fadaea9708` |
+| linux-aarch64 | 3,333,136 | `12e8cae15bb1c8513b9c0b29ef81f755b69bea0b77713d3982dc157e39823288` |
+| linux-armv7 | 3,040,632 | `cfc55f43c5f0d91ccd63629bd96e963a53f4d9cab04bebeee7d4dba082437c15` |
+| android-arm64 | 3,567,920 | `7d8969de3c32886cd58ea17b31e3583e5697925715269d576bf768c22a7e673a` |
+| android-armv7 | 2,752,680 | `1dd820ba5f2c2e8282df3df2617e8e6964bc39f7bebdfdbaba9b23e88707bb4d` |
+| android-x86_64 | 3,608,520 | `b01e40db9da31f39971d03b77737c65c6d6689a7214c2de722cd887192b8f4c7` |
+| windows-i686 | 3,462,656 | `35f76814e2caf41ec75c31a3d22bcc1ae22b7368e84436868794c586d00306fb` |
+| windows-x86_64 | 3,238,400 | `4b5e0dcac7b7656af50d3d0f92cf20781fa4bb8a851a3bbfa67bcad27cd40954` |
+
+Validation of the installed `build/libretro-dist`: mock matrix **20/20**, real
+RetroArch 1.22.2 LoopDemo 120 frames **PASS**, Windows x86_64 Wine **4/4 at
+300 frames**, submission bundle **32/32**, full serial CTest **199/199 in
+394.58 s**.  The 899-title corpus sweep on the fixed CLI gives **879 ok** and
+`docs/COMPATIBILITY_MATRIX.md` was refreshed to **1459 titles, 1438 运行正常**.
+The libretro core renders PvZ (`PASS visual_nonblack: max non-black
+pixels=779`).  PRs refreshed for 0.5.22: `libretro/libretro-super#2204` (head
+`e09c08e`, parent `55e50a81`) and `libretro/docs#1239`; no merge claimed.

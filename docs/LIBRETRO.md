@@ -69,8 +69,12 @@ Outputs go to `build/libretro-dist/<target>/`, with a library and its metadata.
 Use `--no-strip` to retain symbols. `all` selects the script's supported targets
 and requires all of their toolchains.
 
-The eight candidates currently in `build/libretro-dist/` are the r40 package
-(the 0.5.21 release) built on 2026-11-21 from revision `4ac5381`.  r40 makes
+The eight candidates currently in `build/libretro-dist/` are the r41 package
+(the 0.5.22 release) built on 2026-11-21 from revision `294a2bf`.  r41 raises
+the default static field area (`NJ_MAX_STATICS` 4096 -> 16384) so class-heavy
+titles link instead of silently half-rendering (`Plants vs Zombies (240x320)`);
+an exhausted area now throws an explicit `OutOfMemoryError` naming the knob,
+not a bare `NoClassDefFoundError` for a class that is present.  r40 makes
 the Android in-app 保存状态 work for frame-driven titles: a port that only gets
 control from the frame hook (the launcher serves the save from its input poll)
 can call `nj_vm_save_file_boundary()` and the runtime stores a thread parked in

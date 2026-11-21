@@ -1436,3 +1436,19 @@ core: 837 passed, 3 known black fetched titles, 1 known parallel-load state
 flake (`杀鬼子-敌后武工队_2185`, passes standalone); Townsmen5 renders again
 after the round-146 revert.  PRs #2204 (`863af5d5`) / #1239 (`3316299`) still
 OPEN/MERGEABLE, no merge claimed.
+
+## Round 151 (2026-11-21): 0.5.22 / r41
+
+- Version 0.5.22 (r41) carries the static-field-area fix: `NJ_MAX_STATICS`
+  default 4096 -> 16384 and an explicit `OutOfMemoryError` when linking
+  exhausts the area.  `.info` SHA-256 `ceb5330d…`; core hashes in
+  `docs/LIBRETRO_SUBMISSION.md`.
+- Validation: mock 20/20, real RetroArch LoopDemo 120 PASS, Wine 4/4 @300,
+  bundle 32/32, full serial CTest 199/199 in 394.58 s.
+- Corpus: 899 unique titles swept on the fixed CLI -> 879 ok; matrix refreshed
+  to 1459 titles / 1438 运行正常.  `Plants vs Zombies (240x320)` and
+  `JBenchmark3D` recovered from `title-exception`; `GT赛车2_36` slow-loader
+  flake unchanged.
+- PR refresh: super fork branch rebuilt on `55e50a81` as `e09c08e` with the
+  0.5.22 `.info`; PR #2204 body updated.  Docs PR #1239 unchanged (page is
+  version-independent).  Both OPEN/MERGEABLE, no merge claimed.
