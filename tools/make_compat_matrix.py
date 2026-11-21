@@ -97,7 +97,7 @@ def main():
     if sources:
         intro = [
             "One row per JAR from the compatibility corpus (%d titles): %s." % (
-                len(rows), sources),
+                len(rows), sources.rstrip(".")),
             "",
             "Rows that were re-measured keep the newer numbers; the remaining",
             "historical rows keep the numbers their original sweep recorded, so",

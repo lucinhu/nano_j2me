@@ -889,3 +889,30 @@ Verification: PvZ CLI 300 frames now `paints=227 gfx=13,479` with zero
 (harness `PASS visual_nonblack: max non-black pixels=779`); full serial CTest
 **199/199 in 376.34 s**; libretro mock matrix 20/20; real RetroArch LoopDemo
 120 frames PASS.
+
+### Round 151: the fixed binary recovers PvZ and JBenchmark3D (899 unique files)
+
+Re-ran the combined sweep (`NJ_SWEEP_DIRS` vault4-7, `compat-20261121-r151`,
+10 jobs) with the NJ_MAX_STATICS fix and the rebuilt CLI.  1141 rows measured,
+**899 unique files**:
+
+| verdict | unique rows |
+|---|---:|
+| ok | 879 |
+| timeout | 5 |
+| failure | 5 |
+| title-exception | 3 |
+| bad-jar | 3 |
+| title-exit | 2 |
+| no-frame | 2 |
+
+Changes versus round 150: `Plants vs Zombies (240x320).jar` and
+`JBenchmark3D.jar` moved from `title-exception` to `ok` (the static-field-area
+fix and the parallel-load flake both resolved), and `GT赛车2_36.jar` flaked to
+`timeout` under the 10-way load - the documented ~130 s loader, which completes
+600 frames when measured alone.  All other non-ok rows are the known
+slow/self-exiting/defective titles listed in the round-150 section.
+
+The compatibility table was regenerated from this batch (899 fresh rows plus
+560 historical rows not re-measured): **1459 titles, 1438 `运行正常`**
+(`docs/COMPATIBILITY_MATRIX.md`, deterministic across two runs).
