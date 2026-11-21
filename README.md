@@ -93,7 +93,7 @@ MPEG-4 intro movie with its own AMR-NB track.
 |---|---|
 | **Linux** x86_64 / aarch64 | CLI runner and the SDL2 desktop client; builds for glibc 2.17+ |
 | **Windows** x86_64 | `nj2me.exe` (mingw-w64): console runner plus the same library client, UTF-8 paths, verified under Wine |
-| **Android 5.0+** | one APK for arm64-v8a / armeabi-v7a / x86 / x86_64: launcher, floating keypads, AAudio/OpenSL ES sound |
+| **Android 5.0+** | release ships one APK per ABI (arm64-v8a / armeabi-v7a / x86 / x86_64): launcher, floating keypads, AAudio/OpenSL ES sound; `tools/build_android.sh` makes a universal APK for local use |
 | **Android 2.x legacy** | ARMv5 `armeabi` edition with a lightweight launcher — see [docs/ANDROID_LEGACY.md](docs/ANDROID_LEGACY.md) |
 | **Web browsers** | Emscripten module plus a dependency-free ES-module shell — see [docs/WEB.md](docs/WEB.md) |
 | **RetroArch / libretro** | native cores for Linux (x86_64, aarch64, armv7) and Android (arm64, armv7, x86_64) |
@@ -206,7 +206,8 @@ counters (heap, frames/paints, GC, bytecode rate) for debugging.
 ## Other builds
 
 ```sh
-tools/build_android.sh                  # Android APK (standard edition)
+tools/build_android.sh                  # Android APK (universal, local testing)
+tools/build_android_apks.sh             # per-ABI release APKs + SHA256SUMS
 tools/build_android_legacy.sh           # Android 2.x legacy APK
 tools/build_windows.sh                  # Windows x86_64 zip (downloads SDL2 mingw)
 tools/build_libretro_cores.sh --list    # cross-built libretro cores

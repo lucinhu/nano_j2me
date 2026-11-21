@@ -50,10 +50,21 @@ titles, no save-format change.
 
 ## Android APKs
 
-| file | versionCode | size | sha256 |
-|---|---:|---:|---|
-| `nj2me.apk` | 523 | 3,381,610 | `90e27ffbfb8db6c7a08c94829bf6b90e9261a200c15690ed1c8c353a9a47cacd` |
-| `nj2me-legacy.apk` | 523 (0.5.23-legacy) | 720,763 | `a123e7e678272c966ed0db1433fc8f3c0f9f306ba0fb5a3dee04bfe231370118` |
+Android releases ship one APK per architecture (built by
+`tools/build_android_apks.sh`), plus the ARMv5/Android 2.x legacy edition.
+Each APK contains only its own native library, so phones do not download the
+other architectures.  The APKs below were built by
+`tools/build_android_apks.sh` (re-runnable for later releases); each was
+installed and launched on an emulator (x86_64 split on API 36 shows the game
+library and the LoopDemo entry without crashes).
+
+| file | ABI | versionCode | size | sha256 |
+|---|---|---:|---:|---|
+| `nj2me-0.5.23-arm64-v8a.apk` | arm64-v8a | 523 | 993,436 | `22d32676a891e4f403f1bffecf12c6c7d7212bf509d38bf0b3b74e21d88dd6c4` |
+| `nj2me-0.5.23-armeabi-v7a.apk` | armeabi-v7a | 523 | 1,001,630 | `c9b33774dc9e68713180a003e61a3af7047b03391c4d31dc063becea886b2f32` |
+| `nj2me-0.5.23-x86.apk` | x86 | 523 | 981,142 | `c8610f7ad4832bb6d8283af75563fcc42bec90963945708d86771df74e6459ca` |
+| `nj2me-0.5.23-x86_64.apk` | x86_64 | 523 | 993,433 | `fb7576311835145c1b1c9d2f7f01dad222b93676c48eb39b143d81d136b6963e` |
+| `nj2me-0.5.23-legacy.apk` | armeabi (ARMv5) | 523 (0.5.23-legacy) | 720,763 | `79ad8041fd52ddc0236c14db645a94051aa79cb719a7a9091a8697beaaeb1bf2` |
 
 Release zip `nj2me-0.5.23-libretro-cores.zip` 11,959,521 B SHA-256
 `50331d2c56bbe7a3f5515637f7e9037d82ae3443ae0166db689b70d51261cd5e` (128
