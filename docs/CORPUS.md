@@ -1020,3 +1020,22 @@ the sweep: **Wizardry** (Siemens color_game APIs + the `resource:` chunk
 contract) now renders its main menu, and **Dig_Dug_240x400** (Immersion
 VibeTonz) now runs past its `GameCanvas` static initialiser - both were
 `failure` rows before the round-163 API work and both show gfx on screen now.
+
+### Round 164: the compatibility matrix absorbs the fetched corpus (2026-11-22)
+
+`docs/COMPATIBILITY_MATRIX.md` is refreshed from the round-163 combined sweep
+(735 rows measured on 0.5.24) merged over the previous 1459-row table:
+
+* 692 historical rows were re-measured and replaced; 43 genuinely new fetched
+  titles were appended; historical rows that could not be re-run keep their old
+  numbers and the header states the mixed provenance.
+* Two rows were re-measured after the round-163 API work with the fixed CLI and
+  moved to `运行正常`: **Wizardry** (600 frames / 600 paints / 4.94M gfx) and
+  **Dig_Dug_240x400** (600 frames / 421 paints / 36.5k gfx), both previously
+  non-ok.
+* Result: **1502 titles, 1482 `运行正常`** (4 timeout, 5 failure, 3 bad-jar,
+  3 title-exception, 3 title-exit, 2 no-frame).  Regeneration is
+  byte-deterministic (two runs compared with `cmp`).
+
+The scratch rows directory stays in `.local-tools/debug-runs/compat-matrix-r163`
+(untracked), as with every matrix refresh.
