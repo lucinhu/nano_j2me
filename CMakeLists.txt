@@ -866,6 +866,7 @@ if(NJ_BUILD_TESTS)
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_nokiaext_jar.sh
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_canvasitem_jar.sh
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_siemens_jar.sh
+      COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_sizeorder_jar.sh
       WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
       COMMENT "keysdemo.jar, blockdemo.jar (input-effect fixtures)")
   endif()
@@ -2247,6 +2248,14 @@ nj_add_test(test_fullscreen tests/test_fullscreen.c ${NJ_FIXTURES}/fsorder.jar)
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_siemens.sh
               $<TARGET_FILE:nj2me-cli>)
     set_tests_properties(test_siemens PROPERTIES TIMEOUT 120)
+    # Round 170: the first sizeChanged() must be delivered while the MIDlet
+    # thread is still inside setCurrent(), not lazily on the first paint after
+    # an application-started thread has run - NeonRunner's boot renderer was
+    # lost to that reordering and the title painted a null exception forever.
+    add_test(NAME test_sizeorder
+      COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_sizeorder.sh
+              $<TARGET_FILE:nj2me-cli>)
+    set_tests_properties(test_sizeorder PROPERTIES TIMEOUT 120)
   endif()
     set_tests_properties(test_play PROPERTIES TIMEOUT 120)
   endif()

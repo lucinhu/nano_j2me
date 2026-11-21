@@ -110,6 +110,8 @@
 #define NJ_F_C_KEYS      "cKeys"       /* I  latched presses since last poll */
 #define NJ_F_C_HELD      "cHeld"       /* I  keys still physically down */
 #define NJ_F_C_VISIBLE   "cVisible"    /* Z  showNotify/drawNotify delivered */
+#define NJ_F_C_SIZEW     "cSizeW"      /* I  last sizeChanged() width delivered */
+#define NJ_F_C_SIZEH     "cSizeH"      /* I  last sizeChanged() height delivered */
 #define NJ_F_C_PRESSED   "cPressed"    /* Z  a key is currently down */
 #define NJ_F_C_ITEMS     "cItems"      /* Vector of Nokia CanvasItem overlays */
 

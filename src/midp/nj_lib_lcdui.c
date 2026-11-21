@@ -126,6 +126,8 @@
 #define F_C_KEYS     NJ_F_C_KEYS
 #define F_C_VISIBLE  NJ_F_C_VISIBLE
 #define F_C_PRESSED  NJ_F_C_PRESSED
+#define F_C_SIZEW    NJ_F_C_SIZEW
+#define F_C_SIZEH    NJ_F_C_SIZEH
 
 #define F_GC_SUPPRESS NJ_F_GC_SUPPRESS
 #define F_GC_FULL     NJ_F_GC_FULL
@@ -5415,6 +5417,47 @@ static int canvas_call_paint_rooted(nj_vm *vm, nj_ref canvas, nj_ref g,
     return ok;
 }
 
+/* Deliver sizeChanged(w, h) once for a given screen size.
+ *
+ * The first delivery historically happened lazily from canvas_visible() on the
+ * first paint, i.e. after startApp() had returned and after any game thread it
+ * started was running.  NeonRunner stores its boot renderer into `a` on the
+ * game thread and its sizeChanged(240, 320) restores `a` from a not-yet-set
+ * backup: delivering the size after that store destroyed the renderer and the
+ * title painted a null-pointer exception forever.  A real handset shows the
+ * Canvas (and runs sizeChanged) while the MIDlet thread is still inside
+ * startApp()/setCurrent(), before the game thread's run() body gets going, so
+ * deliver the first size from nj_midp_set_current() and remember which size
+ * was delivered.  Resizes still go through canvas_visible() on the frame that
+ * paints at the new size.
+ */
+static int canvas_deliver_size(nj_vm *vm, nj_ref canvas)
+{
+    nj_surface *scr = nj_midp_screen(vm);
+    int w, h;
+
+    if (!scr) {
+        return 1;
+    }
+    w = fget(vm, canvas, NJ_C_CANVAS, F_C_SIZEW, D_INT);
+    h = fget(vm, canvas, NJ_C_CANVAS, F_C_SIZEH, D_INT);
+    if (w == scr->width && h == scr->height) {
+        return 1;
+    }
+    {
+        nj_value a[2];
+        a[0].i = scr->width;
+        a[1].i = scr->height;
+        (void)canvas_call(vm, canvas, "sizeChanged", 2, a);
+        if (vm->exception) {
+            return 0;
+        }
+    }
+    fput(vm, canvas, NJ_C_CANVAS, F_C_SIZEW, D_INT, scr->width);
+    fput(vm, canvas, NJ_C_CANVAS, F_C_SIZEH, D_INT, scr->height);
+    return 1;
+}
+
 static int canvas_visible(nj_vm *vm, nj_ref canvas)
 {
     /*
@@ -5425,41 +5468,13 @@ static int canvas_visible(nj_vm *vm, nj_ref canvas)
      * set in sizeChanged(), so every grid line was drawn at (0,0) and the whole
      * puzzle came out as one black dot in the corner.
      *
-     * Delivered when the canvas has no buffer yet or the buffer no longer
-     * matches the screen, which covers both the first show and a resize
-     * without needing a field to remember the last size delivered.
+     * The first sizeChanged() is normally delivered from nj_midp_set_current()
+     * (see canvas_deliver_size()); this call covers the case where the screen
+     * changed size while the canvas was showing, and the fallback when the
+     * synchronous delivery was interrupted by a title exception.
      */
-    if (isa(vm, canvas, NJ_C_CANVAS)) {
-        nj_ref buf = rget(vm, canvas, NJ_C_CANVAS, F_C_BUFFER, D_IMAGE);
-        nj_surface *scr = nj_midp_screen(vm);
-        int bw = 0, bh = 0;
-        int need = 0;
-
-        if (scr) {
-            /*
-             * On the FIRST show as well as on a resize.  Testing only "is
-             * there a buffer of the right size" is not enough: the frame
-             * painter creates the buffer at screen size before the canvas is
-             * ever shown, so that test is false exactly when sizeChanged()
-             * matters most.
-             */
-            if (!fget(vm, canvas, NJ_C_CANVAS, F_C_VISIBLE, D_BOOL)) {
-                need = 1;
-            } else if (!buf) {
-                need = 1;
-            } else if (nj_midp_image_size(vm, buf, &bw, &bh)) {
-                need = (bw != scr->width || bh != scr->height);
-            }
-            if (need) {
-                nj_value a[2];
-                a[0].i = scr->width;
-                a[1].i = scr->height;
-                (void)canvas_call(vm, canvas, "sizeChanged", 2, a);
-                if (vm->exception) {
-                    return 0;
-                }
-            }
-        }
+    if (isa(vm, canvas, NJ_C_CANVAS) && !canvas_deliver_size(vm, canvas)) {
+        return 0;
     }
     if (!fget(vm, canvas, NJ_C_CANVAS, F_C_VISIBLE, D_BOOL)) {
         (void)canvas_call(vm, canvas, "showNotify", 0, NULL);
@@ -6209,6 +6224,20 @@ nj_status nj_midp_set_current(nj_vm *vm, nj_ref d)
     }
     rput(vm, disp, NJ_C_DISPLAY, F_DISP_CUR, D_DISPLAY, d);
     vm->current_displayable = d;
+    /*
+     * Deliver the first sizeChanged() while the MIDlet thread that called
+     * setCurrent() still owns the stack.  This is what a handset does: the
+     * Canvas is already screen-sized when setCurrent() returns, and games such
+     * as NeonRunner depend on that callback landing before their own game
+     * thread starts running.  A title that throws here (some assume state that
+     * only exists after startApp() returns) keeps the old lazy delivery: the
+     * exception is dropped and canvas_visible() retries on the first paint.
+     */
+    if (isa(vm, d, NJ_C_CANVAS) &&
+        !fget(vm, d, NJ_C_CANVAS, F_C_VISIBLE, D_BOOL) &&
+        !canvas_deliver_size(vm, d)) {
+        nj_clear_exception(vm);
+    }
     /*
      * showNotify() is deliberately NOT delivered here.
      *
@@ -11755,6 +11784,8 @@ static const nj_builtin_field canvas_fields[] = {
     FLD(F_C_VISIBLE, D_BOOL,  0),
     FLD(F_C_PRESSED, D_BOOL,  0),
     FLD(NJ_F_C_ITEMS, D_VECTOR, 0),
+    FLD(F_C_SIZEW,   D_INT,   0),
+    FLD(F_C_SIZEH,   D_INT,   0),
     FLD("KEY_NUM0",   D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
     FLD("KEY_NUM1",   D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
     FLD("KEY_NUM2",   D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),

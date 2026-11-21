@@ -222,3 +222,63 @@ null and whether the game relies on a paint-side loader step that our
 synchronous frame pump never re-enters after the exception).  `GoldenSolitaire`
 remains separately blocked on a game-side `InvalidRecordIDException` +
 `ArrayIndexOutOfBoundsException` in `a.Code(ILjava/lang/Object;)` during boot.
+
+### Round 170: it *was* a sizeChanged() ordering problem (2026-11-22)
+
+The round-166 experiment delivered `sizeChanged()` after `startApp()` returned
+but explicitly **before any game thread ran**, and that was still too late:
+this runtime's `Thread.start()` lets the new thread execute `run()` before the
+caller gets the CPU back, so the game thread had already stored its boot
+renderer by the time the callback was delivered.  Tracing the field writes
+proved it.  A temporary `NRDBG` print in the interpreter's `putfield` path for
+the `j.a:Lk` field (and one in `canvas_call_paint_rooted`) showed, on the
+first frame:
+
+    NRDBG write a:Lk pc=224 o=… v=0x…620 in j.run
+    NRDBG write a:Lk pc=72  o=… v=(nil) in j.sizeChanged
+    NRDBG paint 0 canvas=… self=… a=(nil) c=6
+
+`j.sizeChanged(int,int)` for width 240 executes `a = this.b; hideNotify();`
+(the 240-wide "restore" path).  The runtime delivered that first
+`sizeChanged(240, 320)` lazily from `canvas_visible()`, which
+`canvas_call_paint_rooted()` calls on the first paint — after `run()`
+bytecode 221 had installed the boot renderer.  The game's own callback then
+overwrote it with the not-yet-set backup, so every paint dereferenced null.
+On a handset the Canvas is shown while the MIDlet thread is still inside
+`setCurrent()`, i.e. before the game thread's `run()` body gets going, so the
+order is: `sizeChanged` (null → harmless), then the thread stores the boot
+renderer.
+
+**Fix**: the first `sizeChanged()` is now delivered from
+`nj_midp_set_current()`, synchronously while the MIDlet thread still owns the
+stack, and the delivered size is remembered in two new Canvas fields
+(`cSizeW`/`cSizeH`).  `canvas_visible()` calls the same helper and therefore
+still delivers resizes and still retries on the first paint if the title threw
+out of the synchronous callback (the exception is dropped and the fallback
+keeps the old lazy behaviour for titles that assume post-`startApp()` state).
+`showNotify()` keeps its old "first paint" timing, so the 开心农场
+`setCurrent(); setFullScreenMode(true);` constructor sequence still does not
+see a visible Canvas.
+
+Results:
+
+* **NeonRunner now renders its language menu** (240x320, 8,312 non-black
+  pixels, matching the FreeJ2ME-Plus reference); before the fix every frame
+  was 0 non-black pixels with one paint NPE per frame.
+* A/B against the same build from `dada347` with identical flags:
+  `家园5汉化版` 600 frames gfx 68,263 → 67,790 (0.7%, scheduling noise),
+  `开心农场_240` gfx 1,200 → 1,198 with one fewer first-frame paint — no
+  visual or behavioural change in the sampled titles.
+* New regression fixture `tests/sizeorderdemo` + `tools/check_sizeorder.sh` +
+  `test_sizeorder` CTest gate: a Canvas whose game thread stores a renderer
+  and whose `sizeChanged(240,…)` restores it from a null backup.  The gate
+  **fails on the pre-fix build** (all-black frame, no `paint renderer` line)
+  and passes after it.
+* Full serial CTest after the change: **203/203**; the new gate makes it 204.
+* `GoldenSolitaire` remains black for its own game-side boot exception
+  (unrelated).
+
+Lesson: a "deliver it after startApp returns, before game threads" theory can
+still be too late because `Thread.start()` in this runtime is not deferred to
+the next scheduler pass; only delivery *inside* `setCurrent()` matches the
+handset ordering.
