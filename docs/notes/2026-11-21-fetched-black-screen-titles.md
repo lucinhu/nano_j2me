@@ -426,3 +426,34 @@ per-title screen.
   renders the splash.  Next step: trace the MIDlet's Timer/loader path and the
   first Canvas' displayable setup (its only logged exception is a caught
   `InvalidRecordIDException` from a fresh RMS).
+
+## Round 212: TheMummy is timer-driven; the stall is in its startup loop
+
+Deeper tracing of `TheMummy_K700F.jar` (176x220, heap 16):
+
+- `TheMummyMidlet`'s constructor starts two `java.util.Timer`s; the first
+  task (`h`) is scheduled with `scheduleAtFixedRate(delay 0, period 20 ms)`
+  and its `run()` is the game's whole per-tick logic (`f.d()`).  The MIDlet's
+  `startApp()` then constructs canvas `a(String,int,int,int,int)` and switches
+  between canvases `a`, `f` and `d` with `Display.setCurrent`.
+- Frame dumps and `--stats` show `paints=300, gfx=0`: `a.paint()` returns at
+  its first check unless `Displayable.isShown()` **and** the class' loader flag
+  `a:Z` are both true; nothing draws until that loader finishes.
+- Unpaced (`--fps 0`) the CLI spends only ~30 ms of wall time on 1200 frames,
+  and the virtual clock follows real time there, so the 20 ms timer ticked
+  only **twice** in an entire run: the game logic never advances and the
+  loader never completes.  This is expected for a real-time-driven title, not
+  the bug.
+- Paced (`--fps 30`) the timer does run - 1,251 `h.run()` executions in 25 s
+  with timestamps 20 ms apart - but the frontend never completes even 30
+  frames.  The canvas loader calls `Canvas.repaint()` followed by
+  `Canvas.serviceRepaints()` in its loop (`f` class, bytecode 826/830), i.e. it
+  waits for paint, while `paint()` waits for the loader flag: the two meet and
+  the startup never terminates under the frame pacer.  Next step is to trace
+  `a.b()` (the loader, declared `throws Exception`) and find which flag
+  `paint()` reads, then decide whether the runtime must deliver that paint
+  from the timer thread's `serviceRepaints()` without the frame boundary.
+
+Instrumentation used for this trace (a `NJ_TIMER_DBG` line in
+`src/midp/nj_lib_util.c` `timer_pump`) was reverted afterwards; the worktree is
+clean.
