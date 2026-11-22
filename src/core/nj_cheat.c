@@ -270,3 +270,107 @@ int nj_vm_cheat_read(nj_vm *vm, nj_u4 offset, nj_u1 *buf, nj_u2 len)
     memcpy(buf, arena + offset, len);
     return 1;
 }
+
+/* Little-endian value of `width` bytes, widened to 64 bits. */
+static nj_u8 cheat_read_le(const nj_u1 *p, nj_u2 width)
+{
+    nj_u8 v = 0u;
+    nj_u2 i;
+
+    for (i = 0u; i < width; i++) {
+        v |= (nj_u8)p[i] << (8u * i);
+    }
+    return v;
+}
+
+/* Does `now` satisfy the requested relation to `prev`? */
+static int cheat_change_matches(const nj_u1 *now, const nj_u1 *prev,
+                                nj_u2 width, int mode)
+{
+    if (mode == NJ_CHEAT_CHANGED) return memcmp(now, prev, width) != 0;
+    if (mode == NJ_CHEAT_UNCHANGED) return memcmp(now, prev, width) == 0;
+    if (mode == NJ_CHEAT_INCREASED) {
+        return cheat_read_le(now, width) > cheat_read_le(prev, width);
+    }
+    if (mode == NJ_CHEAT_DECREASED) {
+        return cheat_read_le(now, width) < cheat_read_le(prev, width);
+    }
+    return 0;
+}
+
+nj_u4 nj_vm_cheat_snapshot(nj_vm *vm, nj_u1 *buf, nj_u4 cap)
+{
+    const nj_u1 *arena;
+    nj_u4 size = 0u;
+    nj_u4 n;
+
+    arena = cheat_arena(vm, &size);
+    if (!arena) return 0u;
+    if (!buf) return size;              /* caller asks for the allocation size */
+    n = size < cap ? size : cap;
+    memcpy(buf, arena, n);
+    return n;
+}
+
+nj_u4 nj_vm_cheat_scan_changed(nj_vm *vm, const nj_u1 *prev, nj_u4 prev_len,
+                               nj_u2 width, int mode, nj_u4 *offsets,
+                               nj_u4 max)
+{
+    const nj_u1 *arena;
+    nj_u4 size = 0u;
+    nj_u4 stored = 0u;
+    nj_u4 off;
+
+    if (!prev || !offsets || max == 0u) return 0u;
+    if (width < 1u || width > 8u) return 0u;
+    if (mode < NJ_CHEAT_CHANGED || mode > NJ_CHEAT_DECREASED) return 0u;
+    arena = cheat_arena(vm, &size);
+    if (!arena || prev_len < size || size < width) return 0u;
+
+    for (off = 0u; off + width <= size; off += width) {
+        if (!cheat_change_matches(arena + off, prev + off, width, mode)) {
+            continue;
+        }
+        offsets[stored++] = off;
+        if (stored >= max) break;       /* full: more hits may exist */
+    }
+    return stored;
+}
+
+nj_u4 nj_vm_cheat_filter_changed(nj_vm *vm, const nj_u4 *in_offsets,
+                                 nj_u4 count, const nj_u1 *prev,
+                                 nj_u4 prev_len, nj_u2 width, int mode,
+                                 nj_u4 *out_offsets, nj_u4 max)
+{
+    const nj_u1 *arena;
+    nj_u4 size = 0u;
+    nj_u4 kept = 0u;
+    nj_u4 k;
+
+    if (!in_offsets || !out_offsets || count == 0u || max == 0u) return 0u;
+    if (!prev || width < 1u || width > 8u) return 0u;
+    if (mode < NJ_CHEAT_CHANGED || mode > NJ_CHEAT_DECREASED) return 0u;
+    arena = cheat_arena(vm, &size);
+    if (!arena || prev_len < size) return 0u;
+
+    for (k = 0u; k < count && kept < max; k++) {
+        nj_u4 off = in_offsets[k];
+        if (off > size || width > size - off) continue;
+        if (cheat_change_matches(arena + off, prev + off, width, mode)) {
+            out_offsets[kept++] = off;
+        }
+    }
+    return kept;
+}
+
+int nj_vm_cheat_write(nj_vm *vm, nj_u4 offset, const nj_u1 *bytes, nj_u2 len)
+{
+    void *base = NULL;
+    nj_size size = 0;
+
+    if (!vm || !bytes || len == 0u) return 0;
+    if (nj_vm_memory_region(vm, &base, &size) != NJ_OK || !base) return 0;
+    if ((nj_size)len > size || (nj_size)offset > size - (nj_size)len) return 0;
+    memcpy((nj_u1 *)base + offset, bytes, len);
+    return 1;
+}

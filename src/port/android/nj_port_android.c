@@ -452,6 +452,11 @@ typedef struct android_state {
     int   cheat_search_done;
     int   cheat_search_count;
 
+    /* Change search: a baseline arena copy plus the relation to filter on. */
+    int   cheat_search_filter;    /* NJ_CHEAT_* for modes 4 and 5 */
+    nj_u1 *cheat_snapshot;
+    nj_u4 cheat_snapshot_len;
+
     nj_event queue[256];
     int   qh, qt;
     nj_u2 *ime_polled_text; /* released by the next input_poll */
@@ -1706,11 +1711,15 @@ static int android_input_poll(void *ud, nj_event *ev)
         int width = s->cheat_search_width;
         int mode = s->cheat_search_mode;
         int in_count = s->cheat_search_in_count;
+        int filter = s->cheat_search_filter;
         nj_u4 in[512];
         int n = 0, i;
         s->cheat_search_req = 0;
         if (width < 1 || width > 4) {
             width = 0;
+        }
+        if (filter < NJ_CHEAT_CHANGED || filter > NJ_CHEAT_DECREASED) {
+            filter = NJ_CHEAT_CHANGED;
         }
         for (i = 0; i < width; i++) {
             pat[i] = (nj_u1)(value >> (8 * i));
@@ -1748,6 +1757,57 @@ static int android_input_poll(void *ud, nj_event *ev)
             __android_log_print(ANDROID_LOG_INFO, "nj2me",
                                 "cheats: read value(s) width=%d count=%d",
                                 width, n);
+        } else if (s->vm && mode == 3) {
+            /* Snapshot the arena as the baseline for change searches. */
+            nj_u4 need = nj_vm_cheat_snapshot(s->vm, NULL, 0u);
+            if (need > 0u) {
+                if (!s->cheat_snapshot || s->cheat_snapshot_len < need) {
+                    nj_u1 *nb = (nj_u1 *)realloc(s->cheat_snapshot, (size_t)need);
+                    if (nb) {
+                        s->cheat_snapshot = nb;
+                        s->cheat_snapshot_len = need;
+                    }
+                }
+                if (s->cheat_snapshot && s->cheat_snapshot_len >= need) {
+                    n = (int)nj_vm_cheat_snapshot(s->vm, s->cheat_snapshot,
+                                                  s->cheat_snapshot_len);
+                }
+            }
+            __android_log_print(ANDROID_LOG_INFO, "nj2me",
+                                "cheats: snapshot %d byte(s)", n);
+        } else if (s->vm && mode == 4) {
+            /* First change scan: all addresses whose value moved since the
+             * baseline the player recorded. */
+            if (s->cheat_snapshot && s->cheat_snapshot_len > 0u && width > 0) {
+                n = (int)nj_vm_cheat_scan_changed(s->vm, s->cheat_snapshot,
+                                                  s->cheat_snapshot_len,
+                                                  (nj_u2)width, filter,
+                                                  s->cheat_search_offsets,
+                                                  512u);
+            }
+            __android_log_print(ANDROID_LOG_INFO, "nj2me",
+                                "cheats: change scan filter=%d width=%d -> %d hit(s)",
+                                filter, width, n);
+        } else if (s->vm && mode == 5) {
+            /* Narrow the candidate list by the same relation to the baseline. */
+            if (s->cheat_snapshot && s->cheat_snapshot_len > 0u && width > 0 &&
+                in_count > 0) {
+                n = (int)nj_vm_cheat_filter_changed(
+                        s->vm, in, (nj_u4)in_count, s->cheat_snapshot,
+                        s->cheat_snapshot_len, (nj_u2)width, filter,
+                        s->cheat_search_offsets, 512u);
+            }
+            __android_log_print(ANDROID_LOG_INFO, "nj2me",
+                                "cheats: change filter=%d width=%d in=%d -> %d hit(s)",
+                                filter, width, in_count, n);
+        } else if (s->vm && mode == 6) {
+            /* One-shot write: the "single change" counterpart to a code. */
+            if (width > 0 && in_count > 0) {
+                n = nj_vm_cheat_write(s->vm, in[0], pat, (nj_u2)width) ? 1 : 0;
+            }
+            __android_log_print(ANDROID_LOG_INFO, "nj2me",
+                                "cheats: single write width=%d -> %s", width,
+                                n > 0 ? "ok" : "refused");
         } else if (s->vm && width > 0) {
             if (mode == 1 && in_count > 0) {
                 n = (int)nj_vm_cheat_filter(s->vm, in, (nj_u4)in_count, pat,
@@ -3336,6 +3396,8 @@ static void android_shutdown(void *ud)
     pthread_mutex_destroy(&s->lock);
     free(s->shadow);
     free(s->det_prev);
+    free(s->cheat_snapshot);
+    s->cheat_snapshot = NULL;
 #if NJ_ANDROID_LEGACY
     free(s->frame_rgb565);
 #endif
@@ -6778,6 +6840,158 @@ Java_com_lucinhu_nj2me_GameActivity_nativeCheatRead(JNIEnv *env, jobject thiz,
         waited += 5;
     }
     return NJ_ERR_STATE;
+}
+
+/*
+ * Shared request/wait plumbing for the change-search calls below.  The scan
+ * itself runs on the run thread at a frame boundary (see android_input_poll);
+ * this function only publishes the request and copies the answer back.
+ */
+static int cheat_android_request(android_state *s, int mode, int width,
+                                 int filter, const jlong *in, int in_count,
+                                 JNIEnv *env, jlongArray out, int capacity)
+{
+    jlong tmp[512];
+    int waited = 0, n = 0, k;
+
+    if (!s) {
+        return NJ_ERR_STATE;
+    }
+    pthread_mutex_lock(&s->lock);
+    s->cheat_search_mode = mode;
+    s->cheat_search_width = width;
+    s->cheat_search_filter = filter;
+    s->cheat_search_in_count = 0;
+    if (in && in_count > 0) {
+        int limit = (int)(sizeof(s->cheat_search_in) /
+                          sizeof(s->cheat_search_in[0]));
+        if (in_count > limit) {
+            in_count = limit;
+        }
+        for (k = 0; k < in_count; k++) {
+            s->cheat_search_in[k] = (nj_u4)in[k];
+        }
+        s->cheat_search_in_count = in_count;
+    }
+    s->cheat_search_count = 0;
+    s->cheat_search_done = 0;
+    s->cheat_search_req = 1;
+    pthread_mutex_unlock(&s->lock);
+
+    while (waited < 5000) {
+        pthread_mutex_lock(&s->lock);
+        if (s->cheat_search_done) {
+            n = s->cheat_search_count;
+            s->cheat_search_done = 0;
+            if (out && env && capacity > 0 && mode != 3 && mode != 6) {
+                jsize copied = n < capacity ? (jsize)n : (jsize)capacity;
+                for (k = 0; k < (int)copied; k++) {
+                    tmp[k] = (jlong)s->cheat_search_offsets[k];
+                }
+                pthread_mutex_unlock(&s->lock);
+                if (copied > 0) {
+                    (*env)->SetLongArrayRegion(env, out, 0, copied, tmp);
+                }
+                return n;
+            }
+            pthread_mutex_unlock(&s->lock);
+            return n;
+        }
+        pthread_mutex_unlock(&s->lock);
+        usleep(5000);
+        waited += 5;
+    }
+    return NJ_ERR_STATE;
+}
+
+#define CHEAT_ANDROID_STATE(handle)                                            \
+    android_state *s;                                                          \
+    android_app *a = (android_app *)(intptr_t)(handle);                        \
+    if (!a || !(s = AS(a->port.ud))) {                                         \
+        return NJ_ERR_STATE;                                                   \
+    }
+
+/* Record the arena as the baseline for change searches; returns its size. */
+JNIEXPORT jint JNICALL
+Java_com_lucinhu_nj2me_GameActivity_nativeCheatSnapshot(JNIEnv *env, jobject thiz,
+                                                        jlong handle)
+{
+    CHEAT_ANDROID_STATE(handle);
+    (void)env;
+    (void)thiz;
+    return (jint)cheat_android_request(s, 3, 0, NJ_CHEAT_CHANGED, NULL, 0,
+                                       NULL, NULL, 0);
+}
+
+/* First change scan against the recorded baseline, then keep the hits. */
+JNIEXPORT jint JNICALL
+Java_com_lucinhu_nj2me_GameActivity_nativeCheatChanged(JNIEnv *env, jobject thiz,
+                                                       jlong handle, jint width,
+                                                       jint mode, jlongArray out)
+{
+    jsize cap;
+    CHEAT_ANDROID_STATE(handle);
+    (void)thiz;
+    if (!out || width < 1 || width > 4 ||
+        mode < NJ_CHEAT_CHANGED || mode > NJ_CHEAT_DECREASED) {
+        return NJ_ERR;
+    }
+    cap = (*env)->GetArrayLength(env, out);
+    return (jint)cheat_android_request(s, 4, (int)width, (int)mode, NULL, 0,
+                                       env, out, (int)cap);
+}
+
+/* Narrow the current candidate list by a relation to the baseline. */
+JNIEXPORT jint JNICALL
+Java_com_lucinhu_nj2me_GameActivity_nativeCheatFilterChanged(
+        JNIEnv *env, jobject thiz, jlong handle, jlongArray in, jint count,
+        jint width, jint mode, jlongArray out)
+{
+    jlong tmp[512];
+    jsize cap;
+    CHEAT_ANDROID_STATE(handle);
+    (void)thiz;
+    if (!in || !out || count < 0 || width < 1 || width > 4 ||
+        mode < NJ_CHEAT_CHANGED || mode > NJ_CHEAT_DECREASED) {
+        return NJ_ERR;
+    }
+    cap = (*env)->GetArrayLength(env, out);
+    if (count > (int)(sizeof(tmp) / sizeof(tmp[0]))) {
+        count = (int)(sizeof(tmp) / sizeof(tmp[0]));
+    }
+    if (count > (int)cap) {
+        count = (int)cap;
+    }
+    if (count > 0) {
+        (*env)->GetLongArrayRegion(env, in, 0, (jsize)count, tmp);
+    }
+    return (jint)cheat_android_request(s, 5, (int)width, (int)mode, tmp,
+                                       (int)count, env, out, (int)cap);
+}
+
+/* Write one value once ("single change"); 1 means it was applied. */
+JNIEXPORT jint JNICALL
+Java_com_lucinhu_nj2me_GameActivity_nativeCheatWriteOnce(
+        JNIEnv *env, jobject thiz, jlong handle, jlong offset, jlong value,
+        jint width)
+{
+    jlong in[1];
+    android_state *s;
+    android_app *a;
+    (void)env;
+    (void)thiz;
+    if (!(a = (android_app *)(intptr_t)handle) || !(s = AS(a->port.ud))) {
+        return NJ_ERR_STATE;
+    }
+    if (width < 1 || width > 4) {
+        return NJ_ERR;
+    }
+    in[0] = offset;
+    pthread_mutex_lock(&s->lock);
+    s->cheat_search_value = (nj_u8)(nj_u4)value;
+    pthread_mutex_unlock(&s->lock);
+    return (jint)cheat_android_request(s, 6, (int)width, NJ_CHEAT_CHANGED, in,
+                                       1, NULL, NULL, 0);
 }
 
 /*

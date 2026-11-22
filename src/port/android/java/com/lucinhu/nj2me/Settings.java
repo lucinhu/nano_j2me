@@ -83,7 +83,10 @@ final class Settings {
 
     /** Experimental GPU drawing, off by default; sampled only at game creation. */
     static boolean gles2Experimental(Context ctx) {
-        return prefs(ctx).getBoolean(GLES2_EXPERIMENTAL, false);
+        /* Hardware acceleration is the default on builds that carry the
+         * backend; the settings row keeps a software fallback for titles or
+         * devices where the GPU path misbehaves. */
+        return prefs(ctx).getBoolean(GLES2_EXPERIMENTAL, true);
     }
 
     static void setGles2Experimental(Context ctx, boolean on) {

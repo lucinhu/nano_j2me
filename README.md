@@ -38,7 +38,7 @@ browser — the same runtime everywhere, with one small `nj_port` per platform.
 - **Small and embeddable.** Everything OS-specific is one `nj_port` implementation
   (about ten callbacks). The runtime keeps zero mutable global state; several VMs
   can coexist in one process, and `nj_vm_destroy()` returns the bytes it released.
-- **Cheatable.** The libretro core accepts `<arena offset>:<hex bytes>` cheat codes over the exposed Java arena and re-applies them every frame (frontend cheat search gives the offsets); the Android APK has the same engine with an in-game panel that also **searches** for a value, narrows the candidate list and generates the code, and both read the same file format. See [the cheat note](docs/notes/2026-11-19-android-cheat-editor.md) and [the search note](docs/notes/2026-11-19-cheat-search.md).
+- **Cheatable.** The libretro core accepts `<arena offset>:<hex bytes>` cheat codes over the exposed Java arena and re-applies them every frame (frontend cheat search gives the offsets); the Android APK has the same engine with an in-game panel that **searches** for a value, narrows the candidate list, **change-searches** by the control-variable method (record a baseline, then keep addresses that changed / stayed / grew / shrank) and generates the code, with a choice between a continuous code and a single write. Both read the same file format. See [the cheat note](docs/notes/2026-11-19-android-cheat-editor.md), [the search note](docs/notes/2026-11-19-cheat-search.md) and [the change-search note](docs/notes/2026-11-22-cheat-change-search.md).
 - **Verifiable.** 199 registered tests pass under `ctest`; 399 of the 404 real-game
   corpus titles run; every claim below is checked by a test, a gate or a
   recorded playback.
@@ -101,7 +101,7 @@ MPEG-4 intro movie with its own AMR-NB track.
 |---|---|
 | **Linux** x86_64 / aarch64 | CLI runner and the SDL2 desktop client; builds for glibc 2.17+ |
 | **Windows** x86_64 | `nj2me.exe` (mingw-w64): console runner plus the same library client, UTF-8 paths, verified under Wine |
-| **Android 5.0+** | release ships one APK per ABI (arm64-v8a / armeabi-v7a / x86 / x86_64): launcher, floating keypads, AAudio/OpenSL ES sound; `tools/build_android.sh` makes a universal APK for local use |
+| **Android 5.0+** | release ships one APK per ABI (arm64-v8a / armeabi-v7a / x86 / x86_64): launcher, floating keypads, AAudio/OpenSL ES sound, **GLES2 hardware acceleration on by default** (M3G triangle/raster paths, software fallback toggle in the panel); `tools/build_android.sh` makes a universal APK for local use |
 | **Android 2.x legacy** | ARMv5 `armeabi` edition with a lightweight launcher — see [docs/ANDROID_LEGACY.md](docs/ANDROID_LEGACY.md) |
 | **Web browsers** | Emscripten module plus a dependency-free ES-module shell — see [docs/WEB.md](docs/WEB.md) |
 | **RetroArch / libretro** | native cores for Linux (x86_64, aarch64, armv7) and Android (arm64, armv7, x86_64) |
@@ -227,7 +227,10 @@ Load the libretro core in RetroArch as **Mobile - J2ME (nano_j2me)** and pick a
 [docs/PORTING.md](docs/PORTING.md) and `tests/embedded/idf/`; the port is
 exercised under Espressif's `esp-emu` with `tools/run_esp_emulator.sh`.
 
-Optional accelerators stay off by default: a port-side GLES2 2D backend and
+Optional accelerators stay off by default outside the Android release APKs
+(which already build the GLES2 backend and enable it, see
+[the acceleration note](docs/notes/2026-11-22-android-gles2-default.md)): a
+port-side GLES2 2D backend and
 M3G/ Micro3D fragment path (`NJ_BUILD_GLES2_ACCEL=ON`, see
 [docs/GLES2_BACKEND.md](docs/GLES2_BACKEND.md) and
 [docs/GLES2_3D.md](docs/GLES2_3D.md)), and JIT backends for RV32/ARM64

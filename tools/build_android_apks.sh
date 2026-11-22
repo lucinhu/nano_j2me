@@ -3,6 +3,7 @@
 # Build the per-architecture Android release APKs.
 #
 #     tools/build_android_apks.sh [--out DIR] [--no-legacy] [--skip-native]
+#                                 [--gles2] [--no-gles2]
 #
 # Android releases ship one APK per ABI instead of a universal APK: a merged
 # APK carries four copies of libnj2me.so (about 2.4 MB of dead weight for any
@@ -13,9 +14,12 @@
 # versionCode recorded in each APK, verifies the signatures and writes
 # SHA256SUMS-<version>-apks.txt next to them.
 #
-# Native code is compiled per ABI by the called scripts; --skip-native is only
-# useful together with an already-populated build tree (it is forwarded to
-# nothing today and exists for symmetry with the other release tools).
+# Release APKs are built with the GLES2 hardware-acceleration backend by
+# default (--no-gles2 produces the older software-only binaries, still useful
+# as a fallback for devices or titles where the GPU path misbehaves).  Native
+# code is compiled per ABI by the called scripts; --skip-native is only useful
+# together with an already-populated build tree (it is forwarded to nothing
+# today and exists for symmetry with the other release tools).
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -26,14 +30,17 @@ VERSION_CODE="${VERSION_CODE#"${VERSION_CODE%%[!0]*}"}"
 [ -n "$VERSION_CODE" ] || VERSION_CODE=0
 OUT="$ROOT/build/android-release"
 LEGACY=1
+GLES2=1
 ABIS="arm64-v8a armeabi-v7a x86 x86_64"
 
 while [ $# -gt 0 ]; do
     case "$1" in
         --out) OUT="${2:?--out needs a directory}"; shift 2 ;;
         --no-legacy) LEGACY=0; shift ;;
+        --gles2) GLES2=1; shift ;;
+        --no-gles2) GLES2=0; shift ;;
         --skip-native) shift ;;
-        -h|--help) sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help) sed -n '2,26p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "unknown option: $1" >&2; exit 2 ;;
     esac
 done
@@ -53,8 +60,10 @@ fail() { echo "FAILED: $*" >&2; exit 1; }
 for abi in $ABIS; do
     echo "== $abi"
     rm -rf "$TMP/$abi"; mkdir -p "$TMP/$abi"
+    extra=()
+    [ "$GLES2" = 1 ] && extra+=(--gles2)
     "$ROOT/tools/build_android_apk.sh" --abi "$abi" --out "$TMP/$abi" \
-        || fail "build_android_apk.sh --abi $abi"
+        "${extra[@]}" || fail "build_android_apk.sh --abi $abi"
     [ -f "$TMP/$abi/nj2me.apk" ] || fail "no APK for $abi"
     cp "$TMP/$abi/nj2me.apk" "$OUT/nj2me-$VERSION-$abi.apk"
 done

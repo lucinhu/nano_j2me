@@ -248,6 +248,87 @@ static void test_search(void)
     nj_vm_destroy(vm);
 }
 
+static void test_change_search(void)
+{
+    nj_vm *vm = fresh_vm();
+    void *base = NULL;
+    nj_size size = 0;
+    unsigned char *arena;
+    nj_u4 off[3];
+    nj_u4 hits[16];
+    nj_u1 *snap;
+    nj_u4 snap_len;
+    static const nj_u1 v10[2] = { 0x10, 0x00 };
+    static const nj_u1 v20[2] = { 0x20, 0x00 };
+    static const nj_u1 v05[2] = { 0x05, 0x00 };
+    static const nj_u1 v30[2] = { 0x30, 0x00 };
+    nj_u1 readback[2];
+
+    CHECK(nj_vm_memory_region(vm, &base, &size) == NJ_OK, "change: arena exposed");
+    arena = (unsigned char *)base;
+    off[0] = (nj_u4)(size - 4096u);
+    off[1] = off[0] + 64u;
+    off[2] = off[0] + 128u;
+
+    /* Give the three addresses a known baseline first. */
+    CHECK(nj_vm_cheat_write(vm, off[0], v10, 2u) == 1, "write: baseline 0x10 written");
+    CHECK(nj_vm_cheat_write(vm, off[1], v20, 2u) == 1, "write: baseline 0x20 written");
+    CHECK(nj_vm_cheat_write(vm, off[2], v05, 2u) == 1, "write: baseline 0x05 written");
+    snap_len = nj_vm_cheat_snapshot(vm, NULL, 0u);
+    CHECK(snap_len > 0u && snap_len == (nj_u4)size, "change: snapshot size is the arena size");
+    snap = (nj_u1 *)calloc(1u, snap_len);
+    CHECK(snap != NULL, "change: snapshot buffer allocated");
+    CHECK(nj_vm_cheat_snapshot(vm, snap, snap_len) == snap_len,
+          "change: snapshot copied the arena");
+    CHECK(nj_vm_cheat_scan_changed(vm, snap, snap_len, 2u, NJ_CHEAT_CHANGED,
+                                   hits, 16u) == 0u,
+          "change: no hits before the game writes anything");
+
+    /* 0x10 -> 0x30 (up), 0x20 -> 0x10 (down), 0x05 stays; 0x10 == old 0x10? no. */
+    CHECK(nj_vm_cheat_write(vm, off[0], v30, 2u) == 1, "write: 0x30 written");
+    CHECK(nj_vm_cheat_write(vm, off[1], v10, 2u) == 1, "write: 0x10 written");
+    nj_vm_cheat_write(vm, off[2], v05, 2u);
+
+    CHECK(nj_vm_cheat_scan_changed(vm, snap, snap_len, 2u, NJ_CHEAT_CHANGED,
+                                   hits, 16u) == 2u,
+          "change: two changed addresses found");
+    CHECK(hits[0] == off[0] && hits[1] == off[1],
+          "change: changed addresses are exact and ascending");
+    CHECK(nj_vm_cheat_scan_changed(vm, snap, snap_len, 2u, NJ_CHEAT_INCREASED,
+                                   hits, 16u) == 1u && hits[0] == off[0],
+          "change: increased scan keeps the grown value");
+    CHECK(nj_vm_cheat_scan_changed(vm, snap, snap_len, 2u, NJ_CHEAT_DECREASED,
+                                   hits, 16u) == 1u && hits[0] == off[1],
+          "change: decreased scan keeps the shrunk value");
+    CHECK(nj_vm_cheat_filter_changed(vm, off, 3u, snap, snap_len, 2u,
+                                     NJ_CHEAT_UNCHANGED, hits, 16u) == 1u &&
+          hits[0] == off[2],
+          "change: filter keeps only the unchanged candidate");
+    {
+        nj_u4 in[2] = { off[0], off[1] };
+        nj_u4 out[2];
+
+        CHECK(nj_vm_cheat_filter_changed(vm, in, 2u, snap, snap_len, 2u,
+                                         NJ_CHEAT_CHANGED, out, 1u) == 1u,
+              "change: filter honours the output cap");
+        CHECK(nj_vm_cheat_filter_changed(vm, in, 2u, snap, snap_len, 2u,
+                                         NJ_CHEAT_INCREASED, out, 2u) == 1u &&
+              out[0] == off[0],
+              "change: filter increased keeps the grown candidate");
+    }
+    CHECK(nj_vm_cheat_read(vm, off[0], readback, 2u) == 1 &&
+          readback[0] == 0x30 && readback[1] == 0x00,
+          "write: bytes are visible through the read helper");
+    CHECK(nj_vm_cheat_write(vm, (nj_u4)size - 1u, v10, 2u) == 0,
+          "write: range past the arena end refused");
+    CHECK(nj_vm_cheat_write(vm, 0u, v10, 0u) == 0, "write: empty write refused");
+    CHECK(nj_vm_cheat_scan_changed(vm, snap, snap_len - 1u, 2u,
+                                   NJ_CHEAT_CHANGED, hits, 16u) == 0u,
+          "change: short baseline refused");
+    free(snap);
+    nj_vm_destroy(vm);
+}
+
 int main(void)
 {
     test_parser();
@@ -255,6 +336,7 @@ int main(void)
     test_apply();
     test_load_file();
     test_search();
+    test_change_search();
     printf("test_cheat: %u checks, %u failures\n", checks, failures);
     return failures == 0 ? 0 : 1;
 }

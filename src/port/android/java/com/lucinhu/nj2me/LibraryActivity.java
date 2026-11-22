@@ -976,7 +976,7 @@ public class LibraryActivity extends Activity {
         String f = Settings.fontFile(this);
         String summary = f == null ? aa + "，系统字体" : aa + "，字体：" + new File(f).getName();
         return summary + (GameActivity.graphicsSupported()
-                ? "，下次：" + (Settings.gles2Experimental(this) ? "GLES2 实验加速" : "软件绘制")
+                ? "，下次：" + (Settings.gles2Experimental(this) ? "硬件加速（GLES2）" : "软件绘制")
                 : "，软件绘制（本包未含 GLES2）");
     }
 
@@ -1068,8 +1068,8 @@ public class LibraryActivity extends Activity {
         final boolean graphicsAvailable = GameActivity.graphicsSupported();
         final boolean gles2 = graphicsAvailable && Settings.gles2Experimental(this);
         LinearLayout graphicsRow = Md3.row(this, Md3.IC_SCREEN,
-                graphicsAvailable ? "GLES2 实验加速：" + (gles2 ? "开" : "关") + "（下次启动）"
-                                  : "GLES2 实验加速：不可用",
+                graphicsAvailable ? "硬件加速（GLES2）：" + (gles2 ? "开" : "关") + "（下次启动）"
+                                  : "硬件加速（GLES2）：不可用",
                 graphicsAvailable ? "下次启动游戏生效；支持的绘制交给 GPU，其余用软件。性能提升不保证。"
                                   : "此安装包未含 GLES2，使用软件绘制。",
                 gles2, null);

@@ -626,6 +626,44 @@ nj_u4   nj_vm_cheat_filter(nj_vm *vm, const nj_u4 *in_offsets, nj_u4 count,
 int     nj_vm_cheat_read(nj_vm *vm, nj_u4 offset, nj_u1 *buf, nj_u2 len);
 
 /*
+ * Change search ("control variable" method).
+ *
+ * The value searcher above finds addresses by an exact byte pattern, which
+ * cannot find a number the player has not seen yet.  These helpers snapshot
+ * the arena and then keep the addresses whose value changed, stayed the same,
+ * grew or shrank since that baseline:
+ *
+ *   NJ_CHEAT_CHANGED     value differs from the snapshot
+ *   NJ_CHEAT_UNCHANGED   value equals the snapshot
+ *   NJ_CHEAT_INCREASED   value is larger than the snapshot (unsigned, LE)
+ *   NJ_CHEAT_DECREASED   value is smaller than the snapshot (unsigned, LE)
+ *
+ * `width` is the value size in bytes (1..8).  nj_vm_cheat_snapshot() with a
+ * NULL buffer returns the arena size the caller must allocate; with a buffer
+ * it copies the arena and returns the number of bytes copied.  The scan walks
+ * every `width`-aligned offset and stores at most `max` matching offsets (a
+ * full list means more hits may exist).  The filter narrows a candidate list
+ * the same way.  nj_vm_cheat_write() writes bytes once at a frame boundary
+ * (the "single change" counterpart to a re-applied cheat code) and returns 1
+ * on success, 0 when the range is outside the arena.
+ */
+#define NJ_CHEAT_CHANGED    0
+#define NJ_CHEAT_UNCHANGED  1
+#define NJ_CHEAT_INCREASED  2
+#define NJ_CHEAT_DECREASED  3
+
+nj_u4   nj_vm_cheat_snapshot(nj_vm *vm, nj_u1 *buf, nj_u4 cap);
+nj_u4   nj_vm_cheat_scan_changed(nj_vm *vm, const nj_u1 *prev,
+                                 nj_u4 prev_len, nj_u2 width, int mode,
+                                 nj_u4 *offsets, nj_u4 max);
+nj_u4   nj_vm_cheat_filter_changed(nj_vm *vm, const nj_u4 *in_offsets,
+                                   nj_u4 count, const nj_u1 *prev,
+                                   nj_u4 prev_len, nj_u2 width, int mode,
+                                   nj_u4 *out_offsets, nj_u4 max);
+int     nj_vm_cheat_write(nj_vm *vm, nj_u4 offset, const nj_u1 *bytes,
+                          nj_u2 len);
+
+/*
  * Diagnostic: describe where every live thread currently is.
  *
  * One line per thread (id, state, depth) followed by the innermost frames of

@@ -324,6 +324,22 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
                                              int count, int width, long[] out);
 
     /*
+     * Change search ("控制变量法"): record the arena as a baseline, let the
+     * game change a value, then keep the addresses whose value changed, stayed
+     * equal, grew or shrank.  The last call writes one value once instead of
+     * freezing it every frame.
+     */
+    private static native int nativeCheatSnapshot(long handle);
+    private static native int nativeCheatChanged(long handle, int width,
+                                                 int mode, long[] out);
+    private static native int nativeCheatFilterChanged(long handle,
+                                                       long[] candidates,
+                                                       int count, int width,
+                                                       int mode, long[] out);
+    private static native int nativeCheatWriteOnce(long handle, long offset,
+                                                   long value, int width);
+
+    /*
      * Candidates kept from the last value search, the byte width they were
      * searched with, and whether a search/narrow request is in flight.  The
      * panel talks to the run thread through the same lock the other natives
@@ -332,6 +348,7 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
     private final long[] cheatCandidates = new long[256];
     private int cheatCandidateCount;
     private int cheatSearchWidth = 4;
+    private boolean cheatBaselineSet;
 
     private static native void nativeQuit(long handle);
 
@@ -1393,8 +1410,8 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
         final boolean graphicsAvailable = graphicsSupported();
         final boolean gles2 = graphicsAvailable && Settings.gles2Experimental(this);
         LinearLayout graphicsRow = Md3.row(this, Md3.IC_SCREEN,
-                graphicsAvailable ? "GLES2 实验加速：" + (gles2 ? "开" : "关") + "（下次启动）"
-                                  : "GLES2 实验加速：不可用",
+                graphicsAvailable ? "硬件加速（GLES2）：" + (gles2 ? "开" : "关") + "（下次启动）"
+                                  : "硬件加速（GLES2）：不可用",
                 graphicsAvailable ? "下次启动游戏生效；支持的绘制交给 GPU，其余用软件。性能提升不保证。"
                                   : "此安装包未含 GLES2，使用软件绘制。",
                 gles2, null);
@@ -1878,7 +1895,7 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
                                 runCheatSearch(value, width, narrowing);
                             }
                         })
-                .setNeutralButton(narrowing ? "重新搜索" : "取消",
+                .setNeutralButton(narrowing ? "重新搜索" : "变化搜索",
                         new android.content.DialogInterface.OnClickListener() {
                             @Override
                             public void onClick(android.content.DialogInterface d,
@@ -1886,10 +1903,139 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
                                 if (narrowing) {
                                     cheatCandidateCount = 0;
                                     cheatSearchDialog(false);
+                                } else {
+                                    cheatChangeDialog();
                                 }
                             }
                         })
                 .show();
+    }
+
+    /**
+     * Change search: record a baseline, let the game change the value, then
+     * filter the candidate list by "变了 / 没变 / 变大 / 变小".  This is the
+     * control-variable method: the address that keeps matching the observed
+     * behaviour is the one the game uses.
+     */
+    private void cheatChangeDialog() {
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        int pad = Math.round(20 * getResources().getDisplayMetrics().density);
+        box.setPadding(pad, pad / 2, pad, 0);
+
+        TextView hint = new TextView(this);
+        hint.setText(cheatBaselineSet
+                ? "基准已记录。回游戏里让数值变化，再点下面的条件筛选；"
+                  + "命中后会以当前内存作为新基准继续缩小。"
+                : "第 1 步：点“记录基准”。回游戏里让数值变化（打怪、买东西），"
+                  + "再点“变了”或“变大/变小”筛选。");
+        box.addView(hint);
+
+        final RadioGroup group = new RadioGroup(this);
+        group.setOrientation(RadioGroup.HORIZONTAL);
+        final int[] widths = {1, 2, 4};
+        final String[] widthLabels = {"1 字节", "2 字节", "4 字节"};
+        for (int i = 0; i < widths.length; i++) {
+            RadioButton rb = new RadioButton(this);
+            rb.setText(widthLabels[i]);
+            rb.setId(2400 + widths[i]);
+            rb.setChecked(widths[i] == cheatSearchWidth);
+            group.addView(rb);
+        }
+        box.addView(group);
+
+        final String[] labels = {"记录基准（重设）", "变了", "没变", "变大", "变小"};
+        final int[] modes = {-1, 0, 1, 2, 3};
+        final AlertDialog[] holder = new AlertDialog[1];
+        for (int i = 0; i < labels.length; i++) {
+            final int mode = modes[i];
+            Button b = new Button(this);
+            b.setText(labels[i]);
+            b.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    int width = cheatSearchWidth;
+                    int checked = group.getCheckedRadioButtonId();
+                    for (int k = 0; k < widths.length; k++) {
+                        if (2400 + widths[k] == checked) {
+                            width = widths[k];
+                        }
+                    }
+                    if (mode < 0) {
+                        recordCheatBaseline();
+                    } else {
+                        runCheatChangeFilter(width, mode);
+                    }
+                    if (holder[0] != null) {
+                        holder[0].dismiss();
+                    }
+                }
+            });
+            box.addView(b);
+        }
+        holder[0] = new AlertDialog.Builder(this)
+                .setTitle("变化搜索（控制变量法）")
+                .setView(box)
+                .setNegativeButton("关闭", null)
+                .show();
+    }
+
+    private void recordCheatBaseline() {
+        int n;
+        synchronized (lock) {
+            if (handle == 0) {
+                toast("游戏还没跑起来，稍等一下再搜");
+                return;
+            }
+            n = nativeCheatSnapshot(handle);
+        }
+        if (n <= 0) {
+            toast("没能记录基准（游戏可能还没跑起来）");
+            return;
+        }
+        cheatBaselineSet = true;
+        cheatCandidateCount = 0;
+        toast("基准已记录（" + n + " 字节）。回游戏改变数值后再点变化条件");
+    }
+
+    private void runCheatChangeFilter(int width, int mode) {
+        int n;
+        synchronized (lock) {
+            if (handle == 0) {
+                toast("游戏还没跑起来，稍等一下再搜");
+                return;
+            }
+            if (!cheatBaselineSet) {
+                toast("先点“记录基准”，再去游戏里改变数值");
+                return;
+            }
+            if (cheatCandidateCount > 0) {
+                n = nativeCheatFilterChanged(handle, cheatCandidates,
+                        cheatCandidateCount, width, mode, cheatCandidates);
+            } else {
+                n = nativeCheatChanged(handle, width, mode, cheatCandidates);
+            }
+        }
+        if (n < 0) {
+            toast("这次没能筛选（游戏可能还没跑起来）");
+            return;
+        }
+        cheatSearchWidth = width;
+        cheatCandidateCount = Math.min(n, cheatCandidates.length);
+        if (n == 0) {
+            toast("没有符合条件的地址：再让数值变化一次，或重设基准");
+            return;
+        }
+        if (n > cheatCandidates.length) {
+            toast("命中 " + n + " 个地址，只保留前 " + cheatCandidates.length + " 个");
+        }
+        /* Rebase so the next pass compares against the state we just kept. */
+        synchronized (lock) {
+            if (nativeCheatSnapshot(handle) > 0) {
+                cheatBaselineSet = true;
+            }
+        }
+        showCheatCandidates(0L, width);
     }
 
     private void runCheatSearch(long value, int width, boolean narrow) {
@@ -1968,9 +2114,35 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
                 .setItems(items, new android.content.DialogInterface.OnClickListener() {
                     @Override
                     public void onClick(android.content.DialogInterface d, int which) {
-                        long current = (live != null && which < live.length)
+                        final long current = (live != null && which < live.length)
                                 ? live[which] : value;
-                        cheatWriteCode(cheatCandidates[which], current, width);
+                        final long offset = cheatCandidates[which];
+                        new AlertDialog.Builder(GameActivity.this)
+                                .setTitle("怎么改这个地址？")
+                                .setItems(new String[] {
+                                        "持续修改（写成作弊码，每帧保持）",
+                                        "单次修改（只写一次，游戏可覆盖）"},
+                                        new android.content.DialogInterface.OnClickListener() {
+                                            @Override
+                                            public void onClick(
+                                                    android.content.DialogInterface d2,
+                                                    int which2) {
+                                                if (which2 == 0) {
+                                                    cheatWriteCode(offset, current, width);
+                                                } else {
+                                                    int r;
+                                                    synchronized (lock) {
+                                                        r = nativeCheatWriteOnce(handle,
+                                                                offset, current, width);
+                                                    }
+                                                    toast(r == 1
+                                                            ? "已写入一次（游戏之后可以改回去）"
+                                                            : "这次没能写入");
+                                                }
+                                            }
+                                        })
+                                .setNegativeButton("取消", null)
+                                .show();
                     }
                 })
                 .setPositiveButton("缩小范围",
@@ -2114,7 +2286,7 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
         }
         String detail = "本局状态：" + graphicsStateText(info);
         if (info != null && info.length >= 6) {
-            detail += "\n本局启动选择：" + (info[5] == 1 ? "GLES2 实验加速" : "软件绘制")
+            detail += "\n本局启动选择：" + (info[5] == 1 ? "硬件加速（GLES2）" : "软件绘制")
                     + "\nGPU 填充 " + info[1] + " · 图像 " + info[2] + " · 栅格 " + info[3]
                     + "\n转交软件 " + info[4] + " 次";
             if (info.length >= 8) {
