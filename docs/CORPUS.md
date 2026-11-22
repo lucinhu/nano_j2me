@@ -1898,3 +1898,22 @@ a blank screen for both `RadioBee.jar` (NPE building a Form from a null item
 array) and `Tetrisdlx.jar` (NPE reading a missing `/settings` resource).
 
 Compatibility matrix: 2462 titles, **2421 ok** (was 2420).
+
+## Round 218: r55 whole-corpus probe and 0.5.36 (2026-11-23)
+
+The 0.5.36/r55 package was built from `5af2e3b` and probed through the libretro
+core over the 1034 title rows of the combined corpus (300 frames, 8 jobs):
+
+**1034 titles: 1028 passed, 3 known limitations, 3 failed.**
+
+The three failures are the documented limitation set — `MidnightPool1`
+(paint-clock limitation plus state refusal), `PAC-MAN (176x220)` (title-side
+empty Sprint Muglet URI) and `Asphalt4EliteRacing` (long first frame refuses
+the state round trip).  The known set is `台球传奇_87` and `毁灭战士3_10598`;
+this run's `杀鬼子-敌后武工队_2185` state flake did not reproduce.  That is the
+same outcome as the r54 probe minus the flake, so the `Choice.POPUP` and
+`in_c_call` changes are neutral for the rendered corpus.
+
+Package verification: full serial CTest **210/210** (387.41 s), mock frontend
+matrix **20/20**, real RetroArch LoopDemo 120 frames PASS, Wine x86-64
+**4/4 @300**, submission bundle **32/32**.

@@ -74,8 +74,10 @@ provided):
 - real RetroArch 1.22.2 LoopDemo, 120 frames: **PASS**;
 - Windows x86_64 under Wine, 4 titles × 300 frames: **4/4**;
 - submission bundle validator: **32/32**;
-- whole-corpus libretro visual probe on the r55 core: see
-  `docs/CORPUS.md` round-217/218.
+- whole-corpus libretro visual probe on the r55 core: **1034 titles probed —
+  1028 passed, 3 known limitations, 3 failed** (MidnightPool1, PAC-MAN,
+  Asphalt4EliteRacing; all documented limitations, same set as r54 minus the
+  intermittent `杀鬼子` state flake).
 
 ## Upgrade notes
 
