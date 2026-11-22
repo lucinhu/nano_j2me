@@ -388,6 +388,39 @@ NJFN(class_getResourceAsStream)
     return NJ_OK;
 }
 
+/* True when two classes live in the same runtime package.  The JVM lets a
+ * package-private class be reached from code in its own package; only
+ * cross-package access is forbidden.  Names are internal (slash separated),
+ * so the package is everything before the last slash, and two names without
+ * a slash are both in the unnamed package. */
+static int same_package_class(const nj_class *a, const nj_class *b)
+{
+    const char *pa = NULL;
+    const char *pb = NULL;
+    const char *p;
+
+    if (!a || !b || !a->name || !b->name) {
+        return 0;
+    }
+    for (p = a->name; *p; p++) {
+        if (*p == '/') {
+            pa = p;
+        }
+    }
+    for (p = b->name; *p; p++) {
+        if (*p == '/') {
+            pb = p;
+        }
+    }
+    if (!pa || !pb) {
+        return pa == pb;
+    }
+    if ((nj_size)(pa - a->name) != (nj_size)(pb - b->name)) {
+        return 0;
+    }
+    return memcmp(a->name, b->name, (nj_size)(pa - a->name)) == 0;
+}
+
 /*
  * Class.newInstance(): the no-argument constructor, and nothing else.  Two
  * corpus titles (3D坦克对战1944, CS反恐精英) build their screens this way, and
@@ -427,15 +460,27 @@ NJFN(class_newInstance)
      * class is what makes the report actionable.
      */
     /*
-     * Only the class itself has to be public.  Handsets do not check the
-     * constructor's access flags here: Nokia's Snake (snake_2.jar) is
-     * `public class ToneDevice` with a package-private `ToneDevice()` and
-     * Class.newInstance() is how the MIDlet reaches it.  Refusing that made
-     * startApp() NPE in `f.initialise()`.  A package-private *class* still
-     * gets IllegalAccessException (tests/excdemo/ExcDemo.java covers it).
+     * Handsets do not check the constructor's access flags here: Nokia's
+     * Snake (snake_2.jar) is `public class ToneDevice` with a
+     * package-private `ToneDevice()` and Class.newInstance() is how the
+     * MIDlet reaches it.  Refusing that made startApp() NPE in
+     * `f.initialise()`.
+     *
+     * The class access flag does matter, but the JVM only forbids
+     * cross-package access to a package-private class: 3D_Tetris
+     * (de/_3DTetris) calls Class.newInstance() on its own package-private
+     * `SzeneObjekt` from the same package and a handset accepts it.  Keep
+     * refusing the cross-package case (tests/excdemo covers it).
      */
     if (!(c->flags & NJ_ACC_PUBLIC)) {
-        return nj_throw(vm, "java/lang/IllegalAccessException", c->name);
+        nj_thread *th = vm->cur;
+        nj_method *caller = (th && th->nframes >= 2) ?
+            th->frames[th->nframes - 2].m : NULL;
+        nj_class *from = caller ? caller->owner : NULL;
+
+        if (!from || !same_package_class(from, c)) {
+            return nj_throw(vm, "java/lang/IllegalAccessException", c->name);
+        }
     }
     mark = nj_root_mark(vm);
     o = nj_object_new(vm, c->name);

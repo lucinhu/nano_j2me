@@ -17,10 +17,11 @@ mkdir -p "$WORK/classes/META-INF"
 
 STUBS="$(python3 "$ROOT/tools/midp_stubs.py" --quiet)"
 javac --release 8 -nowarn -classpath "$STUBS" -d "$WORK/classes" \
-    "$ROOT/tests/excdemo/ExcDemo.java"
+    "$ROOT/tests/excdemo/ExcDemo.java" \
+    "$ROOT/tests/excdemo/hidden/ExcHidden.java"
 
 printf 'Manifest-Version: 1.0\r\nMIDlet-Name: ExcDemo\r\nMIDlet-1: ExcDemo, , ExcDemo\r\n\r\n' \
     > "$WORK/classes/META-INF/MANIFEST.MF"
 mkdir -p "$(dirname "$OUT")"
-( cd "$WORK/classes" && jar cfm "$OUT" META-INF/MANIFEST.MF *.class )
+( cd "$WORK/classes" && jar cfm "$OUT" META-INF/MANIFEST.MF *.class hidden/*.class )
 echo "wrote $OUT"

@@ -9,12 +9,13 @@ import javax.microedition.midlet.MIDlet;
  * The corpus had three such titles and the output was useless for all of them.
  */
 /*
- * Package-private on purpose: Class.newInstance() is specified to refuse it
- * with IllegalAccessException, and the message must name the class or the
- * report is another "something went wrong somewhere".
+ * Same package as the demo, package-private on purpose: the JVM lets code in
+ * the same package instantiate it through Class.newInstance(), and handsets
+ * rely on that (3D_Tetris does exactly this).  This is the positive half of
+ * the accessibility test; hidden.ExcHidden is the negative half.
  */
-class ExcHidden {
-    public ExcHidden() { }
+class ExcSamePkg {
+    public ExcSamePkg() { }
 }
 
 public class ExcDemo extends MIDlet {
@@ -30,7 +31,13 @@ public class ExcDemo extends MIDlet {
             e.printStackTrace();
         }
         try {
-            Class.forName("ExcHidden").newInstance();
+            Object o = Class.forName("ExcSamePkg").newInstance();
+            System.out.println("PACKAGE same-package ok " + (o != null));
+        } catch (Exception e) {
+            System.out.println("PACKAGE same-package FAILED " + e);
+        }
+        try {
+            Class.forName("hidden.ExcHidden").newInstance();
         } catch (Exception e) {
             System.out.println("ACCESS " + e.getClass().getName() + ": " + e.getMessage());
         }

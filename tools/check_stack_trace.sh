@@ -29,9 +29,14 @@ echo "$out" | grep -c "    at " | grep -qv "^0$" || {
 # Class.newInstance() must refuse a package-private class with
 # IllegalAccessException, and say which class: the specification distinguishes
 # it from InstantiationException, and a MIDlet may catch one of the two.
-echo "$out" | grep -q "ACCESS java.lang.IllegalAccessException: ExcHidden" || {
+echo "$out" | grep -q "ACCESS java.lang.IllegalAccessException: hidden/ExcHidden" || {
     echo "FAIL: newInstance() on a package-private class must name it"
     echo "$out" | grep "ACCESS" | head -2
+    exit 1; }
+# ... but the same call from the class's own package is legal and must work.
+echo "$out" | grep -q "PACKAGE same-package ok true" || {
+    echo "FAIL: newInstance() must accept a package-private class from its own package"
+    echo "$out" | grep "PACKAGE" | head -2
     exit 1; }
 echo "$out" | grep -q "thrown: java/lang/NullPointerException at ExcDemo.boom()V pc=" || {
     echo "FAIL: the throw site was not named"
