@@ -1634,3 +1634,35 @@ without a single report at 120 frames.
 The campaign stays a manual release-branch check (the sanitizer build is not
 part of the default tree and the run is far too slow for CTest); the wrapper
 is tracked as `tools/check_corpus_asan.py` and exits 1 on any finding.
+
+
+## Round 189: whole-corpus libretro state probe (2026-11-22)
+
+`tools/check_libretro_states.py` grew `--jobs N` and now resolves each row's
+absolute `jar_path` and per-title screen (passing `nano_j2me_screen` plus the
+matching `--expect-screen`), so it can replay the fetched cache rows instead of
+only the repository ones. With those fixes the full r50-core state probe ran
+over every rendered title:
+
+```
+python3 tools/check_libretro_states.py .local-tools/debug-runs/compat-20261122-r187 \
+    --count 1036 --frames 120 --jobs 8 \
+    --harness /var/tmp/nj2me-lrstate-build/test_libretro_frontend \
+    --core build/libretro-dist/linux-x86_64/nano_j2me_libretro.so
+```
+
+Result: **1036 titles -> 1033 serialize/unserialize round trips, 3 failed**
+(log `.local-tools/debug-runs/state-probe-r189.log`). The first run of this
+probe showed 143 "rc=1 missing=none" failures; they were harness geometry
+checks complaining that a 320x240 title was measured with the default 240x320
+expectation. Passing `--expect-screen` alongside the core option removed them,
+which is why the tool now does both.
+
+The three genuine failures are the documented long-frame class:
+`MidnightPool1_1.0.0_320x240` (paint busy-wait on `System.currentTimeMillis()`;
+its frames never complete under the libretro clock model),
+`Asphalt4EliteRacing_1.0.0_320x240` and `毁灭战士3_10598` (the latter runs its
+whole game loop inside the MIDlet constructor). A one-off experiment with
+`LR_STATE_TIMEOUT_MS` raised 4 s -> 15 s still failed all three (wall time grew
+to ~17 s), so these are not "slightly too slow" frames and the 4 s bound is not
+worth loosening: a frontend would only block longer before the same refusal.

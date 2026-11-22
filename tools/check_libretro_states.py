@@ -21,6 +21,7 @@ from that half-loaded VM is not a state a real frontend would ever take.
 Usage:
     tools/check_libretro_states.py <rows dir> [--count N] [--frames N] [--seed N]
                                    [--pace-us N] [--harness PATH] [--core PATH]
+                                   [--jobs N]
 
 Rows come from tools/sweep_compat.py; the sample is deterministic for a seed.
 Only rows classified as ok with a painted frame are sampled.  The tool writes
@@ -37,6 +38,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from concurrent.futures import ProcessPoolExecutor, as_completed
 
 
 ROOT = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
@@ -61,6 +63,50 @@ def find(basename):
     return None
 
 
+def jar_for(row):
+    """Prefer the path the sweep recorded; fall back to the legacy search."""
+    path = row.get("jar_path")
+    if path and os.path.isfile(path):
+        return path
+    return find(os.path.basename(row["file"]))
+
+
+def one(harness, core, row, frames, pace_us):
+    """Run one title's serialize round trip; returns (name, ok, line)."""
+    path = jar_for(row)
+    if path is None:
+        return None
+    with tempfile.TemporaryDirectory() as save_dir:
+        cmd = [harness, "--core", core, "--jar", path,
+               "--frames", str(frames), "--save-dir", save_dir]
+        if pace_us > 0:
+            cmd += ["--pace-us", str(pace_us)]
+        screen = row.get("screen")
+        if screen:
+            # The core option sets the canvas; --expect-screen makes the
+            # harness's base-geometry check expect the same size (a 320x240
+            # build measured on a 240x320 extent would otherwise fail it).
+            cmd += ["--set", "nano_j2me_screen=" + screen,
+                    "--expect-screen", screen]
+        try:
+            p = subprocess.run(cmd, capture_output=True, text=True,
+                               timeout=300)
+        except subprocess.TimeoutExpired:
+            return (row["file"], False,
+                    "%-52s FAIL timeout" % row["file"][:52])
+        out = p.stdout + p.stderr
+        missing = [k for k in REQUIRED if ("PASS " + k) not in out]
+        size = SIZE_RE.search(out)
+        if p.returncode != 0 or missing:
+            reason = "rc=%d missing=%s" % (p.returncode,
+                                           ",".join(missing) or "none")
+            return (row["file"], False,
+                    "%-52s FAIL %s" % (row["file"][:52], reason))
+        return (row["file"], True,
+                "%-52s PASS serialize_size=%s"
+                % (row["file"][:52], size.group(1) if size else "?"))
+
+
 def main(argv):
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("rows")
@@ -71,6 +117,8 @@ def main(argv):
                     help="frame pacing in microseconds (0 disables pacing)")
     ap.add_argument("--harness", default=os.environ.get("NJ_LIBRETRO_HARNESS"))
     ap.add_argument("--core", default=os.environ.get("NJ_LIBRETRO_CORE"))
+    ap.add_argument("--jobs", type=int, default=1,
+                    help="parallel titles (default 1; each runs one process)")
     args = ap.parse_args(argv)
 
     harness = args.harness or os.path.join(ROOT, "build",
@@ -107,37 +155,29 @@ def main(argv):
 
     seen = passed = 0
     fail = []
-    for row in ok:
-        if seen >= args.count:
-            break
-        path = find(os.path.basename(row["file"]))
-        if path is None:
-            continue
+    todo = ok[:args.count]
+
+    def handle(result):
+        nonlocal seen, passed
+        if result is None:
+            return
+        row_file, good, line = result
         seen += 1
-        with tempfile.TemporaryDirectory() as save_dir:
-            cmd = [harness, "--core", core, "--jar", path,
-                   "--frames", str(args.frames), "--save-dir", save_dir]
-            if args.pace_us > 0:
-                cmd += ["--pace-us", str(args.pace_us)]
-            try:
-                p = subprocess.run(cmd, capture_output=True, text=True,
-                                   timeout=300)
-            except subprocess.TimeoutExpired:
-                fail.append((row["file"], "timeout"))
-                print("%-52s FAIL timeout" % row["file"][:52])
-                continue
-            out = p.stdout + p.stderr
-            missing = [k for k in REQUIRED if ("PASS " + k) not in out]
-            size = SIZE_RE.search(out)
-            if p.returncode != 0 or missing:
-                reason = "rc=%d missing=%s" % (p.returncode,
-                                               ",".join(missing) or "none")
-                fail.append((row["file"], reason))
-                print("%-52s FAIL %s" % (row["file"][:52], reason))
-            else:
-                passed += 1
-                print("%-52s PASS serialize_size=%s"
-                      % (row["file"][:52], size.group(1) if size else "?"))
+        print(line, flush=True)
+        if good:
+            passed += 1
+        else:
+            fail.append((row_file, line.split("FAIL ", 1)[-1]))
+
+    if args.jobs > 1:
+        with ProcessPoolExecutor(max_workers=args.jobs) as ex:
+            futs = [ex.submit(one, harness, core, row, args.frames,
+                              args.pace_us) for row in todo]
+            for f in as_completed(futs):
+                handle(f.result())
+    else:
+        for row in todo:
+            handle(one(harness, core, row, args.frames, args.pace_us))
 
     print("\n%d titles: %d state round trips, %d failed"
           % (seen, passed, len(fail)))
