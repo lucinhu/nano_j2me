@@ -283,3 +283,52 @@ primitives produced differences inside noise (合金弹头 0.148/0.121/0.141 s v
 0.121/0.140 s; Minecraft 0.517-0.524 s both), so it was reverted under the
 "reject neutral changes" rule.  Conclusion: option B has little headroom for
 the general corpus; the heavy titles are waiting/loading loops, not drawing.
+
+## Session/transaction accounting (round 202)
+
+The round-196/199 model described "two full-screen transactions per frame",
+but the actual transaction shape was only estimated from a list debug print.
+Instrumenting the GLES2 port (temporary counters, reverted afterwards) shows
+the details on the host RTX 5080 SDL2/GLES2 build with
+`NJ_M3G_FORCE_ACCEL=1 --graphics gles2`, Galaxy on Fire 2 deep keys:
+
+- Every GPU transaction comes through the port's `gfx_triangles_list` hook,
+  not the single-packet entry point and not the persistent-session path; the
+  session path is only opened from `releaseTarget`/`setViewport` order-only
+  pumps, which this title does not hit between its render passes.
+- A 400-frame gameplay run did **908 list transactions (2.3/frame)**, each
+  carrying **14-18 packets** with a union rectangle of roughly **200x200**
+  pixels; a 560-frame run that included the loading animation showed
+  **2960 transactions (5.3/frame)**.  So the count depends on the scene
+  phase, but multiple transactions per frame are the norm.
+- Profiled per-flush cost (560-frame run, host machine also busy, so the
+  absolute numbers are inflated but the shares are representative):
+  `prep` 326 ms, `setup` 294 ms, `import_c` 298 ms, `up_c` 48 ms,
+  `pack_d` 71 ms, `up_d` 310 ms, `seed` 99 ms, `read_c` 835 ms,
+  `read_d` 137 ms, `commit` 448 ms, `draw` 69 ms, total 2966 ms.
+  Fixed per-transaction work (setup/seed/readback/commit) outweighs the
+  actual drawing and scales with the transaction count, not triangle count.
+
+Why they cannot simply be merged: each list transaction is forced by a 2D
+observer (`gfx_load()` flushes before the first `Graphics` operation on the
+surface), and the 2D drawing that follows reads and blends against committed
+CPU pixels.  Keeping the GPU result resident across that 2D drawing would
+require the 2D operations themselves to run in GL.  Phase 1 (frame FBO) alone
+therefore cannot reduce the transaction count; the no-readback upper bound
+measured in round 199 (4.37 s vs software 3.83 s) remains the ceiling for the
+CPU-composite design.
+
+Revised implementation order for the whole-frame renderer:
+
+1. **B1 - 2D command capture (first milestone)**: capture opaque fills and
+   blits issued after a 3D flush as GL quads into the same frame FBO instead
+   of committing the 3D pixels; anything that genuinely needs destination
+   pixels (alpha blends/text over 3D, pixel reads) falls back to a full
+   commit.  Measure the fallback rate on Galaxy before writing the text path.
+2. **B2 - glyph atlas** for text drawn over 3D (most HUD text), using the
+   existing software glyph rasteriser to fill an atlas texture.
+3. **B3 - EGL presentation** on Android and a readback fallback on SDL.
+4. Keep software the default until B1-B3 beat it on the measured workloads.
+
+Until B1 lands the experimental GLES2 backend stays opt-in and the software
+renderer remains the default; this is a multi-round project, not a switch.

@@ -1724,3 +1724,22 @@ started the title (240x320 canvas plus the on-screen keypad rendered) and
 logcat reported `gles2: enabled renderer=Android Emulator OpenGL ES Translator
 (Google SwiftShader) (private pbuffer)` with `running LoopDemo`.  Screenshots
 are kept in `.local-tools/debug-runs/r201/` (untracked evidence).
+
+## Round 202: 0.5.34 CLI corpus sweep (2026-11-23)
+
+Full combined sweep on the 0.5.34 CLI (`tests/games` plus the 646-file
+fetched cache, 18 workers, `.local-tools/debug-runs/compat-20261122-r201`):
+**1050 rows -> 1036 ok / 4 title-exception / 4 bad-jar / 2 timeout /
+2 title-exit / 2 no-frame**.  The verdict set is identical to the round-176
+sweep (1036 ok) and every non-ok row is the same documented one:
+`4in1 Memory`, `ArcadePark2` (missing Glomo class), `JewelQuestDeluxe`,
+`epub_reader_albite` (spec-mandated `setTitle(null)` NullPointerException)
+as title-exceptions; `AMF_Xtreme_Bowling`, `DiamondTwister`,
+`bounce_tale_qy5sf1si`, `鲁宾逊漂流记汉化BT版` as bad jars; `assassins_creed`
+and `gangstar_2` as slow/stalling timeouts; `乱世Q三国` and `有女倾城破解版`
+self-exiting without painting; `蹦球传说` self-exiting after 91 frames.  The
+0.5.34 release changed only GLES2 diagnostics/determinism, so no matrix
+update was needed (the row set would be byte-identical).  The first sweep
+attempt hit a transient `PermissionError` on the CLI binary at row 615; the
+rerun completed cleanly, so it was a filesystem race with the rebuild, not a
+title failure.
