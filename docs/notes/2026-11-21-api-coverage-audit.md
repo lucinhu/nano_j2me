@@ -550,3 +550,30 @@ After the fixes the audit reports **7 classes / 28 signatures**, and they are de
 
 The tool is kept for future rounds; the same command over a new corpus is the cheapest
 way to find “the game never called it, but the member does not exist” gaps.
+
+## Round 186: closing the remaining audit gaps (JSR-82 surface, FileConnection.directorySize)
+
+After round 185 the static member audit still listed 28 signatures over 7 classes.
+Round 186 classified them: two classes are title-side patched-API expectations (see
+below), and the rest were genuine shallow gaps in families the runtime already claims.
+They are now all present, so a midlet that links `javax/bluetooth` or JSR-75 can no
+longer fail on a missing member when it first runs the call:
+
+| Member | Behaviour |
+| --- | --- |
+| `LocalDevice.getDiscoverable()I` | throws `BluetoothStateException` when the device has no radio (like the rest of `LocalDevice`); with a radio it reports `NOT_DISCOVERABLE` (0x9E8B00) because the port hook only sets the mode and nothing stores it |
+| `LocalDevice.getRecord(Connection)` | `NullPointerException` for null; `IllegalArgumentException` for any connection (this runtime cannot have created a local service without a Bluetooth stack) |
+| `RemoteDevice(String)` | validates the twelve-hex-digit address (colons/dashes allowed), `IllegalArgumentException` otherwise |
+| `RemoteDevice.getRemoteDevice(Connection)` | `IllegalArgumentException` — the connection has no Bluetooth device on a radio-less host |
+| `RemoteDevice.isTrustedDevice()` | `false` (no pairing database; an address learned over the air is never authenticated) |
+| `ServiceRecord.setAttributeValue(int,DataElement)Z` | the superseded JSR-82 boolean spelling; shares the existing attribute storage and reports success |
+| `FileConnection.directorySize(Z)J` | walks the port's directory hooks recursively, sums regular-file sizes, excludes dot-files unless `includeHidden`, throws `IOException` for missing paths/files/unreadable directories |
+
+Verification: `tests/test_bluetooth_property.c` gained `test_member_surface()`
+(instance-table lookups for the six BT members; 303 checks/0 failures) and
+`tests/test_ioapi.c` gained `test_file_connection_members()` (FileConnection lookup
+plus the pre-existing `fileSize`; 403 passed/0 failed). The audit now reports only
+`java/io/PrintStream.getResourceAsStream(Class,String)` (not a MIDP member; a title
+assumption) and the `Graphics`/`Image` obfuscated refs from two JARs that bundle a
+patched `DirectGraphics` (title-side ABI) — i.e. no gap left inside the runtime's own
+class surface.

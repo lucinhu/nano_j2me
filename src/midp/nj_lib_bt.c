@@ -1117,6 +1117,8 @@ NJFN(svcrec_host)
     return NJ_OK;
 }
 
+static int bt_local_fill(nj_vm *vm, nj_bt_local *l);
+
 /* ------------------------------------------------------------------ */
 /* RemoteDevice                                                        */
 /* ------------------------------------------------------------------ */
@@ -1170,6 +1172,81 @@ NJFN(remote_hash)
     for (i = 0; t[i]; i++) h = h * 31u + (nj_u1)t[i];
     ret->i = (nj_s4)(h & 0x7FFFFFFF);
     return NJ_OK;
+}
+
+NJFN(svcrec_set_attr_ret)
+{
+    /* The boolean overload is the superseded JSR-82 spelling; keep the same
+     * storage and report success. */
+    nj_status st = svcrec_set_attr(vm, th, args, ret);
+    if (st != NJ_OK) return st;
+    ret->i = 1;
+    return NJ_OK;
+}
+
+NJFN(remote_init_str)
+{
+    char addr[BT_ADDR_MAX];
+    char clean[BT_ADDR_MAX];
+    nj_size i, n = 0;
+    nj_ref s;
+
+    if (!btext(NJ_ARG_REF(args, 0), addr, sizeof addr))
+        return nj_throw(vm, "java/lang/IllegalArgumentException", "no address");
+    for (i = 0; addr[i] && n + 1 < sizeof clean; i++)
+        if (addr[i] != ':' && addr[i] != '-') clean[n++] = addr[i];
+    clean[n] = '\0';
+    if (n != 12)
+        return nj_throw(vm, "java/lang/IllegalArgumentException",
+                        "a Bluetooth address is twelve hex digits");
+    for (i = 0; i < n; i++) {
+        int c = clean[i];
+        if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') ||
+              (c >= 'A' && c <= 'F')))
+            return nj_throw(vm, "java/lang/IllegalArgumentException",
+                            "a Bluetooth address is twelve hex digits");
+    }
+    s = bstr(vm, clean);
+    if (!s) return nj_throw_oom(vm);
+    bset_ref(vm, NJ_THIS(args), NJ_C_REMOTE, F_VADDR, "Ljava/lang/String;", s);
+    return NJ_OK;
+}
+
+NJFN(remote_is_trusted)
+{
+    nj_bt_local l;
+    if (!bt_local_fill(vm, &l))
+        return bt_state(vm, "this device has no Bluetooth radio");
+    /* No pairing database: an address discovered over the air is never
+     * authenticated. */
+    ret->i = 0;
+    return NJ_OK;
+}
+
+NJFN(remote_from_conn)
+{
+    (void)args;
+    return nj_throw(vm, "java/lang/IllegalArgumentException",
+                    "this connection has no Bluetooth device");
+}
+
+NJFN(local_get_discoverable)
+{
+    nj_bt_local l;
+    if (!bt_local_fill(vm, &l))
+        return bt_state(vm, "this device has no Bluetooth radio");
+    /* The port hook only sets the mode; nothing stores it, and a radio-less
+     * host never advertises itself. */
+    ret->i = 0x9E8B00;   /* NOT_DISCOVERABLE */
+    return NJ_OK;
+}
+
+NJFN(local_get_record_conn)
+{
+    if (!NJ_ARG_REF(args, 0))
+        return nj_throw(vm, "java/lang/NullPointerException", NULL);
+    return nj_throw(vm, "java/lang/IllegalArgumentException",
+                    "this connection was not created by a local service");
 }
 
 NJFN(remote_get_remote_device)
@@ -2111,6 +2188,7 @@ static const nj_builtin_method svcrec_methods[] = {
     M("getConnectionURL",   "(IZ)Ljava/lang/String;", NJ_ACC_PUBLIC),
     M("getAttributeValue",  "(I)Ljavax/bluetooth/DataElement;", NJ_ACC_PUBLIC),
     M("setAttributeValue",  "(ILjavax/bluetooth/DataElement;)V", NJ_ACC_PUBLIC),
+    M("setAttributeValue",  "(ILjavax/bluetooth/DataElement;)Z", NJ_ACC_PUBLIC),
     M("removeAttributeValue", "(IZ)V", NJ_ACC_PUBLIC),
     M("getAttributeIDs",    "()[I", NJ_ACC_PUBLIC),
     M("getHostDevice",      "()Ljavax/bluetooth/RemoteDevice;", NJ_ACC_PUBLIC)
@@ -2127,8 +2205,12 @@ static const nj_builtin_method remote_methods[] = {
     M("getDeviceClass",      "()Ljavax/bluetooth/DeviceClass;", NJ_ACC_PUBLIC),
     M("equals",              "(Ljava/lang/Object;)Z", NJ_ACC_PUBLIC),
     M("hashCode",            "()I", NJ_ACC_PUBLIC),
+    M("<init>",              "(Ljava/lang/String;)V", NJ_ACC_PUBLIC),
     M("getRemoteDevice",     "(Ljava/lang/String;)Ljavax/bluetooth/RemoteDevice;",
-      NJ_ACC_PUBLIC | NJ_ACC_STATIC)
+      NJ_ACC_PUBLIC | NJ_ACC_STATIC),
+    M("getRemoteDevice",     "(Ljavax/microedition/io/Connection;)Ljavax/bluetooth/RemoteDevice;",
+      NJ_ACC_PUBLIC | NJ_ACC_STATIC),
+    M("isTrustedDevice",     "()Z", NJ_ACC_PUBLIC)
 };
 
 static const nj_builtin_method local_methods[] = {
@@ -2143,6 +2225,9 @@ static const nj_builtin_method local_methods[] = {
       NJ_ACC_PUBLIC | NJ_ACC_STATIC),
     M("getRecord",        "(Ljavax/bluetooth/ServiceRecord;)Ljavax/bluetooth/ServiceRecord;",
       NJ_ACC_PUBLIC),
+    M("getRecord",        "(Ljavax/microedition/io/Connection;)Ljavax/bluetooth/ServiceRecord;",
+      NJ_ACC_PUBLIC),
+    M("getDiscoverable",  "()I", NJ_ACC_PUBLIC),
     M("updateRecord",     "(Ljavax/bluetooth/ServiceRecord;)V", NJ_ACC_PUBLIC)
 };
 
@@ -2352,10 +2437,14 @@ const nj_native_entry nj_lib_bt_table[] = {
     { NJ_C_SVCREC, "getConnectionURL",     "(IZ)Ljava/lang/String;", svcrec_get_url },
     { NJ_C_SVCREC, "getAttributeValue",    "(I)Ljavax/bluetooth/DataElement;", svcrec_get_attr },
     { NJ_C_SVCREC, "setAttributeValue",    "(ILjavax/bluetooth/DataElement;)V", svcrec_set_attr },
+    { NJ_C_SVCREC, "setAttributeValue",    "(ILjavax/bluetooth/DataElement;)Z", svcrec_set_attr_ret },
     { NJ_C_SVCREC, "removeAttributeValue", "(IZ)V", svcrec_remove_attr },
     { NJ_C_SVCREC, "getAttributeIDs",      "()[I", svcrec_attr_ids },
     { NJ_C_SVCREC, "getHostDevice",        "()Ljavax/bluetooth/RemoteDevice;", svcrec_host },
 
+    { NJ_C_REMOTE, "<init>",                 "(Ljava/lang/String;)V", remote_init_str },
+    { NJ_C_REMOTE, "isTrustedDevice",        "()Z", remote_is_trusted },
+    { NJ_C_REMOTE, "getRemoteDevice",        "(Ljavax/microedition/io/Connection;)Ljavax/bluetooth/RemoteDevice;", remote_from_conn },
     { NJ_C_REMOTE, "getBluetoothAddress", "()Ljava/lang/String;", remote_address },
     { NJ_C_REMOTE, "getFriendlyName",     "(Z)Ljava/lang/String;", remote_name },
     { NJ_C_REMOTE, "getDeviceClass",      "()Ljavax/bluetooth/DeviceClass;", remote_class },
@@ -2365,6 +2454,8 @@ const nj_native_entry nj_lib_bt_table[] = {
       remote_get_remote_device },
 
     { NJ_C_LOCAL, "getLocalDevice",     "()Ljavax/bluetooth/LocalDevice;", local_get_local_device },
+    { NJ_C_LOCAL, "getDiscoverable",       "()I", local_get_discoverable },
+    { NJ_C_LOCAL, "getRecord",             "(Ljavax/microedition/io/Connection;)Ljavax/bluetooth/ServiceRecord;", local_get_record_conn },
     { NJ_C_LOCAL, "getFriendlyName",    "()Ljava/lang/String;", local_friendly_name },
     { NJ_C_LOCAL, "getBluetoothAddress","()Ljava/lang/String;", local_address },
     { NJ_C_LOCAL, "getDeviceClass",     "()Ljavax/bluetooth/DeviceClass;", local_device_class },

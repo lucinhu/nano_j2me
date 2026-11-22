@@ -285,6 +285,37 @@ static int old_icce(void)
     return failures ? 1 : 0;
 }
 
+/* The JSR-82 members the static corpus audit found referenced but absent from
+ * the tables: instance lookups only (the static ones are excercised through the
+ * Java-visible calls above). */
+static void test_member_surface(void)
+{
+    nj_vm *vm = create(NULL);
+    nj_class *local, *remote, *svc;
+    if (!vm) {
+        fprintf(stderr, "FAIL Bluetooth member surface: cannot create the VM\n");
+        ++failures;
+        return;
+    }
+    group = "member surface";
+    local = nj_class_lookup(vm, LOCAL);
+    remote = nj_class_lookup(vm, "javax/bluetooth/RemoteDevice");
+    svc = nj_class_lookup(vm, "javax/bluetooth/ServiceRecord");
+    CHECK(local && nj_method_lookup(local, "getDiscoverable", "()I") != NULL,
+          "LocalDevice.getDiscoverable()I resolves");
+    CHECK(local && nj_method_lookup(local, "getRecord",
+          "(Ljavax/microedition/io/Connection;)Ljavax/bluetooth/ServiceRecord;") != NULL,
+          "LocalDevice.getRecord(Connection) resolves");
+    CHECK(remote && nj_method_lookup(remote, "<init>", "(Ljava/lang/String;)V") != NULL,
+          "RemoteDevice(String) constructor exists");
+    CHECK(remote && nj_method_lookup(remote, "isTrustedDevice", "()Z") != NULL,
+          "RemoteDevice.isTrustedDevice()Z resolves");
+    CHECK(svc && nj_method_lookup(svc, "setAttributeValue",
+          "(ILjavax/bluetooth/DataElement;)Z") != NULL,
+          "ServiceRecord.setAttributeValue(int,DataElement)Z resolves");
+    nj_vm_destroy(vm);
+}
+
 int main(int argc, char **argv)
 {
     int mode;
@@ -295,6 +326,7 @@ int main(int argc, char **argv)
         return 2;
     }
     for (mode = 0; mode < 4; ++mode) test_contract(mode);
+    test_member_surface();
     test_frame_padding();
     printf("Bluetooth property: %u Java queries, %u checks, %u failures\n",
            queries, checks, failures);

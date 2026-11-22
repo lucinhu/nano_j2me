@@ -1289,6 +1289,17 @@ static void test_modified_utf(nj_vm *vm)
     }
 }
 
+/* The FileConnection member the static corpus audit found missing. */
+static void test_file_connection_members(nj_vm *vm)
+{
+    nj_class *fc = nj_class_lookup(vm, "javax/microedition/io/file/FileConnection");
+    OK_MSG(fc != NULL, "FileConnection class exists");
+    OK_MSG(fc && nj_method_lookup(fc, "directorySize", "(Z)J") != NULL,
+           "FileConnection.directorySize(Z)J is declared");
+    OK_MSG(fc && nj_method_lookup(fc, "fileSize", "()J") != NULL,
+           "FileConnection.fileSize()J still resolves");
+}
+
 int main(void)
 {
     nj_port port;
@@ -1315,6 +1326,7 @@ int main(void)
     test_printstream_formats(vm);
     test_printstream_stream(vm);
     test_reader(vm);
+    test_file_connection_members(vm);
     test_reader_base(vm);
     test_writer(vm);
     test_writer_base(vm);

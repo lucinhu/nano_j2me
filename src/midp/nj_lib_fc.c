@@ -457,6 +457,69 @@ NJFN(fc_fileSize)
     return NJ_OK;
 }
 
+static nj_s8 fc_dir_size_walk(nj_vm *vm, const char *host, int include_hidden,
+                            int depth)
+{
+    nj_s8 total = 0;
+    void *h = NULL;
+    char name[256];
+    int isd = 0;
+
+    if (depth > 32 || !vm->port || !vm->port->dir_open || !vm->port->dir_next)
+        return -1;
+    if (vm->port->dir_open(vm->port->ud, host, &h) != 0)
+        return -1;
+    while (vm->port->dir_next(vm->port->ud, h, name, sizeof(name), &isd) == 1) {
+        char child[NJ_FC_PATHMAX];
+        nj_u4 size = 0;
+        int cdir = 0;
+        nj_size n = 0;
+
+        if (name[0] == '\0') continue;
+        if (!include_hidden && name[0] == '.') continue;
+        if (strlen(host) + 1u + strlen(name) + 1u > sizeof(child)) continue;
+        while (host[n]) { child[n] = host[n]; n++; }
+        child[n++] = '/';
+        { nj_size k = 0; while (name[k] && n + 1u < sizeof(child)) child[n++] = name[k++]; }
+        child[n] = '\0';
+        if (!fc_stat(child, &cdir, &size, NULL)) continue;
+        if (cdir) {
+            nj_s8 sub = fc_dir_size_walk(vm, child, include_hidden, depth + 1);
+            if (sub > 0) total += sub;
+        } else {
+            total += (nj_s8)size;
+        }
+    }
+    vm->port->dir_close(vm->port->ud, h);
+    return total;
+}
+
+/* JSR 75 directorySize(): the sum of the sizes of the regular files below this
+ * directory, or IOException when this is not a directory.  Hidden entries are
+ * excluded unless includeHidden is set. */
+NJFN(fc_directorySize)
+{
+    char path[NJ_FC_PATHMAX];
+    char host[NJ_FC_PATHMAX];
+    nj_ref url = fget_ref(vm, NJ_THIS(args), F_URL, "Ljava/lang/String;");
+    int is_dir = 0;
+    nj_s8 total;
+    nj_status st = fc_require_read(vm, NJ_THIS(args));
+
+    if (st != NJ_OK) return st;
+    if (nj_string_to_utf8(url, path, (int)sizeof(path)) <= 0 ||
+        fc_resolve(vm, path, host, sizeof(host)) != 0 ||
+        !fc_stat(host, &is_dir, NULL, NULL))
+        return nj_throw(vm, "java/io/IOException", "directorySize on a missing path");
+    if (!is_dir)
+        return nj_throw(vm, "java/io/IOException", "directorySize on a file");
+    total = fc_dir_size_walk(vm, host, NJ_ARG_INT(args, 0) ? 1 : 0, 0);
+    if (total < 0)
+        return nj_throw(vm, "java/io/IOException", "cannot read the directory");
+    ret->j = total;
+    return NJ_OK;
+}
+
 /*
  * availableSize() is the free space on the volume, not the size of this file.
  * It used to be wired to fc_fileSize, so a MIDlet asking "is there room for
@@ -1265,6 +1328,7 @@ static const nj_builtin_method fc_methods[] = {
     M("getPath",            "()Ljava/lang/String;", 0),
     M("getURL",             "()Ljava/lang/String;", 0),
     M("fileSize",           "()J", 0),
+    M("directorySize",      "(Z)J", 0),
     M("lastModified",       "()J", 0),
     M("list",               "()Ljava/util/Enumeration;", 0),
     M("list",               "(Ljava/lang/String;Z)Ljava/util/Enumeration;", 0),
@@ -1328,6 +1392,7 @@ const nj_native_entry nj_lib_fc_table[] = {
     { NJ_C_FC, "getPath",     "()Ljava/lang/String;", fc_getPath },
     { NJ_C_FC, "getURL",      "()Ljava/lang/String;", fc_getURL },
     { NJ_C_FC, "fileSize",    "()J", fc_fileSize },
+    { NJ_C_FC, "directorySize", "(Z)J", fc_directorySize },
     { NJ_C_FC, "lastModified", "()J", fc_lastModified },
     { NJ_C_FC, "list", "()Ljava/util/Enumeration;", fc_list },
     { NJ_C_FC, "list", "(Ljava/lang/String;Z)Ljava/util/Enumeration;",
