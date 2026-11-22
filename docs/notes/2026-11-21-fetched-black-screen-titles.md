@@ -759,3 +759,10 @@ for a MIDP boot handshake (`isShown()` false at least once right after
 narrow, opt-in "shown only after first showNotify" model is worth trying for
 `com.nokia.mid.ui.FullCanvas` titles, with the 开心农场/startup-wrapper
 regressions as the guard.
+
+Round-222 addendum: a one-shot "first isShown() returns false" experiment (so
+the loader would take the `MIDlet.a(1)` branch) also did not make the title
+progress past stage 3 - the run still hung.  So the missing handshake is at
+most one prerequisite of several; the next probe should first count
+`TheMummyMidlet.a(I)`/`c()` calls and observe the `f` world state after each,
+instead of inferring it from the loader flags.
