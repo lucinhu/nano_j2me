@@ -1743,3 +1743,42 @@ update was needed (the row set would be byte-identical).  The first sweep
 attempt hit a transient `PermissionError` on the CLI binary at row 615; the
 rerun completed cleanly, so it was a filesystem race with the rebuild, not a
 title failure.
+
+## Round 208: Sony Ericsson K700/K800 collection and Class.newInstance() package access (2026-11-23)
+
+Fetched one new archive.org collection, `sony-ericsson-k-7-and-k-8` (one
+147,489,906-byte ZIP holding 752 `.jar` members; item metadata exposes only the
+ZIP, and `tools/fetch_corpus.py` buffers whole items in memory, so the ZIP was
+downloaded directly and its members were extracted with the fetcher's rules:
+`.jar` only, `MIN_BYTES = 20000`, SHA-256 dedupe, basename flattening).
+
+- **673 new JARs** added (71 duplicates, 10 below the size floor); the
+  persistent cache grew from 646 to **1316 files / 439 MB** under
+  `~/.cache/nano_j2me/corpus`.
+- New-title sweep (only the 673 fresh files, 16 jobs): **647 rows measured**
+  (26 of the extracted files share names with each other after flattening):
+  **623 ok / 11 bad-jar / 6 title-exception / 4 failure / 2 timeout /
+  1 no-frame**. Eleven JARs are not ZIPs at all or lack a MIDlet manifest,
+  `Moorhuhn_Kart_Racer_by_BFLM` has a corrupt `logo.png`, one title references
+  a class it does not bundle (`ac.jar` -> Symbian `MIDletExecutor`), and two
+  titles self-exit before painting (`City Bloxx`). The four failures were
+  re-checked after the fix below: `3D_Tetris` now runs 600 frames / 191 paints
+  / 71,647 draw calls, while `BT_Info` installs no Displayable and
+  `RadioBee`/`Tetrisdlx` quit on their own.
+- **Bug fixed — `Class.newInstance()` package accessibility.** `3D_Tetris`
+  calls `Class.newInstance()` on `de/_3DTetris/TetrisSzene$SzeneObjekt`, a
+  package-private class with a public no-argument constructor, from the same
+  package (`de/_3DTetris/TetrisSzene`). The runtime rejected every non-public
+  class with `IllegalAccessException`; a handset (and the FreeJ2ME-Plus
+  reference) accepts same-package access and the title renders its help screen.
+  `src/core/nj_lib_object.c` now allows a package-private class when the
+  caller class (read from the incoming native frame) lives in the same package,
+  and keeps throwing for cross-package access. The `tests/excdemo` fixture
+  moved its hidden class to `hidden/ExcHidden` (cross-package: still refused,
+  and the message still names the class) and gained `ExcSamePkg` (same-package:
+  must succeed), so `check_stack_trace` covers both halves.
+- **Compatibility matrix refreshed** from the round-167/192 table plus these
+  647 fresh rows (rows overlay by file name; the fixed `3D_Tetris` row is the
+  re-measurement): **2462 titles, 2420 ok** (15 bad-jar, 10 title-exception,
+  6 timeout, 5 failure, 3 no-frame, 3 title-exit). Regeneration is
+  byte-deterministic.

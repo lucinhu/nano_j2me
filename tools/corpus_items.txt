@@ -92,3 +92,4 @@ j2me-game-annocreateanewworld
 j2me-game-digital-chocolate-party-night-casanova
 j2me-game-chucknorris
 j2me-game-tetrisrevolution
+sony-ericsson-k-7-and-k-8
