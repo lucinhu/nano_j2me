@@ -2110,3 +2110,27 @@ Validation: full serial CTest **210/210** (397.23 s), mock frontend matrix
 **20/20**, real RetroArch LoopDemo PASS, Wine **4/4 @300**, bundle **32/32**.
 Super PR branch `a6d3f34`, docs PR `95a1d0a`; both OPEN/MERGEABLE, no merge
 claimed.
+
+
+### 0.5.35 / r54 (2026-11-23)
+
+Release: https://github.com/lucinhu/nano_j2me/releases/tag/v0.5.35 - tag
+`v0.5.35` (metadata commit `7cc9d8f`), eight libretro targets plus five
+per-ABI Android APKs (versionCode 535; four GLES2 phone builds and the software
+legacy build); `.info` SHA-256
+`633b6ab16e21c02c3e93f4ceb1e483a7f741fffe7d8ff7ea8ae6c8d225773091`
+(`display_version = "0.5.35"`); the tracked super patch applies to
+`libretro-super` master `55e50a8` as fork commit `a198cc8`.  r54 is a runtime
+compatibility release: `Class.newInstance()` follows the JVM same-package rule
+(3D_Tetris now boots), the Sprint PCS `PlayerListener` constants are real
+fields, and the vendor members the expanded corpus reaches are implemented
+(`Integer.longValue()`, `CustomItem.invalidate()`,
+`ServiceRecord.set/getDeviceServiceClasses()`, the twelve-int `AffineTrans`
+constructor, `Effect3D.set/getSphereTexture()`, `Graphics3D.dispose()`).  The
+corpus in the compatibility matrix grew to 2462 titles (2420 ok) after the
+K700/K800 batch.
+
+Validation: full serial CTest **210/210** (377.06 s), mock frontend matrix
+**20/20**, real RetroArch LoopDemo 120 frames PASS, Wine x86-64 **4/4 @300**,
+submission bundle **32/32**.  Super PR branch `a198cc8`, docs PR head
+`95a1d0a` (baseline `96ee874`); both OPEN/MERGEABLE, no merge claimed.

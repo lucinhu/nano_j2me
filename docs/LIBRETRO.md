@@ -84,23 +84,22 @@ Outputs go to `build/libretro-dist/<target>/`, with a library and its metadata.
 Use `--no-strip` to retain symbols. `all` selects the script's supported targets
 and requires all of their toolchains.
 
-The eight candidates currently in `build/libretro-dist/` are the r53 package
-(the 0.5.34 release) built on 2026-11-22 from revision `61feb9c`.  r53 adds the
+The eight candidates currently in `build/libretro-dist/` are the r54 package
+(the 0.5.35 release) built on 2026-11-23 from revision `7cc9d8f`.  r54 carries
+the round-208 runtime fixes: `Class.newInstance()` allows a package-private class
+when the caller is in the same package (the JVM rule; `3D_Tetris` now boots),
+the Sprint PCS `PlayerListener` constants exist as real fields, and the vendor
+members the expanded corpus reaches (`Integer.longValue()`,
+`CustomItem.invalidate()`, `ServiceRecord.set/getDeviceServiceClasses()`,
+`AffineTrans(IIIIIIIIIIII)`, `Effect3D.set/getSphereTexture()`,
+`Graphics3D.dispose()`) are implemented rather than allowlisted.  r53 added the
 web multi-finger canvas pointers (per-id pass-through to `MultipointTouch`,
 multi-pointer tracking in `web/js/input.js`), touch-down on-screen keys, the
 Android `stats: gpu …` / `m3g_accel=force` diagnostics with per-thread EGL
 current caching, and the measured GLES2 investigation notes (the current
 per-transaction backend is slower than software even without readback; the
 whole-frame renderer design is staged).  r52 adds the
-`nano_j2me_deterministic` option: `retro_run()` advances the virtual clock by
-exactly one 16667 µs tick and `java.util.Random()`'s default constructor is
-seeded from a VM-level 64-bit LCG counter, so replay-oriented runs are
-repeatable.  `check_libretro_determinism` runs `alphademo.jar` twice through the
-real core and requires byte-identical frame dumps.  Frame-driven titles are
-byte-identical (alphademo, 家园5汉化版, 雷霆战机2012BT); titles that sample
-`System.currentTimeMillis()` inside paint (loopdemo) and teardown timing still
-vary, and netplay stays unadvertised pending frame-locked single-step
-execution (see the note below).  r51 added the Nokia
+r51 added the Nokia
 `TextEditor`/`TextEditorListener` overlay family and the field-level builtin-API
 audit; r50 added the member-level audit (radix `parseByte`/`parseShort`,
 `Double.parseDouble`, `Float.valueOf(String)`, `Float.intValue`, the

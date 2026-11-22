@@ -1711,3 +1711,16 @@ built from a clean worktree at that commit, five per-ABI GLES2/legacy APKs
 **20/20**, real RetroArch LoopDemo PASS, Wine **4/4 @300**, bundle **32/32**.
 Super branch `a6d3f34` (parent `55e50a8`), docs PR head `95a1d0a`; both
 OPEN/MERGEABLE, no merge claimed.
+
+
+## Round 209 (2026-11-23): 0.5.35 / r54 package
+
+Version **0.5.35** (metadata commit `7cc9d8f`, `.info` SHA-256
+`633b6ab16e21c02c3e93f4ceb1e483a7f741fffe7d8ff7ea8ae6c8d225773091`), r54 cores
+built from a clean worktree at that commit, five per-ABI GLES2/legacy APKs
+(versionCode 535).  r54 is the round-208 compatibility release (same-package
+`Class.newInstance()`, Sprint `PlayerListener` constants, the six vendor member
+families).  Full serial CTest **210/210** (377.06 s), mock matrix **20/20**,
+real RetroArch LoopDemo PASS, Wine **4/4 @300**, bundle **32/32**.  Super branch
+`a198cc8` (parent `55e50a8`), docs PR head `95a1d0a`; both OPEN/MERGEABLE, no
+merge claimed.
