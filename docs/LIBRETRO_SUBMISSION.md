@@ -1905,6 +1905,34 @@ real RetroArch loopdemo 120 frames PASS, Windows x86_64 Wine **4/4** at 300
 frames, submission bundle **32/32**; GoldenSolitaire and NeonRunner pass the
 libretro visual probe (300 frames).
 
+### 0.5.30 / r49 (2026-11-22)
+
+Release: https://github.com/lucinhu/nano_j2me/releases/tag/v0.5.30 - tag
+`v0.5.30` (metadata commit `b9f6abe`), eight libretro targets plus five
+per-ABI APKs (`versionCode 530`; no universal APK).  `.info` SHA-256
+`b3c7426efa61c640f57a753cf0b2a3d73ff0c79dbe8fddabf98c8341a45691ee`
+(`display_version = "0.5.30"`); the tracked super patch applies to
+`libretro-super` master `55e50a81195eaf8dd1b7720a601282459832ced1` and was
+rebased as fork commit `97bf1f4`.
+
+Behavioural changes vs 0.5.29 are member-level API fixes: Canvas registers
+instance entries for `getGameAction`/`getKeyCode`/`getKeyName` next to the
+static ones (interface dispatch reaches inherited methods; Pro Snowboard now
+renders 300 frames / gfx=6719 / tris=14990), and Mascot Capsule
+`AffineTrans.set(IIIIIIIIIIII)V` was added (`MINI 3D` now runs 300 frames /
+gfx=2477 / tris=3436 with no linkage errors, was 431 throws).  No libretro ABI
+or core-option change.  PR **libretro/libretro-super#2204** head is commit
+`97bf1f4` (branch `add-nano_j2me` on fork `lucinhu/libretro-super`, parent
+master `55e50a8`); PR **libretro/docs#1239** head is `95a1d0a` (patch against
+docs master `96ee874`), both OPEN/MERGEABLE, no merge claimed.
+
+Validation: full serial CTest **207/207** (362.16 s), mock matrix **20/20**,
+real RetroArch loopdemo 120 frames PASS, Windows x86_64 Wine **4/4** at 300
+frames, submission bundle **32/32**; full 1046-title linkage scan leaves one
+known title-side hit (`ArcadePark2`'s missing `GlomoCountry`).
+The corpus sweep on the 0.5.30 CLI is recorded in `docs/CORPUS.md` after it
+completes.
+
 ### 0.5.29 / r48 (2026-11-22)
 
 Release: https://github.com/lucinhu/nano_j2me/releases/tag/v0.5.29 - tag

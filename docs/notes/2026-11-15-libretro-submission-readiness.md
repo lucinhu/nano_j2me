@@ -1638,3 +1638,19 @@ unchanged from r47.  Super PR branch rebuilt as commit `d26aab1` on master
 OPEN/MERGEABLE, no merge claimed.  Validation: full serial CTest **207/207**
 (361.81 s), mock **20/20**, RetroArch loopdemo PASS, Wine **4/4** @300, bundle
 **32/32**, plus Android emulator evidence for GLES2 and the change search.
+
+### Round 183/184 (2026-11-22): 0.5.30 / r49, member-level API fixes
+
+Release v0.5.30 (r49, metadata commit `b9f6abe`, `.info` SHA-256
+`b3c7426efa61c640f57a753cf0b2a3d73ff0c79dbe8fddabf98c8341a45691ee`).
+Two real runtime bugs found by the new `tools/check_corpus_linkage.py` are
+fixed: Canvas now registers its three key methods as instance entries in
+addition to the static ones (interface dispatch for a subclass inheriting
+`getGameAction`; Pro Snowboard renders again) and Mascot Capsule
+`AffineTrans.set(IIIIIIIIIIII)V` was implemented (MINI 3D draws 3D triangles
+now; 431 throws -> 0).  Super PR branch rebuilt as commit `97bf1f4` on
+`libretro-super` master `55e50a8`; docs PR unchanged at `95a1d0a` (baseline
+`96ee874`); both OPEN/MERGEABLE, no merge claimed.  Validation: full serial
+CTest **207/207** (362.16 s), mock **20/20**, RetroArch loopdemo PASS, Wine
+**4/4** @300, bundle **32/32**; linkage scan over 1046 titles leaves only
+`ArcadePark2` (title-side missing GlomoReg class).
