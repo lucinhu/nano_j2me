@@ -1553,3 +1553,54 @@ and `docs/COMPATIBILITY_MATRIX.md` regenerated — 1817 titles, 1799 ok
   corpus's unresolved method references from 296 signatures/54 classes to
   28/7, and the remaining ones are title-side patched-API expectations or
   documented JSR-82/FileConnection stubs.
+
+## Round 187: 0.5.31 sweep, member-audit gate, r50 visual probe (2026-11-22)
+
+The 0.5.31 CLI (release r50) was re-swept over the full 1050-row corpus with the
+same 18-workers settings as round 184:
+
+| verdict | rows |
+| --- | --- |
+| `运行正常` | 1036 |
+| `标题自身异常` | 4 |
+| `非可用包` | 4 |
+| `超时` | 2 |
+| `标题自行退出` | 2 |
+| `未呈现画面` | 2 |
+
+The non-ok rows are the same fifteen titles as round 184 (`4in1 Memory`,
+`ArcadePark2`, `JewelQuestDeluxe`, `epub_reader_albite`; four unusable archives;
+the two wall-clock-self-paced titles; `乱世Q三国`/`有女倾城`; `bouncetale`/
+`蹦球传说`) - **0 verdict changes**. That is what compat-neutral means here:
+the round-186 JSR-82/JSR-75 member additions and the round-187 static-audit
+gate do not alter what any title does, they only close link-time surface.
+
+The matrix was refreshed by overlaying all 1050 fresh rows by file name onto
+the 1817-row table (`rows.jsonl.pre187.bak` holds the previous rows): still
+**1817 titles / 1799 `运行正常`**, and two renders are byte-identical. The
+929 changed lines are measurement noise in bytecode/paint counters for a
+fresh batch, not verdict changes.
+
+Post-release libretro visual probe on the r50 core over the 1036 rendered
+titles (300 frames, 8 jobs, per-title screens):
+
+```
+1036 titles: 1032 passed, 2 known limitation(s), 2 failed
+```
+
+Known limitations are the documented blocking/slow-load titles (`台球传奇_87`
+loads for a multi-second stretch behind the generic key script;
+`毁灭战士3_10598` runs its whole game loop inside the MIDlet constructor).
+The two failures are the documented ones: `MidnightPool1_1.0.0_320x240` (the
+synchronous paint busy-wait on `System.currentTimeMillis()` cannot complete
+under the libretro clock model; it is also the title whose save request times
+out) and `PAC-MAN (176x220) (1.0.0)` (title-side: its constructor slices an
+empty Sprint Muglet URI and the reference run hangs too). The three slow-frame
+state-timeout titles (`杀鬼子`, `Asphalt4EliteRacing`, `3D_Autobahn`) passed
+this run; that failure class is load-timing dependent, so it is recorded as a
+probe limitation rather than a title verdict.
+
+The static member audit became a CTest gate this round: `check_vendor_members`
+runs the CLI's `--dump-builtin-api` over the corpus and fails on any new
+unresolved runtime member outside `tools/api_member_allowlist.txt` (three
+title-side classes). See `docs/notes/2026-11-21-api-coverage-audit.md` round 187.

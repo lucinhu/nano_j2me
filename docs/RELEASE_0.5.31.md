@@ -44,6 +44,15 @@ of a hand-parsed copy.
 * API audit: 1048 corpus JARs, 642 builtin classes implemented; only
   `毁灭战士3_10598.jar` references a missing symbol (unused JSR-226 SVG).
 
+* Post-release corpus check on the released 0.5.31 CLI: the full 1050-row
+  sweep reproduces the 0.5.30 verdicts exactly (**0 changes**, 1036 `ok`) and
+  the r50-core visual probe over the 1036 rendered titles passes **1032** with
+  the 2 documented known limitations and the 2 documented failures
+  (`MidnightPool1`, `PAC-MAN 176x220`).
+* After the round-187 audit gate was added, the suite is **208/208**
+  (362.65 s); `check_vendor_members` fails on any new unresolved runtime
+  member outside the tracked title-side allowlist.
+
 ## Artifacts
 
 Cores (`nj2me-0.5.31-libretro-cores.zip`, SHA-256

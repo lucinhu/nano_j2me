@@ -1933,6 +1933,13 @@ frames, submission bundle **32/32**.  The static member audit now reports
 only two title-side classes (a non-MIDP `PrintStream` extension and two JARs
 built against a patched LCDUI); no runtime-owned member gap remains.
 
+Post-release round-187 checks: the 1050-row corpus sweep on the released CLI
+reproduces the 0.5.30 verdicts exactly (1036 `ok`, 0 changes) and the r50-core
+whole-corpus libretro visual probe over the 1036 rendered titles reports
+**1032 passed / 2 known limitations / 2 documented failures**.  The static
+member audit is now a CTest gate (`check_vendor_members`); the suite is
+**208/208**.
+
 ### 0.5.30 / r49 (2026-11-22)
 
 Release: https://github.com/lucinhu/nano_j2me/releases/tag/v0.5.30 - tag
