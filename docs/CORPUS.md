@@ -1537,3 +1537,19 @@ Matrix refresh: the 1050 fresh rows overlaid by file name into the matrix rows
 directory (backup `rows.jsonl.pre184.bak`, meta sources note the 0.5.30 batch)
 and `docs/COMPATIBILITY_MATRIX.md` regenerated — 1817 titles, 1799 ok
 (distribution unchanged).
+
+## Round 185: r49 whole-corpus visual probe and the member-level audit
+
+* `tools/check_libretro_corpus_visual.py` over the 1050-row sweep's 1036 rendered
+  titles (300 frames, 8 jobs, r49 core): **1030 passed, 2 known limitations,
+  4 failed**. Known limitations are the two blocking-load titles
+  (`台球传奇_87`, `德州扑克2_3884`) plus the Doom3 slow loader; failures are
+  `MidnightPool1` (black + state-service timeout, documented paint-clock
+  limitation), `PAC-MAN (176x220)` (title-side, empty Sprint Muglet URI), and the
+  slow-frame state-service timeout class (`杀鬼子-敌后武工队_2185`,
+  `3D_Autobahn_Raser_World_Challenge`); `Asphalt4EliteRacing` passed this run.
+* Static member audit (`tools/check_vendor_members.py`, see
+  `docs/notes/2026-11-21-api-coverage-audit.md` round-185 section) reduced the
+  corpus's unresolved method references from 296 signatures/54 classes to
+  28/7, and the remaining ones are title-side patched-API expectations or
+  documented JSR-82/FileConnection stubs.

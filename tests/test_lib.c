@@ -1225,6 +1225,73 @@ static void test_float_parse(nj_vm *vm)
     }
 }
 
+/* The radix forms and Double.parseDouble / Float.valueOf(String) that
+ * tools/check_vendor_members.py found referenced but unregistered. */
+static void test_radix_and_double_parse(nj_vm *vm)
+{
+    nj_value a[2], r;
+    int threw;
+
+    r = static_from_string(vm, BYTEW, "parseByte", "(Ljava/lang/String;I)B",
+                           "7f", &threw);
+    /* the failure path above passes the radix as the *second* argument, so
+     * call it explicitly here. */
+    nj_clear_exception(vm);
+    (void)r;
+
+    a[0] = vref(nj_string_new(vm, "7f"));
+    a[1].i = 16;
+    OK(nj_call_static(vm, BYTEW, "parseByte", "(Ljava/lang/String;I)B",
+                      a, &r) == NJ_OK && r.i == 127);
+    clean(vm, "Byte.parseByte(\"7f\", 16)");
+    a[0] = vref(nj_string_new(vm, "-80"));
+    a[1].i = 16;
+    OK(nj_call_static(vm, BYTEW, "parseByte", "(Ljava/lang/String;I)B",
+                      a, &r) == NJ_OK && r.i == -128);
+    clean(vm, "Byte.parseByte(\"-80\", 16)");
+    a[0] = vref(nj_string_new(vm, "80"));
+    a[1].i = 16;
+    OK(nj_call_static(vm, BYTEW, "parseByte", "(Ljava/lang/String;I)B",
+                      a, &r) != NJ_OK);
+    OK(nj_exception_describe(vm) != NULL);
+    nj_clear_exception(vm);
+
+    a[0] = vref(nj_string_new(vm, "7fff"));
+    a[1].i = 16;
+    OK(nj_call_static(vm, SHORTW, "parseShort", "(Ljava/lang/String;I)S",
+                      a, &r) == NJ_OK && r.i == 32767);
+    clean(vm, "Short.parseShort(\"7fff\", 16)");
+    a[0] = vref(nj_string_new(vm, "ffff"));
+    a[1].i = 16;
+    OK(nj_call_static(vm, SHORTW, "parseShort", "(Ljava/lang/String;I)S",
+                      a, &r) != NJ_OK);   /* 65535 does not fit a short */
+    nj_clear_exception(vm);
+    a[0] = vref(nj_string_new(vm, "-8000"));
+    a[1].i = 16;
+    OK(nj_call_static(vm, SHORTW, "parseShort", "(Ljava/lang/String;I)S",
+                      a, &r) == NJ_OK && r.i == -32768);
+    clean(vm, "Short.parseShort(\"-8000\", 16)");
+
+    /* Double.parseDouble returns a double (two slots). */
+    r = static_from_string(vm, DOUBLEW, "parseDouble", "(Ljava/lang/String;)D",
+                           "3.5", &threw);
+    OK(!threw && r.d == 3.5);
+    clean(vm, "Double.parseDouble(\"3.5\")");
+    r = static_from_string(vm, DOUBLEW, "parseDouble", "(Ljava/lang/String;)D",
+                           "-1e3", &threw);
+    OK(!threw && r.d == -1000.0);
+    clean(vm, "Double.parseDouble(\"-1e3\")");
+
+    /* Float.valueOf(String) boxes through <init>(F)V and keeps the bits. */
+    a[0] = vref(nj_string_new(vm, "2.5"));
+    OK(nj_call_static(vm, FLOATW, "valueOf", "(Ljava/lang/String;)Ljava/lang/Float;",
+                      a, &r) == NJ_OK && r.r != 0);
+    a[0] = r;
+    OK(nj_call_special(vm, r.r, FLOATW, "floatValue", "()F", a, &r) == NJ_OK &&
+       r.f == 2.5f);
+    clean(vm, "Float.valueOf(\"2.5\").floatValue()");
+}
+
 static void test_numbers(nj_vm *vm)
 {
     nj_value a[2];
@@ -5684,6 +5751,7 @@ int main(void)
     test_numbers(vm);
     test_integer_short_value(vm);
     test_float_parse(vm);
+    test_radix_and_double_parse(vm);
     test_boxing_valueof_radix(vm);
     test_random(vm);
     test_static_field_init(vm);

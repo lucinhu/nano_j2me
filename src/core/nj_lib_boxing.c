@@ -320,6 +320,87 @@ NJFN(Long_parseLong_radix)
     return NJ_OK;
 }
 
+/* Defined below with the float bit helpers. */
+static nj_status parse_float_double(nj_vm *vm, nj_ref s, int want_double,
+                                    double *dout, float *fout);
+
+/* CLDC 1.1 also declares radix forms of parseByte/parseShort plus
+ * Float.valueOf(String) and Double.parseDouble(String); the corpus references
+ * all four (tools/check_vendor_members.py). */
+static nj_status parse_small_radix(nj_vm *vm, nj_ref s, nj_u4 radix,
+                                   nj_s4 lo, nj_s4 hi, nj_s4 *out)
+{
+    nj_s4 v = 0;
+
+    if (parse_int(vm, s, radix, &v) != NJ_OK) {
+        return NJ_ERR;
+    }
+    if (v < lo || v > hi) {
+        return nj_throw(vm, "java/lang/NumberFormatException", NULL);
+    }
+    *out = v;
+    return NJ_OK;
+}
+
+NJFN(Short_parseShort_radix)
+{
+    nj_s4 v = 0;
+
+    if (parse_small_radix(vm, NJ_ARG_REF(args, 0),
+                          (nj_u4)NJ_ARG_INT(args, 1),
+                          -32768, 32767, &v) != NJ_OK) {
+        return NJ_ERR;
+    }
+    ret->i = v;
+    return NJ_OK;
+}
+
+NJFN(Byte_parseByte_radix)
+{
+    nj_s4 v = 0;
+
+    if (parse_small_radix(vm, NJ_ARG_REF(args, 0),
+                          (nj_u4)NJ_ARG_INT(args, 1),
+                          -128, 127, &v) != NJ_OK) {
+        return NJ_ERR;
+    }
+    ret->i = v;
+    return NJ_OK;
+}
+
+NJFN(Double_parseDouble)
+{
+    double d = 0.0;
+
+    if (parse_float_double(vm, NJ_ARG_REF(args, 0), 1, &d, NULL) != NJ_OK) {
+        return NJ_ERR;
+    }
+    ret->d = d;
+    return NJ_OK;
+}
+
+NJFN(Float_valueOf_str)
+{
+    nj_value a1[3];
+    nj_ref o;
+    float f = 0.0f;
+
+    if (parse_float_double(vm, NJ_ARG_REF(args, 0), 0, NULL, &f) != NJ_OK) {
+        return NJ_ERR;
+    }
+    o = nj_object_new(vm, "java/lang/Float");
+    if (!o) {
+        return nj_throw_oom(vm);
+    }
+    a1[0].f = f;
+    if (nj_call_special(vm, o, "java/lang/Float", "<init>", "(F)V", a1, NULL)
+        != NJ_OK) {
+        return NJ_ERR;
+    }
+    ret->r = o;
+    return NJ_OK;
+}
+
 /*
  * Long.valueOf(String) and Long.valueOf(String, int).  CLDC 1.1 declares all
  * four of parseLong(String), parseLong(String, int), valueOf(String) and
@@ -412,6 +493,26 @@ NJFN(Float_floatToIntBits)
     nj_s4 bits = float_bits(NJ_ARG_FLOAT(args, 0));
 
     ret->i = float_is_nan_bits(bits) ? 0x7FC00000 : bits;
+    return NJ_OK;
+}
+
+/* Float.intValue(): Java's float-to-int conversion saturates and maps NaN to
+ * zero; C's (int) cast is undefined for NaN/out-of-range, so do it by hand. */
+NJFN(Float_intValue)
+{
+    nj_field *f = vf(vm, "java/lang/Float", "F");
+    nj_s4 bits = f ? (nj_s4)nj_field_read_bits32(vm, NJ_THIS(args), f) : 0;
+    float x = float_from_bits(bits);
+
+    if (x != x) {
+        ret->i = 0;
+    } else if (x >= 2147483647.0f) {
+        ret->i = 2147483647;
+    } else if (x <= -2147483648.0f) {
+        ret->i = (nj_s4)(-(nj_s8)2147483647 - 1);
+    } else {
+        ret->i = (nj_s4)x;
+    }
     return NJ_OK;
 }
 
@@ -608,6 +709,62 @@ static int decimal_token(const nj_u2 *p, nj_u4 i, nj_u4 end, const char *token)
         token++;
     }
     return i == end && *token == '\0';
+}
+
+/* Shared by Float.parseFloat, Float.valueOf(String) and Double.parseDouble:
+ * trim U+0000..U+0020, accept NaN/Infinity tokens and an optional f/F/d/D
+ * suffix, then run the CLDC decimal parser. */
+static nj_status parse_float_double(nj_vm *vm, nj_ref s, int want_double,
+                                    double *dout, float *fout)
+{
+    const nj_u2 *p;
+    nj_u4 begin = 0u, end, i;
+    int neg = 0;
+    double d;
+
+    if (!s) {
+        return nj_throw(vm, "java/lang/NullPointerException", NULL);
+    }
+    p = nj_string_chars(s);
+    end = s->length;
+    while (begin < end && p[begin] <= 0x20u) { begin++; }
+    while (end > begin && p[end - 1u] <= 0x20u) { end--; }
+    i = begin;
+    if (i < end && (p[i] == '+' || p[i] == '-')) {
+        neg = p[i] == '-';
+        i++;
+    }
+    if (decimal_token(p, i, end, "NaN")) {
+        if (want_double) { *dout = 0.0 / 0.0; }
+        else { *fout = float_from_bits(0x7FC00000); }
+        return NJ_OK;
+    }
+    if (decimal_token(p, i, end, "Infinity")) {
+        if (want_double) {
+            *dout = neg ? -1.0 / 0.0 : 1.0 / 0.0;
+        } else {
+            *fout = float_from_bits((nj_s4)(neg ? 0xFF800000u : 0x7F800000u));
+        }
+        return NJ_OK;
+    }
+    if (end > i && (p[end - 1u] == 'f' || p[end - 1u] == 'F' ||
+                    p[end - 1u] == 'd' || p[end - 1u] == 'D')) {
+        end--;
+    }
+    if (parse_decimal(vm, p, begin, end, &d) != NJ_OK) {
+        return NJ_ERR;
+    }
+    if (want_double) {
+        *dout = d;
+    } else if (d > 3.4028234663852886e38 || d < -3.4028234663852886e38) {
+        double magnitude = neg ? -d : d;
+        nj_u4 bits = magnitude >= 3.4028235677973366e38
+                   ? 0x7F800000u : 0x7F7FFFFFu;
+        *fout = float_from_bits((nj_s4)(bits | (neg ? 0x80000000u : 0u)));
+    } else {
+        *fout = (float)d;
+    }
+    return NJ_OK;
 }
 
 /* XMLLevel$LevelHandler.startElement in 愤怒的小鸟_383 calls this at pc 592.
@@ -1480,6 +1637,7 @@ static const nj_builtin_method Short_methods[] = {
     M("shortValue", "()S",  0),
     M("intValue",   "()I",  0),
     M("parseShort", "(Ljava/lang/String;)S", NJ_ACC_STATIC),
+    M("parseShort", "(Ljava/lang/String;I)S", NJ_ACC_STATIC),
     M("toString",   "()Ljava/lang/String;", 0),
     M("equals",     "(Ljava/lang/Object;)Z", 0),
     M("hashCode",   "()I", 0)
@@ -1489,6 +1647,7 @@ static const nj_builtin_method Byte_methods[] = {
     M("byteValue","()B",  0),
     M("intValue", "()I",  0),
     M("parseByte", "(Ljava/lang/String;)B", NJ_ACC_STATIC),
+    M("parseByte", "(Ljava/lang/String;I)B", NJ_ACC_STATIC),
     M("toString",  "()Ljava/lang/String;", 0),
     M("equals",    "(Ljava/lang/Object;)Z", 0),
     M("hashCode",  "()I", 0)
@@ -1518,13 +1677,15 @@ static const nj_builtin_method Boolean_methods[] = {
 static const nj_builtin_method Float_methods[] = {
     M("<init>",     "(F)V", 0),
     M("floatValue", "()F",  0),
+    M("intValue",   "()I",  0),
     M("isNaN",      "()Z",  0),
     M("isInfinite", "()Z",  0),
     M("isNaN",      "(F)Z", NJ_ACC_STATIC),
     M("isInfinite", "(F)Z", NJ_ACC_STATIC),
     M("intBitsToFloat", "(I)F", NJ_ACC_STATIC),
     M("floatToIntBits", "(F)I", NJ_ACC_STATIC),
-    M("parseFloat",     "(Ljava/lang/String;)F", NJ_ACC_STATIC),
+    M("parseFloat", "(Ljava/lang/String;)F", NJ_ACC_STATIC),
+    M("valueOf", "(Ljava/lang/String;)Ljava/lang/Float;", NJ_ACC_STATIC),
     M("valueOf",        "(F)Ljava/lang/Float;", NJ_ACC_STATIC),
     M("toString",       "()Ljava/lang/String;", 0),
     M("toString",       "(F)Ljava/lang/String;", NJ_ACC_STATIC),
@@ -1538,7 +1699,8 @@ static const nj_builtin_method Double_methods[] = {
     M("isInfinite",  "()Z",  0),
     M("isNaN",       "(D)Z", NJ_ACC_STATIC),
     M("isInfinite",  "(D)Z", NJ_ACC_STATIC),
-    M("valueOf",     "(D)Ljava/lang/Double;", NJ_ACC_STATIC),
+    M("valueOf", "(D)Ljava/lang/Double;", NJ_ACC_STATIC),
+    M("parseDouble", "(Ljava/lang/String;)D", NJ_ACC_STATIC),
     M("longBitsToDouble", "(J)D", NJ_ACC_STATIC),
     M("toString",      "()Ljava/lang/String;", 0),
     M("toString",      "(D)Ljava/lang/String;", NJ_ACC_STATIC),
@@ -1664,7 +1826,8 @@ const nj_native_entry nj_lib_boxing_table[] = {
     { "java/lang/Short",     "<init>",       "(S)V", Short_init },
     { "java/lang/Short",     "shortValue",   "()S",  Short_value },
     { "java/lang/Short",     "intValue",     "()I",  Short_value },
-    { "java/lang/Short",     "parseShort",   "(Ljava/lang/String;)S", Short_parseShort },
+    { "java/lang/Short", "parseShort", "(Ljava/lang/String;)S", Short_parseShort },
+    { "java/lang/Short", "parseShort", "(Ljava/lang/String;I)S", Short_parseShort_radix },
     { "java/lang/Short",     "toString",     "()Ljava/lang/String;", short_toString_obj },
     { "java/lang/Short",     "equals",       "(Ljava/lang/Object;)Z", short_equals },
     { "java/lang/Short",     "hashCode",     "()I",                  short_hashCode },
@@ -1672,7 +1835,8 @@ const nj_native_entry nj_lib_boxing_table[] = {
     { "java/lang/Byte",      "<init>",       "(B)V", Byte_init },
     { "java/lang/Byte",      "byteValue",    "()B",  Byte_value },
     { "java/lang/Byte",      "intValue",     "()I",  Byte_value },
-    { "java/lang/Byte",      "parseByte",    "(Ljava/lang/String;)B", Byte_parseByte },
+    { "java/lang/Byte", "parseByte", "(Ljava/lang/String;)B", Byte_parseByte },
+    { "java/lang/Byte", "parseByte", "(Ljava/lang/String;I)B", Byte_parseByte_radix },
     { "java/lang/Byte",      "toString",     "()Ljava/lang/String;", byte_toString_obj },
     { "java/lang/Byte",      "equals",       "(Ljava/lang/Object;)Z", byte_equals },
     { "java/lang/Byte",      "hashCode",     "()I",                  byte_hashCode },
@@ -1699,13 +1863,16 @@ const nj_native_entry nj_lib_boxing_table[] = {
 
     { "java/lang/Float",     "<init>",       "(F)V", Float_init },
     { "java/lang/Float",     "floatValue",   "()F",  Float_value },
+    { "java/lang/Float", "intValue", "()I", Float_intValue },
     { "java/lang/Float",     "isNaN",        "()Z",  Float_isNaN },
     { "java/lang/Float",     "isInfinite",   "()Z",  Float_isInfinite },
     { "java/lang/Float",     "isNaN",        "(F)Z", Float_isNaN_v },
     { "java/lang/Float",     "isInfinite",   "(F)Z", Float_isInfinite_v },
     { "java/lang/Float",     "intBitsToFloat", "(I)F", Float_intBitsToFloat },
     { "java/lang/Float",     "floatToIntBits", "(F)I", Float_floatToIntBits },
-    { "java/lang/Float",     "parseFloat", "(Ljava/lang/String;)F", Float_parseFloat },
+    { "java/lang/Float", "parseFloat", "(Ljava/lang/String;)F", Float_parseFloat },
+    { "java/lang/Float", "valueOf", "(Ljava/lang/String;)Ljava/lang/Float;", Float_valueOf_str },
+    { "java/lang/Double", "parseDouble", "(Ljava/lang/String;)D", Double_parseDouble },
     { "java/lang/Double",    "longBitsToDouble", "(J)D", Double_longBitsToDouble },
     { "java/lang/Double",    "doubleToLongBits", "(D)J", Double_doubleToLongBits },
 

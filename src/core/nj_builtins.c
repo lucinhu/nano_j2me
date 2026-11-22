@@ -127,3 +127,39 @@ nj_status nj_builtins_register_all(nj_vm *vm)
     }
     return nj_lib_sax_init(vm);
 }
+
+/* Developer tooling: dump the static builtin tables.  No VM is required, so
+ * this works before a JAR is opened. */
+int nj_dump_builtin_api(const char *path)
+{
+    FILE *f = path ? fopen(path, "w") : stdout;
+    int s;
+    if (!f) {
+        return 0;
+    }
+    for (s = 0; s < nj_builtin_source_count; s++) {
+        const nj_builtin_class *cs = nj_builtin_sources[s].classes;
+        int n = *nj_builtin_sources[s].count;
+        int i;
+        for (i = 0; i < n; i++) {
+            const nj_builtin_class *bc = &cs[i];
+            nj_u2 j;
+            fprintf(f, "%s\t%s\tclass\t\t\n", bc->name,
+                    bc->super ? bc->super : "");
+            for (j = 0; j < bc->nmethods; j++) {
+                fprintf(f, "%s\t%s\tmethod\t%s\t%s\n", bc->name,
+                        bc->super ? bc->super : "",
+                        bc->methods[j].name, bc->methods[j].desc);
+            }
+            for (j = 0; j < bc->nfields; j++) {
+                fprintf(f, "%s\t%s\tfield\t%s\t%s\n", bc->name,
+                        bc->super ? bc->super : "",
+                        bc->fields[j].name, bc->fields[j].desc);
+            }
+        }
+    }
+    if (path) {
+        fclose(f);
+    }
+    return 1;
+}

@@ -4943,6 +4943,28 @@ NJFN(tempoctl_getRate)
     return NJ_OK;
 }
 
+/* RateControl.getMinRate()/getMaxRate(): this player has a single supported
+ * rate (the sample's tempo), so both bounds report that rate; a title drawing
+ * a rate slider then sees a degenerate but truthful range. */
+NJFN(ratectl_getMinRate)
+{
+#if NJ_ENABLE_MIDI
+    nj_ref p = ctl_owner(vm, NJ_THIS(args));
+    struct nj_midi_stream *st = tempo_stream(vm, p);
+
+    ret->i = st ? (nj_s4)nj_midi_stream_rate(st) : 0;
+#else
+    (void)args;
+    ret->i = 0;
+#endif
+    return NJ_OK;
+}
+
+NJFN(ratectl_getMaxRate)
+{
+    return ratectl_getMinRate(vm, th, args, ret);
+}
+
 NJFN(tempoctl_setRate)
 {
 #if NJ_ENABLE_MIDI
@@ -5894,12 +5916,16 @@ static const nj_builtin_method videocontrol_methods[] = {
  * so each one carries the methods it exposes. */
 static const nj_builtin_method rate_methods[] = {
     M("setRate", "(I)I", NJ_ACC_ABSTRACT),
-    M("getRate", "()I", NJ_ACC_ABSTRACT)
+    M("getRate", "()I", NJ_ACC_ABSTRACT),
+    M("getMinRate", "()I", NJ_ACC_ABSTRACT),
+    M("getMaxRate", "()I", NJ_ACC_ABSTRACT)
 };
 
 static const nj_builtin_method tempo_methods[] = {
     M("setRate",  "(I)I", NJ_ACC_ABSTRACT),
     M("getRate",  "()I", NJ_ACC_ABSTRACT),
+    M("getMinRate", "()I", NJ_ACC_ABSTRACT),
+    M("getMaxRate", "()I", NJ_ACC_ABSTRACT),
     M("setTempo", "(I)I", NJ_ACC_ABSTRACT),
     M("getTempo", "()I", NJ_ACC_ABSTRACT)
 };
@@ -5907,6 +5933,8 @@ static const nj_builtin_method tempo_methods[] = {
 static const nj_builtin_method tempoimpl_methods[] = {
     M("setRate",  "(I)I", 0),
     M("getRate",  "()I", 0),
+    M("getMinRate", "()I", 0),
+    M("getMaxRate", "()I", 0),
     M("setTempo", "(I)I", 0),
     M("getTempo", "()I", 0)
 };
@@ -6030,6 +6058,8 @@ const nj_native_entry nj_lib_media_table[] = {
     { NJ_C_TEMPOIMPL, "getTempo", "()I", tempoctl_getTempo },
     { NJ_C_TEMPOIMPL, "setTempo", "(I)I", tempoctl_setTempo },
     { NJ_C_TEMPOIMPL, "getRate",  "()I", tempoctl_getRate },
+    { NJ_C_TEMPOIMPL, "getMinRate", "()I", ratectl_getMinRate },
+    { NJ_C_TEMPOIMPL, "getMaxRate", "()I", ratectl_getMaxRate },
     { NJ_C_TEMPOIMPL, "setRate",  "(I)I", tempoctl_setRate },
     { NJ_C_VOLUME, "setLevel", "(I)I", vol_setLevel },
     { NJ_C_VOLUME, "getLevel", "()I", vol_getLevel },

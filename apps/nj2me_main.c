@@ -678,6 +678,12 @@ int main(int argc, char **argv)
         } else if (strcmp(a, "--version") == 0) {
             printf("nano_j2me %s\n", NJ_VERSION_STRING);
             return 0;
+        } else if (strcmp(a, "--dump-builtin-api") == 0 && i + 1 < argc) {
+            if (!nj_dump_builtin_api(argv[++i])) {
+                fprintf(stderr, "cannot write builtin API dump\n");
+                return 2;
+            }
+            return 0;
         } else if (strcmp(a, "--port") == 0 && i + 1 < argc) {
             c.port_name = argv[++i];
         } else if (strcmp(a, "--graphics") == 0) {

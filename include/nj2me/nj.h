@@ -127,6 +127,11 @@ long nj_port_headless_bytes_written(const nj_port *port);
 const char *nj_port_headless_last_path(const nj_port *port);   /* NULL if none */
 const char *nj_port_headless_last_mode(const nj_port *port);
 
+/* Developer tooling: write one line per builtin class member the runtime
+ * registers ("class\tsuper\tkind\tmember\tdesc").  Used by
+ * tools/check_vendor_members.py; not part of the emulator API. */
+int nj_dump_builtin_api(const char *path);
+
 #ifdef __cplusplus
 }
 #endif

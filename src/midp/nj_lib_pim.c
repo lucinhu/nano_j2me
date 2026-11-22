@@ -228,7 +228,10 @@ static const nj_builtin_method contactlist_impl_methods[] = {
 };
 
 static const nj_builtin_method pimitem_methods[] = {
-    M("getPIMList", "()L" NJ_C_PIMLIST ";", NJ_ACC_ABSTRACT)
+    M("getPIMList", "()L" NJ_C_PIMLIST ";", NJ_ACC_ABSTRACT),
+    M("countValues", "(I)I", NJ_ACC_ABSTRACT),
+    M("getString", "(II)Ljava/lang/String;", NJ_ACC_ABSTRACT),
+    M("getStringArray", "(II)[Ljava/lang/String;", NJ_ACC_ABSTRACT)
 };
 
 static const nj_builtin_method contact_methods[] = {
