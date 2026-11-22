@@ -70,6 +70,11 @@ from the top and from the platform table.
 * Android emulator (API 36, x86_64): GLES2 enabled by default and the cheat
   change search exercised end to end (see above).
 
+
+* 900-frame whole-corpus deep probe (1036 rendered titles): **1023 passed,
+  11 early exits, 2 load/budget timeouts** (`TETRIS®`, `时光樱花册-遗失之心` —
+  both self-paced/load-heavy titles that pass standalone).
+
 ## Download
 
 | File | Size (bytes) | SHA-256 |

@@ -1449,3 +1449,23 @@ Round 178 also added opt-in frame dumps to the mock harness
 (`--dump-dir DIR`, `--dump-every N`, PPM output) so core-path visuals can be
 compared with `--dump-frames` CLI output.
 
+
+Round 182: 900-frame deep probe of the whole corpus
+---------------------------------------------------
+
+The deep probe re-ran every `ok` row at **900 frames** (18 workers, per-row
+canvas size, heap and device profile from the row itself, 240 s budget) on the
+0.5.28 CLI:
+
+| result | titles |
+| --- | ---: |
+| passed | 1023 |
+| early exit (title ends itself) | 11 |
+| failed (timeout) | 2 |
+
+The two failures are load/budget artefacts, not hangs: `TETRIS®` belongs to the
+self-paced class (it runs 600 frames unpaced, see the round-176 classification)
+and `时光樱花册-遗失之心` loads in 29.8 s standalone (round 125 measured the
+same under contention).  The 11 early exits are the known `notifyDestroyed()`
+titles (Lab Hamster, SlimeVolleyBall, Snake, 都市摩天楼, 龙珠Z传说, 明星麻将馆,
+杀鬼子-敌后武工队, Hotguys Rhapsody and the newer fetched builds).
