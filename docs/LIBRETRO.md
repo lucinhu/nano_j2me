@@ -69,8 +69,13 @@ Outputs go to `build/libretro-dist/<target>/`, with a library and its metadata.
 Use `--no-strip` to retain symbols. `all` selects the script's supported targets
 and requires all of their toolchains.
 
-The eight candidates currently in `build/libretro-dist/` are the r47 package
-(the 0.5.28 release) built on 2026-11-22 from revision `2f3d54c`.  r47 adds the
+The eight candidates currently in `build/libretro-dist/` are the r48 package
+(the 0.5.29 release) built on 2026-11-22 from revision `2dccb4c`.  r48 is an
+Android-facing release: the Android APKs build and enable the GLES2 backend by
+default (software fallback stays a panel toggle) and the cheat panel gained
+control-variable change search (baseline + changed/unchanged/increased/
+decreased filters) with single-write and continuous-write actions; the libretro
+core binary itself is functionally the r47 one.  r47 adds the
 JSR-177 `javax.microedition.pki` linkage surface (certificate interface and
 `CertificateException`, so IstanBUL's catch clause resolves; a 1048-JAR audit
 now leaves only Doom3's unreachable JSR-226 SVG symbols missing), opt-in

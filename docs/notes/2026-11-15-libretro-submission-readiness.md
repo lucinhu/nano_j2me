@@ -1623,3 +1623,18 @@ commit `489a595` on the 0.5.28 `.info`; docs PR body refreshed for
 0.5.28.  Validation: full serial CTest **207/207** (375.63 s), mock matrix
 **20/20**, real RetroArch loopdemo 120 frames PASS, Wine **4/4** at 300
 frames, bundle **32/32**.
+
+### Round 181 (2026-11-22): 0.5.29 / r48, Android acceleration and cheat change search
+
+Release v0.5.29 (r48, metadata commit `2dccb4c`, `.info` SHA-256
+`88b6276d42f6dc8af2c8f17139c1aa86efad45437337e757d833eb8c9c95e81c`):
+the Android release APKs now build the GLES2 backend and request hardware
+acceleration by default (panel row keeps the software fallback; legacy ARMv5
+stays software), and the cheat panel gained the control-variable change search
+(baseline + changed/unchanged/increased/decreased) with single-write and
+continuous-write actions.  The libretro core binaries are functionally
+unchanged from r47.  Super PR branch rebuilt as commit `d26aab1` on master
+`55e50a8`; docs PR unchanged at `95a1d0a` (baseline `96ee874`); both
+OPEN/MERGEABLE, no merge claimed.  Validation: full serial CTest **207/207**
+(361.81 s), mock **20/20**, RetroArch loopdemo PASS, Wine **4/4** @300, bundle
+**32/32**, plus Android emulator evidence for GLES2 and the change search.

@@ -1905,6 +1905,31 @@ real RetroArch loopdemo 120 frames PASS, Windows x86_64 Wine **4/4** at 300
 frames, submission bundle **32/32**; GoldenSolitaire and NeonRunner pass the
 libretro visual probe (300 frames).
 
+### 0.5.29 / r48 (2026-11-22)
+
+Release: https://github.com/lucinhu/nano_j2me/releases/tag/v0.5.29 - tag
+`v0.5.29` (metadata commit `2dccb4c`), eight libretro targets plus five
+per-ABI APKs (`versionCode 529`; no universal APK; all four phone ABIs now
+build the GLES2 backend).  `.info` SHA-256
+`88b6276d42f6dc8af2c8f17139c1aa86efad45437337e757d833eb8c9c95e81c`
+(`display_version = "0.5.29"`); the tracked super patch applies to
+`libretro-super` master `55e50a81195eaf8dd1b7720a601282459832ced1`.
+
+Behavioural changes vs 0.5.28 are Android-side: GLES2 hardware acceleration is
+requested by default on builds that carry the backend (software fallback is the
+看到 in-game toggle) and the cheat panel gained the control-variable search and
+both write modes; no libretro ABI or core-option change.  PR
+**libretro/libretro-super#2204** head is commit `d26aab1` (branch
+`add-nano_j2me` on fork `lucinhu/libretro-super`, parent master `55e50a8`);
+PR **libretro/docs#1239** head is `95a1d0a` (patch against docs master
+`96ee874`), both OPEN/MERGEABLE, no merge claimed.
+
+Validation: full serial CTest **207/207** (361.81 s), mock matrix **20/20**,
+real RetroArch loopdemo 120 frames PASS, Windows x86_64 Wine **4/4** at 300
+frames, submission bundle **32/32**; Android emulator (API 36, x86_64)
+confirmed the GLES2 default (`gles2: enabled renderer=...`) and the cheat
+change-search flow end to end.
+
 ### 0.5.28 / r47 (2026-11-22)
 
 Release: https://github.com/lucinhu/nano_j2me/releases/tag/v0.5.28 - tag
