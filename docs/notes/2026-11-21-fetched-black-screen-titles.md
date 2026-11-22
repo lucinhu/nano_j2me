@@ -493,3 +493,28 @@ blocked native pump gives up (the clear sites are `src/core/nj_vm.c:1557`,
 it on every exit path or let the scheduler re-enter a thread whose C call has
 already unwound. Then re-check TheMummy's black screen and the other timer-driven
 titles.
+
+## Round 214: the stale C-call flag is cleared on the abort path too
+
+The round-213 analysis identified the zombie shape (`state=RUNNING`,
+`in_c_call=1`, stale `wake_at` for the timer-2 helper). The only path in
+`src/core/nj_vm.c`'s blocked-native pump that skipped restoring
+`th->in_c_call` was the embedder-stop exit: it set `st = NJ_ERR_HALT` and broke
+out of the pump loop before `th->in_c_call = prev_in_c_call;`. That left a
+thread marked "inside a C call" while its C caller was gone.
+
+The restore now happens before the `stop_requested` check, so every exit from
+the pump loop (runnable, dead, halt deadline, scheduler give-up, embedder stop)
+leaves the flag as it found it.
+
+Effect on the title: the second timer's one-shot task now executes
+(`TheMummyMidlet.a()` builds the canvases, and the game reaches its RecordStore
+load, logging `InvalidRecordIDException` from `RecordStore.getRecord`), which it
+never did before. The title still does not complete a frame, so the remaining
+stall is further down the startup path than the timer queue; the next lead is
+the post-load paint/loader handshake (the round-212 `repaint()` +
+`serviceRepaints()` loop).
+
+Regression evidence: full serial CTest 210/210 in 365.99 s with the change
+(`/tmp/r214-ctest.log`), including `test_vm`, `test_thread`, `test_save`,
+`test_libretro_frontend`, `check_stack_trace`, `test_classinit`.

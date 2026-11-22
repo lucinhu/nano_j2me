@@ -1765,6 +1765,7 @@ nj_status vm_invoke(nj_vm *vm, nj_ref obj, const char *cls,
                     }
                 }
             }
+            th->in_c_call = prev_in_c_call;
             if (stop_requested) {
                 /*
                  * The embedder is done with this run.  The Java frame is
@@ -1775,7 +1776,6 @@ nj_status vm_invoke(nj_vm *vm, nj_ref obj, const char *cls,
                 st = NJ_ERR_HALT;
                 break;
             }
-            th->in_c_call = prev_in_c_call;
             if (th->state != NJ_THREAD_RUNNING) {
                 break;   /* it really is stuck: report it rather than spin */
             }
