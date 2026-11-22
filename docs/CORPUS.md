@@ -1849,13 +1849,20 @@ failures were triaged individually:
   400 frames, but `retro_serialize()` is refused (`157593664`-byte state,
   `NJ_ERR_STATE`): the documented long-frame state-service class (the VM thread
   is inside one frame when the frontend asks for the state), not a new defect.
-- `TheMummy_K700F.jar` and `Midnight Pool2.jar` - black through both the CLI
-  and the core at 240x320, 176x208 and 176x220, while the FreeJ2ME-Plus
-  reference renders The Mummy's "PRESS START" splash and Midnight Pool2's
-  "DO YOU WANT SOUND?" prompt.  These are genuine runtime-side black titles,
-  added to `docs/notes/2026-11-21-fetched-black-screen-titles.md` for the next
-  investigation round; TheMummy's only logged exception is a caught
-  `InvalidRecordIDException` from a fresh RMS.
+- `TheMummy_K700F.jar` and `Midnight Pool2.jar` were first recorded as black
+  in both paths; re-checking with frame dumps corrected half of that.
+  `Midnight Pool2` **does render** in the CLI (240x320 CLU dump shows the
+  "DO YOU WANT SOUND?" prompt; 4,361 non-black pixels by frame 300), but
+  through the core the VM thread stalls inside its first frame: the core
+  reports one present at load and then none, while the virtual clock advances
+  (NJ_LR_PROF: posted=1, vm_frames=0, vclock 2 s per 120 frontend calls) and
+  the save request is refused with -8.  That places it in the long-frame
+  startup-stall class, not in the rendering path.
+  `TheMummy_K700F` remains a genuine runtime-side black title: the CLI paints
+  300 frames with `gfx=0` (nothing is drawn), stalls when paced at 30 fps, and
+  the FreeJ2ME-Plus reference renders its "PRESS START" splash at 176x208.
+  Both are recorded in `docs/notes/2026-11-21-fetched-black-screen-titles.md`
+  for the next investigation round.
 
 A retry-at-larger-budget option for the visual probe was prototyped and
 reverted: the failures that matter here either still refuse the save check at

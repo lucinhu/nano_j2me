@@ -413,10 +413,16 @@ per-title screen.
   exception in the log: `javax/microedition/rms/InvalidRecordIDException` from
   `RecordStore.getRecord` on the fresh RMS (caught by the title).  FreeJ2ME-Plus
   at 176x208 renders the game's splash ("PRESS START"), so this is ours.
-- `Midnight Pool2.jar` (184,586 B, 5 classes): CLI paints (300 frames, 291
-  paints, 4,453 draw calls) but every dumped frame is black at 240x320 and
-  176x208; the core matches.  FreeJ2ME-Plus shows the "DO YOU WANT SOUND?"
-  YES/NO prompt.
-- Both titles are small and use no optional APIs, so the next step is tracing
-  their first `Canvas`/`Display` setup and paint path (the same class of
-  investigation as NeonRunner's `sizeChanged` ordering).
+- `Midnight Pool2.jar` (184,586 B, 5 classes): correction after frame dumps -
+  the CLI renders the "DO YOU WANT SOUND?" prompt (240x320: 4,361 non-black
+  pixels at frame 300, same as the FreeJ2ME reference), so the title is fine.
+  Through the libretro core it stalls inside its first frame: one present at
+  load, none afterwards, virtual clock advancing normally (NJ_LR_PROF
+  posted=1, vm_frames=0), and `retro_serialize()` refused with -8.  This is
+  the long-frame startup-stall class, not a black rendering bug.
+- `TheMummy_K700F.jar` is still genuinely black: the CLI completes 300 frames
+  with `paints=300, gfx=0` (its paint() never issues a draw call), stalls
+  outright at 30 fps pacing (120 s, no frame budget completion), and FreeJ2ME
+  renders the splash.  Next step: trace the MIDlet's Timer/loader path and the
+  first Canvas' displayable setup (its only logged exception is a caught
+  `InvalidRecordIDException` from a fresh RMS).
