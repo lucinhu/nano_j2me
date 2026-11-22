@@ -89,6 +89,7 @@
 #define NJ_CHOICE_EXCLUSIVE 1
 #define NJ_CHOICE_MULTIPLE  2
 #define NJ_CHOICE_IMPLICIT  3
+#define NJ_CHOICE_POPUP     4  /* MIDP 2.0 Choice.POPUP: ChoiceGroup only */
 
 #define F_IMG_W    NJ_F_IMG_WIDTH
 #define F_IMG_H    NJ_F_IMG_HEIGHT
@@ -5156,7 +5157,7 @@ static int form_item_activate(nj_vm *vm, nj_ref form)
             nj_ref arr = fa ? nj_field_read_ref(vm, it, fa) : NULL;
             nj_s4 mode2 = fget(vm, it, NJ_C_CHOICEGROUP, "cgType", D_INT);
             if (arr && (nj_u4)sel < arr->length) {
-                if (mode2 == 1) {
+                if (mode2 == 1 || mode2 == NJ_CHOICE_POPUP) {
                     nj_u4 k;
                     for (k = 0u; k < arr->length; k++) {
                         arr->u.bytes[k] = 0;
@@ -8184,9 +8185,13 @@ static nj_status cg_init_common(nj_vm *vm, nj_ref self, nj_value *args,
     nj_ref label = NJ_ARG_REF(args, 0);
 
     item_init_on(vm, self);
-    if (type < NJ_CHOICE_EXCLUSIVE || type > NJ_CHOICE_IMPLICIT) {
+    /* ChoiceGroup accepts EXCLUSIVE, MULTIPLE and (MIDP 2.0) POPUP; IMPLICIT
+     * is a List-only mode and a real handset rejects it here.  BT INFOx calls
+     * `new ChoiceGroup(label, Choice.POPUP)` with the literal 4. */
+    if (type != NJ_CHOICE_EXCLUSIVE && type != NJ_CHOICE_MULTIPLE &&
+        type != NJ_CHOICE_POPUP) {
         return nj_throw(vm, "java/lang/IllegalArgumentException",
-                        "choice type must be EXCLUSIVE, MULTIPLE or IMPLICIT");
+                        "choice type must be EXCLUSIVE, MULTIPLE or POPUP");
     }
     rput(vm, self, NJ_C_ITEM, "itLabel", D_STR, label);
     fput(vm, self, NJ_C_CHOICEGROUP, "cgType", D_INT, type);
@@ -8583,7 +8588,7 @@ static nj_status cg_set_selected(nj_vm *vm, nj_ref self, nj_s4 at, int on)
         return nj_throw(vm, "java/lang/IndexOutOfBoundsException", NULL);
     }
     type = fget(vm, self, NJ_C_CHOICEGROUP, "cgType", D_INT);
-    if (type == NJ_CHOICE_EXCLUSIVE) {
+    if (type == NJ_CHOICE_EXCLUSIVE || type == NJ_CHOICE_POPUP) {
         nj_u4 i;
         for (i = 0u; i < sels->length; i++) {
             sels->u.bytes[i] = 0;
@@ -8647,7 +8652,7 @@ NJFN(cg_setSelectedFlags)
         if (on && first < 0) {
             first = (int)i;
         }
-        if (on && type == NJ_CHOICE_EXCLUSIVE) {
+        if (on && (type == NJ_CHOICE_EXCLUSIVE || type == NJ_CHOICE_POPUP)) {
             nj_u4 k;
             for (k = 0u; k < sels->length; k++) {
                 sels->u.bytes[k] = 0;
@@ -8703,8 +8708,8 @@ NJFN(cg_getSelectedIndex)
     nj_s4 n = fget(vm, self, NJ_C_CHOICEGROUP, "cgCount", D_INT);
     nj_s4 i;
 
-    if (fget(vm, self, NJ_C_CHOICEGROUP, "cgType", D_INT) == NJ_CHOICE_EXCLUSIVE
-        && sels) {
+    if ((fget(vm, self, NJ_C_CHOICEGROUP, "cgType", D_INT) == NJ_CHOICE_EXCLUSIVE ||
+         fget(vm, self, NJ_C_CHOICEGROUP, "cgType", D_INT) == NJ_CHOICE_POPUP) && sels) {
         int count = 0, last = -1;
         for (i = 0; i < n && (nj_u4)i < sels->length; i++) {
             if (sels->u.bytes[i]) { count++; last = (int)i; }
@@ -12116,6 +12121,7 @@ static const nj_builtin_field choicegroup_fields[] = {
     FLD("EXCLUSIVE",  D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
     FLD("MULTIPLE",   D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
     FLD("IMPLICIT",   D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("POPUP",      D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
     FLD("TEXT_WRAP_DEFAULT", D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
     FLD("TEXT_WRAP_ON",  D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
     FLD("TEXT_WRAP_OFF", D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL)
@@ -12188,6 +12194,7 @@ static const nj_builtin_field choice_fields[] = {
     FLD("EXCLUSIVE",        D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
     FLD("MULTIPLE",         D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
     FLD("IMPLICIT",         D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("POPUP",            D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
     FLD("TEXT_WRAP_DEFAULT", D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
     FLD("TEXT_WRAP_ON",     D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
     FLD("TEXT_WRAP_OFF",    D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL)
@@ -13230,12 +13237,14 @@ nj_status nj_lcdui_late_init(nj_vm *vm)
     lcdui_const_int(vm, NJ_C_CHOICEGROUP, "EXCLUSIVE", NJ_CHOICE_EXCLUSIVE);
     lcdui_const_int(vm, NJ_C_CHOICEGROUP, "MULTIPLE",  NJ_CHOICE_MULTIPLE);
     lcdui_const_int(vm, NJ_C_CHOICEGROUP, "IMPLICIT",  NJ_CHOICE_IMPLICIT);
+    lcdui_const_int(vm, NJ_C_CHOICEGROUP, "POPUP",     NJ_CHOICE_POPUP);
     lcdui_const_int(vm, NJ_C_CHOICEGROUP, "TEXT_WRAP_DEFAULT", 0);
     lcdui_const_int(vm, NJ_C_CHOICEGROUP, "TEXT_WRAP_ON",      1);
     lcdui_const_int(vm, NJ_C_CHOICEGROUP, "TEXT_WRAP_OFF",     2);
     lcdui_const_int(vm, "javax/microedition/lcdui/Choice", "EXCLUSIVE", 1);
     lcdui_const_int(vm, "javax/microedition/lcdui/Choice", "MULTIPLE", 2);
     lcdui_const_int(vm, "javax/microedition/lcdui/Choice", "IMPLICIT", 3);
+    lcdui_const_int(vm, "javax/microedition/lcdui/Choice", "POPUP", 4);
     lcdui_const_int(vm, "javax/microedition/lcdui/Choice", "TEXT_WRAP_DEFAULT", 0);
     lcdui_const_int(vm, "javax/microedition/lcdui/Choice", "TEXT_WRAP_ON", 1);
     lcdui_const_int(vm, "javax/microedition/lcdui/Choice", "TEXT_WRAP_OFF", 2);

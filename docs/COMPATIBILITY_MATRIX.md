@@ -1,6 +1,6 @@
 # Compatibility matrix
 
-One row per JAR from the compatibility corpus (2462 titles): Fresh rows from the 2026-11-23 round-208 sweep of 673 newly fetched Sony Ericsson K700/K800 titles on the 0.5.34 CLI (647 rows), overlaid on the round-187/192 matrix. Earlier batches from rounds 167-192 supply titles that are no longer cached. Rows overlay by file name; compare within a batch. Also re-measured the Class.newInstance() accessibility fix for vault/3D_Tetris.jar.
+One row per JAR from the compatibility corpus (2462 titles): fresh rows from the 2026-11-23 0.5.35 corpus sweeps; BT INFOx re-measured after Choice.POPUP support.
 
 Rows that were re-measured keep the newer numbers; the remaining
 historical rows keep the numbers their original sweep recorded, so
@@ -20,11 +20,11 @@ Built from `HEAD`, 2026-11-23 (recorded by `tools/sweep_compat.py`).
 
 | verdict | titles |
 | --- | --- |
-| 运行正常 | 2420 |
+| 运行正常 | 2421 |
 | 非可用包 | 15 |
 | 标题自身异常 | 10 |
 | 超时 | 6 |
-| 失败 | 5 |
+| 失败 | 4 |
 | 未呈现画面 | 3 |
 | 标题自行退出 | 3 |
 
@@ -490,7 +490,7 @@ Built from `HEAD`, 2026-11-23 (recorded by `tools/sweep_compat.py`).
 | vault/Avenging Angel.jar | 221 | Avenging Angel | - | 2.00.36 | MIDP-2.0 | - | 5 | 16 | 600 | 638148 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
 | vault/AztecSnake.jar | 488 | Aztec Snake Retail Stox | - | 1.0.0 | MIDP-2.0 | - | 17 | 16 | 600 | 599707 | 0 | - | 运行正常 |  |
 | vault/BMW 1 Series Challenge.jar | 118 | BMW 1 Series Challenge | - | 1.0.3 | MIDP-1.0 | nokia-ui | 6 | 16 | 600 | 433630 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
-| vault/BT_Info.jar | 58 | 'BT INFOx | - | 1.04 | MIDP-2.0 | - | 13 | 16 | 60 | 4960 | 0 | java/lang/ArrayIndexOutOfBoundsE | 失败 | installed no Displayable |
+| vault/BT_Info.jar | 58 | 'BT INFOx | - | 1.04 | MIDP-2.0 | - | 13 | 16 | 600 | 6325 | 0 | java/lang/ArrayIndexOutOfBoundsE | 运行正常 | runs without input; the generic key script m |
 | vault/Backgammon.jar | 147 | elkware's Backgammon | - | 1.1.2 | MIDP-2.0 | - | 3 | 16 | 600 | 4055283 | 0 | java/io/IOException,java/lang/Nu | 运行正常 |  |
 | vault/BackstagePass.jar | 63 | BackstagePass | - | 1.0.1 | MIDP-1.0 | nokia-ui | 10 | 16 | 600 | 18774178 | 0 | - | 运行正常 |  |
 | vault/Batman - Guardian of Gotham.jar | 638 | Batman(TM) - Guardian of Got | - | 2.0.0 | MIDP-2.0 | - | 82 | 16 | 600 | 5917024 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |

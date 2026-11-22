@@ -2045,6 +2045,43 @@ static void test_widgets(nj_vm *vm)
             OK(call_int(vm, cg, NJ_C_CHOICEGROUP, "getSelectedFlags", "([Z)I",
                         a, &ok) == 1 && ok);
             OK(nj_array_get_int(a[0].r, 0u) == 0 && nj_array_get_int(a[0].r, 1u) == 1);
+            /* POPUP is a ChoiceGroup-only mode in MIDP 2.0 and selects
+             * exclusively; BT INFOx constructs `new ChoiceGroup(label, 4)`. */
+            {
+                nj_ref popup = construct(vm, NJ_C_CHOICEGROUP,
+                    "(Ljava/lang/String;I)V",
+                    (nj_value[]){ sref(str(vm, "Popup")), iref(4) });
+                OK(popup != NULL);
+                if (popup) {
+                    a[0] = sref(str(vm, "one"));
+                    OK(call_int(vm, popup, NJ_C_CHOICEGROUP, "append",
+                                "(Ljava/lang/String;)I", a, &ok) == 0 && ok);
+                    a[0] = sref(str(vm, "two"));
+                    OK(call_int(vm, popup, NJ_C_CHOICEGROUP, "append",
+                                "(Ljava/lang/String;)I", a, &ok) == 1 && ok);
+                    a[0] = iref(0);
+                    OK(nj_call(vm, popup, NJ_C_CHOICEGROUP, "setSelectedIndex",
+                               "(I)V", a, NULL) == NJ_OK);
+                    a[0] = iref(0);
+                    OK(call_int(vm, popup, NJ_C_CHOICEGROUP, "getSelectedIndex",
+                                "()I", NULL, &ok) == 0 && ok);
+                    OK(call_int(vm, popup, NJ_C_CHOICEGROUP, "isSelected",
+                                "(I)Z", a, &ok) == 1 && ok);
+                    a[0] = iref(1);
+                    OK(call_int(vm, popup, NJ_C_CHOICEGROUP, "isSelected",
+                                "(I)Z", a, &ok) == 0 && ok);
+                }
+                /* IMPLICIT is List-only: ChoiceGroup must reject it. */
+                (void)construct(vm, NJ_C_CHOICEGROUP, "(Ljava/lang/String;I)V",
+                                (nj_value[]){ sref(str(vm, "Bad")), iref(3) });
+                OK(exc_is(vm, "java/lang/IllegalArgumentException"));
+                {
+                    nj_field *fp = nj_field_lookup(vm, NJ_C_CHOICEGROUP,
+                                                   "POPUP", "I", 1);
+                    OK(fp && nj_field_read_int(vm, NULL, fp) == 4);
+                }
+            }
+
             /* MIDP's constants: EXCLUSIVE 1, MULTIPLE 2, IMPLICIT 3. */
             {
                 nj_field *fe = nj_field_lookup(vm, NJ_C_CHOICEGROUP, "EXCLUSIVE",

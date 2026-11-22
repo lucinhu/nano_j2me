@@ -1868,3 +1868,33 @@ A retry-at-larger-budget option for the visual probe was prototyped and
 reverted: the failures that matter here either still refuse the save check at
 1200 frames or are black at every tested size, so a larger budget only doubles
 the probe time without changing the classification.
+
+## Round 217: Choice.POPUP support (BT INFOx, 2026-11-23)
+
+`BT_Info.jar` ("BT INFOx 1.04") failed in the K700/K800 batch with
+`IllegalArgumentException: choice type must be EXCLUSIVE, MULTIPLE or IMPLICIT`
+thrown from `startApp()`; the MIDlet installed no Displayable and the run ended
+with zero frames. The title constructs its language list as
+`new ChoiceGroup(label, Choice.POPUP)` with the literal `4` (startApp bytecode
+2051 `iconst_4`). The runtime modelled only EXCLUSIVE/MULTIPLE/IMPLICIT and
+rejected the MIDP 2.0 POPUP mode out of range.
+
+Chrome/plan:
+- added `NJ_CHOICE_POPUP 4`; ChoiceGroup now accepts EXCLUSIVE, MULTIPLE and
+  POPUP and rejects IMPLICIT (List-only, as on a handset); selection logic
+  treats POPUP as single-select (setSelectedIndex, setSelectedFlags,
+  getSelectedIndex, activation toggle);
+- `POPUP` exposed as a static constant on `Choice` and `ChoiceGroup`
+  (value 4), so titles reading the named constant compile and read the right
+  number;
+- `tests/test_lcdui.c` now asserts POSTUP acceptance, its single-selection
+  behaviour, the constant value and that ChoiceGroup rejects IMPLICIT.
+
+Re-measured row: `vault/BT_Info.jar` **ok**, 600 frames / 600 paints, no
+exceptions; the frame dump shows the expected main menu
+(`Pripojit` / `O programe` / `Koniec`), matching the FreeJ2ME-Plus reference.
+The other two K700 "failure" rows are confirmed title-side: FreeJ2ME-Plus shows
+a blank screen for both `RadioBee.jar` (NPE building a Form from a null item
+array) and `Tetrisdlx.jar` (NPE reading a missing `/settings` resource).
+
+Compatibility matrix: 2462 titles, **2421 ok** (was 2420).
