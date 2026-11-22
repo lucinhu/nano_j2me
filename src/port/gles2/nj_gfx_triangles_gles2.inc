@@ -93,6 +93,10 @@ static const char triangle_draw_fs[] =
     "if(blend==65){c.rgb*=c.a;c.a=1.0;}"
     "else if(blend==66||blend==67)c.a=1.0;NJ_COLOR=c;}";
 
+#if NJ_GLES2_PROFILE
+static void tri_prof_print(const char *when);
+#endif
+
 static void triangles_delete(nj_gles2 *s)
 {
     triangle_state *t=s->geometry;

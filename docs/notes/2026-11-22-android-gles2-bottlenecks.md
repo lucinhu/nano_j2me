@@ -150,3 +150,64 @@ raster packets.  For this runtime that means:
    well-optimised software rasteriser.  Until then, auto-calibration disabling
    the path is the correct default and `debug.nj2me.m3g_accel=force` should
    stay a diagnostic switch.
+
+## Phase breakdown on a real GPU (2026-11-22, round 196)
+
+To answer "what limits the speed", the existing compile-time profiler
+(`-DNJ_GLES2_PROFILE=1`, `src/port/gles2/nj_gfx_triangles_gles2.inc`) was built
+on the host SDL2/GLES2 CLI (`/tmp/r195-gles2-prof`) and run on the
+Galaxy on Fire 2 gameplay workload (560 frames @30 fps, deep key script,
+heap 24) with the backend forced:
+
+```
+PROF final flushes=2366 px=123259843 tri=982266 total=3172.4ms
+  read_c=1031.6 commit=329.0 prep=431.2 setup=417.4 import_c=278.0
+  up_d=307.3 read_d=112.8 seed=92.1 draw=66.9 pack_d=43.7 up_c=35.5
+  views=12.9 val=7.1 init=3.4 alloc=0.8 vbuf=2.7 per_flush_us=1340.8
+```
+
+That is ~3.17 s of GPU-transaction time for 2366 sessions (≈4.2 per frame);
+software rendering of the same workload is 3.83 s, forced GL 4.84–5.47 s.  In
+wall-order terms:
+
+| Phase | Time | Share | Meaning |
+|---|---:|---:|---|
+| `read_c` + `read_d` | ~1.14 s | 36% | synchronous `glReadPixels` of colour (always) and depth (when picked) |
+| `prep` + `setup` | ~0.85 s | 27% | per-session framebuffer/program/state preparation |
+| `commit` | 0.33 s | 10% | CPU copy of the readback into colour/depth buffers |
+| `import_c` + `up_c` | 0.31 s | 10% | texture import/upload for the session |
+| `up_d` | 0.31 s | 10% | depth-texture upload for the session |
+| `seed` + `draw` + rest | ~0.22 s | 7% | initial rectangle seed, actual draw calls |
+
+Conclusions:
+
+- The synchronous readback is the single largest item, but removing it alone is
+  not enough: an earlier benchmark-only switch that skipped readback *and*
+  commit saved only ~0.5 s of the ~1.4 s forced-GL overhead, because the
+  remaining time is spread over ~2366 per-session transactions (framebuffer
+  preparation, texture uploads, depth round-trip) and material-grouped draws.
+- The backend calls the driver ~1341 us per session; a whole-frame renderer
+  would do one such transaction per frame instead of four.
+- The 2D path and M3G `Sprite3D` never use GL, so those titles (Pac-Man menus,
+  board games) cannot benefit at all from the current backend.
+
+### Proposed structural plan
+
+1. **Frame-resident M3G target** — keep one GL colour+depth FBO for the whole
+   M3G frame; seed from the CPU buffer once per frame, flush session-boundary
+   transactions, read back once at frame end.  This removes 3 of 4 sessions per
+   frame (the majority of `prep`/`setup`/`import_c`/`up_d`) and shrinks the
+   readback rectangle to the real dirty area.
+2. **Resident textures** — count `import_c`/`up_c` only on texture content
+   change instead of per session (needs a small content-version stamp from the
+   M3G texture objects).
+3. **GL presentation** — for builds whose frontend can present a GL surface,
+   skip the colour readback entirely and let the compositor show the FBO;
+   this is the only way to remove the remaining ~36% readback share.
+4. Keep the software path as the default for every title where calibration
+   says GPU is not faster (it already declines correctly on the real GPU:
+   `gpu=641us software=251us -> disabled`), so the structural work can land
+   behind the existing capability check without regressions.
+
+Step 1 is the next concrete milestone; step 3 requires a frontend/EGL
+integration change.
