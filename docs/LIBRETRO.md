@@ -909,3 +909,14 @@ state fine, and saves taken after a few seconds work on every core. Details,
 reproduction commands and the working hypothesis are in
 `docs/notes/2026-11-15-libretro-async-load-early-state.md`; the r25 release
 package is held until this is resolved or accepted as a documented limitation.
+
+**Save-state service limitation (round 176).** `retro_serialize()` is served at a
+frame boundary by the core's frame loop. A title whose single frame runs longer
+than the 4 s service timeout - observed with `MidnightPool1` and
+`Asphalt4EliteRacing`, where the VM thread stayed inside one `nj_midp_frame()`
+while the frontend had already called `retro_run()` hundreds of times - makes
+`retro_serialize()` return false and log `save-state request refused (-8); the
+game continues`. The core refuses rather than snapshotting an inconsistent VM;
+the same titles save fine from the CLI path (frame boundary) and under Android's
+boundary save. Frontends that retry later in the session can still get a valid
+state once the title reaches its next boundary.

@@ -1312,3 +1312,55 @@ Merged matrix: **1817 titles — 1796 `运行正常`** (4 title-exception, 5
 timeout, 4 bad-jar, 3 failure, 3 title-exit, 2 no-frame).  Regeneration is
 byte-deterministic; the remaining non-ok rows are the accounted-for
 title-side cases from rounds 167–174 plus four slow/stalling game families.
+
+## Round 176: 1050-title sweep on 0.5.27, r46 libretro probe and two probe-only failure classes (2026-11-22)
+
+The persistent fetched cache reached 646 JARs, so the whole corpus (404 `tests/games`
+entries plus the cache) was re-measured on the 0.5.27 CLI with 18 workers
+(`.local-tools/debug-runs/compat-20261122-r176`):
+
+| Batch | Rows | ok | title-exception | bad-jar | timeout | title-exit | no-frame | failure |
+|---|---|---|---|---|---|---|---|---|
+| tests/games + 646-file cache | 1050 | 1034 | 3 | 4 | 4 | 2 | 2 | 1 |
+
+Two classification refinements landed with this sweep (`tools/sweep_compat.py`):
+
+- a `startApp()` `NullPointerException` from `Displayable.setTitle(null)` is a
+  spec-mandated title-side error, so the row becomes `title-exception` with that
+  note (`epub_reader_albite.jar`);
+- a `timeout` row whose no-input retry failed is measured once **unpaced**
+  (`--fps 0 --run-frames 600`). A clean unpaced run is `ok` with the note
+  "self-paced title: runs 600 frames unpaced" (`Tetris_1.0.0_320x240`,
+  `Gangstar2KingsOfLA_1.1.2_320x240`). `assassins_creed` and `gangstar_2` still
+  time out unpaced - their wall-clock self-pacing/stall is real.
+
+The merged matrix is now **1817 titles, 1799 ok** (byte-deterministic).
+
+The post-release libretro visual probe on the r46 core covered all 1034 `ok` rows
+(300 frames, 8 jobs, `--visual-required --static-ok`): **1023 passed, 3 known
+limitations, 8 failed**. Two failure classes were isolated:
+
+1. **Blank-but-painting titles.** `Catan The Seafarers_320x240_Nokia_E71`,
+   `Carcassonne_1.0.8_320x240`, `Jewel Explosion_320x240`,
+   `Xmas Jewel Explosion__320x240`, `PAC-MAN (176x220) (1.0.0)` and
+   `MidnightPool1_1.0.0_320x240` draw black through the core *and* through the
+   CLI (PAC-MAN's 600-frame dumps have zero non-black pixels while logging
+   gfx>0, one caught `StringIndexOutOfBoundsException` and repeated
+   "all threads are waiting; assuming the app is done"). The sweep counted them
+   `ok` because frame/paint/gfx counters are not pixel checks - only the visual
+   probe sees this class. Tracked in `docs/notes/2026-11-21-fetched-black-screen-titles.md`.
+2. **State-service timeouts.** `MidnightPool1` and `Asphalt4EliteRacing` fail
+   `retro_serialize()` even with a single-process harness: the core logs
+   `save-state request refused (-8)` after the 4 s service timeout. Diagnostics
+   showed the request was never served while the VM thread stayed inside one
+   `nj_midp_frame()` (frontend called `retro_run()` 600 times, `vm_frames=0`,
+   `posted=1`), so this is not a blob-capacity problem: with
+   `--set nano_j2me_heap=16` it still fails at a 25 MB buffer, and the CLI saves
+   the same title's frame-300 state as 16.8 MB. The CLI runs the title normally
+   (60 frames in 2.4 s), so the core's asynchronous frame loop is what stalls
+   here. A frontend that calls `retro_serialize()` while the VM has not reached
+   a frame boundary in time gets `false` (documented limitation in
+   `docs/LIBRETRO.md`). `杀鬼子-敌后武工队_2185` shows the same signature.
+
+Known failures (3): `毁灭战士3_10598` slow loader, `台球传奇_87` and
+`德州扑克2_3884` blocking loads.

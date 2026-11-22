@@ -23,6 +23,13 @@ browser — the same runtime everywhere, with one small `nj_port` per platform.
 - **No dependencies.** `cc` and CMake are enough. No C++, no JVM, no libc
   requirement for freestanding builds, no zlib/libpng/libjpeg — DEFLATE, PNG,
   JPEG, GIF, WAV, AMR-NB, MP3, MIDI, H.263 and MPEG-4 Part 2 are in-tree.
+- **Vendor APIs from real games, implemented honestly.** The Nokia UI
+  extensions (`MultipointTouch`, `CanvasItem` overlays, `FullCanvas`, the
+  clipboard/indicator/notification/gesture families), Siemens
+  `color_game` layers and sprites, Sprint PCS carrier media wrappers and the
+  Immersion VibeTonz stub are all present because shipped games link them;
+  where the emulated handset has no hardware (no motor, no carrier audio) the
+  call is a documented no-op rather than a fake success.
 - **Every finger.** The Android APK, the libretro core and the headless runner
   deliver multi-touch: titles using the Nokia `MultipointTouch` API see the
   whole hand, while the MIDP `Canvas` pointer stays with the first finger —

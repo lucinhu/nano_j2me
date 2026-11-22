@@ -299,3 +299,30 @@ reads 600 frames / 599 paints / gfx=18,875 / ok, and the libretro visual probe
 passes.  Of the original three black titles, NeonRunner (round 170) and
 GoldenSolitaire (this round) are now fixed; the 128x128 Tomb Raider device
 build is still to investigate.
+
+## Round 176: five more blank-but-painting fetched titles (2026-11-22)
+
+The 646-JAR fetched cache and the post-release r46 libretro visual probe
+surfaced five titles that paint (non-zero `gfx`) yet produce only black frames
+through both the CLI and the core at 300-900 frames:
+
+- `Catan The Seafarers_320x240_Nokia_E71.jar`
+- `Carcassonne_1.0.8_320x240.jar`
+- `Jewel Explosion_320x240.jar`
+- `Xmas Jewel Explosion__320x240.jar`
+- `PAC-MAN (176x220) (1.0.0).jar` (the Sprint PCS rebuild; the round-175 API
+  work made it *run*, but it paints black)
+
+`MidnightPool1_1.0.0_320x240.jar` also probes black. For PAC-MAN the CLI dump
+has zero non-black pixels at frames 100-600 while the stats report
+`gfx=2402`; verbose logging shows one caught
+`StringIndexOutOfBoundsException at java/lang/String.substring(II)` followed by
+`all threads are waiting; assuming the app is done` on every frame. The sweep
+classifies these `ok` because it only counts frames/paints/gfx; the visual
+probe is the gate that sees them.
+
+Not yet root-caused; likely candidates are a paint/renderer path that only
+draws black (a Sprite/LayerManager consumer) or a title-side wait for input
+that the generic key script does not satisfy. Next step is to dump the canvas
+draw calls and check whether images decode, then compare against FreeJ2ME-Plus
+for one title.
