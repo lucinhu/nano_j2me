@@ -1575,3 +1575,19 @@ OPEN/MERGEABLE, no merge claimed.
   毁灭战士3 slow loader, 台球传奇 and 德州扑克2 blocking loads).
 * Compatibility matrix merged with the fresh rows and regenerated
   deterministically (1502 titles / 1483 ok).
+
+## Round 175: Sprint PCS carrier API and corpus matrix at 1817 (2026-11-22)
+
+* New `src/midp/nj_lib_sprint.c`: `com.sprintpcs.media.{Clip,Player,
+  PlayerListener,Vibrator}` and `com.sprintpcs.util.{Muglet,System}`, the exact
+  surface seven corpus JARs reference.  The Pac-Man family now links and
+  paints; the wrapper is silent and has no vibration motor (documented).
+  `test_sprint` gate asserts both the class surface and rendered pixels.
+* `tools/sweep_compat.py` retries a `title-exception` row without input (the
+  six TRANSFORMERS builds run fine when a scripted tap does not throw inside
+  their listeners).  The 316 newly fetched archive.org JARs are measured, the
+  Sprint titles re-measured after the API landed, and the matrix is merged to
+  **1817 titles / 1796 ok**, byte-deterministic.
+* Release **0.5.27 / r46**: eight cores, five per-ABI APKs, `.info`
+  `ad619b1a…`; super PR branch rebuilt as `87b32c6` (parent master
+  `55e50a81`); docs PR body refreshed for 0.5.27.

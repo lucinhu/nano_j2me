@@ -1904,3 +1904,29 @@ Validation: full serial CTest **205/205** (366.94 s), mock matrix **20/20**,
 real RetroArch loopdemo 120 frames PASS, Windows x86_64 Wine **4/4** at 300
 frames, submission bundle **32/32**; GoldenSolitaire and NeonRunner pass the
 libretro visual probe (300 frames).
+
+### 0.5.27 / r46 (2026-11-22)
+
+Release: https://github.com/lucinhu/nano_j2me/releases/tag/v0.5.27 - tag
+`v0.5.27` (metadata commit `a3e4229`), eight libretro targets plus five
+per-ABI APKs (`versionCode 527`; no universal APK).  `.info` SHA-256
+`ad619b1aa09830cad2af82ff59d87616774da993f57e27b4075109716c942873`
+(`display_version = "0.5.27"`); the tracked super patch applies to
+`libretro-super` master `55e50a81195eaf8dd1b7720a601282459832ced1`.
+
+Behavioural changes vs 0.5.26: the Sprint PCS carrier wrappers
+(`com.sprintpcs.media.{Clip,Player,PlayerListener,Vibrator}` and
+`com.sprintpcs.util.{Muglet,System}`) are implemented, so the Pac-Man mobile
+archive links and paints (it previously died on `NoClassDefFoundError`);
+`test_sprint` gates the class surface and rendered pixels.  The corpus sweep
+retries a `title-exception` row without input, correctly classifying the six
+TRANSFORMERS builds, and the 316 newly fetched archive.org JARs are merged
+into the compatibility matrix (**1817 titles / 1796 ok**, deterministic).
+PR **libretro/libretro-super#2204** head is commit `87b32c6` (branch
+`add-nano_j2me` on fork `lucinhu/libretro-super`, parent master `55e50a8`);
+PR **libretro/docs#1239** head is `95a1d0a` (patch against docs master
+`96ee874`), both OPEN/MERGEABLE, no merge claimed.
+
+Validation: full serial CTest **206/206** (381.46 s), mock matrix **20/20**,
+real RetroArch loopdemo 120 frames PASS, Windows x86_64 Wine **4/4** at 300
+frames, submission bundle **32/32**.

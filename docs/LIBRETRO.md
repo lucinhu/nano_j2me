@@ -69,8 +69,13 @@ Outputs go to `build/libretro-dist/<target>/`, with a library and its metadata.
 Use `--no-strip` to retain symbols. `all` selects the script's supported targets
 and requires all of their toolchains.
 
-The eight candidates currently in `build/libretro-dist/` are the r45 package
-(the 0.5.26 release) built on 2026-11-22 from revision `effbe13`.  r45 fixes
+The eight candidates currently in `build/libretro-dist/` are the r46 package
+(the 0.5.27 release) built on 2026-11-22 from revision `a3e4229`.  r46 adds the
+Sprint PCS carrier wrappers (`Clip`, `Player`, `PlayerListener`, `Vibrator`,
+`Muglet`, `System`) so the Pac-Man mobile archive links and paints, and the
+corpus sweep now retries key-induced title exceptions without input; the
+fetched corpus (646 JARs) is merged into the compatibility matrix (1817
+titles, 1796 ok).  r45 fixes
 two black-screen titles by making lazy reference points match MIDP/JVMS
 semantics: the first `Canvas.sizeChanged()` is now delivered from
 `Display.setCurrent()` while the MIDlet thread still owns the stack (NeonRunner
