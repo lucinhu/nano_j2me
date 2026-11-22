@@ -559,3 +559,40 @@ deliver a synchronous paint on the calling thread.
 
 Temporary `NJ_TIMER_DBG` and `NJ_WHERE_EVERY` instrumentation was reverted; the
 worktree is clean.
+
+## Round 216: the timer ticks fine; the splash loader waits for game-state flags
+
+The round-215 reentrancy hypothesis was testable and is now disproved. With an
+env-gated trace in `timer_pump` (temporary, reverted) a paced run shows timer 1's
+20 ms task `h` executing normally while the loader loops:
+
+```
+601 timer-task runs in 12 s, 2251 in 45 s (th=2 cls=h, exactly 20 ms apart)
+1 run of the one-shot task c (th=3)
+```
+
+So `TheMummyMidlet.a` is incremented at the required rate and the timer helper
+is not starved by the nested C-call pump.
+
+Re-reading `a.a()` (the splash loop) explains the remaining spin. It loops
+while `MIDlet.a < e` **or** `a.g != -1`, where `e = MIDlet.a + 150` at canvas
+construction; the three stage canvases are built with `(g, c) = (-1,0)`,
+`(-1,1)`, `(28,2)`. Stages 1 and 2 exit on `a >= e` (about 3 s each). Stage 3
+cannot exit that way because `g = 28`; it only leaves early when
+`f.c[4]` or `f.c[5]` is true (bytecode pc 50–66 of `a.a()`). After 45 s the
+loader is therefore in stage 3, waiting for two `f.c[]` flags that the game
+logic has not set.
+
+Those flags are entity marks written by the level loader in `b.b(...)`/its
+update (`getstatic f.c:[Z; ... bastore`, b.class bytecode ~4965–5042, indexed
+by entity id, plus `g.a(5, false)` side effects). Our timer ticks call `f.d()`
+50 times a second, but the flags stay false, so the remaining question is which
+part of the game init never runs on our runtime — with FreeJ2ME the same title
+reaches its "PRESS START" screen. Next: trace `b.b`/`f.d` state transitions
+during stage 3 (or compare the entity table state after the same number of
+ticks under FreeJ2ME) to find the missing init step; keys are not delivered
+during the loader loop because the frame counter does not advance, so this is
+not an input problem.
+
+Temporary `RUN task=`/`NJ_TIMER_DBG` tracing was reverted; the worktree is
+clean.
