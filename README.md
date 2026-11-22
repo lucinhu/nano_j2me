@@ -4,7 +4,7 @@
 
 [![latest release](https://img.shields.io/github/v/release/lucinhu/nano_j2me?sort=semver&label=release&color=blue)](https://github.com/lucinhu/nano_j2me/releases/latest)
 [![licence](https://img.shields.io/badge/licence-MIT-blue)](LICENSE)
-[![tests](https://img.shields.io/badge/ctest-199%20passing-brightgreen)](docs/VERIFICATION.md)
+[![tests](https://img.shields.io/badge/ctest-208%20passing-brightgreen)](docs/VERIFICATION.md)
 [![sanitized](https://img.shields.io/badge/sanitized-ASan%20%2B%20UBSan%20%2B%20LSan-brightgreen)](tools/run_sanitized_tests.sh)
 [![C99](https://img.shields.io/badge/C99-no%20dependencies-informational)](#design-commitments)
 
@@ -49,8 +49,12 @@ browser — the same runtime everywhere, with one small `nj_port` per platform.
   (about ten callbacks). The runtime keeps zero mutable global state; several VMs
   can coexist in one process, and `nj_vm_destroy()` returns the bytes it released.
 - **Cheatable.** The libretro core accepts `<arena offset>:<hex bytes>` cheat codes over the exposed Java arena and re-applies them every frame (frontend cheat search gives the offsets); the Android APK has the same engine with an in-game panel that **searches** for a value, narrows the candidate list, **change-searches** by the control-variable method (record a baseline, then keep addresses that changed / stayed / grew / shrank) and generates the code, with a choice between a continuous code and a single write. Both read the same file format. See [the cheat note](docs/notes/2026-11-19-android-cheat-editor.md), [the search note](docs/notes/2026-11-19-cheat-search.md) and [the change-search note](docs/notes/2026-11-22-cheat-change-search.md).
-- **Verifiable.** 199 registered tests pass under `ctest`; 399 of the 404 real-game
-  corpus titles run; every claim below is checked by a test, a gate or a
+- **Verifiable.** 208 registered tests pass under `ctest`; 400 of the 404
+  in-repository corpus titles run (the exceptions are a truncated archive, a
+  JAR whose manifest names no MIDlet, and two titles that exit themselves), and
+  the 646-title fetched corpus brings the measured total to 1036 running
+  titles. The whole measured corpus also runs under an ASan+UBSan build with
+  zero sanitizer reports; every claim below is checked by a test, a gate or a
   recorded playback.
 
 ## Screenshots
@@ -141,7 +145,7 @@ the fixtures are ~1 MB of regenerable data):
 
 ```sh
 cmake --build build --target nj_fixtures
-ctest --test-dir build --output-on-failure     # 190 tests
+ctest --test-dir build --output-on-failure     # 208 tests
 ```
 
 The fixture step is separate on purpose: a plain `cmake --build` stays a compile
