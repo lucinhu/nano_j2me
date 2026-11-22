@@ -1905,12 +1905,39 @@ real RetroArch loopdemo 120 frames PASS, Windows x86_64 Wine **4/4** at 300
 frames, submission bundle **32/32**; GoldenSolitaire and NeonRunner pass the
 libretro visual probe (300 frames).
 
+### 0.5.28 / r47 (2026-11-22)
+
+Release: https://github.com/lucinhu/nano_j2me/releases/tag/v0.5.28 - tag
+`v0.5.28` (metadata commit `2f3d54c`), eight libretro targets plus five
+per-ABI APKs (`versionCode 528`; no universal APK).  `.info` SHA-256
+`d0e83540d26fb8e0e26bb2fb35b00259029f319168db369c645f7ba6f577289e`
+(`display_version = "0.5.28"`); the tracked super patch applies to
+`libretro-super` master `55e50a81195eaf8dd1b7720a601282459832ced1`.
+
+Behavioural changes vs 0.5.27: the JSR-177 `javax.microedition.pki` surface
+(`Certificate` interface and `CertificateException` with the reference
+constructors and accessors) is implemented as a documented linkage layer -
+no TLS, keystore or certificate parsing, so `https://` still answers as
+unsupported.  The full-corpus API audit over 1048 JARs now reports 641
+implemented classes and a single missing reference (Doom3's unreachable
+JSR-226 SVG symbols); `test_pki` gates the new types.  The libretro mock
+harness gained opt-in PPM frame dumps (`--dump-dir`/`--dump-every`), and all
+seven remaining corpus probes replay each title's canvas size and absolute
+JAR path.  PR **libretro/libretro-super#2204** head is commit `489a595`
+(branch `add-nano_j2me` on fork `lucinhu/libretro-super`, parent master
+`55e50a8`); PR **libretro/docs#1239** head is `95a1d0a` (patch against docs
+master `96ee874`), both OPEN/MERGEABLE, no merge claimed.
+
+Validation: full serial CTest **207/207** (375.63 s), mock matrix **20/20**,
+real RetroArch loopdemo 120 frames PASS, Windows x86_64 Wine **4/4** at 300
+frames, submission bundle **32/32**.
+
 ### 0.5.27 / r46 (2026-11-22)
 
 Release: https://github.com/lucinhu/nano_j2me/releases/tag/v0.5.27 - tag
 `v0.5.27` (metadata commit `a3e4229`), eight libretro targets plus five
 per-ABI APKs (`versionCode 527`; no universal APK).  `.info` SHA-256
-`d0e83540d26fb8e0e26bb2fb35b00259029f319168db369c645f7ba6f577289e`
+`ad619b1aa09830cad2af82ff59d87616774da993f57e27b4075109716c942873`
 (`display_version = "0.5.27"`); the tracked super patch applies to
 `libretro-super` master `55e50a81195eaf8dd1b7720a601282459832ced1`.
 

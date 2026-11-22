@@ -69,8 +69,13 @@ Outputs go to `build/libretro-dist/<target>/`, with a library and its metadata.
 Use `--no-strip` to retain symbols. `all` selects the script's supported targets
 and requires all of their toolchains.
 
-The eight candidates currently in `build/libretro-dist/` are the r46 package
-(the 0.5.27 release) built on 2026-11-22 from revision `a3e4229`.  r46 adds the
+The eight candidates currently in `build/libretro-dist/` are the r47 package
+(the 0.5.28 release) built on 2026-11-22 from revision `2f3d54c`.  r47 adds the
+JSR-177 `javax.microedition.pki` linkage surface (certificate interface and
+`CertificateException`, so IstanBUL's catch clause resolves; a 1048-JAR audit
+now leaves only Doom3's unreachable JSR-226 SVG symbols missing), opt-in
+frame dumps in the mock harness (`--dump-dir`/`--dump-every`) and per-title
+canvas sizes in every corpus probe.  r46 adds the
 Sprint PCS carrier wrappers (`Clip`, `Player`, `PlayerListener`, `Vibrator`,
 `Muglet`, `System`) so the Pac-Man mobile archive links and paints, and the
 corpus sweep now retries key-induced title exceptions without input; the

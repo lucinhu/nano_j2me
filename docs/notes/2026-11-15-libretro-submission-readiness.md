@@ -1591,3 +1591,35 @@ OPEN/MERGEABLE, no merge claimed.
 * Release **0.5.27 / r46**: eight cores, five per-ABI APKs, `.info`
   `ad619b1a…`; super PR branch rebuilt as `87b32c6` (parent master
   `55e50a81`); docs PR body refreshed for 0.5.27.
+
+## Round 179/180: JSR-177 pki and the 0.5.28 / r47 package (2026-11-22)
+
+Round 179 closed the last reachable class-linkage gap in the corpus.  The
+1048-JAR audit (tests/games plus the fetched cache) reports **641 implemented
+classes and one JAR with a missing reference**: Doom3's unused JSR-226
+`javax.microedition.m2g.SVG*` symbols.  `IstanBUL.jar` was the other one, and
+its reference is a **catch type** in the HTTPS bootstrap - resolved while an
+exception is dispatched - so `src/midp/nj_lib_pki.c` now provides
+`javax.microedition.pki.Certificate` and `CertificateException` (reference
+constructors, `getReason()`, `getCertificate()`, message stored in
+`detailMessage`).  It is explicitly a linkage layer, not SATSA: no TLS,
+keystore or certificate parsing, and `https://` still answers as unsupported.
+`tests/test_pki.c` gates the surface (21 checks).
+
+Round 178 added opt-in PPM frame dumps to the libretro mock harness
+(`--dump-dir DIR --dump-every N`) and used them to prove that MidnightPool1 is
+really black through the core (documented limitation: its paint() busy-waits
+50 ms on `System.currentTimeMillis()` and the virtual clock only advances on
+the frontend thread).  Round 177's per-title canvas-size support was
+propagated to all seven remaining corpus probes (deep, motion, audio, states,
+cpu, heap, media), which now also prefer each row's absolute `jar_path`.
+
+Release **0.5.28 / r47**: eight libretro targets, five per-ABI APKs
+(`versionCode 528`), `.info` SHA-256
+`d0e83540d26fb8e0e26bb2fb35b00259029f319168db369c645f7ba6f577289e`;
+tracked super patch applies to `libretro-super` master
+`55e50a81195eaf8dd1b7720a601282459832ced1`.  Super PR branch rebuilt as
+commit `489a595` on the 0.5.28 `.info`; docs PR body refreshed for
+0.5.28.  Validation: full serial CTest **207/207** (375.63 s), mock matrix
+**20/20**, real RetroArch loopdemo 120 frames PASS, Wine **4/4** at 300
+frames, bundle **32/32**.
