@@ -1621,6 +1621,51 @@ CLASSES = {
             "public static void setLightOff()",
         ],
     },
+    # ---- Sprint PCS carrier extensions (Pac-Man mobile archive) --------
+    "com/sprintpcs/util/Muglet": {
+        "methods": [
+            "public static com.sprintpcs.util.Muglet getMuglet()",
+            "public String getMediaType()",
+            "public String getURI()",
+            "public String getReferringURI()",
+        ],
+    },
+    "com/sprintpcs/util/System": {
+        "methods": [
+            "public static void setExitURI(String)",
+            "public static String getSystemState(String)",
+            "public static void addSystemListener(Object)",
+            "public static String[] getPropertiesList()",
+            "public static void setSystemSetting(String, String)",
+            "public static String getProtectedProperty(String)",
+            "public static void promptMasterVolume()",
+        ],
+    },
+    "com/sprintpcs/media/PlayerListener": {
+        "interface": True,
+        "constants": {"AUDIO_DEVICE_UNAVAILABLE": "0", "END_OF_DATA": "1",
+                      "ERROR": "2", "STARTED": "3", "STOPPED": "4",
+                      "PAUSED": "5", "RESUME": "6", "PREEMPTED": "7"},
+        "methods": ["void playerUpdate(int, Object)"],
+    },
+    "com/sprintpcs/media/Clip": {
+        "methods": [
+            "public Clip(String, String, int, int)",
+            "public Clip(byte[], String, int, int)",
+            "public String getContentType()",
+        ],
+    },
+    "com/sprintpcs/media/Player": {
+        "methods": [
+            "public Player()",
+            "public static void addPlayerListener(com.sprintpcs.media.PlayerListener)",
+            "public static void play(com.sprintpcs.media.Clip, int)",
+            "public static void stop()",
+        ],
+    },
+    "com/sprintpcs/media/Vibrator": {
+        "methods": ["public static void vibrate(int)"],
+    },
     # ---- JSR 179: javax.microedition.location -------------------------
     "javax/microedition/location/LocationException": {
         "extends": "Exception",

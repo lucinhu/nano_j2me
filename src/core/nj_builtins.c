@@ -31,6 +31,7 @@ const nj_builtin_source nj_builtin_sources[] = {
     { nj_lib_pim_classes,    &nj_lib_pim_class_count    },
     { nj_lib_samsung_classes, &nj_lib_samsung_class_count },
     { nj_lib_siemens_classes, &nj_lib_siemens_class_count },
+    { nj_lib_sprint_classes, &nj_lib_sprint_class_count },
     { nj_lib_immersion_classes, &nj_lib_immersion_class_count },
     { nj_lib_socket_classes, &nj_lib_socket_class_count }
     , { nj_lib_datagram_classes, &nj_lib_datagram_class_count }

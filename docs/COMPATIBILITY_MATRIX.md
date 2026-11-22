@@ -1,6 +1,6 @@
 # Compatibility matrix
 
-One row per JAR from the compatibility corpus (1502 titles): Fresh rows from the 2026-11-22 round-167 combined sweep on the 0.5.24 CLI (tests/games + the 332-file fetched cache) overlaid by file name; the round-167 sweep distinguishes title-side missing classes (ArcadePark2) and manifest-less suites (AMF_Xtreme_Bowling) from runtime failures.
+One row per JAR from the compatibility corpus (1817 titles): Fresh rows from the 2026-11-22 combined sweeps on the 0.5.26/0.5.27 CLI: the round-171 full sweep (735 rows over tests/games + the 332-file cache), the round-175 sweep of the 316 newly fetched archive.org titles, and the round-175 re-measurement of the Sprint PCS titles after the tm carrier API landed. Rows overlay by file name; compare within a batch.
 
 Rows that were re-measured keep the newer numbers; the remaining
 historical rows keep the numbers their original sweep recorded, so
@@ -20,20 +20,20 @@ Built from `HEAD`, 2026-11-22 (recorded by `tools/sweep_compat.py`).
 
 | verdict | titles |
 | --- | --- |
-| 运行正常 | 1484 |
+| 运行正常 | 1796 |
+| 超时 | 5 |
 | 标题自身异常 | 4 |
 | 非可用包 | 4 |
 | 标题自行退出 | 3 |
-| 超时 | 3 |
-| 失败 | 2 |
+| 失败 | 3 |
 | 未呈现画面 | 2 |
 
 | 3D API used | titles |
 | --- | --- |
-| - | 1219 |
-| nokia-ui | 220 |
-| m3g | 38 |
-| m3g,nokia-ui | 18 |
+| - | 1462 |
+| nokia-ui | 272 |
+| m3g | 53 |
+| m3g,nokia-ui | 23 |
 | mascot | 7 |
 
 | title | size KB | MIDlet name | vendor | version | profile | 3D | classes | heap MB | frames | bytecodes | uncaught | exceptions | verdict | note |
@@ -231,6 +231,7 @@ Built from `HEAD`, 2026-11-22 (recorded by `tools/sweep_compat.py`).
 | vault/2005 Real Football.jar | 201 | 2005RealFootball | - | 1.1.5 | MIDP-1.0 | - | 6 | 16 | 600 | 1861217 | 0 | - | 运行正常 |  |
 | vault/2006 Real Football 3D.jar | 753 | 2006RealFootball3D | - | 1.0.7 | MIDP-2.0 | - | 7 | 16 | 602 | 2983997402 | 0 | java/lang/NumberFormatException | 运行正常 |  |
 | vault/2006 Real Football.jar | 308 | 2006 Real Football | - | 1.1.0 | MIDP-2.0 | - | 6 | 16 | 600 | 17201678 | 0 | - | 运行正常 |  |
+| vault/2010FIFAWorldCup_4.4.11_320x240.jar | 777 | 2010 FIFA World Cup | - | 4.4.11 | MIDP-2.0 | - | 31 | 16 | 600 | 8318275 | 0 | - | 运行正常 |  |
 | vault/2012 Apocalypse.jar | 449 | 2012 Apocalypse | - | 1.0.0 | MIDP-1.0 | - | 48 | 16 | 600 | 19279792 | 0 | - | 运行正常 |  |
 | vault/24 - Jack Bauer.jar | 591 | 24 Jack Bauer | - | 2.0.5 | MIDP-2.0 | - | 20 | 16 | 600 | 11657663 | 0 | java/io/EOFException,javax/micro | 运行正常 |  |
 | vault/24 - Special Ops.jar | 302 | 24 Special Ops | - | 1.0.28 | MIDP-2.0 | - | 13 | 16 | 600 | 14303970 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
@@ -241,6 +242,7 @@ Built from `HEAD`, 2026-11-22 (recorded by `tools/sweep_compat.py`).
 | vault/2890_Stalker_Last_Wi.jar | 1712 | STALKER 3D Last Wish | - | 1.0 | MIDP-2.0 | - | 54 | 16 | 600 | 120801205 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/2933_horror.jar | 661 | Hysteric by -Spirit- | - | 1.0 | MIDP-2.0 | - | 54 | 16 | 600 | 110625220 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/2972_Dead_Shock.jar | 544 | Dead Shock | - | 0.1.78 | MIDP-2.0 | - | 82 | 16 | 600 | 460894371 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| vault/2in1MahjongGames_1.0.0_320x240.jar | 446 | 2in1 Mahjong Games | - | 2.0 | MIDP-2.0 | - | 65 | 16 | 600 | 4301215230 | 0 | - | 运行正常 |  |
 | vault/3 In 1 sheep.jar | 217 | iGame 3in1Sheep | - | 1.0 | MIDP-2.0 | - | 9 | 16 | 600 | 985041 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/3029_Death_Night.jar | 930 | Death Night | - | 1.0 | MIDP-2.0 | - | 5 | 16 | 600 | 558948791 | 0 | - | 运行正常 |  |
 | vault/3050_Dead_Space.jar | 1260 | Dead Space Mobile 3D | - | 1.0 | MIDP-2.0 | - | 54 | 16 | 600 | 115378702 | 0 | java/lang/NullPointerException | 运行正常 |  |
@@ -272,6 +274,7 @@ Built from `HEAD`, 2026-11-22 (recorded by `tools/sweep_compat.py`).
 | vault/3D Super Ball.jar | 221 | 3D SuperBall | - | 1.1.4 | MIDP-2.0 | - | 34 | 16 | 600 | 4711664 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
 | vault/3DBrickBreakerRevolution.jar | 403 | 3D Brick Breaker | - | 1.0.0 | MIDP-2.0 | m3g | 21 | 16 | 600 | 46856739 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
 | vault/3DBrickBreakerRevolution2.jar | 578 | 3DBrickBreak2 by BerON | - | 1.0.3 | MIDP-2.0 | m3g | 29 | 16 | 600 | 55279755 | 0 | java/io/EOFException,javax/micro | 运行正常 |  |
+| vault/3DBrickBreakerRevolution_1.0.0_320x240.jar | 403 | 3D Brick Breaker | - | 1.0.0 | MIDP-2.0 | m3g,nokia-ui | 21 | 16 | 600 | 49297387 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
 | vault/3DKamasutra.jar | 207 | 3D Kamasutra Trivia | - | 1.1.3 | MIDP-2.0 | m3g | 13 | 16 | 600 | 2190038 | 0 | - | 运行正常 |  |
 | vault/3DPingPong.jar | 210 | Ping Pong | - | 1.0.0 | MIDP-2.0 | m3g,nokia-ui | 27 | 16 | 600 | 1129487 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
 | vault/3D_Autobahn_Raser_World_Challenge_S40_2ed_6230i_8800_208x208.jar | 215 | 3D Autobahn Raser WC | - | 1.1.0 | MIDP-1.0 | m3g,nokia-ui | 34 | 16 | 600 | 3280737 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
@@ -299,6 +302,7 @@ Built from `HEAD`, 2026-11-22 (recorded by `tools/sweep_compat.py`).
 | vault/A Good Day to Die Hard.jar | 1593 | A Good Day To Die Hard DEDOM | - | 1.1.1 | MIDP-2.0 | - | 9 | 16 | 600 | 165599089 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/A.M.A.-.IQ.Booster..SE.176x220 - Mastiwap.Com.jar | 204 | AMA IQ Booster | - | 1.0.0 | MIDP-2.0 | - | 15 | 16 | 600 | 11506421 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/AD1066-WilliamTheConquerorCZ_s40v3 - Mastiwap.Com.jar | 225 | AD1066 | - | 1.0 | MIDP-2.0 | - | 4 | 16 | 600 | 45712741 | 0 | java/io/IOException,java/lang/Il | 运行正常 |  |
+| vault/AD1066_1.0_320x240.jar | 324 | AD1066 | - | 1.0 | MIDP-2.0 | - | 42 | 16 | 600 | 24337443 | 0 | java/io/IOException,java/lang/Ar | 运行正常 |  |
 | vault/AMA IQ BOOST.jar | 221 | AMA IQ Booster | - | 1.0.1 | MIDP-2.0 | - | 15 | 16 | 600 | 11369958 | 0 | - | 运行正常 |  |
 | vault/AMA.IQ.Booster_s40v3 - Mastiwap.Com.jar | 218 | AMA IQ Booster | - | 1.0.6 | MIDP-1.0 | - | 21 | 16 | 600 | 7138128 | 0 | - | 运行正常 |  |
 | vault/AMALoveTest_s40v3 - Mastiwap.Com.jar | 222 | AMA Love Test | - | 1.0.0 | MIDP-2.0 | - | 12 | 16 | 600 | 3539394 | 0 | - | 运行正常 |  |
@@ -308,7 +312,9 @@ Built from `HEAD`, 2026-11-22 (recorded by `tools/sweep_compat.py`).
 | vault/AMA_IQ_Booster_Samsung_240x320.jar | 220 | AMA IQ Booster | - | 1.0.0 | MIDP-2.0 | - | 15 | 16 | 600 | 11365954 | 0 | - | 运行正常 |  |
 | vault/AMF_Xtreme_Bowling.jar | 221 | - | - | - | - | m3g | 44 | 16 | 0 | 0 | 0 | - | 非可用包 | not a usable MIDlet suite (bad JAR or no MID |
 | vault/AND1 Streetball.jar | 298 | AND1 Street Basketball | - | 1.0.7 | MIDP-2.0 | - | 4 | 16 | 600 | 267309418 | 0 | - | 运行正常 |  |
+| vault/AOEIIIAsianDynasties_1.0.0_320x240.jar | 610 | AOE III Asian Dynasties | - | 1.0.0 | MIDP-2.0 | - | 41 | 16 | 600 | 3029558 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
 | vault/Abracadaball.jar | 581 | Abracadaball | - | 1.0.6 | MIDP-2.0 | - | 5 | 16 | 600 | 192824135 | 0 | java/lang/ArrayIndexOutOfBoundsE | 运行正常 |  |
+| vault/Abracadaball_1.0.2_320x240.jar | 472 | Abracadaball | - | 1.0.2 | MIDP-2.0 | - | 5 | 16 | 600 | 25276064 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
 | vault/Absolute Blockers Deluxe.jar | 99 | Blockers Deluxe | - | 1.1.15 | MIDP-2.0 | - | 19 | 16 | 600 | 483935 | 0 | java/lang/NumberFormatException, | 运行正常 |  |
 | vault/AbsoluteSummerSports_s40v3 - Mastiwap.Com.jar | 208 | Absolute Summer Sports | - | 1.0.1 | MIDP-2.0 | - | 24 | 16 | 600 | 5290872 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
 | vault/Absolute_Summer_Sports_(176x208) - Mastiwap.Com.jar | 208 | Absolute Summer Sports | - | 1.0.1 | MIDP-2.0 | - | 24 | 16 | 600 | 4621306 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
@@ -319,6 +325,7 @@ Built from `HEAD`, 2026-11-22 (recorded by `tools/sweep_compat.py`).
 | vault/Aces of the Luftwaffe.jar | 444 | Aces Of The Luftwaffe | - | 1.0 | MIDP-2.0 | - | 6 | 16 | 600 | 1986863 | 0 | java/io/IOException,javax/microe | 运行正常 |  |
 | vault/Activision Anthology.jar | 210 | ActivisionAnthology | - | 0.2.7 | MIDP-2.0 | nokia-ui | 11 | 16 | 600 | 18503984 | 0 | java/io/IOException,java/lang/Nu | 运行正常 |  |
 | vault/ActivisionAnthology.jar | 173 | Activision Anthology  (by GD | - | 01.00.01 | MIDP-2.0 | - | 4 | 16 | 600 | 6650034 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| vault/Advanced Brain Trainer 2__320x240.jar | 293 | Advanced Brain Trainer 2 | - | 00.00.29 | MIDP-2.0 | nokia-ui | 25 | 16 | 600 | 4109427 | 0 | java/lang/ArrayIndexOutOfBoundsE | 运行正常 |  |
 | vault/Adventure Time - Heroes of OOO.jar | 320 | Adventure Time | - | 1.0.2 | MIDP-2.0 | - | 12 | 16 | 600 | 1624009 | 0 | - | 运行正常 |  |
 | vault/Age of Ampire3 - Mastiwap.Com.jar | 208 | Age Of Empires III Mobile | - | 1.0.4 | MIDP-1.0 | - | 10 | 16 | 600 | 8265511 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/AgeOfEmpiresIIIENG_s40v3 - Mastiwap.Com.jar | 204 | Age Of Empires III Mobile | - | 1.0.1 | MIDP-1.0 | - | 13 | 16 | 600 | 67917441 | 0 | java/lang/NullPointerException | 运行正常 |  |
@@ -334,8 +341,10 @@ Built from `HEAD`, 2026-11-22 (recorded by `tools/sweep_compat.py`).
 | vault/AirBuster 3D.jar | 299 | AirBurster3d | - | 1.0.1 | MIDP-2.0 | - | 6 | 16 | 600 | 5564308 | 0 | java/io/IOException,java/lang/Ar | 运行正常 |  |
 | vault/AirHockey_s40v3 - Mastiwap.Com.jar | 215 | OAAirHockey | - | 1.15.39 | MIDP-2.0 | nokia-ui | 75 | 16 | 600 | 4447707 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
 | vault/AirHockey_s40v3a-N6280 - Mastiwap.Com.jar | 221 | OAAirHockey | - | 1.13.34 | MIDP-2.0 | - | 73 | 16 | 600 | 4605574 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| vault/AirStrike1944FlightForFreedom_1.0.1_320x240.jar | 316 | Air Strike 1944 | - | 1.0.1 | MIDP-2.0 | - | 6 | 16 | 600 | 75284937 | 0 | - | 运行正常 |  |
 | vault/Aircraft Gear.jar | 265 | Aircraft Gear | - | 1.0.0 | MIDP-2.0 | - | 12 | 16 | 600 | 3030575 | 0 | java/io/IOException,java/lang/Nu | 运行正常 |  |
 | vault/Akiza Dart.jar | 206 | AKIZA Dart by BerON | - | 1.0.0 | MIDP-2.0 | - | 6 | 16 | 600 | 2330563 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| vault/Aladdin 2 The New Adventure_320x240.jar | 643 | Aladdin 2 | - | 1.0 | MIDP-2.0 | - | 8 | 16 | 600 | 4636232 | 0 | - | 运行正常 |  |
 | vault/Alco Bench.jar | 209 | AlcoBench | - | 09.8.11 | MIDP-2.0 | nokia-ui | 66 | 16 | 600 | 872875 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
 | vault/Alex Rider Storm Breaker.jar | 225 | Stormbreaker by street_racer | - | 1.2.0 | MIDP-2.0 | nokia-ui | 9 | 16 | 600 | 4888133653 | 0 | java/lang/ArrayIndexOutOfBoundsE | 运行正常 |  |
 | vault/Ali Baba And The Scary Dev.jar | 204 | Ali Baba | - | 1.1.1 | MIDP-2.0 | - | 2 | 16 | 600 | 1246463905 | 0 | java/lang/ArrayIndexOutOfBoundsE | 运行正常 |  |
@@ -356,6 +365,7 @@ Built from `HEAD`, 2026-11-22 (recorded by `tools/sweep_compat.py`).
 | vault/America's Army - Special Operations.jar | 329 | America's Army | - | 1.0.5 | MIDP-2.0 | - | 6 | 16 | 600 | 15498105 | 0 | - | 运行正常 |  |
 | vault/American Gangster - The Mobile Game.jar | 543 | American Gangster | - | 1.0.9 | MIDP-2.0 | - | 6 | 16 | 600 | 11574333 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
 | vault/American_Gangster _-_The_Mobile_Game_N91 - Mastiwap.Com.jar | 209 | American Gangster | - | 1.0.1 | MIDP-2.0 | nokia-ui | 6 | 16 | 600 | 15695431 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| vault/Americas Cup Racer__320x240.jar | 141 | ACRacer | - | 1.0.5 | MIDP-1.0 | - | 17 | 16 | 600 | 2447095 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
 | vault/Amy Pumpkin's Nightmare.jar | 252 | AmyPumpkin | - | 1.0 | MIDP-2.0 | - | 6 | 16 | 600 | 707975 | 0 | java/io/EOFException,javax/micro | 运行正常 |  |
 | vault/Anakonda.jar | 83 | Anakonda | - | 1.0.0 | MIDP-1.0 | - | 13 | 16 | 600 | 1021025 | 0 | java/io/IOException,java/lang/Nu | 运行正常 |  |
 | vault/Anarchy2087_s60v1 - Mastiwap.Com.jar | 221 | Anarchy2087 | - | 1.0 | MIDP-1.0 | nokia-ui | 8 | 16 | 600 | 9621200 | 0 | java/io/IOException,javax/microe | 运行正常 |  |
@@ -368,6 +378,8 @@ Built from `HEAD`, 2026-11-22 (recorded by `tools/sweep_compat.py`).
 | vault/AncientGames_s40v3a - Mastiwap.Com.jar | 218 | AncientGames | - | 1.0.4 | MIDP-1.0 | nokia-ui | 48 | 16 | 600 | 7778257 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
 | vault/Ancient_Taxi_x65.jar | 215 | WUP.Ru | - | 1.0.85 | MIDP-2.0 | - | 45 | 16 | 600 | 7404579 | 0 | java/io/IOException,javax/microe | 运行正常 |  |
 | vault/AngelsAndDemons.jar | 570 | Angels and Demons | - | 1.0.0 | MIDP-1.0 | - | 12 | 16 | 600 | 10352187 | 0 | java/lang/NumberFormatException, | 运行正常 |  |
+| vault/Angry Snake__320x240.jar | 319 | Angry Snake | - | 1.0.0 | MIDP-2.0 | - | 22 | 16 | 600 | 7407290 | 0 | - | 运行正常 | runs without input; the generic key script m |
+| vault/Animal Tycoon 2_320x240.jar | 1026 | Animal Tycoon 2 | - | 1.0 | MIDP-2.0 | - | 73 | 16 | 600 | 2828547 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
 | vault/Antar_Expedition - Mastiwap.Com.jar | 213 | Antar | - | 1.02 | MIDP-1.0 | nokia-ui | 33 | 16 | 600 | 53 | 0 | - | 运行正常 | runs without input; the generic key script m |
 | vault/Anyplays.-.Sexy.Puzzmaniac.SE.176x220 - Mastiwap.Com.jar | 208 | Puzzmaniac | - | 1.0 | MIDP-2.0 | - | 15 | 16 | 600 | 2452374 | 0 | java/io/EOFException,javax/micro | 运行正常 |  |
 | vault/Apocalypse3000.jar | 213 | Apocalypse 3000 | - | 1.26 | MIDP-1.0 | nokia-ui | 18 | 16 | 600 | 696141 | 0 | java/io/EOFException,javax/micro | 运行正常 |  |
@@ -378,12 +390,14 @@ Built from `HEAD`, 2026-11-22 (recorded by `tools/sweep_compat.py`).
 | vault/Aqua_Driller_(176x208) - Mastiwap.Com.jar | 217 | AquaDriller | - | 1.20 | MIDP-2.0 | nokia-ui | 24 | 16 | 600 | 232976 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
 | vault/Aqua_Driller_v1.20 - Mastiwap.Com.jar | 216 | AquaDriller | - | 1.20 | MIDP-2.0 | nokia-ui | 24 | 16 | 600 | 231876 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
 | vault/Arcade Side Golf.jar | 194 | ArcadeSideGolf | - | 1.0.2 | MIDP-2.0 | - | 6 | 16 | 600 | 20245697 | 0 | java/io/IOException,java/lang/Nu | 运行正常 |  |
+| vault/ArcadeClassicsCollection_1.0.0_320x240.jar | 521 | ArcadeClassics | - | 1.0.0 | MIDP-1.0 | - | 51 | 16 | 600 | 14391831 | 0 | java/io/EOFException,java/io/IOE | 运行正常 |  |
 | vault/ArcadePark.jar | 243 | Arcade Park 2 | - | 1.0.0 | MIDP-2.0 | - | 13 | 16 | 322 | 1116203 | 0 | java/io/EOFException,java/io/IOE | 运行正常 | exited itself (notifyDestroyed) |
 | vault/ArcadePark2.jar | 371 | ArcadePark2 | - | 1.1.2 | MIDP-2.0 | - | 46 | 16 | 60 | 1895 | 0 | java/lang/NoClassDefFoundError,j | 标题自身异常 | title references a class it does not bundle  |
 | vault/Archon.jar | 162 | Archon | - | 1.0.1 | MIDP-2.0 | - | 7 | 16 | 600 | 5977885 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
 | vault/Arkanoid Evolution.jar | 597 | Arkanoid Evolution | - | 1.1.0 | MIDP-2.0 | - | 19 | 16 | 600 | 4018079 | 0 | java/lang/ArrayIndexOutOfBoundsE | 运行正常 |  |
 | vault/Arkanoid.jar | 92 | Arkanoid | - | 1.8.6 | MIDP-1.0 | - | 12 | 16 | 600 | 382505 | 0 | - | 运行正常 |  |
 | vault/Army Men - Mobile Ops.jar | 654 | ArmyMen | - | 1.0.0 | MIDP-2.0 | - | 89 | 16 | 600 | 23250280 | 0 | java/io/EOFException,java/lang/A | 运行正常 |  |
+| vault/Army Men Mobile Ops_320x240.jar | 544 | ArmyMen | - | 1.0.0 | MIDP-2.0 | - | 89 | 16 | 600 | 34479028 | 0 | java/io/EOFException,java/lang/A | 运行正常 |  |
 | vault/Asphalt - Urban GT 3D.jar | 339 | Asphalt Urban GT 3D | - | 1.0.5 | MIDP-2.0 | - | 27 | 16 | 600 | 12886671 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
 | vault/Asphalt - Urban GT.jar | 250 | AsphaltUrbanGT | - | 1.0.1 | MIDP-2.0 | - | 7 | 16 | 600 | 221253009 | 0 | javax/microedition/rms/InvalidRe | 运行正常 |  |
 | vault/Asphalt 2 - Urban GT.jar | 309 | Asphalt2 | - | 1.0.0 | MIDP-2.0 | - | 6 | 16 | 600 | 8822272 | 0 | - | 运行正常 |  |
@@ -392,11 +406,19 @@ Built from `HEAD`, 2026-11-22 (recorded by `tools/sweep_compat.py`).
 | vault/Asphalt 4 - Elite Racing.jar | 370 | Asphalt 4 : Elite Racing | - | 1.1.7 | MIDP-2.0 | - | 10 | 16 | 600 | 10091593 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
 | vault/Asphalt 6 - Adrenaline.jar | 1500 | Asphalt6 | - | 1.0.0 | MIDP-2.0 | - | 22 | 16 | 600 | 168720803 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/Asphalt Nitro.jar | 2086 | Asphalt Nitro | - | 1.1.7 | MIDP-2.0 | - | 21 | 16 | 600 | 185969608 | 0 | java/lang/NullPointerException | 运行正常 |  |
+| vault/Asphalt3StreetRules_1.1.5_320x240.jar | 1110 | Asphalt 3 3D Street Rules | - | 1.1.5 | MIDP-2.0 | m3g,nokia-ui | 18 | 16 | 600 | 4086052204 | 0 | java/lang/ClassNotFoundException | 运行正常 |  |
+| vault/Asphalt4EliteRacing_1.0.0_320x240.jar | 331 | Asphalt 4 Elite Racing | - | 1.0.0 | MIDP-2.0 | - | 11 | 16 | 600 | 3375334466 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| vault/Asphalt5NitroRush_1.1.5_320x240.jar | 957 | Asphalt 5 Nitro Rush 3D | - | 1.1.5 | MIDP-2.0 | m3g,nokia-ui | 18 | 16 | 600 | 3925208554 | 0 | java/lang/ClassNotFoundException | 运行正常 |  |
+| vault/Asphalt6Adrenaline_1.0.2_320x240.jar | 1033 | Asphalt 6 Adrenaline | - | 1.0.2 | MIDP-2.0 | - | 20 | 16 | 600 | 157767159 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/Assassin's Creed - Brotherhood.jar | 1171 | Assassin's Creed Brotherhood | - | 1.1.8 | MIDP-2.0 | - | 11 | 16 | 600 | 183741858 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/Assassin's Creed - Revelations.jar | 1596 | Assassin's Creed Revelations | - | 1.0.6 | MIDP-2.0 | - | 14 | 16 | 600 | 40767011 | 0 | java/lang/IndexOutOfBoundsExcept | 运行正常 |  |
 | vault/Assassin's Creed II.jar | 1025 | Assassin's Creed 2 | - | 1.2.3 | MIDP-2.0 | - | 9 | 16 | 600 | 180784094 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/Assassin's Creed III.jar | 1625 | Assassin's Creed III | - | 1.1.3 | MIDP-2.0 | - | 12 | 16 | 600 | 116503061 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/Assassin's Creed.jar | 612 | Assassin's Creed | - | 1.0.2 | MIDP-2.0 | - | 5 | 16 | 600 | 648882219 | 0 | java/lang/NullPointerException | 运行正常 |  |
+| vault/AssassinsCreed1_1.0.1_320x240.jar | 376 | Assassin_s Creed | - | 1.0.1 | MIDP-2.0 | - | 5 | 16 | 600 | 3584309836 | 0 | - | 运行正常 |  |
+| vault/AssassinsCreed2_1.2.5_320x240.jar | 687 | Assassin's Creed 2 | - | 1.2.5 | MIDP-2.0 | - | 9 | 16 | 600 | 63723470 | 0 | java/lang/NullPointerException | 运行正常 |  |
+| vault/AssassinsCreedBrotherhood_1.2.7_320x240.jar | 1017 | Assassin's Creed Brotherhood | - | 1.2.7 | MIDP-2.0 | - | 10 | 16 | 600 | 114504746 | 0 | java/lang/NullPointerException | 运行正常 |  |
+| vault/AsterixObelixEncounterCleopatra_1.0.3_320x240.jar | 666 | Asterix and Obelix encounter | - | 1.0.3 | MIDP-2.0 | - | 11 | 16 | 600 | 66322273 | 0 | - | 运行正常 |  |
 | vault/Asteroids.jar | 368 | Asteroids | - | 1.0.3 | MIDP-2.0 | - | 6 | 16 | 600 | 4609783 | 0 | java/lang/NumberFormatException, | 运行正常 |  |
 | vault/Astro Knight Galaxy.jar | 182 | Knight | - | 1.0 | MIDP-1.0 | - | 3 | 16 | 600 | 287345774 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
 | vault/AtariLegendsPack.jar | 290 | Atari Legends pack | - | 0.0.15 | MIDP-2.0 | - | 47 | 16 | 600 | 964839 | 0 | java/io/IOException,javax/microe | 运行正常 |  |
@@ -405,6 +427,8 @@ Built from `HEAD`, 2026-11-22 (recorded by `tools/sweep_compat.py`).
 | vault/AtariLegendsVol3.jar | 100 | Atari Legends 3 [terjef] | - | 1.1.0 | MIDP-2.0 | - | 10 | 16 | 600 | 5696353 | 0 | java/lang/IllegalMonitorStateExc | 运行正常 |  |
 | vault/Atlantis SkyPatrol.jar | 468 | Atlantis Sky Patrol | - | 1.0.0 | MIDP-2.0 | - | 12 | 16 | 600 | 750784 | 0 | - | 运行正常 |  |
 | vault/Avalanche Snowboarding.jar | 836 | Avalanche Snowboarding | - | 1.2.0 | MIDP-2.0 | - | 17 | 16 | 600 | 18593864 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| vault/AvalancheSnowboarding_1.2.1_320x240.jar | 714 | Avalanche Snowboarding | - | 1.2.1 | MIDP-2.0 | - | 18 | 16 | 600 | 61646126 | 0 | javax/microedition/rms/InvalidRe | 运行正常 |  |
+| vault/Avatar_1.0.6_320x240.jar | 659 | Avatar | - | 1.0.6 | MIDP-2.0 | - | 8 | 16 | 600 | 30242097 | 0 | - | 运行正常 |  |
 | vault/Avenging Angel.jar | 221 | Avenging Angel | - | 2.00.36 | MIDP-2.0 | - | 5 | 16 | 600 | 638148 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
 | vault/AztecSnake.jar | 488 | Aztec Snake Retail Stox | - | 1.0.0 | MIDP-2.0 | - | 17 | 16 | 600 | 601387 | 0 | - | 运行正常 |  |
 | vault/Backgammon.jar | 147 | elkware's Backgammon | - | 1.1.2 | MIDP-2.0 | - | 3 | 16 | 600 | 4067897 | 0 | java/io/IOException,java/lang/Nu | 运行正常 |  |
@@ -416,11 +440,16 @@ Built from `HEAD`, 2026-11-22 (recorded by `tools/sweep_compat.py`).
 | vault/Bejeweled 3.jar | 550 | Bejeweled 3 | - | 4.0.78 | MIDP-2.0 | - | 42 | 16 | 600 | 2937296 | 0 | - | 运行正常 |  |
 | vault/Bejeweled Twist.jar | 574 | BejeweledTwist | - | 01.00.04 | MIDP-2.0 | - | 5 | 16 | 600 | 31599371 | 0 | java/io/IOException,javax/microe | 运行正常 |  |
 | vault/Bejeweled.jar | 350 | Bejeweled (mobilegamesarena. | - | 1.5.46 | MIDP-2.0 | nokia-ui | 14 | 16 | 600 | 21788436 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| vault/Bejeweled1_1.5.46_320x240.jar | 371 | Bejeweled | - | 1.5.46 | MIDP-2.0 | nokia-ui | 14 | 16 | 600 | 20849794 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| vault/Bejeweled3_4.7.74_320x240.jar | 656 | Bejeweled 3 | - | 4.7.74 | MIDP-2.0 | m3g | 42 | 16 | 600 | 24174715 | 0 | - | 运行正常 |  |
 | vault/BejeweledTwist.jar | 659 | BejeweledTwist by Alexe | - | 01.00.37 | MIDP-2.0 | - | 4 | 16 | 601 | 30388769 | 0 | java/io/IOException,javax/microe | 运行正常 |  |
+| vault/Bejeweled_320x240.jar | 350 | Bejeweled | - | 1.5.46 | MIDP-2.0 | nokia-ui | 14 | 16 | 600 | 21068624 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
 | vault/Beowulf - The Mobile Game.jar | 576 | Beowulf | - | 1.1.1 | MIDP-2.0 | - | 7 | 16 | 600 | 11182462 | 0 | - | 运行正常 |  |
+| vault/Beowulf_1.1.6_320x240.jar | 585 | Beowulf | - | 1.1.6 | MIDP-2.0 | nokia-ui | 7 | 16 | 600 | 16281602 | 0 | - | 运行正常 |  |
 | vault/Big Range Hunting 2.jar | 1048 | Big Range Hunting 2 | - | 1.0.0 | MIDP-2.0 | - | 13 | 16 | 600 | 14764809 | 0 | java/lang/ArrayIndexOutOfBoundsE | 运行正常 |  |
 | vault/Big Range Hunting.jar | 628 | Big Range Hunting | - | 1.0.1 | MIDP-2.0 | - | 9 | 16 | 600 | 340162399 | 0 | java/lang/ClassNotFoundException | 运行正常 |  |
 | vault/Bikini Volleyball.jar | 621 | Bikini Volleyball | - | 1.0.7 | MIDP-2.0 | - | 8 | 16 | 600 | 4434518 | 0 | java/lang/ArrayIndexOutOfBoundsE | 运行正常 |  |
+| vault/BikiniVolleyball_1.0.0_320x240.jar | 659 | Bikini Volleyball | - | 1.0.0 | MIDP-2.0 | - | 8 | 16 | 600 | 4994214604 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
 | vault/Billy The Kid - Wanted.jar | 201 | Billy the Kid: Wanted **MASY | - | 1.2.8 | MIDP-2.0 | - | 23 | 16 | 600 | 316360 | 0 | javax/microedition/rms/InvalidRe | 运行正常 |  |
 | vault/Bio Soldiers 3D.jar | 419 | 3D_BIO-SOLDIERS | - | 1.0 | MIDP-2.0 | - | 7 | 16 | 600 | 730885 | 0 | java/io/IOException,java/lang/Nu | 运行正常 |  |
 | vault/BioShock.jar | 1050 | BioShock | - | 1.1.4 | MIDP-2.0 | - | 19 | 16 | 600 | 10209153 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
@@ -435,9 +464,14 @@ Built from `HEAD`, 2026-11-22 (recorded by `tools/sweep_compat.py`).
 | vault/BlockBreaker 3 Unlimited.jar | 1089 | Block Breaker 3 Unlimited | - | 1.0.8 | MIDP-2.0 | - | 21 | 16 | 600 | 137867352 | 0 | - | 运行正常 |  |
 | vault/BlockBreaker Deluxe.jar | 591 | BlockBreaker Deluxe | - | 1.0.9 | MIDP-2.0 | - | 7 | 16 | 600 | 342428814 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
 | vault/BlockBreaker2Deluxe.jar | 574 | Block Breaker 2 Deluxe (mobi | - | 1.0.3 | MIDP-2.0 | nokia-ui | 10 | 16 | 600 | 2755544520 | 0 | java/lang/NullPointerException | 运行正常 |  |
+| vault/BlockBreaker3Unlimited_1.0.1_320x240.jar | 417 | Block Breaker 3 Unlimited | - | 1.0.1 | MIDP-2.0 | - | 12 | 16 | 600 | 38980796 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/BlockBreakerDeluxe.jar | 591 | Block Breaker Deluxe | - | 1.0.9 | MIDP-2.0 | m3g,nokia-ui | 7 | 16 | 600 | 5262355937 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| vault/BlockBreakerDeluxe2_1.0.4_320x240.jar | 375 | Block Breaker 2 Deluxe | - | 1.0.4 | MIDP-2.0 | - | 10 | 16 | 600 | 22658011 | 0 | java/lang/NullPointerException | 运行正常 |  |
+| vault/Blokus_1.0.6_320x240.jar | 538 | Blokus | - | 1.0.6 | MIDP-2.0 | - | 16 | 16 | 600 | 25533935 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/Blood+.jar | 677 | Blood+ | - | 1.0.0 | MIDP-2.0 | - | 23 | 16 | 600 | 7544461 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
 | vault/Blur Racing Mobile.jar | 624 | Blur | - | 1.0.0 | MIDP-2.0 | - | 22 | 16 | 600 | 259433233 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| vault/Bobble Blast Deluxe_320x240_Nokia_E71.jar | 372 | Bobble Blast Deluxe | - | 1.0.0 | MIDP-2.0 | - | 86 | 16 | 600 | 23125130 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| vault/Bobbys Blocks_320x240.jar | 229 | Bobby | - | 1.1.2 | MIDP-2.0 | - | 12 | 16 | 600 | 2837902494 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
 | vault/Bolt.jar | 432 | Bolt | - | 1.0.0 | MIDP-2.0 | - | 21 | 16 | 600 | 562021 | 0 | java/io/EOFException,java/io/IOE | 运行正常 |  |
 | vault/Bomberman 2007.jar | 291 | Bomberman | - | 1.0.32 | MIDP-1.0 | - | 12 | 16 | 600 | 23434154 | 0 | javax/microedition/rms/InvalidRe | 运行正常 |  |
 | vault/Bomberman Deluxe.jar | 166 | Bomberman Deluxe | - | 1.28.2 | MIDP-1.0 | - | 5 | 16 | 600 | 26684634 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
@@ -448,19 +482,38 @@ Built from `HEAD`, 2026-11-22 (recorded by `tools/sweep_compat.py`).
 | vault/Bounce Tales (240x320).jar | 592 | Bounce Tales | - | 2.0.25 | MIDP-2.0 | nokia-ui | 20 | 16 | 600 | 71741514 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
 | vault/Bounce Tales.jar | 592 | Bounce Tales | - | 2.0.25 | MIDP-2.0 | - | 20 | 16 | 600 | 11624377 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
 | vault/Brain Genius (240x320).jar | 321 | Brain Genius | - | 0.2.0 | MIDP-1.0 | - | 8 | 16 | 600 | 7135561 | 0 | java/lang/NullPointerException | 运行正常 |  |
+| vault/Brain Genius 2 Deluxe__320x240.jar | 575 | Brain Genius 2 Deluxe | - | 1.1.3 | MIDP-1.0 | nokia-ui | 24 | 16 | 600 | 7357775 | 0 | java/lang/NullPointerException | 运行正常 |  |
+| vault/Brain Tester 24 Pack Vol 2_320x240.jar | 951 | Brain Tester2 | - | 1.0.5 | MIDP-2.0 | nokia-ui | 39 | 16 | 600 | 14580342 | 0 | java/io/EOFException,javax/micro | 运行正常 |  |
+| vault/BrainChallenge1_1.0.0_320x240.jar | 241 | Brain Challenge | - | 1.0.0 | MIDP-2.0 | - | 8 | 16 | 600 | 10628643 | 0 | java/lang/ArrayIndexOutOfBoundsE | 运行正常 |  |
+| vault/BrainChallenge2StressManagement_1.0.9_320x240.jar | 391 | BRAIN CHALLENGE VOL.2 | - | 1.0.9 | MIDP-2.0 | - | 8 | 16 | 600 | 27582365 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| vault/BrainChallenge3ThinkAgain_1.1.0_320x240.jar | 730 | Brain Challenge 3 Think Agai | - | 1.1.0 | MIDP-2.0 | - | 20 | 16 | 600 | 2088148356 | 0 | java/lang/NullPointerException | 运行正常 |  |
+| vault/BrainChallenge4-BreakingLimits_1.0.5_320x240.jar | 870 | Brain Challenge 4: Breaking  | - | 1.0.5 | MIDP-2.0 | nokia-ui | 10 | 16 | 600 | 318306933 | 0 | java/lang/NullPointerException | 运行正常 |  |
+| vault/BrainTester_1.0.2_320x240.jar | 272 | Brain | - | 0.0.2 | MIDP-2.0 | - | 69 | 16 | 600 | 7643316 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
 | vault/Brave - The Official Game.jar | 1373 | Brave | - | 1.1.1 | MIDP-2.0 | - | 29 | 16 | 600 | 17818806 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| vault/Break Quest Mobile_320x240.jar | 492 | Break Quest Mobile | - | 1.0.1 | MIDP-2.0 | - | 69 | 16 | 600 | 1324307854 | 0 | java/io/IOException,javax/microe | 运行正常 |  |
+| vault/Brick and Bubble Revolution__320x240.jar | 803 | BrickBubbleRev | - | 1.0.2 | MIDP-2.0 | nokia-ui | 70 | 16 | 600 | 36455834 | 0 | java/io/EOFException,java/lang/O | 运行正常 |  |
 | vault/BrickBreakerRevolution.jar | 234 | Brick Breaker | - | 1.0.09 | MIDP-2.0 | nokia-ui | 13 | 16 | 600 | 1961788974 | 0 | java/io/EOFException,java/lang/N | 运行正常 |  |
 | vault/BrickBreakerRevolution2.jar | 947 | BBR 2 | - | 1.0.4 | MIDP-2.0 | nokia-ui | 57 | 16 | 600 | 210944287 | 0 | java/io/EOFException,javax/micro | 运行正常 |  |
+| vault/BrickCrusher_1.0.0_320x240.jar | 291 | Brick Crusher | - | 1.0.0 | MIDP-2.0 | - | 89 | 16 | 600 | 2212497691 | 0 | java/io/IOException,javax/microe | 运行正常 |  |
 | vault/Brothers in Arms - Art of War.jar | 594 | Brothers in Arms Art of War | - | 1.3.8 | MIDP-2.0 | - | 6 | 16 | 600 | 63293982 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
 | vault/Brothers in Arms - Earned in Blood.jar | 257 | Brothers In Arms | - | 1.0.1 | MIDP-2.0 | - | 9 | 16 | 600 | 1103978 | 0 | - | 运行正常 |  |
+| vault/BrothersInArmsEarnedInBlood_1.0.1_320x240.jar | 232 | Brothers In Arms:Earned In B | - | 1.0.1 | MIDP-2.0 | - | 7 | 16 | 600 | 2766691446 | 0 | java/lang/ArrayIndexOutOfBoundsE | 运行正常 |  |
 | vault/Bubble Bash 2.jar | 994 | Bubble Bash 2 | - | 1.1.3 | MIDP-2.0 | - | 24 | 16 | 600 | 63257984 | 0 | - | 运行正常 |  |
 | vault/Bubble Bash 3.jar | 1224 | Bubble Bash 3 | - | 1.1.3 | MIDP-2.0 | - | 20 | 16 | 600 | 702965020 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/Bubble Bash Mania.jar | 955 | Bubble Bash Mania | - | 1.2.9 | MIDP-2.0 | - | 16 | 16 | 600 | 11805597068 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/Bubble Bash.jar | 320 | Bubble Bash | - | 1.0.2 | MIDP-2.0 | - | 9 | 16 | 600 | 663207020 | 0 | - | 运行正常 |  |
 | vault/Bubble Bobble Evolution.jar | 545 | Bubble Bobble Evolution | - | 1.5.2 | MIDP-1.0 | - | 15 | 16 | 600 | 4252198 | 0 | java/lang/IllegalArgumentExcepti | 运行正常 |  |
 | vault/Bubble Bobble.jar | 137 | Bubble Bobble | - | 1.4.9 | MIDP-2.0 | - | 12 | 16 | 600 | 423368 | 0 | - | 运行正常 |  |
+| vault/Bubble Bobble_320x240.jar | 134 | Bubble Bobble | - | 1.4.9 | MIDP-2.0 | - | 12 | 16 | 600 | 2715915 | 0 | java/io/IOException | 运行正常 |  |
+| vault/Bubble Boom Challenge 2__320x240.jar | 361 | BB_Challenge2 | - | 1.0.8 | MIDP-2.0 | - | 16 | 16 | 600 | 14249918 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| vault/Bubble Pop_320x240.jar | 938 | BubblePop | - | 1.4.0 | MIDP-2.0 | nokia-ui | 37 | 16 | 600 | 6381664 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| vault/Bubble Town 2_320x240.jar | 435 | Bubble Town 2 | - | 1.2.3 | MIDP-2.0 | - | 61 | 16 | 600 | 961253 | 0 | java/lang/ArrayIndexOutOfBoundsE | 运行正常 |  |
+| vault/Bubble X Mania Deluxe_320x240.jar | 315 | Bublex Mania Deluxe | - | 1.0.0 | MIDP-2.0 | - | 20 | 16 | 600 | 3928308526 | 0 | java/io/IOException,javax/microe | 运行正常 |  |
 | vault/BubbleBash.jar | 320 | Bubble Bash (mobilegamesaren | - | 1.0.1 | MIDP-2.0 | - | 9 | 16 | 600 | 5220102154 | 0 | - | 运行正常 |  |
+| vault/BubbleBash1_4.0.0_320x240.jar | 432 | Bubble Bash | - | 1.0.0 | MIDP-2.0 | - | 8 | 16 | 600 | 5051793893 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| vault/BubbleBash2_1.0.8_320x240.jar | 639 | Bubble Bash 2 | - | 1.0.9 | MIDP-2.0 | - | 20 | 16 | 600 | 29994272 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/Bugs Bunny - Rabbit Rescue.jar | 576 | Bugs Bunny | - | 1.0.9 | MIDP-2.0 | - | 38 | 16 | 600 | 3440861 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| vault/Build-a-lot_320x240.jar | 337 | Build-a-lot serviak | - | 1.0.2 | MIDP-2.0 | - | 42 | 16 | 600 | 17719963 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
 | vault/Bulldozer Inc.jar | 190 | BulldozerInc | - | 1.0 | MIDP-2.0 | - | 5 | 16 | 600 | 315201 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
 | vault/Bumper Car City.jar | 316 | Autoscooter | - | 1.0.58 | MIDP-2.0 | - | 14 | 16 | 600 | 18969582 | 0 | java/io/EOFException,java/lang/N | 运行正常 |  |
 | vault/Burger Time Delight.jar | 265 | BurgerTime Delight | - | 1.0.0 | MIDP-2.0 | - | 38 | 16 | 600 | 6510060 | 0 | - | 运行正常 |  |
@@ -469,22 +522,37 @@ Built from `HEAD`, 2026-11-22 (recorded by `tools/sweep_compat.py`).
 | vault/Burnout 3D.jar | 371 | Burnout | - | 4.2.36 | MIDP-2.0 | - | 10 | 16 | 600 | 16499908 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
 | vault/Burnout.jar | 354 | Burnout | - | 4.3.21 | MIDP-2.0 | - | 8 | 16 | 600 | 4671537 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
 | vault/Burnout_2ri68qv5.jar | 412 | Burnout | - | 4.20.50 | MIDP-2.0 | - | 8 | 16 | 600 | 114157311 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| vault/Burnout_4.3.34_320x240.jar | 400 | Burnout | - | 4.3.34 | MIDP-2.0 | - | 8 | 16 | 600 | 111088472 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| vault/CSI2Miami_1.0.5_320x240.jar | 693 | CSI: Miami 2 | - | 1.0.5 | MIDP-2.0 | - | 15 | 16 | 600 | 27321976 | 0 | java/lang/NullPointerException | 运行正常 |  |
+| vault/CSILasVegas_1.03_320x240.jar | 642 | CSI: Las Vegas | - | 1.0.3 | MIDP-2.0 | - | 8 | 16 | 600 | 9619206 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/CSIMiami2.jar | 945 | CSI: Miami 2 | - | 1.1.1 | MIDP-2.0 | nokia-ui | 15 | 16 | 600 | 27607850 | 0 | java/lang/NullPointerException | 运行正常 |  |
+| vault/CSIMiami_1.0.3_320x240.jar | 641 | CSI: Miami | - | 1.0.2 | MIDP-2.0 | - | 6 | 16 | 600 | 225783343 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/CSINewYork.jar | 952 | CSI NY The mobile game | - | 1.0.3 | MIDP-2.0 | - | 8 | 16 | 600 | 97508375 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| vault/CSINewYork_1.1.2_320x240.jar | 375 | CSI: New York | - | 1.1.2 | MIDP-2.0 | - | 7 | 16 | 600 | 48855789 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
 | vault/Caesar.jar | 267 | CAESAR | - | 0.4.6 | MIDP-1.0 | nokia-ui | 5 | 16 | 600 | 8944016 | 0 | - | 运行正常 |  |
 | vault/CafeKakuro.jar | 294 | Cafe Kakuro | - | 1.1.60 | MIDP-2.0 | nokia-ui | 20 | 16 | 600 | 39087761 | 0 | java/io/EOFException,java/lang/N | 运行正常 |  |
 | vault/Cake Mania - My Story.jar | 967 | Cake Mania | - | 1.0.1 | MIDP-2.0 | - | 43 | 16 | 600 | 2600879 | 0 | java/io/EOFException,javax/micro | 运行正常 |  |
 | vault/California Gold Rush - Bonanza!.jar | 1227 | CGRBonanza | - | 1.0.8 | MIDP-2.0 | - | 71 | 16 | 600 | 837406 | 0 | java/io/EOFException,javax/micro | 运行正常 |  |
+| vault/California Gold Rush Bonanza_1.0.7_320x240.jar | 841 | California Gold Rush | - | 1.0.4 | MIDP-2.0 | nokia-ui | 62 | 16 | 600 | 16742976 | 0 | java/io/EOFException,java/lang/C | 运行正常 |  |
 | vault/Cannon Rats.jar | 1050 | Cannon Rats | - | 1.1.5 | MIDP-2.0 | - | 49 | 16 | 600 | 197684627 | 0 | java/lang/NullPointerException | 运行正常 |  |
+| vault/CannonRats_1.1.6_320x240.jar | 819 | Cannon Rats | - | 1.1.6 | MIDP-2.0 | - | 49 | 16 | 600 | 851413802 | 0 | java/lang/NullPointerException | 运行正常 |  |
+| vault/Carcassonne_1.0.8_320x240.jar | 652 | Carcassonne | - | 1.0.8 | MIDP-2.0 | nokia-ui | 82 | 16 | 600 | 93915 | 0 | java/io/IOException,java/lang/Nu | 运行正常 |  |
 | vault/Castle of Magic.jar | 946 | Castle of Magic | - | 1.1.3 | MIDP-2.0 | - | 12 | 16 | 600 | 454394165 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
 | vault/Castlevania - Aria of Sorrow.jar | 405 | Castlevania Aria Of Sorrow | - | 1.0.0 | MIDP-2.0 | - | 4 | 16 | 600 | 8945551 | 0 | javax/microedition/rms/InvalidRe | 运行正常 |  |
 | vault/Castlevania - Dawn of Sorrow.jar | 610 | Castlevania Dawn of Sorrow | - | 1.0.0 | MIDP-2.0 | - | 19 | 16 | 600 | 4025754 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
 | vault/Castlevania - Order of Shadows.jar | 521 | CastlevaniaOoS | - | 0.0.7 | MIDP-2.0 | - | 66 | 16 | 600 | 1037964 | 0 | javax/microedition/rms/InvalidRe | 运行正常 |  |
+| vault/Castlevania Order Of Shadows_320x240.jar | 523 | Castlevania 2 | - | 0.0.10 | MIDP-2.0 | - | 66 | 16 | 601 | 1592530 | 0 | javax/microedition/rms/InvalidRe | 运行正常 |  |
 | vault/Castlevania-AriaOfSorrow_N80.jar | 403 | Castlevania Aria Of Sorrow | - | 1.0.0 | MIDP-2.0 | - | 4 | 16 | 600 | 11739659 | 0 | javax/microedition/rms/InvalidRe | 运行正常 |  |
+| vault/Catan The Seafarers_320x240_Nokia_E71.jar | 504 | Catan2 | - | 1.0.5 | MIDP-2.0 | nokia-ui | 110 | 16 | 600 | 3730513599 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| vault/CatanTheFirstIsland_1.0.2_320x240.jar | 418 | Catan | - | 1.0.2 | MIDP-2.0 | nokia-ui | 103 | 16 | 600 | 3376877421 | 0 | java/lang/NumberFormatException, | 运行正常 |  |
 | vault/Chainz.jar | 101 | Chainz | - | 1.0.13 | MIDP-2.0 | nokia-ui | 12 | 16 | 600 | 613961666 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| vault/ChampionshipStreetRacing_1.0.0_320x240.jar | 556 | ChampStreetRacing | - | 1.0.0 | MIDP-2.0 | - | 95 | 16 | 600 | 12672653 | 0 | java/io/IOException,java/lang/Nu | 运行正常 |  |
+| vault/ChessMaster_1.0.2_320x240.jar | 189 | Chess Master | - | 1.0.2 | MIDP-2.0 | - | 6 | 16 | 600 | 2347655347 | 0 | - | 运行正常 |  |
 | vault/Chessmaster (240x400).jar | 958 | Chessmaster | - | 1.0.5 | MIDP-2.0 | - | 9 | 16 | 600 | 878187591 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/Chessmaster.jar | 139 | Chessmaster | - | 1.0.4 | MIDP-1.0 | nokia-ui | 5 | 16 | 600 | 1925969373 | 0 | - | 运行正常 |  |
+| vault/ChristmasMidnightPool_1.0.8_320x240.jar | 248 | Christmas Midnight Pool | - | 1.0.8 | MIDP-1.0 | - | 8 | 16 | 600 | 271285130 | 0 | - | 运行正常 |  |
 | vault/Chuck Norris - Bring on the Pain.jar | 621 | Chuck Norris - Bring on the | - | 1.1.0 | MIDP-2.0 | - | 7 | 16 | 600 | 27381970 | 0 | java/lang/NullPointerException | 运行正常 |  |
+| vault/ChuckNorrisBringOnThePain_1.0.2_320x240.jar | 600 | Chuck Norris - Bring on the  | - | 1.0.2 | MIDP-2.0 | - | 6 | 16 | 600 | 38064846 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
 | vault/City Bloxx.jar | 422 | City Bloxx | - | 1.0.22 | MIDP-2.0 | - | 19 | 16 | 600 | 13757665 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
 | vault/CityTycoon.jar | 216 | City Tycoon | - | 1.0 | MIDP-2.0 | - | 33 | 16 | 600 | 179786 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
 | vault/Clash of the Titans - The Movie.jar | 713 | Clash of Titans Movie | - | 1.0.0 | MIDP-2.0 | - | 17 | 16 | 600 | 265234483 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
@@ -493,7 +561,12 @@ Built from `HEAD`, 2026-11-22 (recorded by `tools/sweep_compat.py`).
 | vault/Colin McRae - DiRT.jar | 568 | Colin McRae DiRT | - | 1.2.5 | MIDP-1.0 | - | 21 | 16 | 600 | 5785988 | 0 | - | 运行正常 |  |
 | vault/Command & Conquer 3 - Tiberium Wars.jar | 594 | Command & Conquer 3 - Tiberi | - | 4.1.64 | MIDP-2.0 | - | 29 | 16 | 600 | 2847419 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/Command & Conquer 4 - Tiberian Twilight.jar | 1097 | C&C4 Tiberian Twilight | - | 4.1.10 | MIDP-2.0 | - | 38 | 16 | 600 | 2466996 | 0 | - | 运行正常 |  |
+| vault/Command And Conquer 3 Tiberium Wars_320x240_Nokia_6790.jar | 602 | Command & Conquer 3 - Tiberi | - | 4.3.81 | MIDP-2.0 | nokia-ui | 29 | 16 | 600 | 13996467 | 0 | java/lang/NullPointerException | 运行正常 |  |
+| vault/CommandAndConquer4TiberiumTwilight_4.1.8_320x240.jar | 1087 | C&C4 Tiberian Twilight [Mobi | - | 4.1.8 | MIDP-2.0 | - | 35 | 16 | 600 | 9958840 | 0 | - | 运行正常 |  |
+| vault/CommandAndConquerRedAlertMobile_4.8.5_320x240.jar | 804 | C&C: Red Alert Mobile | - | 4.8.5 | MIDP-2.0 | - | 32 | 16 | 600 | 12478640 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/Commandos.jar | 609 | Commandos | - | 1.2.3 | MIDP-2.0 | - | 20 | 16 | 600 | 33509532 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| vault/CommonKnowledge_1.0.5_320x240.jar | 336 | Common Knowledge Quiz | - | 1.0.5 | MIDP-2.0 | nokia-ui | 6 | 16 | 600 | 4365267472 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| vault/CopsLAPolice_1.2.3_320x240.jar | 635 | COPS | - | 1.2.3 | MIDP-2.0 | - | 11 | 16 | 600 | 145635661 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/Cowboys & Aliens.jar | 1255 | Cowboys And Aliens | - | 1.1.8 | MIDP-2.0 | - | 16 | 16 | 600 | 192651415 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/Crash Arena 3D.jar | 379 | CrashArena 3D | - | 1.3.0 | MIDP-2.0 | - | 81 | 16 | 600 | 3692984 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
 | vault/Crash Bamdicoot - Mutant Island.jar | 905 | Crash Mutant Island | - | 1.0.4 | MIDP-1.0 | - | 49 | 16 | 600 | 5360357 | 0 | java/io/IOException,java/lang/Nu | 运行正常 |  |
@@ -502,7 +575,9 @@ Built from `HEAD`, 2026-11-22 (recorded by `tools/sweep_compat.py`).
 | vault/CrashBandicootNitroKart2.jar | 396 | CBNK | - | 5.0.6 | MIDP-1.0 | - | 23 | 16 | 600 | 19298747 | 0 | java/io/IOException | 运行正常 |  |
 | vault/Crazy Window Cleaners.jar | 473 | WindowCleaners | - | 1.0.52 | MIDP-2.0 | - | 15 | 16 | 600 | 3096060 | 0 | java/io/EOFException,java/lang/N | 运行正常 |  |
 | vault/Crosspix.jar | 234 | Crosspix | - | 1.0.2 | MIDP-1.0 | - | 14 | 16 | 600 | 11613708 | 0 | java/lang/NullPointerException | 运行正常 |  |
+| vault/Crunch Time Basketball__320x240.jar | 220 | CrunchTimeBasketball | - | 1.0.0 | MIDP-2.0 | - | 8 | 16 | 600 | 2771432 | 0 | - | 运行正常 |  |
 | vault/Crystal Defenders.jar | 384 | Crystal Defenders | - | 1.0.0 | MIDP-2.0 | - | 17 | 16 | 600 | 7431381 | 0 | java/lang/NullPointerException | 运行正常 |  |
+| vault/Crystal Defenders_320x240.jar | 368 | Crystal Defenders TEGOS.ru | - | 1.0.0 | MIDP-2.0 | - | 18 | 16 | 600 | 14427174 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/Cthulhu.jar | 401 | Cthulhu_DW1 | - | 1.2.5 | MIDP-1.0 | nokia-ui | 28 | 16 | 600 | 2847423 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
 | vault/Cubes.jar | 449 | Cubes | - | 1.0.13 | MIDP-2.0 | - | 23 | 16 | 601 | 557807101 | 0 | javax/microedition/media/MediaEx | 运行正常 |  |
 | vault/Cubis2.jar | 246 | Cubis 2 | - | 1.2.3 | MIDP-2.0 | - | 12 | 16 | 600 | 3234134 | 0 | java/io/IOException | 运行正常 |  |
@@ -511,53 +586,85 @@ Built from `HEAD`, 2026-11-22 (recorded by `tools/sweep_compat.py`).
 | vault/Dakar 2010.jar | 975 | DAKAR Rally 2010 | - | 0.1.8 | MIDP-2.0 | - | 47 | 16 | 600 | 10384560 | 0 | java/io/IOException,java/lang/Nu | 运行正常 |  |
 | vault/Danger Dash.jar | 1282 | Danger Dash | - | 1.0.5 | MIDP-2.0 | - | 24 | 16 | 600 | 567152521 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
 | vault/DarkWorld2.jar | 439 | Dark World 2_freemobilejavag | - | 1.0 | MIDP-2.0 | - | 26 | 16 | 600 | 209208 | 0 | - | 运行正常 |  |
+| vault/DateOrDitch2_1.0.3_320x240.jar | 731 | Date Or Ditch 2 | - | 1.0.3 | MIDP-2.0 | - | 28 | 16 | 600 | 18022042 | 0 | java/lang/ClassNotFoundException | 运行正常 |  |
+| vault/DateOrDitch_1.0.3_320x240.jar | 556 | Date or Ditch | - | 1.0.3 | MIDP-2.0 | - | 11 | 16 | 600 | 26576525 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
 | vault/Death Race.jar | 609 | Death Race: The Mobile Game | - | 1.1.4 | MIDP-2.0 | - | 17 | 16 | 600 | 86994141 | 0 | javax/microedition/rms/InvalidRe | 运行正常 |  |
 | vault/Death Trap 2 - The Unlocked Code.jar | 237 | Death Trap 2.TUC | - | 1.0.0 | MIDP-2.0 | - | 12 | 16 | 600 | 566189 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
 | vault/Death Zone.jar | 306 | Death Zone serviak and Black | - | 1.0.0 | MIDP-2.0 | - | 24 | 16 | 600 | 638687205 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| vault/DerekJeterProBaseball2009_1.2.0_320x240.jar | 601 | Derek Jeter Pro Barketball 2 | - | 1.2.0 | MIDP-2.0 | - | 10 | 16 | 617 | 16914902 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| vault/DesperateHousewives_1.0.2_320x240.jar | 398 | Desperate Housewives | - | 1.0.2 | MIDP-2.0 | - | 8 | 16 | 600 | 3873386710 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| vault/DetectiveRidleyAndTheMysteriousEnigmaa_1.06_320x240.jar | 916 | Detective Ridley And The Mys | - | 1.0.6 | MIDP-2.0 | - | 12 | 16 | 600 | 26241552 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/Dewy's Adventure.jar | 416 | Dewy's Adventure | - | 1.0.0 | MIDP-2.0 | - | 2 | 16 | 600 | 6765217759 | 0 | javax/microedition/rms/InvalidRe | 运行正常 |  |
+| vault/Diamond Islands 2_320x240.jar | 1093 | Diamond Islands 2 | - | 1.0.18 | MIDP-2.0 | nokia-ui | 23 | 16 | 600 | 7578197 | 0 | java/io/EOFException,java/lang/C | 运行正常 |  |
 | vault/Diamond Rush.jar | 296 | Diamond Rush | - | 1.2.0 | MIDP-2.0 | - | 10 | 16 | 600 | 1179769 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
 | vault/Diamond Twister (1).jar | 594 | Diamond Twister | - | 1.0.8 | MIDP-2.0 | - | 6 | 16 | 600 | 9648119 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/Diamond Twister 2.jar | 1003 | Diamond Twister 2 | - | 1.1.3 | MIDP-2.0 | - | 8 | 16 | 601 | 7009717 | 0 | - | 运行正常 |  |
+| vault/Diamond Twister 2_320x240.jar | 877 | Diamond Twister 2 | - | 1.0.5 | MIDP-2.0 | - | 8 | 16 | 601 | 8236762 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/DiamondIslands.jar | 385 | Diamond Islands | - | 1.0.11 | MIDP-2.0 | - | 11 | 16 | 601 | 8974031 | 0 | java/io/EOFException,javax/micro | 运行正常 |  |
 | vault/DiamondIslands2.jar | 530 | Diamond Islands 2 | - | 1.0.21 | MIDP-2.0 | nokia-ui | 20 | 16 | 601 | 32762258 | 0 | java/io/EOFException,java/lang/A | 运行正常 |  |
 | vault/DiamondQuest.jar | 440 | Paris Hilton's Diamond Quest | - | 1.0.0 | MIDP-2.0 | - | 7 | 16 | 600 | 1577672136 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
 | vault/DiamondRush.jar | 408 | Diamond Rush by GDC | - | 1.0.1 | MIDP-2.0 | - | 9 | 16 | 600 | 4105284 | 0 | javax/microedition/rms/InvalidRe | 运行正常 |  |
+| vault/DiamondRush_1.1.6_320x240.jar | 300 | Diamond Rush | - | 1.1.6 | MIDP-2.0 | - | 12 | 16 | 600 | 3947784 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
 | vault/DiamondTwister.jar | 594 | Diamond Twister (mobilegames | - | 1.0.7 | MIDP-2.0 | - | 6 | 16 | 0 | 0 | 0 | - | 非可用包 | archive entry is corrupt (Error -3 while dec |
 | vault/DiamondTwister2.jar | 807 | Diamond Twister 2 | - | 1.1.0 | MIDP-2.0 | - | 8 | 16 | 601 | 11288657 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/Dictator Defense.jar | 656 | DictatorDef | - | 1.0.18 | MIDP-2.0 | - | 32 | 16 | 600 | 2021228 | 0 | java/io/EOFException,javax/micro | 运行正常 |  |
 | vault/Die Hard 4.0 - The Mobile Game.jar | 593 | Die Hard 4.0 | - | 1.0.6 | MIDP-2.0 | - | 5 | 16 | 600 | 591469450 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
 | vault/Dig_Dug_240x400.jar | 192 | Dig Dug by Namco | - | 2.1.0 | MIDP-2.0 | - | 13 | 16 | 600 | 6898744767 | 0 | - | 运行正常 |  |
+| vault/Diner Dash Flo On The Go_320x240.jar | 576 | Diner Dash Flo on the Go | - | 1.0.0 | MIDP-2.0 | - | 37 | 16 | 600 | 9025968 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
 | vault/DiscoveringAngelsAndDemons.jar | 177 | AngelsAndDemons | - | 1.0.0 | MIDP-2.0 | - | 10 | 16 | 600 | 4916286 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
 | vault/DisneyBoardGames.jar | 624 | Disney Board Games | - | 1.1.1 | MIDP-2.0 | - | 36 | 16 | 600 | 6936304 | 0 | java/io/EOFException,javax/micro | 运行正常 |  |
+| vault/Dogz3D_1.1.5_320x240.jar | 932 | DogZ 3D | - | 1.1.5 | MIDP-2.0 | m3g | 20 | 16 | 600 | 37920742 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| vault/DominoFever_1.0.3_320x240.jar | 400 | Domino Fever | - | 1.0.3 | MIDP-2.0 | - | 9 | 16 | 600 | 5600591 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
 | vault/DonaldDuckQuestDeluxe.jar | 190 | Donald Duck's Quest Deluxe | - | 2.0.0 | MIDP-1.0 | - | 9 | 16 | 600 | 1900857 | 0 | java/io/EOFException,java/lang/N | 运行正常 |  |
+| vault/Dont Pull_320x240.jar | 111 | Dont Pull | - | 1.0.0 | MIDP-2.0 | - | 6 | 16 | 600 | 429637336 | 0 | java/lang/ArrayIndexOutOfBoundsE | 运行正常 |  |
 | vault/Doodle Jump.jar | 452 | Doodle Jump | - | 1.3.0 | MIDP-2.0 | - | 7 | 16 | 600 | 989325546 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
 | vault/Doom II RPG.jar | 748 | Doom II RPG | - | 5.1.89 | MIDP-2.0 | - | 35 | 16 | 600 | 4648340 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
 | vault/Doom RPG.jar | 295 | Doom RPG | - | 1.4.67 | MIDP-2.0 | - | 26 | 16 | 600 | 258335 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| vault/Dragon How To Train Your Dragon_320x240_Nokia_E71.jar | 355 | Dragon Konon.Mobi | - | 1.0.0 | MIDP-2.0 | - | 10 | 16 | 600 | 7698905 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
 | vault/Dragon Mania.jar | 1604 | Dragon Mania | - | 1.0.0 | MIDP-2.0 | - | 24 | 16 | 600 | 596170174 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/Driver - San Francisco.jar | 1265 | Driver San Francisco | - | 1.2.4 | MIDP-2.0 | - | 11 | 16 | 600 | 68282003 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/Driver L.A. Undercover.jar | 539 | Driver | - | 1.0.5 | MIDP-2.0 | - | 6 | 16 | 600 | 229352757 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| vault/DriverLAUndercover_1.0.5_320x240.jar | 317 | Driver | - | 1.0.5 | MIDP-2.0 | nokia-ui | 8 | 16 | 600 | 9951198 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| vault/DriverSanFrancisco_1.0.4_320x240.jar | 840 | Driver San Francisco | - | 1.0.4 | MIDP-2.0 | - | 12 | 16 | 600 | 156436752 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/Dungeon Hunter - Curse Of Heaven.jar | 1012 | Dungeon Hunter Curse of Heav | - | 1.0.0 | MIDP-2.0 | - | 16 | 16 | 600 | 50845586 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
 | vault/Dungeon Hunter 3.jar | 1334 | DUNGEON HUNTER 3 | - | 1.3.0 | MIDP-2.0 | - | 13 | 16 | 600 | 240999944 | 0 | java/lang/NullPointerException | 运行正常 |  |
+| vault/DungeonHunter3_1.1.0_320x240.jar | 887 | Dungeon Hunter 3 | - | 1.1.0 | MIDP-2.0 | - | 14 | 16 | 600 | 5010817451 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/Earthworm Jim.jar | 1026 | Earthworm Jim | - | 1.1.7 | MIDP-2.0 | - | 17 | 16 | 600 | 112910616 | 0 | java/lang/NullPointerException | 运行正常 |  |
+| vault/EarthwormJim_1.1.7_320x240.jar | 675 | Earthworm Jim | - | 1.1.7 | MIDP-2.0 | nokia-ui | 17 | 16 | 600 | 121078919 | 0 | - | 运行正常 |  |
+| vault/Edge_320x240_Nokia_E71.jar | 376 | Edge Konon.Mobi | - | 4.0.0 | MIDP-2.0 | - | 4 | 16 | 600 | 1676251 | 0 | javax/microedition/io/Connection | 运行正常 |  |
 | vault/El Che.jar | 386 | El Che | - | 1.0.4 | MIDP-2.0 | - | 26 | 16 | 600 | 2244141 | 0 | - | 运行正常 |  |
 | vault/Elven Chronicles.jar | 233 | Elven Chronicles | - | 1.0.9 | MIDP-2.0 | - | 11 | 16 | 600 | 14479823 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| vault/EverydayEnglishTrainer_1.0.2_320x240.jar | 605 | Everyday English Trainer | - | 1.0.2 | MIDP-2.0 | - | 4 | 16 | 600 | 6330304408 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
 | vault/FIFA 2007.jar | 419 | FIFA 07 | - | 1.7.11 | MIDP-1.0 | - | 5 | 16 | 600 | 365342 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
 | vault/Family Guy - Uncensored.jar | 471 | Family Guy Uncensored | - | 1.0.4 | MIDP-2.0 | - | 10 | 16 | 600 | 7200005 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
 | vault/Family Guy 2.jar | 808 | Family Guy 2 | - | 1.0.0 | MIDP-2.0 | - | 25 | 16 | 600 | 15171259 | 0 | java/lang/ArrayIndexOutOfBoundsE | 运行正常 |  |
 | vault/FarCry 2.jar | 626 | Far Cry 2 | - | 1.0.8 | MIDP-2.0 | - | 17 | 16 | 600 | 126040750 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| vault/FarCry2_1.0.8_320x240.jar | 634 | Far Cry 2 | - | 1.0.8 | MIDP-2.0 | - | 17 | 16 | 600 | 128490119 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| vault/Farm Tycoon__320x240.jar | 739 | FarmTycoon | - | 1.0 | MIDP-2.0 | - | 19 | 16 | 600 | 4622907 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
 | vault/Fast Five The Movie - Official Game.jar | 1226 | Fast Five | - | 1.2.2 | MIDP-2.0 | - | 12 | 16 | 600 | 21604947 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/Fast and Furious 6.jar | 1917 | Fast & Furious 6 | - | 1.1.2 | MIDP-2.0 | - | 19 | 16 | 600 | 54786277 | 0 | java/lang/NullPointerException | 运行正常 |  |
+| vault/FastAndFurious6_1.0.6_320x240.jar | 1287 | Fast & Furious 6 | - | 1.0.6 | MIDP-2.0 | - | 15 | 16 | 601 | 128301998 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/Ferrari GT - Evolution.jar | 739 | Ferrari GT | - | 1.0.0 | MIDP-2.0 | - | 14 | 16 | 600 | 2314691 | 0 | - | 运行正常 |  |
 | vault/Ferrari GT 2 - Revolution.jar | 992 | Ferrari GT 2: Revolution | - | 1.1.2 | MIDP-2.0 | - | 19 | 16 | 601 | 202666626 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/Ferrari GT 3 - World Track.jar | 1562 | Ferrari GT 3: World Track | - | 1.3.3 | MIDP-2.0 | - | 36 | 16 | 600 | 71671324 | 0 | java/io/IOException,java/lang/Nu | 运行正常 |  |
 | vault/Ferrari World Championship 2009.jar | 988 | Ferrari World Championship 2 | - | 1.0.6 | MIDP-2.0 | - | 15 | 16 | 600 | 26432938 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/Ferrari World Championship.jar | 595 | Ferrari World Championship | - | 1.0.8 | MIDP-2.0 | - | 13 | 16 | 600 | 31749912 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| vault/FerrariGT2Revolution_1.0.9_320x240.jar | 689 | Ferrari GT 2 Revolution | - | 1.0.9 | MIDP-2.0 | nokia-ui | 19 | 16 | 600 | 169119256 | 0 | - | 运行正常 |  |
 | vault/Final Fantasy II.jar | 1343 | Final Fantasy II | - | 1.0.0 | MIDP-2.0 | - | 13 | 16 | 600 | 5323413 | 0 | java/lang/ArrayIndexOutOfBoundsE | 运行正常 |  |
 | vault/Final Fantasy.jar | 1148 | Final Fantasy | - | 1.0.0 | MIDP-2.0 | - | 12 | 16 | 600 | 3555013 | 0 | - | 运行正常 |  |
+| vault/FinalFantasy1_1.0.0_320x240_Nokia_E71.jar | 1153 | Final Fantasy | - | 1.0.0 | MIDP-2.0 | - | 13 | 16 | 600 | 5849813 | 0 | java/lang/NullPointerException | 运行正常 |  |
+| vault/FinalFantasyII_1.0.0_320x240.jar | 998 | Final fantasy II | - | 1.0.0 | MIDP-2.0 | - | 14 | 16 | 600 | 15081535 | 0 | java/lang/ArrayIndexOutOfBoundsE | 运行正常 |  |
+| vault/Flat Out Racing 3D_320x240_Nokia_E71.jar | 344 | FlatOut Racing3D | - | 0.5.4 | MIDP-2.0 | m3g | 54 | 16 | 625 | 84519218 | 0 | java/io/IOException,java/lang/Cl | 运行正常 |  |
 | vault/FlatOut 3D.jar | 348 | FlatOut Racing3D | - | 0.4.9 | MIDP-2.0 | - | 54 | 16 | 600 | 68779800 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
 | vault/FlatOut.jar | 402 | FlatOut Racing | - | 0.5.7 | MIDP-2.0 | - | 22 | 16 | 600 | 24841953 | 0 | java/lang/IllegalArgumentExcepti | 运行正常 |  |
+| vault/Fling_320x240.jar | 306 | Fling | - | 0.1.8 | MIDP-2.0 | nokia-ui | 30 | 16 | 600 | 72245 | 0 | - | 运行正常 |  |
+| vault/FortBoyard_1.0.2_320x240.jar | 577 | Fort Boyard | - | 1.0.2 | MIDP-2.0 | nokia-ui | 14 | 16 | 600 | 10819814 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| vault/Frantic Factory_320x240.jar | 361 | Frantic Factory | - | 1.0.1 | MIDP-1.0 | - | 12 | 16 | 600 | 17098789 | 0 | - | 运行正常 |  |
 | vault/Frogger Beats n' Bounces.jar | 216 | Frogger Beats n Bounces | - | 1.0.7 | MIDP-2.0 | - | 2 | 16 | 601 | 880065 | 0 | - | 运行正常 |  |
 | vault/Frogger Evolution.jar | 224 | Frogger Evolution | - | 1.0.0 | MIDP-2.0 | - | 2 | 16 | 600 | 4709889 | 0 | - | 运行正常 |  |
+| vault/FrozenPenguin2_1.0_320x240.jar | 515 | Frozen Penguin 2 | - | 1.0 | MIDP-2.0 | - | 44 | 16 | 600 | 36612202 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| vault/FruitZum_1.0_320x240.jar | 252 | Fruit Zum | - | 1.0 | MIDP-2.0 | - | 12 | 16 | 600 | 2314465 | 0 | java/io/IOException,java/lang/Nu | 运行正常 |  |
+| vault/Fullmetal Fortress_320x240.jar | 114 | FULLMETAL FORTRESS | - | 1.1.0 | MIDP-1.0 | - | 7 | 16 | 600 | 82807 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/FurbyIsland.jar | 372 | Furby Island | - | 1.0.17 | MIDP-2.0 | - | 17 | 16 | 600 | 3061288 | 0 | java/lang/ArrayIndexOutOfBoundsE | 运行正常 |  |
 | vault/G.I. Joe - The Rise of Cobra.jar | 678 | G.I. JOE | - | 7.2.50 | MIDP-2.0 | - | 13 | 16 | 600 | 1006582 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
 | vault/GT Racing - Motor Academy.jar | 992 | GT Racing: Motor Academy | - | 1.2.2 | MIDP-2.0 | - | 12 | 16 | 600 | 2878434 | 0 | - | 运行正常 |  |
@@ -575,8 +682,14 @@ Built from `HEAD`, 2026-11-22 (recorded by `tools/sweep_compat.py`).
 | vault/Gangstar 2 - Kings of L.A..jar | 987 | Gangstar 2 | - | 1.0.7 | MIDP-2.0 | - | 11 | 16 | 600 | 360167875 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
 | vault/Gangstar City.jar | 1621 | Gangstar City | - | 1.1.1 | MIDP-2.0 | - | 16 | 16 | 600 | 547991627 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/Gangstar Rio - City of Saints.jar | 1449 | Gangstar Rio: City of Saints | - | 1.0.9 | MIDP-2.0 | - | 13 | 16 | 600 | 274430988 | 0 | java/lang/NullPointerException | 运行正常 |  |
+| vault/Gangstar1CrimeCity_1.0.0_320x240.jar | 321 | Gangstar Crime City | - | 1.0.0 | MIDP-2.0 | - | 6 | 16 | 600 | 5383318330 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| vault/Gangstar2KingsOfLA_1.1.2_320x240.jar | 692 | Gangstar 2: Kings of L.A | - | 1.1.2 | MIDP-2.0 | - | 11 | 16 | 0 | 0 | 0 | - | 超时 |  |
+| vault/Gangstar3MiamiVindication_1.0.0_320x240.jar | 348 | Gangstar Miami | - | 1.0.0 | MIDP-2.0 | - | 5 | 16 | 600 | 5176578356 | 0 | javax/microedition/rms/InvalidRe | 运行正常 |  |
+| vault/Gauntlet_320x240.jar | 969 | Gauntlet | - | 4.2.3 | MIDP-2.0 | - | 23 | 16 | 600 | 4237410 | 0 | - | 运行正常 |  |
 | vault/GemDropDeluxe.jar | 1243 | Gem Drop Deluxe | - | 1.0.3 | MIDP-2.0 | nokia-ui | 2 | 16 | 600 | 7386312900 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| vault/GhostRecon2AdvancedWarfighter_1.0.0_320x240.jar | 330 | G.R.A.W. 2 | - | 1.0.0 | MIDP-2.0 | - | 6 | 16 | 600 | 2411807950 | 0 | - | 运行正常 |  |
 | vault/GianaSisters.jar | 103 | Super Mario | - | 1.0.2 | MIDP-2.0 | nokia-ui | 23 | 16 | 600 | 2332913 | 0 | java/io/IOException,java/lang/Nu | 运行正常 |  |
+| vault/Go Go Rescue Squad_320x240.jar | 393 | Go! Go! Rescue Squad | - | 0.0.8 | MIDP-2.0 | - | 12 | 16 | 600 | 29967500 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/God of War - Betrayal.jar | 488 | God Of War | - | 1.4.46 | MIDP-2.0 | - | 6 | 16 | 600 | 142966717 | 0 | java/lang/NumberFormatException, | 运行正常 |  |
 | vault/GoldDigger.jar | 924 | Gold Digger | - | 1.0 | MIDP-2.0 | nokia-ui | 23 | 16 | 600 | 420022553 | 0 | java/lang/IllegalArgumentExcepti | 运行正常 |  |
 | vault/GoldenSolitaire.jar | 233 | Golden Solitaire | - | 1.0.3 | MIDP-2.0 | - | 17 | 16 | 600 | 59362567 | 0 | javax/microedition/rms/InvalidRe | 运行正常 |  |
@@ -590,9 +703,13 @@ Built from `HEAD`, 2026-11-22 (recorded by `tools/sweep_compat.py`).
 | vault/GunFever.jar | 167 | GunFever | - | 1.0.4 | MIDP-2.0 | - | 9 | 16 | 600 | 540289 | 0 | - | 运行正常 |  |
 | vault/Guns, Wheels & Madheads 2.jar | 310 | Guns Wheels Madheads 2 | - | 1.1.0 | MIDP-2.0 | - | 27 | 16 | 600 | 708419 | 0 | - | 运行正常 |  |
 | vault/Guns, Wheels & Madheads.jar | 329 | Guns Wheels Madheads | - | 1.1.0 | MIDP-2.0 | - | 28 | 16 | 600 | 80131483 | 0 | - | 运行正常 |  |
+| vault/HarryPotterAndTheDeathlyHallowsPart2_1.2.4_320x240.jar | 956 | Harry Potter 7 P2 | - | 1.2.4 | MIDP-2.0 | - | 17 | 16 | 600 | 22720902 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/Hero of Sparta.jar | 993 | Hero Of Sparta | - | 1.1.9 | MIDP-2.0 | - | 9 | 16 | 600 | 636602976 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| vault/HeroOfSparta_1.0.2_320x240.jar | 602 | Hero Of Sparta | - | 1.0.2 | MIDP-2.0 | - | 9 | 16 | 606 | 102084545 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
 | vault/HeroesLore.jar | 827 | Heroes Lore by SunYu_911 | - | 2.0.7 | MIDP-2.0 | - | 90 | 16 | 601 | 4923610 | 0 | java/lang/ClassCastException,jav | 运行正常 |  |
+| vault/Heroes_1.0.0_320x240.jar | 536 | Heroes | - | 1.0.0 | MIDP-2.0 | - | 5 | 16 | 600 | 132931138 | 0 | java/lang/ArrayIndexOutOfBoundsE | 运行正常 |  |
 | vault/Hexic.jar | 198 | Hexic | - | 1.0.9 | MIDP-2.0 | - | 12 | 16 | 600 | 5895894 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| vault/IQ Booster Logic__320x240.jar | 508 | IQ Booster Logic | - | 1.0.0 | MIDP-2.0 | - | 101 | 16 | 600 | 38536711 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
 | vault/Ice Age 4 - Continental Drift.jar | 1527 | Ice Age 4: Continental Drift | - | 1.1.6 | MIDP-2.0 | - | 17 | 16 | 600 | 196936691 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/Ice Age Scrat-ventures.jar | 1016 | ICE AGE SCRAT-VENTURES | - | 1.0.1 | MIDP-2.0 | - | 24 | 16 | 600 | 84498029 | 0 | - | 运行正常 |  |
 | vault/Ice Age Village.jar | 1791 | Ice Age Village | - | 1.0.9 | MIDP-2.0 | - | 19 | 16 | 600 | 196237724 | 0 | java/lang/NullPointerException | 运行正常 |  |
@@ -603,32 +720,57 @@ Built from `HEAD`, 2026-11-22 (recorded by `tools/sweep_compat.py`).
 | vault/Iron Man 2.jar | 1074 | Iron Man 2 | - | 1.1.4 | MIDP-2.0 | - | 9 | 16 | 600 | 133717447 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/Iron Man 3.jar | 1753 | Iron Man 3 | - | 1.1.2 | MIDP-2.0 | - | 12 | 16 | 600 | 166184845 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/IstanBUL.jar | 2793 | istanBUL | - | 1.0.0 | MIDP-2.0 | - | 21 | 16 | 600 | 512584 | 0 | java/lang/NullPointerException | 运行正常 |  |
+| vault/JMEBoy_with-games.jar | 698 | JMEBoy | - | 1.5.3 | MIDP-2.0 | nokia-ui | 94 | 16 | 600 | 2010203 | 0 | java/lang/NullPointerException,j | 运行正常 | painted 604 frames but made no draw calls (b |
 | vault/James Cameron's Avatar.jar | 998 | Avatar | - | 1.0.6 | MIDP-2.0 | - | 9 | 16 | 600 | 21523502 | 0 | - | 运行正常 |  |
 | vault/JetSetWilly.jar | 177 | Jet Set Willy | - | 1.0.1 | MIDP-1.0 | nokia-ui | 14 | 16 | 600 | 1088624 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| vault/Jewel Conquest__320x240.jar | 270 | Jewel | - | 1.0 | MIDP-2.0 | - | 8 | 16 | 600 | 7193741 | 0 | - | 运行正常 |  |
+| vault/Jewel Explosion_320x240.jar | 354 | Jewel Explosion | - | 1.0.0 | MIDP-2.0 | - | 35 | 16 | 600 | 4433486824 | 0 | java/io/IOException | 运行正常 |  |
+| vault/Jewel Quest III World Adventure_320x240_Nokia_E71.jar | 764 | Jewel Quest III World Advent | - | 4.5.57 | MIDP-2.0 | - | 25 | 16 | 600 | 10971575 | 0 | - | 运行正常 |  |
+| vault/JewelPack2in1_2.0_320x240.jar | 394 | Jewel Pack 2in1 | - | 2.0 | MIDP-2.0 | - | 77 | 16 | 600 | 4882535283 | 0 | - | 运行正常 |  |
 | vault/JewelQuest.jar | 164 | Jewel Quest | - | 1.0.5 | MIDP-1.0 | - | 19 | 16 | 600 | 440266 | 0 | java/io/IOException | 运行正常 |  |
 | vault/JewelQuest2.jar | 315 | JewelQuest2 | - | 0.3.2 | MIDP-1.0 | - | 14 | 16 | 600 | 1153567 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
 | vault/JewelQuest3.jar | 585 | Jewel Quest III World Advent | - | 4.2.84 | MIDP-2.0 | - | 25 | 16 | 600 | 2667124 | 0 | - | 运行正常 |  |
 | vault/JewelQuestDeluxe.jar | 743 | Jewel Quest Deluxe | - | 1.1.2 | MIDP-2.0 | - | 5 | 16 | 600 | 402167 | 1 | java/io/IOException,java/lang/Cl | 标题自身异常 | game-side: the JAR ships no /title.png (caug |
 | vault/Jurassic Park.jar | 1102 | Jurassic Park | - | 1.1.2 | MIDP-2.0 | - | 12 | 16 | 600 | 141527149 | 0 | java/lang/NullPointerException | 运行正常 |  |
+| vault/JurassicPark_1.2.2_320x240.jar | 911 | Jurassic Park | - | 1.2.2 | MIDP-2.0 | - | 12 | 16 | 600 | 268263765 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/K.O. Legends.jar | 1024 | K.O. Legends | - | 1.0.6 | MIDP-2.0 | - | 23 | 16 | 600 | 226749888 | 0 | java/lang/NullPointerException | 运行正常 |  |
+| vault/KOFighters_1.0.0_320x240.jar | 323 | KO Fighters | - | 1.0.0 | MIDP-2.0 | - | 12 | 16 | 600 | 24844385 | 0 | java/lang/ArrayIndexOutOfBoundsE | 运行正常 |  |
 | vault/Kartmania 3D.jar | 934 | Kartmania3D | - | 1.0.2 | MIDP-2.0 | - | 123 | 16 | 600 | 4141190 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
 | vault/KasparovChess.jar | 189 | Kasparov Chess | - | 1.0.1 | MIDP-1.0 | - | 6 | 16 | 600 | 5070540 | 0 | javax/microedition/rms/InvalidRe | 运行正常 |  |
 | vault/King Kong.jar | 297 | KingKong | - | 1.0.3 | MIDP-2.0 | - | 5 | 16 | 600 | 60703102 | 0 | - | 运行正常 |  |
+| vault/KoraDeluxe3D_1.0.4_320x240.jar | 947 | KORa Deluxe | - | 1.0.4 | MIDP-2.0 | m3g | 123 | 16 | 600 | 200814602 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| vault/KungFuPanda_4.9.12_320x240.jar | 544 | Kung Fu Panda | - | 4.9.12 | MIDP-2.0 | nokia-ui | 26 | 16 | 600 | 13509102 | 0 | java/lang/IllegalMonitorStateExc | 运行正常 |  |
 | vault/LOST.jar | 308 | LOST | - | 1.0.2 | MIDP-2.0 | - | 6 | 16 | 600 | 346817663 | 0 | - | 运行正常 |  |
 | vault/Lara Crofts Poker Party (CLDC-1.0, MIDP-1.0) v1.0.1 (132x176).jar | 102 | Lara Crofts Poker Party | - | 1.0.1 | MIDP-1.0 | - | 15 | 16 | 600 | 1941201 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| vault/LasVegasNights_1.1.6_320x240.jar | 635 | Las Vegas Nights | - | 1.1.6 | MIDP-2.0 | - | 10 | 16 | 600 | 11642186 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| vault/LegoBatman_1.3.0_320x240.jar | 1004 | Lego Batman | - | 1.3.0 | MIDP-2.0 | - | 18 | 16 | 600 | 199396003 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/Let's Go Bowling.jar | 961 | Let's go bowling! | - | 1.1.8 | MIDP-2.0 | - | 23 | 16 | 600 | 239404490 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/Let's Golf.jar | 1027 | Let's Golf! | - | 1.1.1 | MIDP-2.0 | - | 7 | 16 | 600 | 112541540 | 0 | java/lang/NullPointerException | 运行正常 |  |
+| vault/LetsGoBowling_1.0.4_320x240.jar | 698 | Let's go bowling! | - | 1.0.4 | MIDP-2.0 | m3g | 22 | 16 | 600 | 72483529 | 0 | - | 运行正常 |  |
+| vault/LetsGolf_1.0.7_320x240.jar | 634 | Let's Golf! | - | 1.0.7 | MIDP-2.0 | - | 9 | 16 | 600 | 62858345 | 0 | java/lang/NullPointerException | 运行正常 |  |
+| vault/LiveFreeOrDieHard_1.0.0_320x240.jar | 326 | Live Free Or Die Hard | - | 1.0.0 | MIDP-2.0 | nokia-ui | 5 | 16 | 600 | 4562093314 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
 | vault/Looney Tunes Monster Match.jar | 674 | LooneyTunes Monster Match | - | 1.0.0 | MIDP-2.0 | - | 44 | 16 | 600 | 5111906 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
 | vault/LooneyTunesMonsterMatch.jar | 675 | LooneyTunes Monster Match (w | - | 1.0.0 | MIDP-2.0 | - | 44 | 16 | 600 | 22109115 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| vault/LostPlanet2_1.0.7_320x240.jar | 625 | Lost Planet 2 | - | 1.0.7 | MIDP-2.0 | - | 16 | 16 | 600 | 137006752 | 0 | java/lang/NullPointerException | 运行正常 |  |
+| vault/Lost_1.0.0_320x240.jar | 301 | LOST | - | 1.0.0 | MIDP-2.0 | - | 6 | 16 | 600 | 6806592898 | 0 | - | 运行正常 |  |
 | vault/Lucha Libre - Desafio Total.jar | 517 | Lucha Libre Desafio Total | - | 1.1.7 | MIDP-2.0 | - | 6 | 16 | 601 | 354716059 | 0 | - | 运行正常 |  |
+| vault/Lumines_1.0.0_320x240.jar | 428 | Lumines | - | 1.0.0 | MIDP-2.0 | - | 6 | 16 | 600 | 2984731199 | 0 | - | 运行正常 |  |
+| vault/Luxor Quest_320x240.jar | 374 | Luxor Quest | - | 1.1.9 | MIDP-2.0 | - | 21 | 16 | 600 | 5813383 | 0 | java/io/IOException,java/lang/Nu | 运行正常 |  |
 | vault/Luxor2.jar | 650 | LUXOR 2 | - | 1.0.11 | MIDP-2.0 | nokia-ui | 6 | 16 | 600 | 402646529 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
 | vault/LuxorQuest.jar | 755 | Luxor Quest_freemobilejavaga | - | 1.1.1 | MIDP-2.0 | - | 22 | 16 | 600 | 3468851 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
 | vault/Magic Wing II Ep.1.jar | 140 | MagicWingIIEp1\gkataria | - | 1.0 | MIDP-1.0 | - | 3 | 16 | 600 | 225925262 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
 | vault/MagicGarden.jar | 237 | MagicGarden by drAdeLante | - | 1.0.1 | MIDP-2.0 | - | 13 | 16 | 601 | 400403 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| vault/MahjongAdventure_1.0.2_320x240.jar | 269 | Mahjong Adventure | - | 1.0.2 | MIDP-2.0 | - | 33 | 16 | 600 | 5033636407 | 0 | - | 运行正常 |  |
 | vault/MahjongQuest.jar | 214 | Mah Jong Quest | - | 1.0.5 | MIDP-1.0 | - | 14 | 16 | 600 | 438069 | 0 | java/io/IOException,java/lang/Nu | 运行正常 |  |
+| vault/MahjongStar_1.0.0_320x240.jar | 235 | Mahjong | - | 1.3.6 | MIDP-2.0 | - | 12 | 16 | 600 | 2943328 | 0 | java/io/IOException | 运行正常 |  |
+| vault/Mahjong_1.3.6_320x240.jar | 264 | Mahjong Stars | - | 1.0.0 | MIDP-2.0 | - | 33 | 16 | 600 | 4992436407 | 0 | - | 运行正常 |  |
+| vault/Majesty Royal Simulator_320x240.jar | 1137 | Majesty | - | 1.13.34 | MIDP-2.0 | - | 77 | 16 | 600 | 36202853 | 0 | java/io/EOFException,java/io/IOE | 运行正常 |  |
 | vault/Marble Madness.jar | 636 | Marble Madness | - | 4.5.84 | MIDP-2.0 | - | 32 | 16 | 600 | 5168146 | 0 | javax/microedition/rms/InvalidRe | 运行正常 |  |
 | vault/March of Heroes.jar | 1496 | March Of Heroes | - | 1.1.2 | MIDP-2.0 | - | 17 | 16 | 209 | 38698074 | 0 | java/lang/NullPointerException | 标题自行退出 | exited itself (notifyDestroyed) after 209 fr |
+| vault/MarchOfHeroes_1.0.9_320x240.jar | 970 | March Of Heroes | - | 1.0.9 | MIDP-2.0 | - | 19 | 16 | 600 | 113994297 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/Mech Strategy Wars.jar | 698 | MechStrategyWars | - | 1.0.6 | MIDP-2.0 | - | 13 | 16 | 600 | 4504832 | 0 | - | 运行正常 |  |
+| vault/Medal Chase 2__320x240.jar | 179 | MedalChase2 | - | 1.0.0 | MIDP-2.0 | - | 9 | 16 | 600 | 3718750 | 0 | - | 运行正常 |  |
+| vault/Medal Honor10_4.14.37_320x240.jar | 652 | Medal Honor 10 | - | 4.14.37 | MIDP-2.0 | - | 32 | 16 | 600 | 21903851 | 0 | - | 运行正常 |  |
 | vault/Medal of Honor - Airborne - Elite.jar | 559 | Medal Of Honor Airborne Elit | - | 1.0.0 | MIDP-2.0 | - | 32 | 16 | 600 | 10557545 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
 | vault/Medal of Honor - Airborne 3D.jar | 587 | Medal Of Honor Airborne | - | 7.1.33 | MIDP-2.0 | - | 40 | 16 | 600 | 8893457 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
 | vault/Medal of Honor - Airborne.jar | 547 | Medal Of Honor Airborne | - | 4.5.25 | MIDP-2.0 | - | 32 | 16 | 600 | 10342281 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
@@ -636,6 +778,8 @@ Built from `HEAD`, 2026-11-22 (recorded by `tools/sweep_compat.py`).
 | vault/Medal of Honor.jar | 418 | Medal of Honor | - | 1.12.73 | MIDP-2.0 | - | 41 | 16 | 600 | 618759417 | 0 | - | 运行正常 |  |
 | vault/Medieval Combat - Age of Glory.jar | 267 | Medieval Combat - Age of Glo | - | 1.0.4 | MIDP-2.0 | - | 6 | 16 | 600 | 162138922 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/Mega Tower Assault.jar | 848 | Mega Tower Assault | - | 1.2.6 | MIDP-2.0 | - | 16 | 16 | 600 | 5583007 | 0 | - | 运行正常 |  |
+| vault/MegaMan 3_320x240.jar | 210 | Mega Man III | - | 1.0.0 | MIDP-2.0 | - | 14 | 16 | 600 | 4027358 | 0 | java/io/EOFException,java/lang/A | 运行正常 |  |
+| vault/MegaTowerAssault_1.3.3_320x240.jar | 772 | Mega Tower Assault | - | 1.3.3 | MIDP-2.0 | nokia-ui | 16 | 16 | 600 | 5943791 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/Men in Black 3.jar | 1618 | Men in Black 3 | - | 1.3.0 | MIDP-2.0 | - | 17 | 16 | 600 | 79140841 | 0 | - | 运行正常 |  |
 | vault/Metal Gear Acid 2 3D.jar | 595 | Metal Gear Acid 2 3D | - | 1.0.0 | MIDP-2.0 | - | 37 | 16 | 600 | 9462724 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
 | vault/Metal Gear Acid 2.jar | 426 | Metal Gear Acid 2 | - | 1.0.0 | MIDP-2.0 | - | 24 | 16 | 600 | 10986848 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
@@ -647,8 +791,10 @@ Built from `HEAD`, 2026-11-22 (recorded by `tools/sweep_compat.py`).
 | vault/MetalGearAcid2.jar | 604 | Metal Gear Acid 2 3D | - | 1.0.0 | MIDP-2.0 | m3g | 34 | 16 | 600 | 11848525 | 0 | javax/microedition/rms/RecordSto | 运行正常 | runs without input; the generic key script m |
 | vault/MetalSlug3.jar | 302 | Metal Slug Mobile 3 | - | 0.4.8 | MIDP-2.0 | - | 3 | 16 | 600 | 5999774 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
 | vault/MetalSlug4.jar | 768 | Metal Slug 4 | - | 1.0.1 | MIDP-2.0 | - | 6 | 16 | 600 | 8705676 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| vault/MetalSlug4_1.1.5_320x240.jar | 748 | Metal Slug 4 | - | 1.1.5 | MIDP-2.0 | - | 4 | 16 | 600 | 5946603 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
 | vault/Meteos - Astro Blocks.jar | 290 | Meteos | - | 1.0.5 | MIDP-2.0 | - | 9 | 16 | 600 | 254565967 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/MeteosAstroBlocks.jar | 296 | Meteos - Astro Blocks | - | 1.0.4 | MIDP-2.0 | - | 7 | 16 | 600 | 4134957563 | 0 | java/lang/ArrayIndexOutOfBoundsE | 运行正常 |  |
+| vault/MiamiNights2_1.0.3_320x240.jar | 632 | Miami Nights 2 | - | 1.0.3 | MIDP-2.0 | - | 7 | 16 | 600 | 79900 | 0 | - | 运行正常 |  |
 | vault/Midnight Bowling 2.jar | 588 | Midnight Bowling 2 | - | 1.1.1 | MIDP-2.0 | - | 5 | 16 | 600 | 185538582 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/Midnight Bowling 3.jar | 1430 | Midnight Bowling 3 | - | 1.1.3 | MIDP-2.0 | - | 30 | 16 | 600 | 38737350 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/Midnight Bowling.jar | 260 | MidnightBowling | - | 1.0.1 | MIDP-2.0 | - | 5 | 16 | 600 | 2984109 | 0 | javax/microedition/rms/InvalidRe | 运行正常 |  |
@@ -656,30 +802,52 @@ Built from `HEAD`, 2026-11-22 (recorded by `tools/sweep_compat.py`).
 | vault/Midnight Pool 3.jar | 1348 | Midnight Pool 3 | - | 1.2.2 | MIDP-2.0 | - | 29 | 16 | 600 | 51654719 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/Midnight Pool 4.jar | 656 | Midnight Pool | - | 1.0.2 | MIDP-2.0 | - | 26 | 16 | 600 | 43069956 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/Midnight Pool.jar | 598 | Midnight Pool | - | 1.0.3 | MIDP-2.0 | - | 6 | 16 | 600 | 1838293 | 0 | - | 运行正常 |  |
+| vault/MidnightBowling2_1.0.1_320x240.jar | 558 | Midnight Bowling 2 | - | 1.0.1 | MIDP-2.0 | nokia-ui | 5 | 16 | 600 | 273764896 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| vault/MidnightDarts_1.0.3_320x240.jar | 563 | MIDNIGHT DARTS | - | 1.0.3 | MIDP-2.0 | - | 6 | 16 | 600 | 13368625 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| vault/MidnightPool1_1.0.0_320x240.jar | 205 | Midnight Pool | - | 1.0.0 | MIDP-2.0 | - | 5 | 16 | 600 | 5973367332 | 0 | - | 运行正常 |  |
+| vault/MidnightPool2_1.0.1_320x240.jar | 406 | Midnight Pool 2 | - | 1.0.1 | MIDP-2.0 | - | 14 | 16 | 600 | 3386475636 | 0 | java/lang/ClassNotFoundException | 运行正常 |  |
+| vault/MidnightPool3_1.2.4_320x240.jar | 1265 | Midnight Pool 3 | - | 1.2.4 | MIDP-2.0 | - | 29 | 16 | 600 | 103798299 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/Mig 2D Retro Shooter.jar | 1494 | Mig29 2D Retro Shooter | - | 1.0.0 | MIDP-2.0 | - | 75 | 16 | 600 | 36769345 | 0 | java/io/EOFException,java/io/IOE | 运行正常 |  |
 | vault/Might and Magic II.jar | 610 | MightAndMagicII | - | 1.1.8 | MIDP-2.0 | - | 12 | 16 | 600 | 190609006 | 0 | java/lang/ClassNotFoundException | 运行正常 |  |
 | vault/Might and Magic.jar | 189 | MightAndMagic | - | 1.0.0 | MIDP-2.0 | - | 5 | 16 | 600 | 172832600 | 0 | - | 运行正常 |  |
 | vault/MightAndMagic.jar | 229 | MightAndMagic | - | 1.0.6 | MIDP-2.0 | - | 7 | 16 | 600 | 5115680408 | 0 | - | 运行正常 |  |
+| vault/MightAndMagicII_1.0.2_320x240.jar | 609 | Might And Magic II | - | 1.0.2 | MIDP-2.0 | nokia-ui | 9 | 16 | 600 | 201075155 | 0 | java/lang/IllegalArgumentExcepti | 运行正常 |  |
 | vault/Million Dollar Poker.jar | 594 | Million Dollar Poker | - | 1.0.6 | MIDP-2.0 | - | 10 | 16 | 600 | 186553723 | 0 | java/lang/NullPointerException | 运行正常 |  |
+| vault/MillionDollarPokerFeatGusHansen_1.0.0_320x240.jar | 480 | Million Dollar Poker | - | 1.0.0 | MIDP-2.0 | nokia-ui | 10 | 16 | 600 | 3423652711 | 0 | - | 运行正常 |  |
 | vault/Millionaire City.jar | 751 | MillCity | - | 1.0.25 | MIDP-2.0 | - | 64 | 16 | 600 | 1855441 | 0 | java/io/EOFException,javax/micro | 运行正常 |  |
 | vault/MindGames.jar | 186 | Mind Games by Kowciu | - | 1.0.17 | MIDP-2.0 | - | 17 | 16 | 600 | 2836691 | 0 | javax/microedition/rms/InvalidRe | 运行正常 |  |
 | vault/MindGames2.jar | 461 | Mind Games 2 | - | 1.0.0 | MIDP-2.0 | nokia-ui | 24 | 16 | 600 | 3001369 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| vault/Mini Golf 99 Challenge 2010_320x240.jar | 611 | MGolf 99 Chall | - | 1.0.3 | MIDP-2.0 | nokia-ui | 37 | 16 | 600 | 18557256 | 0 | java/io/EOFException,java/lang/N | 运行正常 |  |
 | vault/Mini Golf Magic 3D.jar | 334 | MiniGolfMagic by [wl] | - | 1.5.05 | MIDP-2.0 | - | 18 | 16 | 600 | 1657947 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
 | vault/MiniGolf Theme Park - 99 Holes.jar | 469 | MGolf Park 99 | - | 1.0.11 | MIDP-2.0 | - | 36 | 16 | 600 | 12320689 | 0 | java/io/EOFException,javax/micro | 运行正常 |  |
 | vault/MiniGolfThemePark.jar | 744 | MGolf Park 99_www.antofungky | - | 1.0.15 | MIDP-2.0 | nokia-ui | 39 | 16 | 600 | 12449400 | 0 | java/io/EOFException,java/lang/C | 运行正常 |  |
 | vault/Minigolf Revolution - Pirate Park.jar | 581 | Minigolf Revolution Pirate P | - | 1.0.1 | MIDP-2.0 | - | 7 | 16 | 600 | 9194388 | 0 | - | 运行正常 |  |
 | vault/Mission Impossible III.jar | 313 | Mission Impossible III | - | 1.0.0 | MIDP-2.0 | - | 4 | 16 | 600 | 430581033 | 0 | - | 运行正常 |  |
+| vault/MissionImpossible3_1.0.0_320x240.jar | 293 | Mission Impossible 3 | - | 1.0.0 | MIDP-2.0 | nokia-ui | 4 | 16 | 600 | 3024040925 | 0 | - | 运行正常 |  |
 | vault/Modern Combat 2 - Black Pegasus.jar | 1344 | Modern Combat 2: Black Pegas | - | 1.2.2 | MIDP-2.0 | - | 13 | 16 | 600 | 161802566 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/Modern Combat 4 - Zero Hour.jar | 1539 | Modern Combat4: Zero Hour | - | 1.1.2 | MIDP-2.0 | - | 12 | 16 | 600 | 270126237 | 0 | java/lang/NullPointerException | 运行正常 |  |
+| vault/MonopolyUBuild_1.9.2_320x240.jar | 518 | MONOPOLY U-Build www.wapx.ws | - | 1.9.2 | MIDP-2.0 | - | 28 | 16 | 600 | 23694252 | 0 | javax/microedition/rms/InvalidRe | 运行正常 |  |
 | vault/Monsters University.jar | 1355 | Monsters University | - | 1.1.2 | MIDP-2.0 | - | 13 | 16 | 600 | 21945927 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/Moto Racing  Fever 3D.jar | 312 | Moto Racing Fever | - | 1.2.0 | MIDP-2.0 | - | 27 | 16 | 600 | 12647329 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| vault/MotocrossTrailExtreme_1.0.5_320x240.jar | 1049 | Motocross Trial Extreme | - | 1.0.5 | MIDP-2.0 | - | 11 | 16 | 600 | 174372029 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/MrSudoku.jar | 112 | MrSuDoku Tegos.ru | - | 1.0 | MIDP-2.0 | nokia-ui | 3 | 16 | 600 | 656612 | 0 | java/io/IOException,javax/microe | 运行正常 |  |
-| vault/MsPacMan.jar | 248 | Ms. PAC-MAN | - | 1.4.5 | MIDP-2.0 | nokia-ui | 47 | 16 | 600 | 3854845 | 0 | java/io/EOFException,javax/bluet | 运行正常 |  |
+| vault/Ms Pac Man_320x240.jar | 237 | Ms. PAC-MAN | - | 1.4.21 | MIDP-2.0 | - | 47 | 16 | 600 | 3551948 | 0 | java/io/EOFException,javax/bluet | 运行正常 |  |
+| vault/Ms. PAC-MAN (176x220) (1.0.0).jar | 59 | Ms. PAC-MAN | - | 1.0.0 | MIDP-2.0 | - | 10 | 16 | 600 | 281407204 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| vault/Ms. PAC-MAN Demo (176x220) (1.00).jar | 73 | Ms. PAC-MAN DEMO | - | 1.00 | MIDP-2.0 | - | 2 | 16 | 600 | 3623905673 | 0 | - | 运行正常 |  |
+| vault/Ms. PAC-MAN Demo by Namco (128x160) (1.5.1).jar | 59 | Ms. PAC-MAN Demo by Namco | - | 1.5.1 | MIDP-1.0 | - | 10 | 16 | 600 | 803701 | 0 | - | 运行正常 |  |
+| vault/Ms. PAC-MAN Demo by Namco (176x220) (2.1.0).jar | 80 | Ms. PAC-MAN by Namco | - | 2.1.0 | MIDP-2.0 | - | 21 | 16 | 600 | 3538507 | 0 | javax/microedition/io/Connection | 运行正常 |  |
+| vault/Ms. PAC-MAN Demo by Namco (240x400) (2.1.0).jar | 190 | Ms. PAC-MAN by Namco | - | 2.1.0 | MIDP-2.0 | - | 22 | 16 | 600 | 3139074 | 0 | java/io/IOException,java/lang/Nu | 运行正常 |  |
+| vault/MsPacMan.jar | 248 | Ms. PAC-MAN | - | 1.4.5 | MIDP-2.0 | nokia-ui | 47 | 16 | 600 | 3845132 | 0 | java/io/EOFException,javax/bluet | 运行正常 |  |
+| vault/MyLifeInNewYork_1.0.4_320x240.jar | 406 | My Life in New York | - | 1.0.4 | MIDP-2.0 | - | 6 | 16 | 600 | 5855197 | 0 | java/lang/ArrayIndexOutOfBoundsE | 运行正常 |  |
 | vault/MyMonsterPet.jar | 535 | MyMonsterPet-zetrO | - | 1.3.5 | MIDP-1.0 | - | 50 | 16 | 600 | 24759829 | 0 | - | 运行正常 |  |
 | vault/N.O.V.A. 3.jar | 1536 | N.O.V.A. 3 | - | 1.1.9 | MIDP-2.0 | - | 9 | 16 | 600 | 13654416 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/N.O.V.A. Legacy.jar | 1226 | N.O.V.A. Legacy | - | 1.0.8 | MIDP-2.0 | - | 12 | 16 | 600 | 30280340 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/N.O.V.A..jar | 1195 | N.O.V.A. | - | 1.0.6 | MIDP-2.0 | - | 14 | 16 | 600 | 179286175 | 0 | java/lang/NullPointerException | 运行正常 |  |
+| vault/NBA ProBasketBall2010_1.0.1_320x240.jar | 552 | NBA Pro Basketball 2010 | - | 1.0.1 | MIDP-2.0 | - | 9 | 16 | 600 | 224237674 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/NBA Smash!.jar | 617 | NBA Smash | - | 1.0.9 | MIDP-2.0 | - | 9 | 16 | 600 | 137407896 | 0 | java/lang/ArrayIndexOutOfBoundsE | 运行正常 |  |
+| vault/NFL2011_1.0.1_320x240 C3.jar | 819 | NFL 2011 | - | 1.0.1 | MIDP-2.1 | - | 22 | 16 | 600 | 570902307 | 0 | java/lang/ClassNotFoundException | 运行正常 |  |
+| vault/NOVA Near Orbit Vanguard Alliance_320x240.jar | 866 | N.O.V.A. | - | 1.0.6 | MIDP-2.0 | - | 14 | 16 | 600 | 83131987 | 0 | - | 运行正常 |  |
+| vault/Namco Arcade Golf_320x240.jar | 288 | NAMCO ARCADE GOLF | - | 1.3.6 | MIDP-1.0 | - | 5 | 16 | 600 | 9801661 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
 | vault/Need for Speed - Carbon 3D.jar | 398 | NeedForSpeedCarbon | - | 1.1.98 | MIDP-2.0 | - | 33 | 16 | 600 | 4525112 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
 | vault/Need for Speed - Hot Pursuit 3D Bonus Edition.jar | 1592 | Need for Speed Hot Pursuit B | - | 4.16.3 | MIDP-2.0 | - | 67 | 16 | 602 | 10816785 | 0 | java/lang/ClassNotFoundException | 运行正常 |  |
 | vault/Need for Speed - Hot Pursuit 3D.jar | 1126 | Need for Speed Hot Pursuit | - | 4.1.88 | MIDP-2.0 | - | 60 | 16 | 602 | 9751471 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
@@ -696,22 +864,44 @@ Built from `HEAD`, 2026-11-22 (recorded by `tools/sweep_compat.py`).
 | vault/Need for Speed - Undercover.jar | 485 | Need for Speed Undercover | - | 4.4.0 | MIDP-2.0 | - | 29 | 16 | 600 | 5010016 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
 | vault/NeonRunner.jar | 330 | Neon Runner | - | 1.0.1 | MIDP-2.0 | nokia-ui | 21 | 16 | 600 | 1876056817 | 0 | - | 运行正常 |  |
 | vault/New York Nights.v1.00.jar | 190 | NYNights | - | 0.0.75 | MIDP-1.0 | nokia-ui | 7 | 16 | 600 | 5032994071 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| vault/NewYorkNights2FriendsForLife_1.0.5_320x240.jar | 664 | New York Nights 2 | - | 1.0.5 | MIDP-2.0 | - | 8 | 16 | 600 | 44963 | 0 | java/lang/ClassNotFoundException | 运行正常 |  |
+| vault/NightAtTheMuseum2_1.0.2_320x240.jar | 324 | Night at the Museum. Battle  | - | 1.0.2 | MIDP-2.0 | - | 13 | 16 | 600 | 8531281 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
 | vault/Nightmare Creatures.jar | 160 | NightmareCreatures | - | 0.3.2 | MIDP-1.0 | nokia-ui | 4 | 16 | 600 | 1404684138 | 0 | - | 运行正常 |  |
 | vault/Ninja Prophecy.jar | 1021 | Ninja Prophecy | - | 1.1.5 | MIDP-2.0 | - | 54 | 16 | 600 | 160199619 | 0 | java/lang/NullPointerException | 运行正常 |  |
+| vault/Ninja Prophecy_1.0.3_320x240.jar | 723 | Ninja Prophecy yMoBi.ru | - | 1.0.3 | MIDP-2.0 | nokia-ui | 54 | 16 | 602 | 68237196 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| vault/NinjaProphecy_1.0.3_320x240.jar | 723 | Ninja Prophecy | - | 1.0.3 | MIDP-2.0 | nokia-ui | 54 | 16 | 602 | 68206320 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
 | vault/Nitro Street Racing 2.jar | 976 | NitroStreet Racing2 | - | 1.2.0 | MIDP-2.0 | - | 16 | 16 | 600 | 342833686 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/Nitro Street Racing 3D.jar | 1151 | NitroStreet Racing | - | 1.1.2 | MIDP-2.0 | - | 25 | 16 | 600 | 6934450652 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
 | vault/Nitro Street Racing.jar | 608 | NitroStreet Racing | - | 1.1.0 | MIDP-2.0 | - | 9 | 16 | 600 | 603300673 | 0 | java/lang/NullPointerException | 运行正常 |  |
+| vault/NitroStreetRacing2_1.1.3_320x240.jar | 628 | Nitro Street Racing 2 | - | 1.1.3 | MIDP-2.0 | - | 18 | 16 | 600 | 626646049 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/Numba.jar | 203 | Numba | - | 0.0.3 | MIDP-2.0 | - | 15 | 16 | 600 | 105002204 | 0 | java/io/IOException,javax/microe | 运行正常 |  |
 | vault/Off-Road Dirt Motocross.jar | 579 | Xtreme Dirt Bike | - | 1.0.8 | MIDP-2.0 | - | 11 | 16 | 600 | 473424685 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| vault/OffRoadDirtMotocross_1.0.0_320x240.jar | 358 | Off-Road Dirt Motocross | - | 1.0.0 | MIDP-2.0 | - | 12 | 16 | 600 | 3719030527 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| vault/Onimusha Puzzle Dark Castle_320x240.jar | 161 | Onimusha Puzzle Dark Castle | - | 1.0.0 | MIDP-2.0 | - | 4 | 16 | 600 | 2349372 | 0 | java/lang/ArrayIndexOutOfBoundsE | 运行正常 |  |
+| vault/OregonTrailAmericanSettlers_1.1.4_320x240.jar | 917 | Oregon Trail American Settle | - | 1.1.4 | MIDP-2.0 | nokia-ui | 23 | 16 | 600 | 24871172 | 0 | java/lang/NullPointerException | 运行正常 |  |
+| vault/OregonTrailGoldRush_1.4.3_320x240.jar | 654 | The Oregon Trail Gold Rush | - | 1.4.3 | MIDP-2.0 | - | 20 | 16 | 600 | 56812865 | 0 | - | 运行正常 |  |
 | vault/Orlen Team - Dakar 2007.jar | 159 | Orlen Team - Dakar 2007 | - | 1.0.0 | MIDP-2.0 | - | 10 | 16 | 600 | 6934379 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| vault/PAC-MAN (176x220) (1.0.0).jar | 86 | PAC-MAN | - | 1.0.0 | MIDP-1.0 | - | 8 | 16 | 600 | 40035 | 0 | java/lang/StringIndexOutOfBounds | 运行正常 |  |
+| vault/PAC-MAN Ms. PAC-MAN Demo (176x220) (2.1.0).jar | 68 | PAC-MAN and Ms. PAC-MAN DEMO | - | 2.1.0 | MIDP-2.0 | - | 18 | 16 | 546 | 888590 | 0 | - | 运行正常 | exited itself (notifyDestroyed) |
+| vault/PAC-MAN Ms. PAC-MAN Demo (240x320) (2.1.1).jar | 67 | PAC-MAN / Ms. PAC-MAN DEMO b | - | 2.1.1 | MIDP-2.0 | - | 18 | 16 | 600 | 1178917 | 0 | - | 运行正常 |  |
+| vault/PAC-MAN Ms. PAC-MAN Demo (240x320) (2.6.0).jar | 181 | PAC-MAN \ Ms. PAC-MAN DEMO b | - | 2.6.0 | MIDP-2.0 | - | 29 | 16 | 600 | 237329637 | 0 | - | 运行正常 |  |
+| vault/PAC-MAN Ms.PAC-MAN Demo (128x160) (2.6.0).jar | 111 | PAC-MAN \ Ms. PAC-MAN DEMO | - | 2.6.0 | MIDP-2.0 | - | 28 | 16 | 600 | 176187811 | 0 | - | 运行正常 |  |
+| vault/PAC-MANIA 3D by Namco (176x220) (1.0.0).jar | 184 | PAC-MANIA (3D) by Namco | - | 1.0.0 | MIDP-2.0 | - | 19 | 16 | 600 | 781 | 0 | java/lang/StringIndexOutOfBounds | 运行正常 | runs without input; the generic key script m |
+| vault/Pac Man Kart Rally 2D-3D_320x240.jar | 500 | PAC-MAN Kart Rally | - | 1.0.1 | MIDP-2.0 | - | 25 | 16 | 600 | 117558 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
 | vault/Pac-Man - Championship Edition.jar | 697 | PAC-MAN CHAMPIONSHIP EDITION | - | 1.1.0 | MIDP-2.0 | - | 22 | 16 | 600 | 27840332 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| vault/Pac-Man Championship Edition_320x240.jar | 441 | PAC-MAN CHAMPIONSHIP EDITION | - | 1.1.0 | MIDP-2.0 | - | 22 | 16 | 600 | 22769539 | 0 | javax/microedition/rms/InvalidRe | 运行正常 |  |
 | vault/Pac-Man Party.jar | 836 | PAC-MAN Party by Namco | - | 1.0.0 | MIDP-2.0 | - | 5 | 16 | 600 | 28549657 | 0 | java/lang/NullPointerException | 运行正常 |  |
+| vault/Pac-Man Pinball 2_320x240.jar | 421 | PAC-MAN Pinball 2 | - | 1.0.3 | MIDP-2.0 | nokia-ui | 24 | 16 | 600 | 8637731 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
 | vault/Pac-Man.jar | 209 | PAC-MAN | - | 1.8.6 | MIDP-2.0 | - | 44 | 16 | 600 | 17688906 | 0 | javax/bluetooth/BluetoothStateEx | 运行正常 |  |
 | vault/Pac-Mania.jar | 169 | PAC-MANIA | - | 1.1.8 | MIDP-2.0 | - | 4 | 16 | 600 | 12124954044 | 0 | - | 运行正常 |  |
-| vault/PacManChampionship.jar | 558 | PAC-MAN CHAMPIONSHIP EDITION | - | 1.1.0 | MIDP-2.0 | - | 23 | 16 | 600 | 30917846 | 0 | javax/microedition/rms/InvalidRe | 运行正常 |  |
+| vault/PacManChampionship.jar | 558 | PAC-MAN CHAMPIONSHIP EDITION | - | 1.1.0 | MIDP-2.0 | - | 23 | 16 | 600 | 30917921 | 0 | javax/microedition/rms/InvalidRe | 运行正常 |  |
 | vault/Paperboy - Wheels on Fire.jar | 320 | Paperboy Wheels On Fire | - | 01.00.01 | MIDP-2.0 | - | 11 | 16 | 600 | 2897066 | 0 | - | 运行正常 |  |
 | vault/ParcoGiochi.jar | 283 | Parco Giochi | - | 1.0.48 | MIDP-2.0 | nokia-ui | 14 | 16 | 600 | 18051893 | 0 | java/io/EOFException,java/lang/N | 运行正常 |  |
+| vault/ParisHiltonsDiamondQuest_1.1.0_320x240.jar | 323 | Paris Hilton's Diamond Quest | - | 1.1.0 | MIDP-2.0 | - | 8 | 16 | 600 | 7529250600 | 0 | javax/microedition/rms/InvalidRe | 运行正常 |  |
+| vault/ParisNights_1.0.0_320x240.jar | 320 | Paris Nights | - | 1.0.0 | MIDP-2.0 | - | 10 | 16 | 600 | 1951497 | 0 | java/lang/ClassNotFoundException | 运行正常 |  |
+| vault/Petz_1.0.2_320x240.jar | 643 | Petz | - | 1.0.2 | MIDP-2.0 | - | 11 | 16 | 600 | 20083265 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
 | vault/Phantom Duck.jar | 465 | Phantom Duck | - | 1.0.2 | MIDP-1.0 | - | 11 | 16 | 600 | 1964582 | 0 | java/io/EOFException | 运行正常 |  |
+| vault/Pictionary_320x240.jar | 208 | Pictionary | - | 1.13.24 | MIDP-2.0 | - | 13 | 16 | 600 | 726882292 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
 | vault/Pirates of the Caribbean - At World's End.jar | 283 | Pirates 3 | - | 1.0.2 | MIDP-1.0 | - | 19 | 16 | 600 | 2748242 | 0 | java/io/EOFException,java/lang/N | 运行正常 |  |
 | vault/Pirates of the Seven Seas.jar | 581 | Pirates of the Seven Seas | - | 1.1.6 | MIDP-2.0 | - | 7 | 16 | 600 | 1517883 | 0 | - | 运行正常 |  |
 | vault/PiratesOfTheCaribbean.jar | 265 | Pirates 3 | - | 1.0.4 | MIDP-1.0 | nokia-ui | 19 | 16 | 600 | 6012869 | 0 | java/io/EOFException,java/lang/N | 运行正常 |  |
@@ -750,6 +940,7 @@ Built from `HEAD`, 2026-11-22 (recorded by `tools/sweep_compat.py`).
 | vault/Plants vs. Zombies [360x640] (N8) (andrew-lviv.net).jar | 1712 | Plants vs Zombies | - | 4.2.74 | MIDP-2.0 | - | 99 | 16 | 601 | 6044041 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
 | vault/Plants vs. Zombies [360x640] (SATIO U5i Vivaz) (andrew-lviv.net).jar | 1710 | Plants vs Zombies | - | 4.1.3 | MIDP-2.0 | - | 99 | 16 | 600 | 209218 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
 | vault/Plants vs. Zombies [480x800] (S8000) (andrew-lviv.net).jar | 1341 | Plants vs Zombies | - | 4.2.75 | MIDP-2.0 | - | 99 | 16 | 601 | 5521955 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| vault/PlantsVsZombies_4.1.61_320x240.jar | 1313 | Plants vs Zombies | - | 4.1.61 | MIDP-2.0 | - | 93 | 16 | 601 | 4996850 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
 | vault/Plants_vs_Zombies_240x320-4.3.22-651742-mobiles24.jar | 1510 | Plants vs Zombies | - | 4.3.22 | MIDP-2.0 | - | 124 | 16 | 601 | 5611858 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
 | vault/PlantsvsZombies_Asha311.jar | 1341 | Plants vs Zombies | - | 4.2.75 | MIDP-2.0 | - | 99 | 16 | 601 | 5521955 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
 | vault/PlantsvsZombies_C6-00.jar | 1746 | Plants vs Zombies | - | 4.3.26 | MIDP-2.0 | - | 99 | 16 | 600 | 6619525 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
@@ -764,13 +955,21 @@ Built from `HEAD`, 2026-11-22 (recorded by `tools/sweep_compat.py`).
 | vault/Platinum Solitaire 3.jar | 1243 | Platinum Solitaire 3 | - | 1.1.5 | MIDP-2.0 | - | 6 | 16 | 600 | 66574060 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/Platinum Solitaire.jar | 595 | Platinum Solitaire | - | 1.0.12 | MIDP-2.0 | - | 6 | 16 | 600 | 305385259 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
 | vault/Platinum Sudoku 2.jar | 964 | Platinum Sudoku 2 | - | 1.0.8 | MIDP-2.0 | - | 14 | 16 | 600 | 72399404 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| vault/Platinum Sudoku 2_320x240.jar | 389 | Platinum Sudoku 2 | - | 1.2.0 | MIDP-2.0 | - | 13 | 16 | 600 | 6452302 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
 | vault/Platinum Sudoku.jar | 262 | Platinum Sudoku | - | 1.2.2 | MIDP-2.0 | - | 8 | 16 | 600 | 291108007 | 0 | - | 运行正常 |  |
 | vault/PlatinumMahjong.jar | 288 | Platinum Mahjong | - | 1.0.9 | MIDP-2.0 | - | 4 | 16 | 600 | 3729747327 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
-| vault/PlatinumSudoku.jar | 269 | Platinum Sudoku | - | 1.0.1 | MIDP-2.0 | - | 9 | 16 | 600 | 5220933656 | 0 | - | 运行正常 |  |
-| vault/PlatinumSudoku2.jar | 629 | Platinum Sudoku 2 | - | 1.1.3 | MIDP-2.0 | - | 14 | 16 | 600 | 84420871 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| vault/PlatinumSolitaire2_1.0.4_320x240.jar | 529 | Platinum Solitaire 2 | - | 1.0.4 | MIDP-2.0 | - | 8 | 16 | 600 | 2335305531 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| vault/PlatinumSolitaire3_1.0.7_320x240.jar | 1094 | Platinum Solitaire 3 | - | 1.0.7 | MIDP-2.0 | - | 6 | 16 | 600 | 4509262795 | 0 | - | 运行正常 |  |
+| vault/PlatinumSudoku.jar | 269 | Platinum Sudoku | - | 1.0.1 | MIDP-2.0 | - | 9 | 16 | 600 | 5383540395 | 0 | - | 运行正常 |  |
+| vault/PlatinumSudoku1_1.0.1_320x240.jar | 334 | Platinum Sudoku | - | 1.0.1 | MIDP-2.0 | - | 12 | 16 | 600 | 4827464121 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| vault/PlatinumSudoku2.jar | 629 | Platinum Sudoku 2 | - | 1.1.3 | MIDP-2.0 | - | 14 | 16 | 600 | 84440067 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| vault/Playman Summer Games 3_320x240.jar | 414 | Playman Summer Games 3 | - | 1.0.21 | MIDP-2.0 | - | 6 | 16 | 600 | 6770831542 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
 | vault/Pocket Chef.jar | 630 | Pocket Chef | - | 1.0.0 | MIDP-2.0 | - | 12 | 16 | 600 | 84522518 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| vault/PocketChef_1.0.3_320x240.jar | 565 | Pocket Chef | - | 1.0.3 | MIDP-2.0 | - | 11 | 16 | 600 | 121866756 | 0 | - | 运行正常 |  |
 | vault/Postal Babes.jar | 337 | Postal Babes | - | 1.4.0 | MIDP-2.0 | - | 20 | 16 | 600 | 8236184 | 0 | java/io/EOFException,java/io/IOE | 运行正常 |  |
 | vault/Predators.jar | 959 | Predators | - | 1.0.8 | MIDP-2.0 | - | 17 | 16 | 600 | 110755314 | 0 | java/lang/NullPointerException | 运行正常 |  |
+| vault/Predators_1.3.0_320x240.jar | 663 | Predators | - | 1.3.0 | MIDP-2.0 | - | 19 | 16 | 600 | 187839535 | 0 | - | 运行正常 |  |
+| vault/Prehistoric Fun Park_320x240_Nokia_E71.jar | 213 | Prehistoric Fun Park | - | 0.1.20 | MIDP-2.0 | - | 7 | 16 | 600 | 43808 | 0 | - | 运行正常 |  |
 | vault/Prince of Persia (2008).jar | 620 | Prince of Persia | - | 1.0.5 | MIDP-2.0 | - | 6 | 16 | 600 | 635351818 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
 | vault/Prince of Persia - The Forgotten Sands.jar | 995 | Prince of Persia The Forgott | - | 1.0.7 | MIDP-2.0 | - | 11 | 16 | 600 | 31180620 | 0 | java/lang/ArrayIndexOutOfBoundsE | 运行正常 |  |
 | vault/Prince of Persia - The Two Thrones.jar | 306 | Prince Of Persia 3 | - | 1.0.1 | MIDP-2.0 | - | 7 | 16 | 600 | 343346649 | 0 | - | 运行正常 |  |
@@ -779,19 +978,31 @@ Built from `HEAD`, 2026-11-22 (recorded by `tools/sweep_compat.py`).
 | vault/PrinceOfPersia.jar | 196 | PrinceOfPersiaTheSandsOfTime | - | 1.0.1 | MIDP-2.0 | - | 6 | 16 | 600 | 16490505 | 0 | - | 运行正常 |  |
 | vault/PrinceOfPersia2.jar | 211 | PrinceOfPersia-WarriorWithin | - | 1.0.1 | MIDP-1.0 | nokia-ui | 5 | 16 | 600 | 2482577281 | 0 | - | 运行正常 |  |
 | vault/PrinceOfPersia3.jar | 275 | Prince Of Persia 3 | - | 1.0 | MIDP-2.0 | - | 7 | 16 | 600 | 3171869012 | 0 | - | 运行正常 |  |
+| vault/PrinceOfPersia3TheTwoThrones_1.0.3_320x240.jar | 326 | Prince Of Persia 3 | - | 1.0.3 | MIDP-2.0 | - | 8 | 16 | 891 | 1695858092 | 0 | - | 运行正常 |  |
 | vault/PrinceOfPersia4.jar | 600 | Prince of Persia | - | 1.0.4 | MIDP-2.0 | - | 6 | 16 | 600 | 1061590751 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| vault/PrinceOfPersiaClassic_1.0.1_320x240.jar | 614 | Prince of Persia Classic by  | - | 1.0.1 | MIDP-2.0 | - | 7 | 16 | 600 | 6461202860 | 0 | java/lang/NullPointerException | 运行正常 |  |
+| vault/PrinceOfPersiaThe ForgottenSands_1.0.4_320x240.jar | 737 | Prince of Persia The Forgott | - | 1.0.4 | MIDP-2.0 | - | 11 | 16 | 600 | 42508726 | 0 | - | 运行正常 |  |
+| vault/PrinceOfPersia_1.0.0_320x240.jar | 591 | Prince of Persia | - | 1.0.0 | MIDP-2.0 | - | 6 | 16 | 600 | 103154758 | 0 | - | 运行正常 |  |
 | vault/Pro Evolution Soccer 2008.jar | 346 | PES 2008 | - | 1.0.1 | MIDP-2.0 | - | 8 | 16 | 601 | 519765820 | 0 | java/lang/IndexOutOfBoundsExcept | 运行正常 |  |
 | vault/Pro Evolution Soccer 2010.jar | 458 | PES 2010 | - | 1.0.0 | MIDP-2.0 | - | 9 | 16 | 600 | 6218142070 | 0 | java/lang/IndexOutOfBoundsExcept | 运行正常 |  |
 | vault/Pro Evolution Soccer 2011.jar | 558 | PES 2011 | - | 1.0.0 | MIDP-2.0 | - | 9 | 16 | 600 | 5127301551 | 0 | java/lang/IndexOutOfBoundsExcept | 运行正常 |  |
+| vault/ProEvolutionSoccer2014_1.0.8_320x240.jar | 1045 | PES 2014 | - | 1.0.8 | MIDP-2.0 | - | 18 | 16 | 600 | 440072 | 0 | java/io/IOException,java/lang/Il | 运行正常 |  |
+| vault/ProGolf2010_1.1.0_320x240.jar | 652 | Pro Golf 2010 | - | 1.1.0 | MIDP-2.0 | - | 6 | 16 | 600 | 2411790728 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/Project Gotham Racing.jar | 941 | PGR | - | 1.0.2 | MIDP-1.0 | - | 45 | 16 | 600 | 2520430 | 0 | - | 运行正常 |  |
 | vault/Pub Mania.jar | 566 | PubMania | - | 1.0.1 | MIDP-2.0 | - | 5 | 16 | 600 | 275058540 | 0 | javax/microedition/rms/InvalidRe | 运行正常 |  |
 | vault/Puzzle Bobble Evolution.jar | 531 | Puzzle Bobble Evolution | - | 0.8.0 | MIDP-1.0 | - | 17 | 16 | 600 | 4466891 | 0 | java/lang/IllegalArgumentExcepti | 运行正常 |  |
 | vault/Puzzle Bobble.jar | 145 | Puzzle Bobble | - | 1.4.8 | MIDP-2.0 | - | 12 | 16 | 600 | 241572 | 0 | java/io/IOException | 运行正常 |  |
+| vault/Puzzle Challenge Deluxe_320x240_Nokia_E71.jar | 259 | Puzzle Challenge Deluxe | - | 1.0.0 | MIDP-1.0 | - | 12 | 16 | 600 | 57129298 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/Puzzle Quest - Warlords.jar | 441 | Puzzle Quest - Warlords | - | 1.0.63 | MIDP-1.0 | - | 15 | 16 | 600 | 574263 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| vault/Puzzle Tracks__320x240.jar | 348 | Puzzle Tracks | - | 1.2.0 | MIDP-2.0 | - | 12 | 16 | 600 | 3064655 | 0 | java/io/IOException | 运行正常 |  |
 | vault/PuzzleQuest.jar | 327 | Puzzle Quest - Warlords | - | 1.0.47 | MIDP-1.0 | - | 11 | 16 | 600 | 18711692 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| vault/Puzzlebox_1.0.0_320x240.jar | 340 | Puzzle Box | - | 1.2.0 | MIDP-2.0 | - | 58 | 16 | 600 | 87162 | 0 | - | 运行正常 |  |
+| vault/QBlox_320x240.jar | 382 | QBlox | - | 1.0.8 | MIDP-2.0 | nokia-ui | 14 | 16 | 600 | 104470703 | 0 | java/io/IOException,java/lang/Ar | 运行正常 |  |
 | vault/R-Type.jar | 272 | R-Type | - | 0.0.5 | MIDP-2.0 | - | 7 | 16 | 600 | 606469 | 0 | java/io/IOException,java/lang/Nu | 运行正常 |  |
 | vault/Race Driver - Grid.jar | 970 | Race Driver Grid | - | 1.0.2 | MIDP-2.0 | - | 66 | 16 | 600 | 12176266 | 0 | - | 运行正常 |  |
+| vault/Race Electrix_320x240.jar | 488 | Race Electrix | - | 1.1.5 | MIDP-1.0 | - | 3 | 16 | 600 | 102782 | 0 | - | 运行正常 |  |
 | vault/Racing Fever GT.jar | 253 | Racing Fever GT 3D | - | 1.0.6 | MIDP-2.0 | - | 28 | 16 | 600 | 12609122 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| vault/Rainbow Invaders_320x240.jar | 112 | Rainbow Invaders | - | 1.0 | MIDP-2.0 | - | 13 | 16 | 600 | 29972082 | 0 | java/io/IOException,java/lang/Nu | 运行正常 |  |
 | vault/Rally Master Pro.jar | 1155 | Rally Master Pro | - | 1.0 | MIDP-2.0 | - | 179 | 16 | 600 | 10834336 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
 | vault/Rally Stars.jar | 512 | RallyStars-3D | - | 1.1.0 | MIDP-2.0 | - | 45 | 16 | 600 | 14994339 | 0 | java/io/IOException,java/lang/Nu | 运行正常 |  |
 | vault/Rayman 3.jar | 174 | Rayman3 | - | 1.0.3 | MIDP-2.0 | - | 5 | 16 | 600 | 178945842 | 0 | - | 运行正常 |  |
@@ -808,6 +1019,10 @@ Built from `HEAD`, 2026-11-22 (recorded by `tools/sweep_compat.py`).
 | vault/Real Football 2016.jar | 1002 | Real Football 2016 | - | 1.0.1 | MIDP-2.0 | - | 16 | 16 | 600 | 113644953 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
 | vault/Real Football 2017.jar | 1015 | Real Football 2017 | - | 1.0.3 | MIDP-2.0 | - | 16 | 16 | 600 | 129738652 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
 | vault/Real Football 2018.jar | 1020 | Real Football 2018 | - | 1.0.1 | MIDP-2.0 | - | 16 | 16 | 600 | 127692104 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| vault/RealFootball2007-3D_1.0.6_320x240.jar | 1003 | RealFootball2007 3D | - | 1.0.6 | MIDP-2.0 | m3g,nokia-ui | 7 | 16 | 600 | 6144557529 | 0 | java/io/IOException,java/lang/Nu | 运行正常 |  |
+| vault/RealFootball2012_1.1.2_320x240.jar | 898 | Real Football 2012 | - | 1.1.2 | MIDP-2.0 | nokia-ui | 14 | 16 | 600 | 590340428 | 0 | - | 运行正常 | runs without input; the generic key script d |
+| vault/RealFootballManagerEdition_1.0.0_320x240.jar | 599 | Real Football Manager Editio | - | 1.0.0 | MIDP-2.0 | - | 10 | 16 | 600 | 3223338762 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| vault/RealRuby_1.0.5_320x240.jar | 484 | Real Rugby | - | 1.0.5 | MIDP-2.0 | - | 7 | 16 | 600 | 7468266305 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
 | vault/Real_2_Football_2007.jar | 335 | RealFootball2007 | - | 1.0.7 | MIDP-2.0 | - | 7 | 16 | 600 | 3118107076 | 0 | - | 运行正常 |  |
 | vault/Red Bull Motocross.jar | 834 | RedBullMotoCross2D | - | 0.3.9 | MIDP-2.0 | - | 52 | 16 | 600 | 6251660 | 0 | java/io/EOFException,javax/micro | 运行正常 |  |
 | vault/Red Out Racer.jar | 244 | Red Out Racer | - | 1.0.2 | MIDP-2.0 | - | 23 | 16 | 600 | 1890019 | 0 | javax/microedition/media/MediaEx | 运行正常 |  |
@@ -815,55 +1030,125 @@ Built from `HEAD`, 2026-11-22 (recorded by `tools/sweep_compat.py`).
 | vault/ResidentEvil-Degeneration_s40v3a.jar | 371 | Resident Evil Degeneration | - | 1.0.0 | MIDP-2.0 | - | 10 | 16 | 601 | 2905480 | 0 | java/lang/NumberFormatException | 运行正常 |  |
 | vault/Ridge Racer Drift.jar | 1268 | RidgeRacerD | - | 1.0.1 | MIDP-2.0 | - | 28 | 16 | 600 | 190565764 | 0 | javax/microedition/rms/InvalidRe | 运行正常 |  |
 | vault/Ridge Racer.jar | 398 | Ridge Racer | - | 1.0.7 | MIDP-2.0 | - | 35 | 16 | 600 | 82292567 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| vault/RiseOfLostEmpires_1.0.0_320x240.jar | 320 | Rise of Lost Empires | - | 1.0.0 | MIDP-2.0 | - | 10 | 16 | 600 | 3808355547 | 0 | java/lang/NullPointerException | 运行正常 |  |
+| vault/Risk_320x240.jar | 956 | RISK | - | 1.11.2 | MIDP-2.0 | nokia-ui | 12 | 16 | 600 | 11544991 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| vault/Robin Hood_320x240_Nokia_E71.jar | 998 | Robin Hood | - | 4.8.0 | MIDP-2.0 | - | 15 | 16 | 600 | 14112374 | 0 | java/io/EOFException | 运行正常 |  |
 | vault/Robobombo.jar | 338 | Robobombo | - | 1.0.7 | MIDP-2.0 | - | 61 | 16 | 600 | 2259389 | 0 | java/lang/ClassNotFoundException | 运行正常 |  |
 | vault/Robot Battle Tactics.jar | 321 | Robot Battle Tactics | - | 1.0.0 | MIDP-2.0 | - | 14 | 16 | 600 | 4454379 | 0 | - | 运行正常 |  |
+| vault/Robot Maker_320x240.jar | 357 | Robot Maker TEGOS.ru | - | 1.0.0 | MIDP-2.0 | - | 10 | 16 | 600 | 3914148 | 0 | - | 运行正常 |  |
+| vault/RolandGarros2009_1.0.8_320x240.jar | 604 | Roland-Garros 2009 | - | 1.0.8 | MIDP-2.0 | - | 11 | 16 | 600 | 86887663 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
 | vault/Roll that Ball 2.jar | 512 | Roll that Ball 2 | - | 1.0.1 | MIDP-2.0 | - | 18 | 16 | 600 | 369622431 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
 | vault/Roll that Ball.jar | 568 | Roll that Ball | - | 1.0.0 | MIDP-2.0 | - | 18 | 16 | 600 | 330747742 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
 | vault/Rollercoaster Revolution - 99 Tracks.jar | 845 | Abahn Rev 99 | - | 1.0.10 | MIDP-2.0 | - | 39 | 16 | 600 | 3381751 | 0 | java/io/EOFException,javax/micro | 运行正常 |  |
+| vault/Rollercoaster Revolution 99 Tracks_320x240.jar | 666 | Roller Rev 99 | - | 1.0.20 | MIDP-2.0 | nokia-ui | 39 | 16 | 600 | 62819930 | 0 | java/io/EOFException,java/lang/C | 运行正常 |  |
 | vault/Rome - Throne of Destiny.jar | 232 | Rome Throne Of Destiny | - | 1.0.0 | MIDP-2.0 | - | 12 | 16 | 600 | 1170921 | 0 | java/io/IOException,javax/microe | 运行正常 |  |
 | vault/SEGA Rally 3D.jar | 958 | SEGA Rally 3D | - | 1.0.5 | MIDP-2.0 | - | 44 | 16 | 600 | 217522597 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
 | vault/SU-30.jar | 434 | Su-30 | - | 1.8.0 | MIDP-2.0 | - | 55 | 16 | 600 | 4917863 | 0 | java/io/EOFException,java/io/IOE | 运行正常 |  |
+| vault/SallysStudio_1.0.4_320x240.jar | 1004 | Sallys Studio | - | 1.0.4 | MIDP-2.0 | - | 14 | 16 | 600 | 59743894 | 0 | java/lang/NullPointerException | 运行正常 |  |
+| vault/Scrabble Mobile_1.1.1_320x240-en.jar | 825 | Scrabble | - | 1.1.1 | MIDP-2.0 | - | 4 | 16 | 600 | 7175714271 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
 | vault/ShadoWalker.jar | 518 | Shadowalker | - | 1.0.3 | MIDP-1.0 | - | 12 | 16 | 600 | 722344 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/Shadowalker.jar | 591 | Shadowalker | - | 1.0.6 | MIDP-1.0 | - | 14 | 16 | 600 | 20832210 | 0 | java/lang/NullPointerException | 运行正常 |  |
+| vault/SherlockHolmes_1.0.9_320x240.jar | 640 | Sherlock Holmes: The Officia | - | 1.0.9 | MIDP-2.0 | - | 10 | 16 | 600 | 24399826 | 0 | java/lang/NullPointerException | 运行正常 |  |
+| vault/ShrekForeverAfter_1.0.3_320x240.jar | 437 | Shrek Forever After | - | 1.0.2 | MIDP-2.0 | - | 15 | 16 | 600 | 2650843 | 0 | java/lang/ClassNotFoundException | 运行正常 |  |
+| vault/ShrekParty_1.0.1_320x240.jar | 678 | Shrek Party | - | 1.0.1 | MIDP-2.0 | - | 7 | 16 | 600 | 29044557 | 0 | java/lang/ArrayIndexOutOfBoundsE | 运行正常 |  |
+| vault/ShrekTheThird_1.1.2_320x240.jar | 579 | Shrek the Third: The Officia | - | 1.1.2 | MIDP-2.0 | - | 7 | 16 | 600 | 4334620084 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/Siberian Strike.jar | 206 | Siberian Strike | - | 1.0.0 | MIDP-2.0 | - | 6 | 16 | 600 | 1216158 | 0 | - | 运行正常 |  |
+| vault/Sid Meiers Civilization 4 Defender Of The Gates_320x240_Nokia_E71.jar | 363 | Civilization IV Defenders Of | - | 1.2.6 | MIDP-2.0 | - | 12 | 16 | 600 | 6075207 | 0 | java/io/IOException | 运行正常 |  |
+| vault/SidMeiersCivilization5_1.0.6_320x240.jar | 635 | Sid Meier's Civilization V M | - | 1.0.6 | MIDP-2.0 | - | 11 | 16 | 600 | 11681926 | 0 | - | 运行正常 |  |
 | vault/Silent Hill Mobile 2.jar | 475 | Silent Hill Mobile 2 | - | 1.0.0 | MIDP-2.0 | - | 12 | 16 | 600 | 8286718 | 0 | java/io/IOException,java/lang/Nu | 运行正常 |  |
 | vault/Silent Hill Mobile 3.jar | 579 | Silent Hill 3 | - | 1.0.20 | MIDP-2.0 | - | 13 | 16 | 600 | 2680857 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
 | vault/Silent Hill Mobile.jar | 476 | Silent Hill | - | 0.1.0 | MIDP-2.0 | - | 10 | 16 | 600 | 3291811 | 0 | java/io/IOException,javax/microe | 运行正常 |  |
+| vault/Silent Hunter_320x240_Nokia_E71.jar | 730 | Silent Hunter | - | 1.0 | MIDP-2.0 | - | 45 | 16 | 600 | 3635065 | 0 | java/io/IOException,javax/microe | 运行正常 |  |
 | vault/SimCity Deluxe.jar | 914 | SimCity Deluxe | - | 1.12.37 | MIDP-2.0 | - | 180 | 16 | 600 | 8488099 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| vault/SimCity Metropolis_320x240.jar | 779 | SimCityM | - | 1.23.87 | MIDP-2.0 | - | 25 | 16 | 600 | 152445362 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
 | vault/Snake III.jar | 293 | Snake III | - | 3.07.2 | MIDP-2.0 | - | 49 | 16 | 600 | 131592 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| vault/Snake Reloaded_320x240_Nokia_E71.jar | 619 | Snake Reloaded | - | 1.0.17 | MIDP-2.0 | nokia-ui | 47 | 16 | 600 | 69829977 | 0 | java/io/EOFException,javax/micro | 运行正常 |  |
 | vault/Snowboard Hero.jar | 751 | SnowboardHero | - | 1.0.1 | MIDP-2.0 | - | 135 | 16 | 600 | 8889770 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| vault/Sokoban.jar | 35 | Sokoban | - | 1.1 | MIDP-1.0 | - | 14 | 16 | 600 | 9578353 | 0 | java/io/EOFException | 运行正常 |  |
+| vault/Solitaire 8 in 1 2011_320x240.jar | 366 | Solitaire8x1 | - | 2.0 | MIDP-2.0 | nokia-ui | 8 | 16 | 600 | 6166966 | 0 | - | 运行正常 |  |
+| vault/Solitaire Deluxe 16 Pack_320x240.jar | 427 | Solitaire Dlx | - | 1.5.24 | MIDP-2.0 | - | 51 | 16 | 600 | 26902740 | 0 | java/io/IOException,javax/microe | 运行正常 |  |
+| vault/Solitaire Pop_320x240.jar | 526 | Solitaire Pop | - | 1.0.0 | MIDP-2.0 | - | 7 | 16 | 600 | 10478460 | 0 | java/lang/ArrayIndexOutOfBoundsE | 运行正常 |  |
 | vault/Sonic & SEGA All-Star Racing.jar | 1015 | Sonic Racing | - | 1.2.2 | MIDP-2.0 | - | 24 | 16 | 600 | 8347579 | 0 | - | 运行正常 |  |
 | vault/Sonic Advance.jar | 1073 | Sonic Advance | - | 1.3.0 | MIDP-2.0 | - | 174 | 16 | 600 | 2391943 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/Sonic Jump.jar | 328 | Sonic Jump | - | 1.0.3 | MIDP-1.0 | - | 7 | 16 | 602 | 4337055 | 0 | java/io/IOException,javax/microe | 运行正常 |  |
 | vault/Sonic Runners Adventures.jar | 966 | Sonic Runners Adventure | - | 1.0.8 | MIDP-2.0 | - | 14 | 16 | 600 | 27246883 | 0 | - | 运行正常 |  |
 | vault/Sonic Spinball.jar | 637 | Sonic Spinball by konon | - | 4.0.20 | MIDP-2.0 | - | 14 | 16 | 600 | 28100950 | 0 | java/lang/ArrayIndexOutOfBoundsE | 运行正常 |  |
+| vault/Sonic Spinball_320x240.jar | 560 | Sonic Spinball | - | 4.0.75 | MIDP-2.0 | - | 16 | 16 | 600 | 23146024 | 0 | java/lang/ArrayIndexOutOfBoundsE | 运行正常 |  |
 | vault/Sonic Unleashed.jar | 848 | SonicUnleashed | - | 1.2.5 | MIDP-2.0 | - | 15 | 16 | 600 | 183726898 | 0 | java/lang/NullPointerException | 运行正常 |  |
+| vault/SonicAdvance_1.4.0_320x240.jar | 1057 | Sonic Advance | - | 1.4.0 | MIDP-2.0 | - | 174 | 16 | 600 | 2864649 | 0 | java/lang/NullPointerException | 运行正常 |  |
+| vault/SonicSegaAllStars_1.0.2_320x240.jar | 659 | Sonic Racing | - | 1.0.2 | MIDP-2.0 | - | 26 | 16 | 600 | 42230827 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/SonicTheHedgehogPartOne_6280.jar | 278 | Sonic The Hedgehog Part One | - | 1.0.46 | MIDP-2.0 | - | 5 | 16 | 600 | 4204495 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
 | vault/SonicTheHedgehogPartTwo_6280.jar | 339 | Sonic The Hedgehog Part Two | - | 1.0.2 | MIDP-2.0 | nokia-ui | 5 | 16 | 600 | 1499718 | 0 | java/io/IOException,java/lang/Nu | 运行正常 |  |
+| vault/SonicUnleashed_1.2.2_320x240.jar | 642 | SonicUnleashed | - | 1.2.2 | MIDP-2.0 | - | 11 | 16 | 600 | 261784496 | 0 | - | 运行正常 |  |
 | vault/Soul Calibur Mobile.jar | 1334 | SOULCALIBUR Mobile by Namco | - | 1.0.0 | MIDP-2.0 | - | 14 | 16 | 600 | 6769462 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/Soul of Darkness.jar | 631 | Soul Of Darkness | - | 1.3.2 | MIDP-2.0 | - | 8 | 16 | 600 | 363502553 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
 | vault/SoulOfDarkness_HTC_P3450_EN_IGPL_EU_101_S8000.jar | 617 | Soul Of Darkness | - | 1.0.1 | MIDP-2.0 | - | 6 | 16 | 0 | 0 | 0 | - | 超时 |  |
+| vault/SpaceInvaderEvolution_0.5.6_320x240.jar | 350 | Space Invader Evolution | - | 0.5.6 | MIDP-2.0 | - | 42 | 16 | 600 | 4460478 | 0 | - | 运行正常 |  |
 | vault/Speed Racer.jar | 886 | Speed Racer 3D | - | 1.2.9 | MIDP-2.0 | - | 26 | 16 | 600 | 842903 | 0 | - | 运行正常 |  |
 | vault/Spider-Man - Toxic City.jar | 995 | Spider-Man: Toxic City | - | 1.1.6 | MIDP-2.0 | - | 15 | 16 | 600 | 95483971 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/Spider-Man - Ultimate Power.jar | 1542 | Spider-Man: Ultimate Power | - | 1.2.3 | MIDP-2.0 | - | 18 | 16 | 600 | 69901982 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/Splatterhouse.jar | 549 | Splatterhouse by Namco | - | 1.0.0 | MIDP-2.0 | - | 14 | 16 | 600 | 13180845 | 0 | java/lang/NullPointerException | 运行正常 |  |
+| vault/SplinterCellConviction_1.1.5_320x240_bresilien.jar | 638 | Splinter Cell Conviction | - | 1.1.5 | MIDP-2.0 | - | 11 | 16 | 600 | 11729621 | 0 | java/lang/NullPointerException | 运行正常 |  |
+| vault/SplinterCellDoubleAgent_1.0.1_320x240.jar | 317 | Splinter Cell DA | - | 1.0.1 | MIDP-2.0 | nokia-ui | 6 | 16 | 601 | 67484383 | 0 | java/lang/ArrayIndexOutOfBoundsE | 运行正常 |  |
 | vault/Spongebob - Bikini Bottom Pursuit.jar | 390 | Bob Esponja | - | 1.1.0 | MIDP-2.0 | - | 21 | 16 | 600 | 496533 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| vault/Spooks_1.0.0_320x240.jar | 411 | Spooks The Mobile Game | - | 1.0.0 | MIDP-2.0 | - | 7 | 16 | 600 | 18139798 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
 | vault/Spore Creatures.jar | 758 | SPORE CREATURES | - | 4.0.52 | MIDP-2.0 | - | 42 | 16 | 600 | 63668253 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| vault/SporeCreatures_4.9.20_320x240.jar | 663 | SPORE CREATURES | - | 4.9.20 | MIDP-2.0 | - | 42 | 16 | 600 | 5175025 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| vault/SporeOrigins_4.9.0_320x240.jar | 805 | SPORE | - | 4.9.0 | MIDP-2.0 | - | 28 | 16 | 600 | 3301204051 | 0 | java/lang/IllegalArgumentExcepti | 运行正常 |  |
+| vault/Spyro Eternal Night_320x240.jar | 370 | SpyroEternal | - | 0.5.9 | MIDP-2.0 | nokia-ui | 6 | 16 | 600 | 7288729 | 0 | java/io/EOFException,javax/micro | 运行正常 |  |
+| vault/Star Invasion_320x240.jar | 1003 | Star Invasion | - | 1.0.21 | MIDP-2.0 | nokia-ui | 17 | 16 | 600 | 53901180 | 0 | java/io/EOFException,javax/micro | 运行正常 |  |
+| vault/Star Wars The Clone Wars_320x240.jar | 416 | Star Wars - The Clone Wars | - | 1.0.35 | MIDP-1.0 | nokia-ui | 7 | 16 | 600 | 9586442 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
 | vault/Street Fighter Alpha - Warriors' Dreams.jar | 1041 | Street Fighter Alpha | - | 1.1.5 | MIDP-2.0 | - | 19 | 16 | 600 | 59446444 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| vault/Sudoku DChoc Cafe__320x240.jar | 290 | Sudoku | - | 1.1.25 | MIDP-2.0 | nokia-ui | 18 | 16 | 600 | 13885746 | 0 | java/io/EOFException,java/lang/N | 运行正常 |  |
 | vault/Super Bomberman.jar | 150 | Super Bomberman | - | 1.1.1 | MIDP-1.0 | - | 4 | 16 | 600 | 4918907 | 0 | java/lang/ArrayIndexOutOfBoundsE | 运行正常 |  |
 | vault/Super Breakout.jar | 222 | Super Breakout | - | 1.0.4 | MIDP-2.0 | - | 28 | 16 | 600 | 31839645 | 0 | java/lang/ClassCastException,jav | 运行正常 |  |
 | vault/Super Monkey Ball - Tip'n Tilt 2.jar | 300 | SMB TNT2 | - | 1.2.8 | MIDP-2.0 | - | 28 | 16 | 600 | 532390 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
 | vault/Super Monkey Ball - Tip'n Tilt.jar | 362 | Super Monkey Ball Tip n Tilt | - | 1.0.1 | MIDP-2.0 | - | 7 | 16 | 600 | 7179413 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/Super Puzzle Bobble.jar | 142 | Super Puzzle Bobble | - | 1.4.8 | MIDP-2.0 | - | 12 | 16 | 600 | 231472 | 0 | java/io/IOException | 运行正常 |  |
 | vault/Super Water Bomber.jar | 318 | Super Water Bomber | - | 1.0.3 | MIDP-2.0 | - | 18 | 16 | 600 | 12200233 | 0 | java/io/EOFException,javax/micro | 运行正常 |  |
+| vault/SuperMarioTheLostLevels_1.0_320x240.jar | 133 | 超级玛利兄弟2 | - | 1.0 | MIDP-2.0 | - | 17 | 16 | 600 | 3419300 | 0 | java/io/IOException | 运行正常 |  |
 | vault/Superman & Batman - Heroes United.jar | 457 | Superman Batman Heroes Unite | - | 1.0.5 | MIDP-2.0 | - | 6 | 16 | 600 | 2899754 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| vault/SurfIsUp_1.2.3_320x240.jar | 310 | Surf's Up | - | 1.3.3 | MIDP-2.0 | - | 6 | 16 | 600 | 3978378011 | 0 | - | 运行正常 |  |
+| vault/Swapper_320x240.jar | 266 | Swapper | - | 1.0.0 | MIDP-2.0 | - | 34 | 16 | 600 | 2713591056 | 0 | java/io/IOException,java/lang/Cl | 运行正常 |  |
+| vault/TRANSFORMERS (176x208) 1.0.4 [Andrew-Lviv.net].jar | 566 | Transformers by street_racer | - | 1.0.4 | MIDP-2.0 | m3g | 8 | 16 | 600 | 31529829 | 0 | java/lang/IllegalArgumentExcepti | 运行正常 | runs without input; the generic key script t |
+| vault/TRANSFORMERS (176x208) 1.0.4 [Dedomil.net].jar | 569 | Transformers by street_racer | - | 1.0.4 | MIDP-2.0 | m3g | 8 | 16 | 600 | 31530063 | 0 | java/lang/IllegalArgumentExcepti | 运行正常 | runs without input; the generic key script t |
+| vault/TRANSFORMERS (240x320) 1.0.1 [Andrew-Lviv.net].jar | 520 | Transformers | - | 1.0.2 | MIDP-2.0 | m3g | 86 | 16 | 600 | 31518912 | 0 | java/lang/IndexOutOfBoundsExcept | 运行正常 | runs without input; the generic key script t |
+| vault/TRANSFORMERS (240x320) 1.0.1 [Dedomil.net].jar | 614 | Transformers | - | 1.0.1 | MIDP-2.0 | m3g | 8 | 16 | 601 | 9202477 | 0 | javax/microedition/rms/InvalidRe | 运行正常 |  |
+| vault/TRANSFORMERS (240x320) 1.0.2 [Dedomil.net].jar | 523 | Transformers | - | 1.0.2 | MIDP-2.0 | m3g | 86 | 16 | 600 | 31518926 | 0 | java/lang/IndexOutOfBoundsExcept | 运行正常 | runs without input; the generic key script t |
+| vault/TRANSFORMERS (320x240) 1.0.1 [Andrew-Lviv.net].jar | 626 | Transformers | - | 1.0.1 | MIDP-2.0 | m3g | 8 | 16 | 600 | 31530021 | 0 | java/lang/IndexOutOfBoundsExcept | 运行正常 | runs without input; the generic key script t |
+| vault/TRANSFORMERS (320x240) 1.0.1 [Dedomil.net].jar | 629 | Transformers | - | 1.0.1 | MIDP-2.0 | m3g | 8 | 16 | 600 | 31529799 | 0 | java/lang/IndexOutOfBoundsExcept | 运行正常 | runs without input; the generic key script t |
+| vault/TRANSFORMERS G1_ AWAKENING (240x320) 1.0.4 [Dedomil.net].jar | 646 | Transformers G1 Awakening | - | 1.0.4 | MIDP-1.0 | m3g | 18 | 16 | 600 | 44225001 | 0 | java/io/EOFException | 运行正常 |  |
+| vault/TRANSFORMERS G1_ AWAKENING (320x240) 1.0.0 [Dedomil.net].jar | 337 | Transformers G1 Awakening | - | 1.0.0 | MIDP-1.0 | - | 12 | 16 | 600 | 27536775 | 0 | java/io/EOFException | 运行正常 |  |
+| vault/TRANSFORMERS_ DARK OF THE MOON (240x320) 4.4.95 [Andrew-Lviv.net].jar | 1019 | Transformers Dark of the Moo | - | 4.4.95 | MIDP-2.0 | - | 84 | 16 | 600 | 6937370 | 0 | - | 运行正常 |  |
+| vault/TRANSFORMERS_ DARK OF THE MOON (240x320) 4.4.95 [Dedomil.net].jar | 1019 | Transformers Dark of the Moo | - | 4.4.95 | MIDP-2.0 | - | 84 | 16 | 600 | 7031656 | 0 | - | 运行正常 |  |
+| vault/TRANSFORMERS_ DARK OF THE MOON (240x320) 4.5.15 [Dedomil.net].jar | 1020 | Transformers Dark of the Moo | - | 4.5.15 | MIDP-2.0 | - | 84 | 16 | 600 | 6937893 | 0 | - | 运行正常 |  |
+| vault/TRANSFORMERS_ DARK OF THE MOON (240x320) 4.5.20 [Dedomil.net].jar | 1023 | Transformers Dark of the Moo | - | 4.5.20 | MIDP-2.0 | - | 84 | 16 | 600 | 7340018 | 0 | - | 运行正常 |  |
+| vault/TRANSFORMERS_ DARK OF THE MOON (240x320) 4.7.22 [Andrew-Lviv.net].jar | 802 | Transformers Dark of the Moo | - | 4.7.22 | MIDP-2.0 | - | 82 | 16 | 600 | 4741345 | 0 | - | 运行正常 |  |
+| vault/TRANSFORMERS_ DARK OF THE MOON (240x320) 4.7.22 [Dedomil.net].jar | 802 | Transformers Dark of the Moo | - | 4.7.22 | MIDP-2.0 | - | 82 | 16 | 600 | 4754338 | 0 | - | 运行正常 |  |
+| vault/TRANSFORMERS_ DARK OF THE MOON (320x240) 4.6.74 [Andrew-Lviv.net].jar | 786 | Transformers Dark of the Moo | - | 4.9.49 | MIDP-2.0 | - | 80 | 16 | 600 | 12017199 | 0 | - | 运行正常 |  |
+| vault/TRANSFORMERS_ DARK OF THE MOON (320x240) 4.6.74 [Dedomil.net].jar | 786 | Transformers Dark of the Moo | - | 4.6.74 | MIDP-2.0 | - | 80 | 16 | 600 | 12016879 | 0 | - | 运行正常 |  |
+| vault/TRANSFORMERS_ DARK OF THE MOON (360x640) 4.6.51 [Dedomil.net].jar | 1012 | Transformers.3.:.Dark.of.the | - | 4.6.51 | MIDP-2.0 | - | 85 | 16 | 600 | 5447415 | 0 | - | 运行正常 |  |
+| vault/TRANSFORMERS_ DARK OF THE MOON (360x640) 4.7.86 [Dedomil.net].jar | 1012 | Transformers.3.:.Dark.of.the | - | 4.7.86 | MIDP-2.0 | - | 85 | 16 | 600 | 5441782 | 0 | - | 运行正常 |  |
+| vault/TRANSFORMERS_ DARK OF THE MOON (360x640) 4.8.25 [Andrew-Lviv.net].jar | 1012 | Transformers.3.:.Dark.of.the | - | 4.8.25 | MIDP-2.0 | - | 85 | 16 | 600 | 5123012 | 0 | - | 运行正常 |  |
+| vault/TRANSFORMERS_ DARK OF THE MOON (360x640) 4.8.25 [Dedomil.net].jar | 1012 | Transformers.3.:.Dark.of.the | - | 4.8.25 | MIDP-2.0 | - | 85 | 16 | 600 | 5113363 | 0 | - | 运行正常 |  |
+| vault/TRANSFORMERS_ REVENGE OF THE FALLEN (240x320) 1.0.0 Multi6 [Andrew-Lviv.net].jar | 721 | TRANSFORMERS: Revenge of the | - | 1.0.0 | MIDP-2.0 | - | 13 | 16 | 600 | 34571330 | 0 | java/lang/ArrayIndexOutOfBoundsE | 运行正常 |  |
+| vault/TRANSFORMERS_ REVENGE OF THE FALLEN (240x320) 1.0.0 Multi6 [Dedomil.net].jar | 721 | TRANSFORMERS: Revenge of the | - | 1.0.0 | MIDP-2.0 | - | 13 | 16 | 600 | 34378606 | 0 | java/lang/ArrayIndexOutOfBoundsE | 运行正常 |  |
+| vault/TRANSFORMERS_ REVENGE OF THE FALLEN (320x240) 1.0.0 Multi3 [PHONEKY].jar | 597 | TRANSFORMERS: ROTF | - | 1.0.0 | MIDP-2.0 | - | 31 | 16 | 600 | 52442913 | 0 | java/lang/ArrayIndexOutOfBoundsE | 运行正常 |  |
+| vault/TRANSFORMERS_ REVENGE OF THE FALLEN (360x640) 1.0.0 [Glu Mobile Ltd].jar | 731 | TRANSFORMERS Revenge of the  | - | 1.0.0 | MIDP-2.0 | - | 36 | 16 | 600 | 34751301 | 0 | java/lang/ArrayIndexOutOfBoundsE | 运行正常 |  |
 | vault/Taiko_no_Tatsujin_Japanese128x128-40143-mobiles24.jar | 214 | Taiko no Tatsujin | - | 1.0.0 | MIDP-2.0 | - | 10 | 16 | 600 | 92032528 | 0 | java/lang/NullPointerException | 运行正常 |  |
+| vault/Team Monster Us vs Them_320x240.jar | 526 | Team Monster | - | 0.9.15 | MIDP-2.0 | - | 5 | 16 | 600 | 16849692 | 0 | java/io/IOException,javax/microe | 运行正常 |  |
 | vault/Tekken Mobile.jar | 759 | TEKKEN MOBILE | - | 1.0.7 | MIDP-2.0 | - | 32 | 16 | 600 | 5411541 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
 | vault/Temple Rush 2.jar | 267 | Temple Rush 2 | - | 1.0.4 | MIDP-2.0 | - | 21 | 16 | 600 | 319098 | 0 | java/io/IOException,java/lang/St | 运行正常 |  |
 | vault/Temple Rush.jar | 269 | Temple Rush | - | 1.0.3 | MIDP-2.0 | - | 21 | 16 | 600 | 319161 | 0 | java/io/IOException,java/lang/St | 运行正常 |  |
 | vault/Terminator Salvation.jar | 939 | Terminator Salvation | - | 1.1.0 | MIDP-2.0 | - | 8 | 16 | 600 | 243872880 | 0 | - | 运行正常 |  |
+| vault/TerminatorSalvation_1.0.5_320x240.jar | 471 | Terminator Salvation | - | 1.0.5 | MIDP-2.0 | - | 16 | 16 | 600 | 8164364 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
 | vault/Tetris (2008).jar | 102 | Tetris | - | 1.21.29 | MIDP-1.0 | - | 57 | 16 | 600 | 1432780 | 0 | java/util/NoSuchElementException | 运行正常 |  |
+| vault/Tetris Blockout_320x240.jar | 202 | Tetris Blockout | - | 4.6.17 | MIDP-2.0 | nokia-ui | 14 | 16 | 601 | 3906490 | 0 | java/io/IOException,java/lang/Ar | 运行正常 |  |
 | vault/Tetris Mobile.jar | 361 | TETRIS® | - | 1.0.0 | MIDP-2.0 | - | 34 | 16 | 600 | 8616310 | 0 | - | 运行正常 |  |
+| vault/Tetris_1.0.0_320x240.jar | 423 | TETRIS® | - | 1.0.0 | MIDP-2.0 | nokia-ui | 34 | 16 | 0 | 0 | 0 | - | 超时 |  |
+| vault/Tetris_320x240.jar | 636 | Tetris-New | - | 4.13.15 | MIDP-2.0 | m3g,nokia-ui | 114 | 16 | 600 | 31084806 | 0 | java/lang/NullPointerException | 运行正常 |  |
+| vault/TexasHoldemPoker1_1.1.0_320x240.jar | 413 | Texas HoldEm Poker | - | 1.1.0 | MIDP-2.0 | nokia-ui | 14 | 16 | 600 | 8778715674 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| vault/TexasHoldemPoker2_1.3.3_320x240.jar | 1026 | Texas Hold'Em Poker 2 | - | 1.3.3 | MIDP-2.0 | - | 25 | 16 | 600 | 294045419 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/The Adventures of Tintin.jar | 1775 | The Adventures of Tintin | - | 1.1.4 | MIDP-2.0 | - | 12 | 16 | 600 | 23104573 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/The Amazing Spider-Man 2.jar | 2201 | The Amazing Spider Man 2 | - | 1.0.4 | MIDP-2.0 | - | 17 | 16 | 600 | 52173520 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/The Amazing Spider-Man.jar | 1538 | The Amazing Spider Man | - | 1.2.7 | MIDP-2.0 | - | 12 | 16 | 600 | 222640093 | 0 | java/lang/NullPointerException | 运行正常 |  |
@@ -886,6 +1171,13 @@ Built from `HEAD`, 2026-11-22 (recorded by `tools/sweep_compat.py`).
 | vault/The Settlers.jar | 596 | The Settlers | - | 1.0.3 | MIDP-2.0 | - | 6 | 16 | 600 | 11058406 | 0 | - | 运行正常 |  |
 | vault/The Simpsons - Itchy & Scratchy Land.jar | 767 | The Simpsons 2 | - | 7.1.97 | MIDP-2.0 | - | 8 | 16 | 600 | 3577384 | 0 | javax/microedition/rms/InvalidRe | 运行正常 |  |
 | vault/The Simpsons - Minutes to Meltdown.jar | 395 | The Simpsons | - | 4.1.18 | MIDP-2.0 | - | 10 | 16 | 600 | 137426 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| vault/The Sims 3 Ambitions_320x240.jar | 817 | The Sims 3 Ambitions | - | 4.2.28 | MIDP-2.0 | - | 26 | 16 | 600 | 12556627 | 0 | java/io/EOFException | 运行正常 |  |
+| vault/The Sims DJ_320x240.jar | 636 | The Sims DJ | - | 7.2.47 | MIDP-2.0 | m3g | 34 | 16 | 600 | 46439818 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| vault/TheAdventuresOfTintin_1.0.1_320x240.jar | 1068 | The Adventures of Tintin | - | 1.0.1 | MIDP-2.0 | - | 13 | 16 | 600 | 61651315 | 0 | java/lang/NullPointerException | 运行正常 |  |
+| vault/TheMummyTheTombOfTheDragonEmperor_1.0.0_320x240.jar | 634 | The Mummy: TOTDE | - | 1.0.0 | MIDP-2.0 | - | 10 | 16 | 600 | 653278423 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| vault/TheSettlers_1.1.1_320x240.jar | 538 | The settlers | - | 1.1.1 | MIDP-2.0 | - | 6 | 16 | 600 | 10438475 | 0 | java/lang/NullPointerException | 运行正常 |  |
+| vault/TheSims3WinterEdition_0.2.12_320x240.jar | 719 | The Sims 3 Winter Edition | - | 0.2.12 | MIDP-2.0 | m3g | 37 | 16 | 600 | 10382749 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| vault/TheSims3_7.6.60_320x240.jar | 523 | The Sims 3 | - | 7.6.60 | MIDP-2.0 | - | 27 | 16 | 600 | 18490559 | 0 | java/lang/ArrayIndexOutOfBoundsE | 运行正常 |  |
 | vault/Thor - The Dark World.jar | 1661 | Thor The Dark World | - | 1.0.1 | MIDP-2.0 | - | 12 | 16 | 600 | 460309655 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/Tom Clancy's Ghost Recon - Future Soldier.jar | 1493 | Ghost Recon Future Soldier | - | 1.3.1 | MIDP-2.0 | - | 18 | 16 | 600 | 53189946 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/Tom Clancy's Ghost Recon 2 - Advance Warfighter.jar | 375 | Ghost Recon 2 | - | 1.0.4 | MIDP-2.0 | - | 11 | 16 | 600 | 205698505 | 0 | java/lang/ClassNotFoundException | 运行正常 |  |
@@ -897,6 +1189,7 @@ Built from `HEAD`, 2026-11-22 (recorded by `tools/sweep_compat.py`).
 | vault/Tom Clancy's Splinter Cell - Double Agent.jar | 330 | Splinter Cell DA | - | 1.0.2 | MIDP-2.0 | - | 6 | 16 | 600 | 273423531 | 0 | - | 运行正常 |  |
 | vault/Tom Clancy's Splinter Cell - Pandora Tomorrow.jar | 223 | SC-PT | - | 1.0.2 | MIDP-2.0 | - | 6 | 16 | 600 | 1969170 | 0 | javax/microedition/rms/InvalidRe | 运行正常 |  |
 | vault/Tom Clancys's Rainbow Six - Vegas (1).jar | 319 | Rainbow Six Vegas | - | 1.3.7 | MIDP-2.0 | - | 7 | 16 | 600 | 163176590 | 0 | - | 运行正常 |  |
+| vault/TomClancysHAWX_1.0.2_320x240.jar | 319 | Tom Clancy's H.A.W.X | - | 1.0.2 | MIDP-2.0 | - | 8 | 16 | 600 | 5436249904 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
 | vault/Tomb Raider - Anniversary.jar | 291 | TombRaiderAnniversary | - | 0.2.8 | MIDP-2.0 | - | 4 | 16 | 600 | 1154824 | 0 | java/lang/ArrayIndexOutOfBoundsE | 运行正常 |  |
 | vault/Tomb Raider - Legend Tokyo.jar | 516 | Tomb Raider Legend | - | 1.15.41 | MIDP-2.0 | - | 21 | 16 | 600 | 1187578 | 0 | - | 运行正常 |  |
 | vault/Tomb Raider - Underworld.jar | 1127 | TR Underworld | - | 1.7.0 | MIDP-1.0 | - | 7 | 16 | 600 | 12861635 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
@@ -1011,25 +1304,40 @@ Built from `HEAD`, 2026-11-22 (recorded by `tools/sweep_compat.py`).
 | vault/Top Gear - The Mobile Game.jar | 604 | Top Gear: the mobile game | - | 1.1.0 | MIDP-2.0 | - | 17 | 16 | 600 | 77632713 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
 | vault/Tornado Mania 3D.jar | 455 | 3D Tornado Mania | - | 1.0.0 | MIDP-2.0 | - | 24 | 16 | 600 | 12093672 | 0 | java/io/EOFException,java/lang/N | 运行正常 |  |
 | vault/Tornado Mania.jar | 339 | Tornado Mania! | - | 1.1.0 | MIDP-2.0 | - | 10 | 16 | 600 | 13843036 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| vault/TotalConquest_1.0.1_320x240.jar | 919 | Total Conquest by Ankit | - | 1.0.1 | MIDP-2.0 | - | 25 | 16 | 600 | 78463590 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/Totally Spies.jar | 306 | TotallySpies! | - | 1.0.0 | MIDP-2.0 | - | 8 | 16 | 600 | 111300189 | 0 | - | 运行正常 |  |
 | vault/TotallySpies S60.jar | 193 | TotallySpies! | - | 1.1.4 | MIDP-1.0 | nokia-ui | 5 | 16 | 600 | 2915878846 | 0 | java/io/EOFException,java/lang/A | 运行正常 |  |
+| vault/Tour de France 2010_320x240.jar | 297 | Tour De France 2010 | - | 1.0 | MIDP-2.0 | nokia-ui | 13 | 16 | 600 | 4223699 | 0 | - | 运行正常 |  |
+| vault/Tournament BlackJack_320x240.jar | 323 | Tournament BJ | - | 1.0.17 | MIDP-2.0 | - | 49 | 16 | 600 | 28252756 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
 | vault/Tower Bloxx - My City.jar | 927 | TBloxx My City | - | 1.0.4 | MIDP-2.0 | - | 39 | 16 | 600 | 17704855 | 0 | java/io/EOFException,javax/micro | 运行正常 |  |
 | vault/Tower Bloxx - New York.jar | 1088 | Tower Bloxx NY | - | 1.0.0 | MIDP-2.0 | - | 56 | 16 | 600 | 5546675 | 0 | java/io/EOFException,javax/micro | 运行正常 |  |
 | vault/Tower Bloxx - Revolution.jar | 779 | TowerBloxxRev | - | 1.0.2 | MIDP-2.0 | - | 52 | 16 | 600 | 5325095 | 0 | java/io/EOFException,javax/micro | 运行正常 |  |
 | vault/Tower Bloxx Deluxe.jar | 426 | Tower Bloxx Deluxe | - | 1.0.2 | MIDP-2.0 | - | 20 | 16 | 600 | 12265510 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| vault/Tower Bloxx New York_320x240_Nokia_E71.jar | 995 | Tower Bloxx NY | - | 1.0.4 | MIDP-2.0 | nokia-ui | 56 | 16 | 600 | 23503501 | 0 | java/io/EOFException,javax/micro | 运行正常 |  |
 | vault/Tower Bloxx.jar | 165 | Tower Bloxx(TM) | - | 1.2.6 | MIDP-1.0 | - | 16 | 16 | 600 | 12653534 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
 | vault/Tower Mania.jar | 247 | Tower Mania | - | 1.0.1 | MIDP-2.0 | - | 22 | 16 | 600 | 13025299 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| vault/TowerDefense_1.0_320x240.jar | 204 | Tower defense | - | 1.0 | MIDP-2.0 | - | 20 | 16 | 600 | 16615901 | 0 | - | 运行正常 |  |
+| vault/Townsmen 6 Revolution_320x240.jar | 630 | Townsmen 6 xsmart.ru | - | 1.0.0 | MIDP-2.0 | - | 24 | 16 | 601 | 3808149 | 0 | java/io/IOException,java/lang/Nu | 运行正常 |  |
 | vault/Treasure Grab.jar | 443 | Treasure Grab | - | 1.0.44 | MIDP-1.0 | - | 10 | 16 | 600 | 196792598 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
 | vault/Tropical Madness.jar | 309 | Tropical Madness | - | 1.1.5 | MIDP-2.0 | - | 6 | 16 | 600 | 38446869 | 0 | - | 运行正常 |  |
 | vault/Turtle Dash.jar | 825 | Turtle Dash | - | 1.0.0 | MIDP-2.0 | - | 34 | 16 | 600 | 3021039 | 0 | java/io/EOFException,javax/micro | 运行正常 |  |
+| vault/Turtle Dash_320x240.jar | 729 | Turtle Dash | - | 1.0.0 | MIDP-2.0 | nokia-ui | 34 | 16 | 600 | 59363817 | 0 | java/io/EOFException,javax/micro | 运行正常 |  |
+| vault/Ultimate Brick Breaker 2_320x240.jar | 341 | Ultimate Brick Breaker 2 | - | 1.1.1 | MIDP-2.0 | - | 27 | 16 | 600 | 4155665 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
 | vault/Ultimate Street Football.jar | 462 | Street Football | - | 1.0.0 | MIDP-2.0 | - | 8 | 16 | 600 | 450672577 | 0 | - | 运行正常 |  |
 | vault/Ultra Phoenix - Resurgence.jar | 221 | Ultra Phoenix - Resurgence | - | 1.1.3 | MIDP-2.0 | - | 30 | 16 | 600 | 7783282 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| vault/UnoSpin_1.0.6_320x240.jar | 757 | UNO Spin | - | 1.0.6 | MIDP-2.0 | - | 30 | 16 | 600 | 47511340 | 0 | java/lang/NullPointerException | 运行正常 |  |
+| vault/Uno_1.0.1_320x240.jar | 547 | UNO | - | 1.0.1 | MIDP-2.0 | - | 15 | 16 | 600 | 99851429 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
 | vault/V-Rally 3D.jar | 304 | V-Rally 3D | - | 1.5.2 | MIDP-2.0 | - | 99 | 16 | 600 | 293785 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| vault/VampireRomance_1.1.0_320x240.jar | 1053 | Vampire Romance | - | 1.1.0 | MIDP-2.0 | nokia-ui | 16 | 16 | 600 | 168400974 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/Vodafone McLaren Mercedes Team Racing.jar | 202 | VMM Team Racing by NH | - | 1.0.10 | MIDP-1.0 | - | 14 | 16 | 600 | 613357 | 0 | java/io/EOFException,java/lang/N | 运行正常 |  |
 | vault/War Hero 1944.jar | 278 | War Hero 1944 Shared by Mate | - | 1.0.62 | MIDP-1.0 | - | 15 | 16 | 600 | 12641036 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
 | vault/Watchmen.jar | 607 | Watchmen | - | 1.3.3 | MIDP-2.0 | - | 125 | 16 | 600 | 3951695 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| vault/WhereInTheWorldIsCarmenSandiego_1.0.1_320x240.jar | 663 | Where in The World is Carmen | - | 1.0.1 | MIDP-2.0 | - | 5 | 16 | 600 | 31929309 | 0 | java/lang/NullPointerException | 运行正常 |  |
+| vault/WheresWallyNow_1.0.1_320x240.jar | 988 | Where is Wally Now | - | 1.0.1 | MIDP-2.0 | - | 7 | 16 | 600 | 43814688 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/Wild West Guns.jar | 1472 | Wild West Guns | - | 1.2.6 | MIDP-2.0 | - | 17 | 16 | 600 | 189574104 | 0 | java/lang/NullPointerException | 运行正常 |  |
+| vault/Wimbledon2009_1.0.4_320x240.jar | 706 | wimbledon 2009 | - | 1.0.4 | MIDP-2.0 | - | 11 | 16 | 600 | 89489117 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
 | vault/Wizardry.jar | 187 | Wizardry | - | 1.75 | MIDP-1.0 | - | 19 | 16 | 600 | 61127920 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| vault/Womens Murder Club_320x240_Nokia_E71.jar | 965 | Women's Murder Club Konon.Mo | - | 1.2.2 | MIDP-2.0 | - | 59 | 16 | 600 | 1280550 | 0 | java/lang/ArrayIndexOutOfBoundsE | 运行正常 |  |
 | vault/Wonder Blocks.jar | 612 | Wonder Blocks | - | 1.1.0 | MIDP-2.0 | - | 10 | 16 | 600 | 22741070 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
 | vault/Wonder Zoo.jar | 837 | Wonder Zoo | - | 1.2.9 | MIDP-2.0 | - | 14 | 16 | 600 | 17815357 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/Woody Woodpecker in Waterfools.jar | 615 | woody | - | 2.0.0 | MIDP-2.0 | - | 21 | 16 | 600 | 1044972 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
@@ -1041,9 +1349,12 @@ Built from `HEAD`, 2026-11-22 (recorded by `tools/sweep_compat.py`).
 | vault/Worms Reloaded.jar | 757 | Worms Reloaded | - | 4.4.53 | MIDP-2.0 | - | 35 | 16 | 600 | 12965135 | 0 | - | 运行正常 |  |
 | vault/Wrath of the Titans.jar | 1557 | Wrath of the Titans | - | 1.3.2 | MIDP-2.0 | - | 20 | 16 | 600 | 175367175 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/XIII - Covert Identity.jar | 598 | XIII_2 | - | 1.0.0 | MIDP-2.0 | - | 5 | 16 | 600 | 530645441 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| vault/Xmas Jewel Explosion__320x240.jar | 180 | X-mas Jewel Explosion | - | 1.0.2 | MIDP-2.0 | - | 36 | 16 | 600 | 4242279160 | 0 | java/io/IOException | 运行正常 |  |
 | vault/Zombie Infection 2.jar | 1224 | Zombie Infection 2 | - | 1.1.9 | MIDP-2.0 | - | 13 | 16 | 600 | 202116318 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/Zombie Infection.jar | 1013 | Zombie Infection | - | 1.2.0 | MIDP-2.0 | - | 8 | 16 | 601 | 22099539 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
 | vault/Zombie Mob Defense.jar | 772 | Zombie Mob | - | 1.0.0 | MIDP-2.0 | - | 39 | 16 | 600 | 4088760 | 0 | java/io/EOFException,javax/micro | 运行正常 |  |
+| vault/ZombieInfection1_1.0.0_320x240.jar | 358 | Zombie Infection | - | 1.0.0 | MIDP-2.0 | - | 9 | 16 | 600 | 5051235969 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| vault/ZombieInfection2_1.0.3_320x240.jar | 430 | Zombie Infection 2 | - | 1.0.3 | MIDP-2.0 | - | 50 | 16 | 600 | 3553781944 | 0 | java/lang/ClassNotFoundException | 运行正常 |  |
 | vault/ZombieInfection_SonyEricsson_X1_EN_IGPL_EU_TS_101.jar | 615 | Zombie Infection | - | 1.0.1 | MIDP-2.0 | - | 8 | 16 | 600 | 1632813305 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
 | vault/Zombiewood.jar | 820 | Zombiewood | - | 1.2.9 | MIDP-2.0 | - | 42 | 16 | 600 | 93994054 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/Zoo Keeper.jar | 366 | ZOO KEEPER | - | 1.1.1 | MIDP-2.0 | - | 9 | 16 | 600 | 1274023133 | 0 | - | 运行正常 |  |
@@ -1062,6 +1373,7 @@ Built from `HEAD`, 2026-11-22 (recorded by `tools/sweep_compat.py`).
 | vault/biohazard-240x320-namobilu.com.jar | 640 | BioHazard | - | 1.0.0 | MIDP-1.0 | - | 61 | 16 | 0 | 0 | 0 | - | 失败 |  |
 | vault/blades_and_magic_3d_multiscreen-27836.jar | 1142 | Blades and Magic | - | 1.0.9 | MIDP-2.0 | mascot | 86 | 16 | 600 | 7834003 | 0 | java/io/IOException,java/lang/Nu | 运行正常 |  |
 | vault/bobby_carrot_2_wint_240201.jar | 109 | BC2 - Winterland | - | 1.0.6 | MIDP-1.0 | nokia-ui | 4 | 16 | 600 | 192856 | 0 | - | 运行正常 |  |
+| vault/boggle_small-en.jar | 123 | Boggle | - | 1.4.4 | MIDP-2.0 | - | 3 | 16 | 600 | 2096702 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
 | vault/bounce_Nokia.jar | 39 | Bounce | - | 1.24 | MIDP-1.0 | nokia-ui | 8 | 16 | 600 | 5071 | 0 | - | 运行正常 | runs without input; the generic key script m |
 | vault/bounce_tale_qy5sf1si.jar | 426 | - | - | - | - | - | 0 | 16 | 0 | 0 | 0 | - | 非可用包 | not a zip file |
 | vault/bounce_tales_travel_240x320_191806.jar | 521 | Bounce Tales | - | 2.0.3 | MIDP-2.0 | nokia-ui | 19 | 16 | 600 | 71473119 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
@@ -1101,6 +1413,7 @@ Built from `HEAD`, 2026-11-22 (recorded by `tools/sweep_compat.py`).
 | vault/eightfatet_tt83sn7j.jar | 574 | Eight Fate The Horror Before | - | 1.0 | MIDP-1.0 | - | 10 | 16 | 600 | 2458090130 | 0 | - | 运行正常 |  |
 | vault/electronicarts_tombraiderunderworld_de_en_es_fr_it_Nokia_5530_v1_8_8.jar | 1304 | TR Underworld | - | 1.8.8 | MIDP-1.0 | m3g | 7 | 16 | 600 | 17835898 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
 | vault/elvenchron_66js6a7i.jar | 232 | Elven Chronicles by street_r | - | 1.0.5 | MIDP-2.0 | nokia-ui | 11 | 16 | 600 | 13640133 | 0 | java/lang/NumberFormatException | 运行正常 |  |
+| vault/epub_reader_albite_136959_great.jar | 798 | Albite Reader | - | 2.2 | MIDP-2.0 | - | 149 | 16 | 60 | 296 | 0 | java/lang/NullPointerException | 失败 | installed no Displayable |
 | vault/fifa23 j2me.jar | 1050 | FIFA 23 | - | 1.1.0 | MIDP-2.0 | - | 29 | 16 | 600 | 57571706 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/game-of-death-240x320-namobilu.com.jar | 596 | 死亡游戏(3D增强版) | - | 1.0.0 | MIDP-2.0 | - | 26 | 16 | 600 | 16008257 | 0 | - | 运行正常 |  |
 | vault/gameloft.medieval.combat.v1.04.s60.java.retail-binpda.jar | 200 | Medieval Combat - Age Of Glo | - | 1.0.4 | MIDP-1.0 | nokia-ui | 5 | 16 | 600 | 3310279750 | 0 | - | 运行正常 |  |
@@ -1115,6 +1428,7 @@ Built from `HEAD`, 2026-11-22 (recorded by `tools/sweep_compat.py`).
 | vault/hauntings-the-abandoned-mansion-240x320-namobilu.com.jar | 422 | Haunting Mansion | - | 1.0.0 | MIDP-2.0 | - | 5 | 16 | 600 | 26871628 | 0 | - | 运行正常 |  |
 | vault/holywar_fsb7evml.jar | 207 | HolyWars | - | 01.01.02 | MIDP-2.0 | nokia-ui | 19 | 16 | 600 | 1015556 | 0 | - | 运行正常 |  |
 | vault/house-13-240x320-namobilu.com.jar | 322 | House N13 | - | 1.0 | MIDP-2.0 | - | 4 | 16 | 600 | 232304 | 0 | - | 运行正常 |  |
+| vault/iSudoku_320x240.jar | 164 | iSudoku | - | 1.0.0 | MIDP-1.0 | - | 65 | 16 | 600 | 655382 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/knight_tales_land_o_240742.jar | 168 | KnightTales | - | 01.00.04 | MIDP-1.0 | nokia-ui | 11 | 16 | 600 | 605159 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
 | vault/land_of_the_dead_day_320x240_136780.jar | 306 | LOTD | - | 1.1.14 | MIDP-1.0 | - | 10 | 16 | 600 | 314909437 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
 | vault/lego_batman_the_mob_261440.jar | 2192 | Lego Batman | - | 1.1.9 | MIDP-2.0 | - | 17 | 16 | 600 | 391554806 | 0 | java/lang/NullPointerException | 运行正常 |  |
@@ -1122,6 +1436,7 @@ Built from `HEAD`, 2026-11-22 (recorded by `tools/sweep_compat.py`).
 | vault/midnight_pool_3_258300.jar | 2301 | Midnight Pool 3 | - | 1.2.3 | MIDP-2.0 | - | 30 | 16 | 600 | 1135329930 | 0 | java/lang/ArrayIndexOutOfBoundsE | 运行正常 |  |
 | vault/mini3draci_ix48iqod.jar | 252 | MINI 3D | - | 1.0.22 | MIDP-2.0 | mascot | 43 | 16 | 600 | 373677 | 0 | java/lang/IllegalArgumentExcepti | 运行正常 |  |
 | vault/modern_combat_2_bla_261155.jar | 3061 | Modern Combat 2: Black Pegas | - | 1.1.1 | MIDP-2.0 | - | 14 | 16 | 600 | 600569718 | 0 | java/lang/ArrayIndexOutOfBoundsE | 运行正常 |  |
+| vault/mradio.jar | 38 | Mocha Radio | - | 1.1.0 | MIDP-2.0 | - | 11 | 16 | 600 | 162475 | 0 | java/io/IOException | 运行正常 |  |
 | vault/my_life_in_new_york_258886.jar | 2235 | My Life in New York | - | 1.1.0 | MIDP-2.0 | - | 15 | 16 | 600 | 67691756 | 0 | - | 运行正常 |  |
 | vault/need_for_speed_hot_p_259337.jar | 1022 | Need for Speed Hot Pursuit B | - | 4.16.46 | MIDP-2.0 | - | 42 | 16 | 602 | 10901459 | 0 | java/io/IOException,java/lang/Nu | 运行正常 |  |
 | vault/nokia solitare 128x160.jar | 88 | Solitaire | - | 2.1 | MIDP-2.0 | nokia-ui | 6 | 16 | 600 | 1184127 | 0 | java/io/IOException,java/lang/Nu | 运行正常 |  |

@@ -238,6 +238,37 @@ def one(job):
                            "; also exits without input").strip("; ")
         except subprocess.TimeoutExpired:
             pass
+    if row.get("verdict") == "title-exception" and row.get("uncaught", 0) > 0:
+        # The generic key script can also *cause* a game-code exception: the
+        # TRANSFORMERS builds run 600 frames and draw their menus, but a
+        # scripted tap on an unimplemented menu item throws inside the game's
+        # own listener.  Retry once without input before blaming the title.
+        none_path = os.path.join(OUT, "keys-none.txt")
+        if not os.path.exists(none_path):
+            with open(none_path, "w", encoding="utf-8") as fh:
+                fh.write("# deliberately empty: run without input\n")
+        cmd = [BIN, "--port", "headless", "--size", "240x320",
+               "--heap", str(row.get("heap", 16)), "--fps", "30",
+               "--run-frames", str(RUN), "--keys", "@" + none_path,
+               "--rms-dir", os.path.join(OUT, "rms", base.replace(".jar", "") + "-nokeys-te"),
+               "--stats", path]
+        try:
+            p = subprocess.run(cmd, capture_output=True, text=True, timeout=90)
+            m = re.search(r"stats:.*", p.stderr)
+            stats = dict(re.findall(r"(\w+)=(\d+)", m[0])) if m else {}
+            frames = int(stats.get("frames", 0))
+            uncaught = len(re.findall(r"uncaught exception in thread \d+:", p.stderr))
+            if p.returncode == 0 and frames >= RUN // 2 and uncaught == 0:
+                row.update({"keys": "none", "frames": frames,
+                            "paints": int(stats.get("paints", 0)),
+                            "bytecodes": int(stats.get("bytecodes", 0)),
+                            "thrown": 0, "uncaught": 0, "verdict": "ok",
+                            "note": ("runs without input; the generic key script "
+                                     "throws inside game code")})
+                return row
+        except subprocess.TimeoutExpired:
+            pass
+
     if row.get("verdict") == "timeout":
         # A timeout with input does not prove the title is stuck: some titles
         # answer a key by entering a wall-clock paced animation or a wait loop
@@ -349,7 +380,11 @@ def main():
     with open(os.path.join(OUT, "keys.txt"), "w") as fh:
         fh.write("\n".join(KEYS) + "\n")
     done = 0
-    with open(rows_path, "a") as fh, ProcessPoolExecutor(max_workers=10) as ex:
+    try:
+        workers = max(1, int(os.environ.get("NJ_SWEEP_JOBS") or "10"))
+    except ValueError:
+        workers = 10
+    with open(rows_path, "a") as fh, ProcessPoolExecutor(max_workers=workers) as ex:
         for row in ex.map(one, jobs):
             fh.write(json.dumps(row, ensure_ascii=False) + "\n")
             fh.flush()

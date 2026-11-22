@@ -863,6 +863,14 @@ extern const int nj_lib_siemens_class_count;
 extern const nj_native_entry nj_lib_siemens_table[];
 extern const int nj_lib_siemens_count;
 
+/* Built by nj_lib_sprint.c: the Sprint PCS `com.sprintpcs.media` and
+ * `com.sprintpcs.util` carrier extensions (Pac-Man mobile archive and a
+ * handful of retail titles). */
+extern const nj_builtin_class nj_lib_sprint_classes[];
+extern const int nj_lib_sprint_class_count;
+extern const nj_native_entry nj_lib_sprint_table[];
+extern const int nj_lib_sprint_count;
+
 /* Built by nj_lib_immersion.c: Immersion's com.immersion.VibeTonz vibration
  * engine, a handset API called from GameCanvas static initialisers. */
 extern const nj_builtin_class nj_lib_immersion_classes[];

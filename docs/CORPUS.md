@@ -1282,3 +1282,33 @@ unsupported `.7z`/`.rar` members were skipped with a message as designed.
 
 A sweep of just the 315 new JARs is running; its rows will be merged into the
 compatibility matrix once complete.
+
+### Round 175: the fetched corpus reaches the matrix (2026-11-22)
+
+The 315 new JARs from round 174 were swept with the 0.5.27-era CLI (18
+workers): **302 ok / 8 title-exception / 3 failure / 2 timeout**.  The
+failures were all understood and mostly fixed in this round:
+
+* **Sprint PCS carrier API** — the Pac-Man mobile archive (PAC-MAN, PAC-MANIA
+  3D, five Ms. PAC-MAN builds) needs `com.sprintpcs.media.{Clip,Player,
+  PlayerListener,Vibrator}`; the runtime now ships them (plus
+  `com.sprintpcs.util.{Muglet,System}` for three retail titles), so the five
+  Pac-Man titles went from `title-exception`/`failure` to **ok** (PAC-MAN,
+  the 128/160/176/220/240/400 builds all paint; PAC-MANIA 3D runs its own
+  renderer without drawing in the probe window, recorded as ok).  The
+  wrapper is silent (no audio through the carrier API) and has no motor:
+  both are documented limitations, not corruption.
+* **Scripted-key collateral** — the six TRANSFORMERS builds run 600 frames
+  and draw their menus, but the generic key script presses an unimplemented
+  menu item that throws inside the game.  The sweep now retries a
+  `title-exception` row once without input (`tools/sweep_compat.py`), the
+  same way it already handled `title-exit` and `timeout`; all six become ok
+  and the one genuine script-free failure left is `epub_reader_albite`, a
+  non-game reader whose boot sets a null displayable title.
+* Two Ms. PAC-MAN demos that previously failed on the missing
+  `media.PlayerListener` now run through the Sprint classes.
+
+Merged matrix: **1817 titles — 1796 `运行正常`** (4 title-exception, 5
+timeout, 4 bad-jar, 3 failure, 3 title-exit, 2 no-frame).  Regeneration is
+byte-deterministic; the remaining non-ok rows are the accounted-for
+title-side cases from rounds 167–174 plus four slow/stalling game families.

@@ -374,3 +374,29 @@ This is the second title fixed by making a lazy reference point match MIDP
 semantics (`Class.newInstance()` in round 168).  Neither was an API the game
 called explicitly for its result: the titles call these reflection entry
 points purely for their side effects, so "look up and return" is not enough.
+
+## Round 175: the Sprint PCS carrier wrappers (2026-11-22)
+
+The Pac-Man mobile archive in the fetched corpus contains the Sprint PCS
+builds.  A corpus-wide class-reference scan found only seven JARs that touch
+`com.sprintpcs.*`: the Pac-Man family (PAC-MAN, PAC-MANIA 3D, five
+Ms. PAC-MAN builds) and three retail titles (Far Cry 2, Platinum Sudoku,
+Real Football Manager Edition) that only use `com.sprintpcs.util.System`.
+
+`src/midp/nj_lib_sprint.c` implements that surface: `media.Clip` (both
+reference constructors, content type stored), `media.Player` (static listener
+registration, `play(Clip,int)` validating the repeat count, `stop()`),
+`media.PlayerListener`, `media.Vibrator` (no motor -> no-op), `util.Muglet`
+(empty media type/URI) and `util.System` (state/exit-URI/property no-ops).
+The wrapper deliberately plays no audio: the titles pass `resource:` URIs
+that the media Manager cannot open, and a handset class would surface a
+`MediaException` these games do not expect.  This is a compatibility shim,
+not a media implementation.
+
+Regression gate: `tests/sprintdemo/SprintDemo.java` (both Clip flavours,
+listener registration, play/stop, vibrate, Muglet, exit URI, bad-repeat
+`IllegalArgumentException`) plus `tools/check_sprint.sh` (markers + painted
+canvas pixel assertions); `test_sprint` is in CTest.  Verified PAC-MAN
+(176x220) 300 frames / gfx=1202, Ms. PAC-MAN Demo (176x220) 330 frames /
+gfx=1600; all 18 Pac-Man-family JARs and the three `util.System` titles
+sweep as ok.
