@@ -457,3 +457,39 @@ Deeper tracing of `TheMummy_K700F.jar` (176x220, heap 16):
 Instrumentation used for this trace (a `NJ_TIMER_DBG` line in
 `src/midp/nj_lib_util.c` `timer_pump`) was reverted afterwards; the worktree is
 clean.
+
+## Round 213: the second timer's helper is stuck runnable inside a C call
+
+The round-212 trace left one question: timer 1's helper cycles every 20 ms but
+`Timer.schedule(task, 250)` on timer 2 never fires. The round-213 thread-state
+dump answers it.
+
+The two helpers behave differently from the start: thread 2 (timer 1) enters
+`nj2me/util/TimerThread.pump`, is scheduled with `wake_at = now + 20`, and the
+scheduler genuinely wakes it (`SCHED wake t=2 in_c_call=0`). Thread 3 (timer 2)
+sleeps once with `wait=250`, and then never appears in a wake again. A periodic
+dump of the thread table shows why:
+
+```
+SCHEDT pass=201 id=2 state=2 incall=0 frames=1 wake=...342   (SLEEPING, normal)
+SCHEDT pass=201 id=3 state=1 incall=1 frames=6 wake=...292   (RUNNING, in_c_call, stale wake)
+```
+
+`NJ_THREAD_RUNNING` plus `in_c_call=1` is the "parked inside a nested C call"
+shape the scheduler's in_c_call branch in `src/core/nj_thread.c` hands back to
+its owner (`parked_ready = 1; continue;`), on the assumption that the pump that
+owns the C stack will resume the thread. But this thread is not owned by a pump
+any more: its native (`timer_pump`) already returned `NJ_ERR_TIMEOUT` and
+unwound. So nothing ever resumes it, the one-shot task `c` never runs,
+`TheMummyMidlet.a()` never constructs the gameplay canvas, canvas `a.c()` is
+never called, the paint gate `a:Z` stays 0, and every frame is black.
+
+`wake_at` stays set on the RUNNING thread, so the scheduler's SLEEPING branch
+never sees it again; the 1,251 later 20 ms wakes in the trace are all timer 1.
+
+Next: find which `nj_call`-style C-to-Java bridge leaves `in_c_call` set when a
+blocked native pump gives up (the clear sites are `src/core/nj_vm.c:1557`,
+`:1778`, and the `stop_requested` early exit around `:1766`), and either clear
+it on every exit path or let the scheduler re-enter a thread whose C call has
+already unwound. Then re-check TheMummy's black screen and the other timer-driven
+titles.
