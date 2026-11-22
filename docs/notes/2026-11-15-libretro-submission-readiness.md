@@ -1724,3 +1724,18 @@ families).  Full serial CTest **210/210** (377.06 s), mock matrix **20/20**,
 real RetroArch LoopDemo PASS, Wine **4/4 @300**, bundle **32/32**.  Super branch
 `a198cc8` (parent `55e50a8`), docs PR head `95a1d0a`; both OPEN/MERGEABLE, no
 merge claimed.
+
+## Round 218 (2026-11-23): 0.5.36 / r55 package
+
+Version **0.5.36** (metadata commit `5af2e3b`, `.info` SHA-256
+`d8e0ca30d01c16044756765066fa00d1a1abb790186eb23c883176a691de4382`), eight
+libretro targets built from a clean worktree and five versionCode-536 APKs.
+The release carries the MIDP 2.0 `Choice.POPUP` support (BT INFOx now runs its
+menu) and the blocked-call pump `in_c_call` leak fix from rounds 214/217.  The
+tracked super patch was regenerated against `libretro-super` master `55e50a8`
+(fork commit `efebb07`).  Validation: CTest **210/210** (387.41 s), mock
+**20/20**, real RetroArch LoopDemo PASS, Wine **4/4 @300**, bundle **32/32**.
+Super PR #2204 was force-pushed to `efebb07`; docs PR #1239 unchanged
+(`95a1d0a`); both OPEN/MERGEABLE, no merge claimed.  The whole-corpus r55
+visual probe is running and its result is appended to `docs/CORPUS.md` once
+complete.

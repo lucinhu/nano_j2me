@@ -84,9 +84,14 @@ Outputs go to `build/libretro-dist/<target>/`, with a library and its metadata.
 Use `--no-strip` to retain symbols. `all` selects the script's supported targets
 and requires all of their toolchains.
 
-The eight candidates currently in `build/libretro-dist/` are the r54 package
-(the 0.5.35 release) built on 2026-11-23 from revision `7cc9d8f`.  r54 carries
-the round-208 runtime fixes: `Class.newInstance()` allows a package-private class
+The eight candidates currently in `build/libretro-dist/` are the r55 package
+(the 0.5.36 release) built on 2026-11-23 from revision `5af2e3b`.  r55 carries
+the 0.5.36 runtime fixes: MIDP 2.0 `Choice.POPUP` support (a `ChoiceGroup`
+built with `Choice.POPUP = 4` now works and selects exclusively; `BT INFOx`
+boots its menu) and the blocked-call pump `in_c_call` leak fix (a thread parked
+in a native call is no longer left marked "in a C call" when the pump aborts).
+On top of those, r55 includes the round-208 fixes carried by r54:
+`Class.newInstance()` allows a package-private class
 when the caller is in the same package (the JVM rule; `3D_Tetris` now boots),
 the Sprint PCS `PlayerListener` constants exist as real fields, and the vendor
 members the expanded corpus reaches (`Integer.longValue()`,

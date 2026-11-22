@@ -2112,6 +2112,27 @@ Super PR branch `a6d3f34`, docs PR `95a1d0a`; both OPEN/MERGEABLE, no merge
 claimed.
 
 
+### 0.5.36 / r55 (2026-11-23)
+
+Release: https://github.com/lucinhu/nano_j2me/releases/tag/v0.5.36 - tag
+`v0.5.36` (metadata commit `5af2e3b`), eight libretro targets plus five
+per-ABI Android APKs (versionCode 536; four GLES2 phone builds and the software
+legacy build); `.info` SHA-256
+`d8e0ca30d01c16044756765066fa00d1a1abb790186eb23c883176a691de4382`
+(`display_version = "0.5.36"`); the tracked super patch applies to
+`libretro-super` master `55e50a8` as fork commit `efebb07`.  r55 is a runtime
+compatibility release: MIDP 2.0 `Choice.POPUP` is accepted by `ChoiceGroup`
+(and exposed as a constant on `Choice`/`ChoiceGroup`; IMPLICIT stays List-only),
+which unblocks `BT INFOx`; and the blocked-call pump now restores `in_c_call`
+on the embedder-stop exit path, so timer-driven titles no longer leave a
+helper parked in a stale C call.  The compatibility matrix holds 2462 titles
+(2421 ok) after the K700/K800 sweep.
+
+Validation: full serial CTest **210/210** (387.41 s), mock frontend matrix
+**20/20**, real RetroArch LoopDemo 120 frames PASS, Wine x86-64 **4/4 @300**,
+submission bundle **32/32**.  Super PR branch `efebb07`, docs PR head
+`95a1d0a` (baseline `96ee874`); both OPEN/MERGEABLE, no merge claimed.
+
 ### 0.5.35 / r54 (2026-11-23)
 
 Release: https://github.com/lucinhu/nano_j2me/releases/tag/v0.5.35 - tag
