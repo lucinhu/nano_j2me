@@ -1654,3 +1654,22 @@ now; 431 throws -> 0).  Super PR branch rebuilt as commit `97bf1f4` on
 CTest **207/207** (362.16 s), mock **20/20**, RetroArch loopdemo PASS, Wine
 **4/4** @300, bundle **32/32**; linkage scan over 1046 titles leaves only
 `ArcadePark2` (title-side missing GlomoReg class).
+
+## Round 186 (2026-11-22): 0.5.31 / r50 package
+
+Metadata commit `8d97a3d`; `.info` SHA-256
+`4f7a9f1921fe1a09890484c2d8852559b9aa8676650c870604d74a59ac3ffd8a`
+(`display_version = "0.5.31"`); tracked super patch rebased on
+`libretro-super` master `55e50a8` as fork commit `54f978a`.  r50 ships the
+member-level audit infrastructure (`nj_dump_builtin_api()` and CLI
+`--dump-builtin-api`, `tools/check_vendor_members.py`) and every gap it
+found: radix `parseByte`/`parseShort`, `Double.parseDouble`,
+`Float.valueOf(String)`, `Float.intValue`, the
+`InputConnection`/`OutputConnection` superclass fix, `RateControl`
+min/max rates, `PIMItem` declarations, the JSR-82 Bluetooth surface and
+JSR-75 `FileConnection.directorySize`.  The audit's residual list is
+title-side only (non-MIDP `PrintStream`; two JARs built against patched
+LCDUI).  Validation: full serial CTest **207/207** (360.12 s), mock matrix
+**20/20**, real RetroArch loopdemo PASS, Wine **4/4** @300, bundle
+**32/32**.  Super PR branch `54f978a`, docs PR unchanged at `95a1d0a`
+(baseline `96ee874`); both OPEN/MERGEABLE, no merge claimed.

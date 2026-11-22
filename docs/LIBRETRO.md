@@ -69,15 +69,16 @@ Outputs go to `build/libretro-dist/<target>/`, with a library and its metadata.
 Use `--no-strip` to retain symbols. `all` selects the script's supported targets
 and requires all of their toolchains.
 
-The eight candidates currently in `build/libretro-dist/` are the r49 package
-(the 0.5.30 release) built on 2026-11-22 from revision `b9f6abe`.  r49 fixes
-two member-level API bugs that a new linkage scan found: `Canvas` now also
-registers its `getGameAction`/`getKeyCode`/`getKeyName` methods as instance
-entries (so a Canvas subclass implementing an interface through the inherited
-method resolves; Pro Snowboard rendered black with `AbstractMethodError`), and
-Mascot Capsule's `AffineTrans.set(IIIIIIIIIIII)V` twelve-int overload now
-exists (`MINI 3D` threw `NoSuchMethodError` every frame).  The mobile side is
-unchanged from r48.  r48 is an
+The eight candidates currently in `build/libretro-dist/` are the r50 package
+(the 0.5.31 release) built on 2026-11-22 from revision `8d97a3d`.  r50 adds a
+static member-level API audit: the runtime exports its builtin tables through
+`nj2me --dump-builtin-api`, `tools/check_vendor_members.py` diffs every corpus
+`Methodref` against them, and the gaps it found are closed (radix
+`parseByte`/`parseShort`, `Double.parseDouble`, `Float.valueOf(String)`,
+`Float.intValue`, the `InputConnection`/`OutputConnection` superclass bug,
+`RateControl` minimum/maximum rate, `PIMItem` declarations, the JSR-82
+Bluetooth surface and JSR-75 `FileConnection.directorySize`).  The libretro
+core binary is functionally the r49 one.  r48 is an
 Android-facing release: the Android APKs build and enable the GLES2 backend by
 default (software fallback stays a panel toggle) and the cheat panel gained
 control-variable change search (baseline + changed/unchanged/increased/

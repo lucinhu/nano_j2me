@@ -1905,6 +1905,34 @@ real RetroArch loopdemo 120 frames PASS, Windows x86_64 Wine **4/4** at 300
 frames, submission bundle **32/32**; GoldenSolitaire and NeonRunner pass the
 libretro visual probe (300 frames).
 
+### 0.5.31 / r50 (2026-11-22)
+
+Release: https://github.com/lucinhu/nano_j2me/releases/tag/v0.5.31 - tag
+`v0.5.31` (metadata commit `8d97a3d`), eight libretro targets plus five
+per-ABI APKs (`versionCode 531`; no universal APK).  `.info` SHA-256
+`4f7a9f1921fe1a09890484c2d8852559b9aa8676650c870604d74a59ac3ffd8a`
+(`display_version = "0.5.31"`); the tracked super patch applies to
+`libretro-super` master `55e50a81195eaf8dd1b7720a601282459832ced1` and was
+rebased as fork commit `54f978a`.
+
+Behavioural changes vs 0.5.30: a builtin-API dump (`nj_dump_builtin_api()` /
+`--dump-builtin-api`) and `tools/check_vendor_members.py`, plus the member
+gaps the audit found — radix `Byte`/`Short` parsers, `Double.parseDouble`,
+`Float.valueOf(String)`, `Float.intValue`, `RateControl` minimum/maximum
+rate, `PIMItem` query declarations, the `InputConnection`/`OutputConnection`
+superclass fix (`close()` resolution), the remaining JSR-82 Bluetooth members
+and JSR-75 `FileConnection.directorySize(Z)J`.  No libretro ABI or
+core-option change.  PR **libretro/libretro-super#2204** head is commit
+`54f978a` (branch `add-nano_j2me` on fork `lucinhu/libretro-super`, parent
+master `55e50a8`); PR **libretro/docs#1239** head is `95a1d0a` (patch against
+docs master `96ee874`), both OPEN/MERGEABLE, no merge claimed.
+
+Validation: full serial CTest **207/207** (360.12 s), mock matrix **20/20**,
+real RetroArch loopdemo 120 frames PASS, Windows x86_64 Wine **4/4** at 300
+frames, submission bundle **32/32**.  The static member audit now reports
+only two title-side classes (a non-MIDP `PrintStream` extension and two JARs
+built against a patched LCDUI); no runtime-owned member gap remains.
+
 ### 0.5.30 / r49 (2026-11-22)
 
 Release: https://github.com/lucinhu/nano_j2me/releases/tag/v0.5.30 - tag
