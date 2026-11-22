@@ -17538,6 +17538,20 @@ void nj_m3g_flush(nj_vm *vm)
 #endif
 }
 
+/* True when a deferred triangle batch is queued for this VM.  Diagnostic
+ * only (the 2D-capture study needs to know whether a 2D observer follows a
+ * real 3D commit); never used to make rendering decisions. */
+int nj_m3g_pending(nj_vm *vm)
+{
+#if NJ_ENABLE_M3G && NJ_ENABLE_GFX_ACCEL
+    m3g_journal *j = (m3g_journal *)vm->m3g_journal;
+    return j != NULL && j->count > 0;
+#else
+    (void)vm;
+    return 0;
+#endif
+}
+
 /* Order-only flush: queued draws are handed to the port's persistent session,
  * but the CPU colour/depth buffers stay stale until a later nj_m3g_flush().
  * Only safe at points where nothing may observe the target yet. */

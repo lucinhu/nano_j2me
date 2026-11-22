@@ -83,6 +83,143 @@
 
 #include <string.h>   /* memcpy: alignment-safe 16/32-bit pixel access */
 
+#ifdef NJ_GFX_2D_STATS
+#include <stdio.h>
+#include <stdlib.h>
+
+/*
+ * Dev-only classification of the 2D drawing that follows a deferred M3G
+ * batch.  The whole-frame GLES2 renderer can only capture drawing that does
+ * not need the destination pixels, so before building it we measure how often
+ * the first drawing operation after a 3D commit is capturable.  Compiled only
+ * with -DNJ_GFX_2D_STATS and switched on by the NJ_GFX_2D_STATS environment
+ * variable; never enabled in release builds.
+ */
+static const char *const nj2d_names[NJ2D_KIND_COUNT] = {
+    "clear", "pixel", "line", "rect", "fill", "roundrect", "fillroundrect",
+    "arc", "fillarc", "triangle", "image", "image_rop", "rgb", "text", "char"
+};
+static struct nj2d_stats {
+    int inited, active;
+    long intervals_pending, intervals_empty;
+    long ops_pending, first_fallback, intervals_with_fallback, max_ops;
+    long first_kind[NJ2D_KIND_COUNT];
+    long kind_count[NJ2D_KIND_COUNT];
+    long cap_total[NJ2D_KIND_COUNT];
+    long uncap_total[NJ2D_KIND_COUNT];
+    int cur_pending, cur_fallback;
+    long cur_ops;
+} nj2d;
+
+static void nj2d_dump(void);
+static void nj2d_init(void)
+{
+    if (nj2d.inited) {
+        return;
+    }
+    nj2d.inited = 1;
+    nj2d.active = getenv("NJ_GFX_2D_STATS") != NULL;
+    if (nj2d.active) {
+        atexit(nj2d_dump);
+    }
+}
+
+static void nj2d_finish(void)
+{
+    if (!nj2d.cur_pending) {
+        nj2d.cur_ops = 0;
+        nj2d.cur_fallback = 0;
+        return;
+    }
+    if (nj2d.cur_ops > nj2d.max_ops) {
+        nj2d.max_ops = nj2d.cur_ops;
+    }
+    if (nj2d.cur_fallback) {
+        nj2d.intervals_with_fallback++;
+    }
+    nj2d.cur_ops = 0;
+    nj2d.cur_fallback = 0;
+}
+
+void nj_gfx_2d_stats_start_interval(int journal_pending)
+{
+    nj2d_init();
+    if (!nj2d.active) {
+        return;
+    }
+    nj2d_finish();
+    nj2d.cur_pending = journal_pending != 0;
+    if (nj2d.cur_pending) {
+        nj2d.intervals_pending++;
+    } else {
+        nj2d.intervals_empty++;
+    }
+}
+
+void nj_gfx_2d_note_op(int kind, int capturable)
+{
+    if (!nj2d.active || kind < 0 || kind >= NJ2D_KIND_COUNT) {
+        return;
+    }
+    nj2d.kind_count[kind]++;
+    if (capturable) {
+        nj2d.cap_total[kind]++;
+    } else {
+        nj2d.uncap_total[kind]++;
+    }
+    if (!nj2d.cur_pending) {
+        return;
+    }
+    if (nj2d.cur_ops == 0) {
+        nj2d.first_kind[kind]++;
+    }
+    nj2d.cur_ops++;
+    nj2d.ops_pending++;
+    if (!capturable) {
+        if (nj2d.cur_ops == 1) {
+            nj2d.first_fallback++;
+        }
+        nj2d.cur_fallback = 1;
+    }
+}
+
+static void nj2d_dump(void)
+{
+    int i;
+
+    nj2d_finish();
+    fprintf(stderr, "[gfx2d] intervals pending=%ld empty=%ld ops_after_pending=%ld"
+            " first_fallback=%ld intervals_with_fallback=%ld max_ops=%ld\n",
+            nj2d.intervals_pending, nj2d.intervals_empty, nj2d.ops_pending,
+            nj2d.first_fallback, nj2d.intervals_with_fallback, nj2d.max_ops);
+    fprintf(stderr, "[gfx2d] first-op:");
+    for (i = 0; i < NJ2D_KIND_COUNT; ++i) {
+        if (nj2d.first_kind[i]) {
+            fprintf(stderr, " %s=%ld", nj2d_names[i], nj2d.first_kind[i]);
+        }
+    }
+    fprintf(stderr, "\n[gfx2d] all-ops:");
+    for (i = 0; i < NJ2D_KIND_COUNT; ++i) {
+        if (nj2d.kind_count[i]) {
+            fprintf(stderr, " %s=%ld(cap=%ld,uncap=%ld)", nj2d_names[i],
+                    nj2d.kind_count[i], nj2d.cap_total[i], nj2d.uncap_total[i]);
+        }
+    }
+    fprintf(stderr, "\n");
+}
+
+static int nj2d_opaque(const nj_gfx *g)
+{
+    return g && !g->use_xor && ((g->color >> 24) == 255u);
+}
+#endif /* NJ_GFX_2D_STATS */
+
+#ifdef NJ_GFX_2D_STATS
+#define NJ2D_OP(kind, cap) nj_gfx_2d_note_op((kind), (cap))
+#else
+#define NJ2D_OP(kind, cap) ((void)0)
+#endif
+
 /* ------------------------------------------------------------------ */
 /* Limits / fixed point                                                */
 /* ------------------------------------------------------------------ */
@@ -1134,6 +1271,7 @@ void nj_gfx_clear(nj_gfx *g, nj_u4 argb)
     if (!g) {
         return;
     }
+    NJ2D_OP(NJ2D_CLEAR, 1);
     nj_surface_fill(g->surf, argb);
 }
 
@@ -1144,6 +1282,7 @@ void nj_gfx_pixel(nj_gfx *g, int x, int y)
     if (!g || !nj_surface_ok(g->surf)) {
         return;
     }
+    NJ2D_OP(NJ2D_PIXEL, nj2d_opaque(g));
     dx = nj_gfx_dev_x(g, x);
     dy = nj_gfx_dev_y(g, y);
     if (!nj_in_clip(g, dx, dy)) {
@@ -1159,6 +1298,7 @@ void nj_gfx_line(nj_gfx *g, int x1, int y1, int x2, int y2)
     if (!g || !nj_surface_ok(g->surf)) {
         return;
     }
+    NJ2D_OP(NJ2D_LINE, nj2d_opaque(g));
     nj_line_impl(g, x1, y1, x2, y2, &phase);
 }
 
@@ -1170,6 +1310,7 @@ void nj_gfx_rect(nj_gfx *g, int x, int y, int w, int h)
     if (!g || !nj_surface_ok(g->surf)) {
         return;
     }
+    NJ2D_OP(NJ2D_RECT, nj2d_opaque(g));
     if (w < 0 || h < 0) {
         return;                          /* MIDP: nothing */
     }
@@ -1198,6 +1339,7 @@ void nj_gfx_fill_rect(nj_gfx *g, int x, int y, int w, int h)
     if (!g) {
         return;
     }
+    NJ2D_OP(NJ2D_FILL, nj2d_opaque(g));
     if (!nj_box_from_user(g, x, y, w, h, &bx0, &by0, &bx1, &by1)) {
         return;
     }
@@ -1335,6 +1477,7 @@ void nj_gfx_arc(nj_gfx *g, int x, int y, int w, int h, int start, int extent)
     if (!g || !nj_surface_ok(g->surf)) {
         return;
     }
+    NJ2D_OP(NJ2D_ARC, nj2d_opaque(g));
     if (w < 0 || h < 0 || extent == 0) {
         return;
     }
@@ -1408,6 +1551,7 @@ void nj_gfx_fill_arc(nj_gfx *g, int x, int y, int w, int h, int start,
     if (!g || !nj_surface_ok(g->surf)) {
         return;
     }
+    NJ2D_OP(NJ2D_FILL_ARC, nj2d_opaque(g));
     if (w <= 0 || h <= 0 || extent == 0) {
         return;
     }
@@ -1463,6 +1607,7 @@ void nj_gfx_round_rect(nj_gfx *g, int x, int y, int w, int h, int rw, int rh)
     if (!g || !nj_surface_ok(g->surf)) {
         return;
     }
+    NJ2D_OP(NJ2D_ROUND, nj2d_opaque(g));
     if (w < 0 || h < 0) {
         return;
     }
@@ -1538,6 +1683,7 @@ void nj_gfx_fill_round_rect(nj_gfx *g, int x, int y, int w, int h, int rw,
     if (!g || !nj_surface_ok(g->surf)) {
         return;
     }
+    NJ2D_OP(NJ2D_FILL_ROUND, nj2d_opaque(g));
     if (w <= 0 || h <= 0) {
         return;
     }
@@ -1647,6 +1793,7 @@ void nj_gfx_triangle(nj_gfx *g, int x1, int y1, int x2, int y2, int x3, int y3,
     if (!g || !nj_surface_ok(g->surf)) {
         return;
     }
+    NJ2D_OP(NJ2D_TRI, nj2d_opaque(g));
     if (!filled) {
         nj_gfx_line(g, x1, y1, x2, y2);
         nj_gfx_line(g, x2, y2, x3, y3);
@@ -2672,6 +2819,7 @@ void nj_gfx_draw_image(nj_gfx *g, const nj_image *img, int dx, int dy,
     if (!g || !nj_image_region(img, &sx, &sy, &sw, &sh)) {
         return;
     }
+    NJ2D_OP(NJ2D_IMAGE, !g->use_xor && !img->has_alpha);
     fmt = nj_image_format(img);
     /* No ROP parameter: the blend mode decides.  SRC_OVER (the default) is
      * the MIDP drawImage rule — transparent pixels leave the destination
@@ -2692,6 +2840,8 @@ void nj_gfx_draw_image_rop(nj_gfx *g, const nj_image *img, int dx, int dy,
     if (!g || !nj_image_region(img, &sx, &sy, &sw, &sh)) {
         return;
     }
+    NJ2D_OP(NJ2D_IMAGE_ROP, !g->use_xor && transform == 0
+            && (rop == NJ_ROP_SET || (!img->has_alpha && rop == NJ_ROP_PAINT)));
     fmt = nj_image_format(img);
     nj_region_draw(g, (const nj_u1 *)img->pixels,
                    (nj_s8)img->width * nj_image_bpp(fmt), fmt,
@@ -2711,6 +2861,8 @@ void nj_gfx_draw_rgb(nj_gfx *g, const nj_u1 *rgb, int scanlen, int alpha,
     if (!g || !rgb || sw <= 0 || sh <= 0 || scanlen <= 0) {
         return;
     }
+    NJ2D_OP(NJ2D_RGB, !g->use_xor && transform == 0
+            && (rop == NJ_ROP_SET || (alpha == 255 && rop == NJ_ROP_PAINT)));
     nj_region_draw(g, rgb, scanlen, NJ_PIXFMT_RGB888, NULL, 0, 0,
                    sx, sy, sw, sh, transform, rop,
                    g->use_xor, g->xor_color, dx, dy, alpha);
@@ -2736,6 +2888,10 @@ void nj_gfx_draw_region(nj_gfx *g, const nj_image *src, int sx, int sy, int sw,
     /* The caller's is_xor/xor_argb pair drives sprite drawing; the graphics
      * context's own XOR mode also applies. */
     xor_on = is_xor || g->use_xor;
+    fmt = nj_image_format(src);
+    xor_on = is_xor || g->use_xor;
+    NJ2D_OP(NJ2D_IMAGE_ROP, !xor_on && transform == 0 && mask == NULL
+            && !src->has_alpha && rop == NJ_ROP_PAINT);
     fmt = nj_image_format(src);
     nj_region_draw(g, (const nj_u1 *)src->pixels,
                    (nj_s8)src->width * nj_image_bpp(fmt), fmt,

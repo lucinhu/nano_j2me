@@ -221,6 +221,9 @@ void nj_gfx_draw_text(nj_gfx *g, const nj_u2 *s, int len, int x, int y,
     if (!g || !s) {
         return;
     }
+#ifdef NJ_GFX_2D_STATS
+    nj_gfx_2d_note_op(NJ2D_TEXT, 0);
+#endif
     if (len < 0) {
         len = 0;
         while (s[len] != 0u) {

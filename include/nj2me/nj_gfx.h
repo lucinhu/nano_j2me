@@ -224,6 +224,24 @@ const nj_font *nj_font_builtin(int size, int style);
  */
 typedef void *(*nj_font_alloc_fn)(void *ud, nj_size n);
 
+#ifdef NJ_GFX_2D_STATS
+/*
+ * Development-only classification of 2D drawing after a deferred M3G batch
+ * (see src/gfx/nj_gfx.c).  Compiled only with -DNJ_GFX_2D_STATS and switched
+ * on by the NJ_GFX_2D_STATS environment variable; used to estimate the
+ * capture/fallback split of a whole-frame GPU renderer.  Never enabled in
+ * release builds.
+ */
+enum {
+    NJ2D_CLEAR, NJ2D_PIXEL, NJ2D_LINE, NJ2D_RECT, NJ2D_FILL,
+    NJ2D_ROUND, NJ2D_FILL_ROUND, NJ2D_ARC, NJ2D_FILL_ARC, NJ2D_TRI,
+    NJ2D_IMAGE, NJ2D_IMAGE_ROP, NJ2D_RGB, NJ2D_TEXT, NJ2D_CHAR,
+    NJ2D_KIND_COUNT
+};
+void nj_gfx_2d_stats_start_interval(int journal_pending);
+void nj_gfx_2d_note_op(int kind, int capturable);
+#endif
+
 int nj_fontset_use_ttf(nj_fontset *fs, const nj_u1 *data, nj_u4 len,
                        nj_font_alloc_fn alloc, void *ud);
 

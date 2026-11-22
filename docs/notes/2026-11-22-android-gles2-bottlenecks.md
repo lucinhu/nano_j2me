@@ -332,3 +332,54 @@ Revised implementation order for the whole-frame renderer:
 
 Until B1 lands the experimental GLES2 backend stays opt-in and the software
 renderer remains the default; this is a multi-round project, not a switch.
+
+## 2D capture study (round 203)
+
+Before writing B1 we measured what the 2D drawing after a 3D batch actually
+looks like, because the whole-frame renderer only pays off if that drawing can
+run in GL instead of forcing a CPU commit.  A development-only classifier was
+added behind `-DNJ_GFX_2D_STATS` (`NJ_GFX_2D_STATS=1` at run time): it tags
+every 2D primitive with an op kind and a conservative "capturable in GL
+without reading the destination" flag, and it counts the primitives that
+follow a real M3G commit (via the new diagnostic `nj_m3g_pending()`).
+
+Setup: host RTX 5080, SDL2/GLES2 build of `nj2me`, Galaxy on Fire 2
+(`tests/games/浴火银河2完整版_7689.jar`, deep keys, heap 24, 900 frames at the
+60 fps budget, `NJ_M3G_FORCE_ACCEL=1`), software and `--graphics gles2`
+compared.
+
+| metric | software | GLES2 |
+| --- | --- | --- |
+| user CPU, 900 frames | 4.05 s | 5.19 s |
+| GL triangles / batches | - | 702,232 / 1,790 (≈2.0/frame) |
+| 2D image blits (`draw_region`/`drawImage`) | 637,346 (99.89% capturable) | 589,519 (99.70% capturable) |
+| lines / rects / fills | 17,218 / 5,126 / 1,641 (all capturable) | 9,768 / 2,891 / 895 (all capturable) |
+| text / text-char ops | 0 | 0 |
+
+Two results change the design:
+
+1. **The 2D workload of this title is essentially all opaque image blits.**
+   99.7-99.9% of the ~600-700 k blits per 900 frames are opaque (no per-pixel
+   alpha), plus a few thousand opaque lines/rects/fills and, in this window,
+   no text at all.  Capturing them as GL textured quads is therefore the right
+   B1 scope, and the glyph atlas (B2) is a general-case requirement rather
+   than a prerequisite for this title.
+2. **The per-frame GL batches are created inside the M3G rendering phase, not
+   by the 2D observers.**  The classifier counted 620-690 k `Graphics` calls
+   and the journal was empty at every one: `intervals pending=0`.  So the
+   `gfx_load()` flush still costs a call per Graphics operation but usually
+   commits nothing; the two GPU batches per frame come from M3G session
+   boundaries/pumps during rendering.  The round-202 "transaction forced by a
+   2D observer" reading was too strong: moving the 2D flush cannot merge those
+   batches.  Only a frame-resident FBO that spans the whole M3G phase (and,
+   once 2D capture exists, the 2D phase too) removes the repeated seed,
+   colour/depth import and readback per batch.
+
+Consequence: the first B1 milestone is a frame-scoped GLES2 transaction -
+one FBO for the whole frame, 2D opaque geometry/blits appended as GL quads,
+one CPU readback per presented frame (plus on-demand commit for pixel reads
+such as `getRGB`, save states or screenshots).  With ~2 batches/frame at
+~1.7 ms per commit, replacing them with a single ~0.6-1 ms present readback
+should put this title below the software CPU cost.  The classifier stays as a
+opt-in diagnostic so the fallback share can be re-measured on other titles
+(especially text-heavy 2D ones) before B2 lands.

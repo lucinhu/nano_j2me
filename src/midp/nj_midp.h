@@ -476,6 +476,7 @@ nj_status nj_pim_late_init(nj_vm *vm);
 nj_status nj_m3g_late_init(nj_vm *vm);
 /* Commit deferred Graphics3D triangles before the target can be observed. */
 void nj_m3g_flush(nj_vm *vm);
+int nj_m3g_pending(nj_vm *vm);
 void nj_m3g_pump(nj_vm *vm);
 
 /*

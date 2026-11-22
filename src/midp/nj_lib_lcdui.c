@@ -780,6 +780,9 @@ static int gfx_load(nj_vm *vm, nj_ref g_obj, nj_gfx *g, nj_surface *surf_scratch
     }
     /* A deferred Graphics3D batch may still be queued for this very surface;
      * any Graphics call can draw over it or read it back. */
+#ifdef NJ_GFX_2D_STATS
+    nj_gfx_2d_stats_start_interval(nj_m3g_pending(vm));
+#endif
     nj_m3g_flush(vm);
     target = rget_hot(vm, g_obj, NJ_HF_G_TGT, G_CLS, F_G_TGT, D_IMAGE);
     s = nj_midp_surface(vm, target, surf_scratch);
