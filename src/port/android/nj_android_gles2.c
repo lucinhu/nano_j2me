@@ -75,6 +75,7 @@ static void failed(nj_android_gles2 *s, const char *stage, EGLint error)
                         "gles2: %s (EGL 0x%x); software fallback for this run",
                         stage, (unsigned int)error);
     s->failed = 1;
+    s->current = 0;
     publish(s);
 }
 
@@ -98,12 +99,17 @@ static int make_current(nj_android_gles2 *s)
 {
     if (!owning_thread(s) || s->failed || s->context == EGL_NO_CONTEXT)
         return 0;
+    /* All GL is issued from the owning run thread, so a successful bind stays
+     * valid until stop/dispose or a context-loss report. Issuing eglMakeCurrent
+     * per packet showed up as measurable CPU in the Android profile. */
+    if (s->current) return usable(s);
     /* Rebinding also lets EGL report EGL_CONTEXT_LOST before backend GL calls.
      * Never borrow a UI/Surface context or use a window surface. */
     if (!eglMakeCurrent(s->display, s->pbuffer, s->pbuffer, s->context)) {
         failed(s, "eglMakeCurrent failed", eglGetError());
         return 0;
     }
+    s->current = 1;
     return usable(s);
 }
 
@@ -312,6 +318,7 @@ static void release(nj_android_gles2 *s)
             s->backend = backend;
             return;
         }
+        s->current = 0;
         if (s->context != EGL_NO_CONTEXT) {
             if (!eglDestroyContext(s->display, s->context)) {
                 failed(s, "eglDestroyContext failed; retaining resources", eglGetError());

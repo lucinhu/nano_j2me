@@ -1583,6 +1583,26 @@ static void android_display_present(void *ud, int x, int y, int w, int h)
                                 (unsigned)(tenths / 10ull),
                                 (unsigned)(tenths % 10ull),
                                 s->stats_frames, (unsigned)ms);
+#if NJ_ANDROID_GLES2 && !NJ_ANDROID_LEGACY
+            /* The GPU counters answer the first question in any acceleration
+             * investigation: is the GL path doing the work, and is it declining
+             * back to software? Snapshot only (never touches EGL/GL). */
+            if (s->gles2_bound) {
+                nj_android_gles2_info gi;
+                nj_android_gles2_snapshot(&s->gles2, &gi);
+                __android_log_print(ANDROID_LOG_INFO, LOG_TAG,
+                                    "stats: gpu state=%d fills=%llu blits=%llu "
+                                    "rasters=%llu declines=%llu triangles=%llu "
+                                    "batches=%llu",
+                                    gi.state,
+                                    (unsigned long long)gi.fills,
+                                    (unsigned long long)gi.blits,
+                                    (unsigned long long)gi.rasters,
+                                    (unsigned long long)gi.declines,
+                                    (unsigned long long)gi.triangles,
+                                    (unsigned long long)gi.batches);
+            }
+#endif
             s->stats_t0 = now;
             s->stats_frames = 0;
         }
@@ -5678,6 +5698,24 @@ static void *android_main_thread(void *arg)
         pthread_mutex_unlock(&s->lock);
     }
 #endif
+    /*
+     * Debug override for the M3G renderer's one-time GPU/software calibration:
+     * on some drivers the calibration batch measures the GPU transaction slower
+     * than software on a small canvas even though gameplay is triangle-heavy.
+     * "force" skips the calibration, everything else leaves the automatic
+     * choice; the same property is documented in docs/ANDROID_LEGACY.md's
+     * sibling notes about debug properties.
+     */
+    {
+        char prop[PROP_VALUE_MAX];
+        prop[0] = '\0';
+        (void)__system_property_get("debug.nj2me.m3g_accel", prop);
+        if (strcmp(prop, "force") == 0) {
+            (void)setenv("NJ_M3G_FORCE_ACCEL", "1", 1);
+            __android_log_print(ANDROID_LOG_INFO, LOG_TAG,
+                                "m3g: accel forced by debug.nj2me.m3g_accel");
+        }
+    }
     (void)nj_run(&a->port, &a->opts);
 #if NJ_ANDROID_GLES2 && !NJ_ANDROID_LEGACY
     if (s && s->gles2_bound) {

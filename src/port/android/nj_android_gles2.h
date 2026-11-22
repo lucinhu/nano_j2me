@@ -42,6 +42,9 @@ typedef struct nj_android_gles2 {
     pthread_t owner;
     int mode; /* -1 property, 0 software, 1 GLES2; frozen when owner_set */
     int owner_set, requested, initialized, failed, stopped;
+    /* EGL context is current on the owning thread. eglMakeCurrent is expensive
+     * enough to matter per drawing packet, so it is only issued on transitions. */
+    int current;
     EGLDisplay display;
     EGLContext context;
     EGLSurface pbuffer;

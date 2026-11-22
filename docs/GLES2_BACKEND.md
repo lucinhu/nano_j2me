@@ -135,3 +135,25 @@ GL 对象和 scratch 可以跨回调保留；传入的 `nj_gfx`、source、mask 
 - 本轮没有更新或操作用户正在使用的真机应用。模拟器使用只读临时覆盖，验证完毕关闭；没有以本轮模拟器结果追加真机 UI 或性能结论。
 
 以上是二维阶段及应用设置的正确性验证，未包含安卓真机应用完整流程、商业游戏完整流程或性能基准。同步逐操作读回可能慢于软件实现，默认不开启。新增三维混合路径的支持范围、颜色/深度原子回退和独立验证见 [GLES2_3D.md](GLES2_3D.md)；完整 GPU 几何/纹理流水线和 Vulkan 尚未实现。
+
+## 2026-11-22 加速上限与诊断：为什么「开了 GLES2 还是不够快」
+
+本节的实测与代码审查见 [2026-11-22-android-gles2-bottlenecks.md](notes/2026-11-22-android-gles2-bottlenecks.md)。结论摘要：
+
+- 当前加速只是 M3G 的 `gfx_raster` / `gfx_triangles` 两个钩子的机会性加速；二维绘制、`Sprite3D` 场景、软件回退和最终显示缓冲都在 CPU。`jr_draw_accel()` 对 `r->sw.sprite` 直接返回软件路径。
+- 每个加速事务都是同步的：私有 FBO 渲染 → `glReadPixels` → CPU 颜色/深度提交；写深度时还要第二次绘制和第二次读回。移动 GPU 上读回是主要成本，且回落软件时该图元会被重画一遍。
+- M3G 启动时有一次校准（`m3g_calibrate()`，要求 GPU 批次比软件快 15% 以上）。校准失败或逐包 DECLINE 时整局留在软件；此前这两个数字对用户和日志都不可见。
+- API 36 x86_64 模拟器（SwiftShader，CPU GL 驱动）实测：Galaxy on Fire 2 菜单 GLES2 37.6% CPU vs 软件 36.4%（无收益，GPU 计数全 0，说明菜单走二维/Sprite 路径）；m3gdemo 自动校准为软件（`software=172us`），强制后 `rasters=16 declines=46`；Doom3 载入动画强制 GLES2 时 4.6 fps、CPU 99.4%、`declines` 每 5 秒约 +144 且 `rasters=triangles=0`（三维包全部被拒绝后回落软件）。
+
+本轮加入的诊断与开关：
+
+```sh
+# 每 5 秒同时在 logcat 打印 GPU 计数：state/fills/blits/rasters/declines/triangles/batches
+adb shell setprop debug.nj2me.stats 1
+# 跳过 M3G 的一次性校准，强制走已绑定的原生路径（默认自动）
+adb shell setprop debug.nj2me.m3g_accel force
+```
+
+另外 `eglMakeCurrent` 改为只在所有者线程切换时调用（context 丢失、停止、释放时失效），不再每个绘制包调用一次。真机 GPU 与 SwiftShader 的结论不能互相替代：要判断某台设备是否真的受益，先看 `stats: gpu` 的 declines 与 triangles 计数，再看 fps/CPU。
+
+进一步提高上限的结构性做法（尚未实现）：三维结果保留在 GL 纹理中、深度留在 GPU，每帧只合成一次而不再读回；二维要整体改为命令缓冲、每帧一次上传/合成；显示路径改为 EGL window surface。在这些完成之前，二维游戏不会从 GL 加速获益，三维收益也受 CPU 解释器/变换/光照成本限制。
