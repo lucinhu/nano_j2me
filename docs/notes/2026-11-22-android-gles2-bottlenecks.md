@@ -383,3 +383,39 @@ such as `getRGB`, save states or screenshots).  With ~2 batches/frame at
 should put this title below the software CPU cost.  The classifier stays as a
 opt-in diagnostic so the fallback share can be re-measured on other titles
 (especially text-heavy 2D ones) before B2 lands.
+
+## Why the GL transactions cannot be merged by seed reuse (round 204)
+
+Two experiments tried to remove the repeated seed/import cost of the stateless
+triangle path before committing to the frame-resident rewrite.
+
+**Seed reuse across consecutive transactions.**  The stateless framebuffer
+keeps the committed pixels; when the next transaction uses exactly the same
+rectangle and the CPU surface still hashes to the committed bytes, the colour
+import, depth packing and seed pass can be skipped.  Measured on Galaxy on Fire
+2 (900 frames, 1620 transactions): only **78 transactions (4.8%)** matched
+exactly.  Relaxing the test from "same rectangle" to "new rectangle contained in
+the resident rectangle" made it worse (8 of 1600), because consecutive M3G
+transactions have unrelated rectangles (different viewports/targets).  There was
+no CPU difference against the baseline (GL 5.08/5.20 s vs 5.19 s, software
+4.34-4.46 s in the same session), so the change was reverted; a hash-gated
+reuse cannot help when rectangles do not repeat.
+
+**Where the transactions actually come from.**  Tracing `m3g_journal_flush`
+showed all **1888 flushes in 900 frames (2.1/frame)** originate inside
+`m3g_journal_append`: a packet whose surface/depth differs from the journal's
+current target forces a commit of the old journal, and the batch-size cap
+(`M3G_JOURNAL_BATCH_MAX`) forces the rest.  The six 2D-visible
+`nj_m3g_flush()` call sites (present, `gfx_load`, image reads, screen grab,
+bindTarget, clear) saw `pending=0` in **614,429 calls** - a 2D observer never
+commits a queued batch in this title.  That also explains the earlier
+`intervals pending=0` result: the transactions are not caused by the 2D phase at
+all; they are target-boundary commits during M3G rendering.
+
+Consequence: a frame-scoped FBO must also make the target switch cheap.  The
+next design step is to keep one resident journal/transaction per M3G target
+(screen or offscreen image) and commit each target once, when it is first
+observed, instead of committing on every target switch.  The 944 single-packet
+flushes per 900 frames are exactly these target-boundary commits, so the
+reduction is measurable (≈2.1 → ≈1 transaction/frame for this title) without
+requiring the 2D-capture phase first.
