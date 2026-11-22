@@ -45,6 +45,10 @@ typedef struct nj_android_gles2 {
     /* EGL context is current on the owning thread. eglMakeCurrent is expensive
      * enough to matter per drawing packet, so it is only issued on transitions. */
     int current;
+    /* glGetString is a context-loss probe on drivers without robustness and
+     * cannot change while a context lives; cached and re-checked periodically. */
+    unsigned int version_probes;
+    int version_ok;
     EGLDisplay display;
     EGLContext context;
     EGLSurface pbuffer;

@@ -165,6 +165,10 @@ typedef struct sdl2_gles2 {
     GLuint sentinel;
     sdl2_gl_reset_fn reset_status;
     int requested, active;
+    /* Deep context probes are driver calls; the cheap identity checks run every
+     * packet, the GL queries only periodically while nothing changed. */
+    unsigned int deep_probes;
+    int deep_ok;
     nj_u8 fills, blits, rasters, declines, triangles, batches;
 } sdl2_gles2;
 
@@ -194,6 +198,7 @@ static void sdl2_gles2_disable(sdl2_gles2 *s, const char *reason)
 {
     if (s->active) {
         s->active = 0;
+        s->deep_ok = 0;
         SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
                     "gfx: SDL2 GLES2 disabled (%s); software fallback", reason);
     }
@@ -206,12 +211,25 @@ static void sdl2_gles2_disable(sdl2_gles2 *s, const char *reason)
 static int sdl2_gles2_current(void *ud)
 {
     sdl2_gles2 *s = (sdl2_gles2 *)ud;
-    return s->context && SDL_ThreadID() == s->thread &&
-           SDL_GL_GetCurrentContext() == s->context &&
-           SDL_GL_GetCurrentWindow() == s->window &&
-           (!s->reset_status || s->reset_status() == GL_NO_ERROR) &&
-           s->gl.GetString && s->gl.GetString(GL_VERSION) != NULL &&
-           (!s->sentinel || s->gl.IsTexture(s->sentinel) == GL_TRUE);
+    if (!s->context || SDL_ThreadID() != s->thread ||
+        SDL_GL_GetCurrentContext() != s->context ||
+        SDL_GL_GetCurrentWindow() != s->window) {
+        s->deep_ok = 0;
+        return 0;
+    }
+    /* The cheap identity checks above catch the realistic failure modes (wrong
+     * thread/context/window). The driver queries below cost a call per packet,
+     * so once they passed they are re-run only periodically to notice a lost
+     * context on drivers without robustness. */
+    if (s->deep_ok && (++s->deep_probes & 1023u) != 0) return 1;
+    if ((s->reset_status && s->reset_status() != GL_NO_ERROR) ||
+        !s->gl.GetString || s->gl.GetString(GL_VERSION) == NULL ||
+        (s->sentinel && s->gl.IsTexture(s->sentinel) != GL_TRUE)) {
+        s->deep_ok = 0;
+        return 0;
+    }
+    s->deep_ok = 1;
+    return 1;
 }
 
 static int sdl2_gles2_enter(sdl2_gles2 *s, sdl2_gl_binding *previous)
@@ -513,6 +531,8 @@ static void sdl2_gles2_open(sdl2_gles2 *s)
                  (const char *)s->gl.GetString(GL_RENDERER),
                  (const char *)s->gl.GetString(GL_VERSION));
     s->active = 1;
+    s->deep_ok = 0;
+    s->deep_probes = 0;
 done:
     while (changed) {
         --changed;

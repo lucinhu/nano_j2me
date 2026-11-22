@@ -76,6 +76,8 @@ static void failed(nj_android_gles2 *s, const char *stage, EGLint error)
                         stage, (unsigned int)error);
     s->failed = 1;
     s->current = 0;
+    s->version_ok = 0;
+    s->version_probes = 0;
     publish(s);
 }
 
@@ -88,10 +90,15 @@ static int usable(nj_android_gles2 *s)
         failed(s, "GL context reset", EGL_CONTEXT_LOST);
         return 0;
     }
+    /* Probing glGetString for every drawing packet is a driver call per packet
+     * for no benefit: only context loss can change the answer.  Keep checking
+     * periodically so a lost context still falls back. */
+    if (s->version_ok && (++s->version_probes & 1023u) != 0) return 1;
     if (!glGetString(GL_VERSION)) {
         failed(s, "GL context unavailable", EGL_CONTEXT_LOST);
         return 0;
     }
+    s->version_ok = 1;
     return 1;
 }
 
@@ -110,6 +117,8 @@ static int make_current(nj_android_gles2 *s)
         return 0;
     }
     s->current = 1;
+    s->version_ok = 0;
+    s->version_probes = 0;
     return usable(s);
 }
 

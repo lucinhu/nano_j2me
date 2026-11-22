@@ -100,3 +100,53 @@ useful target is the presentation/composition step, not per-primitive GL.
 5. Keep the CPU image: the interpreter is the biggest single component of a 3D
    frame; the optional baseline JIT (`NJ_ENABLE_JIT`) is worth measuring on a
    device with the new stats line.
+
+## Real-GPU measurements (host SDL2 port, round 195)
+
+The emulator numbers above are CPU-GL (SwiftShader).  To separate "the GPU is
+slow" from "the backend architecture makes the GPU slow", the same code was
+built for the desktop SDL2 port and measured on a discrete GPU
+(`NVIDIA GeForce RTX 5080 Laptop GPU`, `OpenGL ES 3.2 NVIDIA 620.73.04`):
+
+| workload | software | GLES2 | result |
+| --- | --- | --- | --- |
+| `loopdemo`, 1200 frames (`NJ_SDL2_GLES2_2D=1`) | 4.83 s / 249 fps | 7.05 s / 170 fps | **2D accel is 46% slower** (fills=2385, blits=1200) |
+| `m3gtarget` 160 tris/frame, direct path (median of 3) | 0.232 s | 0.248 s | GL slightly slower |
+| `m3gtarget`, buffered path (median of 3) | 0.211 s | 0.250 s | **+18%** |
+| Galaxy on Fire 2 gameplay, 560 frames @30fps, forced GL | user 3.83–3.90 s, sys 0.17–0.21 s | user 4.84–5.12 s, sys 0.93–1.09 s | **25–30% more CPU** (1.0–1.24 M triangles, 0 declines) |
+
+The important row is the first one that is *not* a table entry: with the
+default auto-calibration (no `NJ_M3G_FORCE_ACCEL`), the real GPU measures the
+reference batch as `gpu=641us software=251us -> disabled (software is faster)`
+and the runtime stays on software.  So the shipped default is not hurting
+users; the forced setting is the only way to observe the GPU path, and on this
+hardware it is slower.
+
+### What that proves
+
+The cost is not EGL context switching (already cached per thread) and not the
+context-validation probes.  Caching the validation probes (`glGetString`,
+`glIsTexture` checked every 1024 packets instead of every packet) changed the
+Galaxy run by less than the run-to-run noise (4.84 s before, 4.95–5.12 s
+after), which rules out that housekeeping as a bottleneck.  The remaining cost
+is exactly the design: each raster/triangle packet renders into a private FBO,
+reads the result back with `glReadPixels` and re-commits it to the CPU
+colour/depth buffers, and the optional 2D callbacks do the same per fill/blit.
+On a fast GPU the extra round trip costs more than the software span code it
+replaces.
+
+### What a real speed-up requires
+
+Reference implementations of J2ME 3D acceleration keep the **frame** on the
+GPU (one scene render into a GL texture, depth kept on the GPU, presentation
+through an EGL/window surface) instead of accelerating individual software
+raster packets.  For this runtime that means:
+
+1. M3G renders its whole frame in GL (or at least one transaction per frame),
+   the result is presented directly from a GL texture — no per-packet readback.
+2. 2D remains a separate CPU canvas that is uploaded once per frame and
+   composited in GL (or a command-buffer renderer); per-blit readback must go.
+3. Only then does the `NJ_ENABLE_GFX_ACCEL` path have a chance to beat the
+   well-optimised software rasteriser.  Until then, auto-calibration disabling
+   the path is the correct default and `debug.nj2me.m3g_accel=force` should
+   stay a diagnostic switch.
