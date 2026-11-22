@@ -1905,6 +1905,31 @@ real RetroArch loopdemo 120 frames PASS, Windows x86_64 Wine **4/4** at 300
 frames, submission bundle **32/32**; GoldenSolitaire and NeonRunner pass the
 libretro visual probe (300 frames).
 
+### 0.5.32 / r51 (2026-11-22)
+
+Release: https://github.com/lucinhu/nano_j2me/releases/tag/v0.5.32 - tag
+`v0.5.32` (metadata commit `1933320`), eight libretro targets plus five
+per-ABI APKs (`versionCode 532`; no universal APK).  `.info` SHA-256
+`411161e48b3bb07c455719a4aedc38b2207030f9d21a26e8cc6aaf1c2445baf2`
+(`display_version = "0.5.32"`); the tracked super patch applies to
+`libretro-super` master `55e50a81195eaf8dd1b7720a601282459832ced1` and was
+rebased as fork commit `a4859b5`.
+
+Behavioural changes vs 0.5.31: the Nokia `TextEditor`/`TextEditorListener`
+overlay family (CanvasItem compositing after the canvas paint, content/
+caret/selection API, listener action constants) and the field-level extension
+of the builtin-API audit (`--dump-builtin-api` now emits field flags;
+`tools/check_vendor_members.py` resolves `Fieldref` through superclasses and
+reports no runtime-owned field gaps).  No libretro ABI, `.info` field or core
+option change.  PR **libretro/libretro-super#2204** head is commit `a4859b5`
+(branch `add-nano_j2me` on fork `lucinhu/libretro-super`, parent master
+`55e50a8`); PR **libretro/docs#1239** head is `95a1d0a` (patch against docs
+master `96ee874`), both OPEN/MERGEABLE, no merge claimed.
+
+Validation: full serial CTest **209/209** (364.01 s), mock matrix **20/20**,
+real RetroArch LoopDemo 120 frames PASS, Windows x86_64 Wine **4/4** at 300
+frames, submission bundle **32/32**.
+
 ### 0.5.31 / r50 (2026-11-22)
 
 Release: https://github.com/lucinhu/nano_j2me/releases/tag/v0.5.31 - tag

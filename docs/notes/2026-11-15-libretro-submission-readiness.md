@@ -1673,3 +1673,18 @@ LCDUI).  Validation: full serial CTest **207/207** (360.12 s), mock matrix
 **20/20**, real RetroArch loopdemo PASS, Wine **4/4** @300, bundle
 **32/32**.  Super PR branch `54f978a`, docs PR unchanged at `95a1d0a`
 (baseline `96ee874`); both OPEN/MERGEABLE, no merge claimed.
+
+## Round 191 (2026-11-22): 0.5.32 / r51 package
+
+Metadata commit `1933320`; `.info` SHA-256
+`411161e48b3bb07c455719a4aedc38b2207030f9d21a26e8cc6aaf1c2445baf2`
+(`display_version = "0.5.32"`); tracked super patch rebased on
+`libretro-super` master `55e50a8` as fork commit `a4859b5`.  r51 ships the
+Nokia `TextEditor`/`TextEditorListener` overlay family (real CanvasItem
+compositing, content/caret/selection/colour API, listener action constants)
+and the field-level builtin-API audit (`--dump-builtin-api` field flags;
+`check_vendor_members.py` audits `Fieldref` through the superclass chain with
+zero runtime-owned field gaps).  Validation: full serial CTest **209/209**
+(364.01 s), mock matrix **20/20**, real RetroArch LoopDemo PASS, Wine
+**4/4** @300, bundle **32/32**.  Super PR branch `a4859b5`, docs PR unchanged
+at `95a1d0a` (baseline `96ee874`); both OPEN/MERGEABLE, no merge claimed.
