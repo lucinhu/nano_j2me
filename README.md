@@ -115,9 +115,9 @@ MPEG-4 intro movie with its own AMR-NB track.
 |---|---|
 | **Linux** x86_64 / aarch64 | CLI runner and the SDL2 desktop client; builds for glibc 2.17+ |
 | **Windows** x86_64 | `nj2me.exe` (mingw-w64): console runner plus the same library client, UTF-8 paths, verified under Wine |
-| **Android 5.0+** | release ships one APK per ABI (arm64-v8a / armeabi-v7a / x86 / x86_64): launcher, floating keypads, AAudio/OpenSL ES sound, **GLES2 hardware acceleration on by default** (M3G triangle/raster paths, software fallback toggle in the panel); `tools/build_android.sh` makes a universal APK for local use |
-| **Android 2.x legacy** | ARMv5 `armeabi` edition with a lightweight launcher — see [docs/ANDROID_LEGACY.md](docs/ANDROID_LEGACY.md) |
-| **Web browsers** | Emscripten module plus a dependency-free ES-module shell — [live demo](https://lucinhu.github.io/nano_j2me/), see [docs/WEB.md](docs/WEB.md) |
+| **Android 5.0+** | release ships one APK per ABI (arm64-v8a / armeabi-v7a / x86 / x86_64): launcher, floating keypads, AAudio/OpenSL ES sound, **GLES2 hardware acceleration on by default** (M3G triangle/raster paths, software fallback toggle in the panel); `tools/build_android.sh` makes a universal APK for local use. **Devices on Android 2.x–4.4 must use the legacy APK below** (the standard APKs require Android 5.0+). |
+| **Android 2.x legacy** | ARMv5 `armeabi` + lightweight launcher, minSdk 5, works on Android 2.x and newer old devices; software rendering only — see [docs/ANDROID_LEGACY.md](docs/ANDROID_LEGACY.md) |
+| **Web browsers** | Emscripten module plus a dependency-free ES-module shell — touch input with multi-finger canvas pointers and touch-down on-screen keys, [live demo](https://lucinhu.github.io/nano_j2me/), see [docs/WEB.md](docs/WEB.md) |
 | **RetroArch / libretro** | native cores for Linux (x86_64, aarch64, armv7) and Android (arm64, armv7, x86_64) |
 | **ESP32-S3 / ESP32-C3** | full runtime and MIDlet on an ESP-IDF board (PSRAM required for the VM); the Korvo board port lives in [lucinhu/esp32s31-korvo-nano-j2me](https://github.com/lucinhu/esp32s31-korvo-nano-j2me) |
 | **headless** | the reference port used by the test suite, for embedding and CI |

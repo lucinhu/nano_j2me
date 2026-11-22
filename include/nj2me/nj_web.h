@@ -288,6 +288,15 @@ void njw_key(int key, int down);
 #define NJW_POINTER_MOVE 2
 void njw_pointer(int action, int x, int y);
 
+/*
+ * Multi-finger variant of njw_pointer(): `id` is the browser pointer id
+ * (clamped to 0..255).  The MIDP Canvas API remains single-pointer, so only
+ * the first finger down drives pointerPressed/Dragged/Released; the Nokia
+ * MultipointTouch listener receives every finger with this id.  Ports that
+ * cannot distinguish fingers keep using njw_pointer(), which forwards id 0.
+ */
+void njw_pointer_multi(int id, int action, int x, int y);
+
 /* Committed UTF-8 text (max NJ_TEXT_INPUT_BYTES-1 bytes per event; the shell
  * must split longer strings on UTF-8 code point boundaries).  Only used by
  * MIDlets that read keystrokes directly; native editors use the calls

@@ -96,8 +96,8 @@
 |---|---|
 | **Linux** x86_64 / aarch64 | 命令行运行器和 SDL2 桌面客户端；最低 glibc 2.17 |
 | **Windows** x86_64 | `nj2me.exe`（mingw-w64）：命令行运行器加同一个游戏库客户端，UTF-8 路径，已在 Wine 下验证 |
-| **Android 5.0+** | 单个 APK，含 arm64-v8a / armeabi-v7a / x86 / x86_64：启动器、浮动键盘、AAudio/OpenSL ES 声音 |
-| **Android 2.x 旧版** | ARMv5 `armeabi` 版本，配轻量启动器——见 [docs/ANDROID_LEGACY.md](docs/ANDROID_LEGACY.md) |
+| **Android 5.0+** | 单个 APK，含 arm64-v8a / armeabi-v7a / x86 / x86_64：启动器、浮动键盘、AAudio/OpenSL ES 声音。**Android 2.x–4.4 的老设备请使用下面的 legacy 版**（标准 APK 要求 Android 5.0+） |
+| **Android 2.x 旧版** | ARMv5 `armeabi` 版本，配轻量启动器，minSdk 5，兼容 Android 2.x 及更老设备；仅软件渲染——见 [docs/ANDROID_LEGACY.md](docs/ANDROID_LEGACY.md) |
 | **网页浏览器** | Emscripten 模块加零依赖 ES-module 外壳——[在线演示](https://lucinhu.github.io/nano_j2me/)，见 [docs/WEB.md](docs/WEB.md) |
 | **RetroArch / libretro** | Linux（x86_64、aarch64、armv7）和 Android（arm64、armv7、x86_64）原生核心 |
 | **ESP32-S3 / ESP32-C3** | ESP-IDF 板上的完整运行时和 MIDlet（VM 需要 PSRAM）；Korvo 开发板移植版在 [lucinhu/esp32s31-korvo-nano-j2me](https://github.com/lucinhu/esp32s31-korvo-nano-j2me) |

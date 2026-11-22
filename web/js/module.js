@@ -410,6 +410,22 @@ export class WasmRuntime {
     this._fn('njw_pointer')(action | 0, x | 0, y | 0);
   }
 
+  /**
+   * Forward one finger of a multi-touch gesture.  `id` is the browser pointer
+   * id (0..255); the wasm port exposes it to the Nokia MultipointTouch layer
+   * while the MIDP Canvas keeps its single-pointer owner semantics.
+   * Older bundles without `njw_pointer_multi` fall back to the single-finger
+   * entry point so the shell stays compatible with cached modules.
+   */
+  pointerMulti(id, action, x, y) {
+    const multi = this._tryFn('njw_pointer_multi');
+    if (multi) {
+      multi(id | 0, action | 0, x | 0, y | 0);
+      return;
+    }
+    this.pointer(action, x, y);
+  }
+
   /* ------------------------------------------------------- text editing */
 
   textInput(text) {

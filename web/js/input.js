@@ -202,12 +202,13 @@ export class GameInput {
     this._keyOverrides = {};          // last argument of setKeyOverrides()
     this._gamepadHeld = new Set();    // nj_key currently pressed on a pad
     this._controlPointers = new Map(); // pointerId -> { code, button }
-    this._canvasPointer = null;       // { id, x, y }
+    this._canvasPointers = new Map(); // pointerId -> { x, y }
 
     this._onKeyDown = this._onKeyDown.bind(this);
     this._onKeyUp = this._onKeyUp.bind(this);
     this._onWindowBlur = this._onWindowBlur.bind(this);
     this._onControlsDown = this._onControlsDown.bind(this);
+    this._onControlsMove = this._onControlsMove.bind(this);
     this._onControlsRelease = this._onControlsRelease.bind(this);
     this._onCanvasDown = this._onCanvasDown.bind(this);
     this._onCanvasMove = this._onCanvasMove.bind(this);
@@ -251,9 +252,9 @@ export class GameInput {
 
     if (this.controls) {
       this.controls.addEventListener('pointerdown', this._onControlsDown, { passive: false });
+      this.controls.addEventListener('pointermove', this._onControlsMove);
       this.controls.addEventListener('pointerup', this._onControlsRelease);
       this.controls.addEventListener('pointercancel', this._onControlsRelease);
-      this.controls.addEventListener('pointerout', this._onControlsRelease);
       this.controls.addEventListener('contextmenu', (event) => event.preventDefault());
     }
     if (this.canvas) {
@@ -285,9 +286,9 @@ export class GameInput {
     window.removeEventListener('gamepaddisconnected', this._onGamepadDisconnected);
     if (this.controls) {
       this.controls.removeEventListener('pointerdown', this._onControlsDown);
+      this.controls.removeEventListener('pointermove', this._onControlsMove);
       this.controls.removeEventListener('pointerup', this._onControlsRelease);
       this.controls.removeEventListener('pointercancel', this._onControlsRelease);
-      this.controls.removeEventListener('pointerout', this._onControlsRelease);
     }
     if (this.canvas) {
       this.canvas.removeEventListener('pointerdown', this._onCanvasDown);
@@ -336,10 +337,10 @@ export class GameInput {
       this._emit(record.code, false);
     }
     this._controlPointers.clear();
-    if (this._canvasPointer) {
-      this._emitPointer(NJW.POINTER_UP, this._canvasPointer.x, this._canvasPointer.y);
-      this._canvasPointer = null;
+    for (const [pointerId, point] of this._canvasPointers) {
+      this._emitPointer(NJW.POINTER_UP, point.x, point.y, pointerId);
     }
+    this._canvasPointers.clear();
   }
 
   /**
@@ -466,33 +467,70 @@ export class GameInput {
 
   _onControlsDown(event) {
     if (!this.enabled) { return; }
-    const button = event.target.closest ? event.target.closest('[data-nj-key]') : null;
+    const button = this._controlButtonAt(event);
     if (!button) { return; }
     event.preventDefault();
     if (this._controlPointers.has(event.pointerId)) { return; }
-    const code = Number(button.dataset.njKey);
-    if (!Number.isFinite(code)) { return; }
-    this._controlPointers.set(event.pointerId, { code, button });
-    button.classList.add('is-pressed');
-    button.setAttribute('aria-pressed', 'true');
+    try { this.controls.setPointerCapture(event.pointerId); } catch (error) { /* ignore */ }
+    this._controlPointers.set(event.pointerId, { code: 0, button: null });
+    this._pressControlButton(event.pointerId, button);
     this._notifyGesture();
     this._vibrate();
+  }
+
+  /** The keycap under this pointer event, if any. */
+  _controlButtonAt(event) {
+    let target = event.target;
+    if (target && target.closest) { target = target.closest('[data-nj-key]'); }
+    if (!target || !target.dataset || !target.dataset.njKey) {
+      target = document.elementFromPoint(event.clientX, event.clientY);
+      if (target && target.closest) { target = target.closest('[data-nj-key]'); }
+    }
+    if (!target || !target.dataset) { return null; }
+    return Number.isFinite(Number(target.dataset.njKey)) ? target : null;
+  }
+
+  /** Press, or slide to, the key held by one control pointer. */
+  _pressControlButton(pointerId, button) {
+    const record = this._controlPointers.get(pointerId);
+    if (!record || record.button === button) { return; }
+    const code = Number(button.dataset.njKey);
+    if (!Number.isFinite(code)) { return; }
+    if (record.button) { this._releaseControlButton(record); }
+    record.code = code;
+    record.button = button;
+    button.classList.add('is-pressed');
+    button.setAttribute('aria-pressed', 'true');
     this._emit(code, true);
   }
 
-  _onControlsRelease(event) {
-    if (!this._controlPointers.size) { return; }
-    const record = this._controlPointers.get(event.pointerId);
-    if (!record) { return; }
-    /* pointerout only releases when the finger actually left the cap. */
-    if (event.type === 'pointerout') {
-      const to = event.relatedTarget;
-      if (to && record.button.contains(to)) { return; }
-    }
-    this._controlPointers.delete(event.pointerId);
+  /** Release the key held by one control pointer (without forgetting it). */
+  _releaseControlButton(record) {
+    if (!record.button) { return; }
     record.button.classList.remove('is-pressed');
     record.button.setAttribute('aria-pressed', 'false');
     this._emit(record.code, false);
+    record.button = null;
+    record.code = 0;
+  }
+
+  /** Sliding a held finger between keycaps presses the one under it. */
+  _onControlsMove(event) {
+    const record = this._controlPointers.get(event.pointerId);
+    if (!record) { return; }
+    const button = this._controlButtonAt(event);
+    if (button) {
+      this._pressControlButton(event.pointerId, button);
+    } else if (record.button) {
+      this._releaseControlButton(record);
+    }
+  }
+
+  _onControlsRelease(event) {
+    const record = this._controlPointers.get(event.pointerId);
+    if (!record) { return; }
+    this._releaseControlButton(record);
+    this._controlPointers.delete(event.pointerId);
   }
 
   _vibrate() {
@@ -506,28 +544,29 @@ export class GameInput {
 
   _onCanvasDown(event) {
     if (!this.enabled || this.textActive) { return; }
-    if (this._canvasPointer) { return; }
     event.preventDefault();
     try { this.canvas.setPointerCapture(event.pointerId); } catch (error) { /* ignore */ }
     const point = this._canvasPoint(event);
-    this._canvasPointer = { id: event.pointerId, x: point.x, y: point.y };
+    this._canvasPointers.set(event.pointerId, { x: point.x, y: point.y });
     this._notifyGesture();
-    this._emitPointer(NJW.POINTER_DOWN, point.x, point.y);
+    this._emitPointer(NJW.POINTER_DOWN, point.x, point.y, event.pointerId);
   }
 
   _onCanvasMove(event) {
-    if (!this._canvasPointer || this._canvasPointer.id !== event.pointerId) { return; }
-    const point = this._canvasPoint(event);
-    this._canvasPointer.x = point.x;
-    this._canvasPointer.y = point.y;
-    this._emitPointer(NJW.POINTER_MOVE, point.x, point.y);
+    const point = this._canvasPointers.get(event.pointerId);
+    if (!point) { return; }
+    const next = this._canvasPoint(event);
+    point.x = next.x;
+    point.y = next.y;
+    this._emitPointer(NJW.POINTER_MOVE, next.x, next.y, event.pointerId);
   }
 
   _onCanvasUp(event) {
-    if (!this._canvasPointer || this._canvasPointer.id !== event.pointerId) { return; }
-    const point = this._canvasPoint(event);
-    this._emitPointer(NJW.POINTER_UP, point.x, point.y);
-    this._canvasPointer = null;
+    const point = this._canvasPointers.get(event.pointerId);
+    if (!point) { return; }
+    const at = this._canvasPoint(event);
+    this._canvasPointers.delete(event.pointerId);
+    this._emitPointer(NJW.POINTER_UP, at.x, at.y, event.pointerId);
   }
 
   _canvasPoint(event) {
@@ -673,9 +712,13 @@ export class GameInput {
     if (this.onKey) { this.onKey(key, down); }
   }
 
-  _emitPointer(action, x, y) {
+  _emitPointer(action, x, y, id = 0) {
     try {
-      this.runtime.pointer(action, x, y);
+      if (typeof this.runtime.pointerMulti === 'function') {
+        this.runtime.pointerMulti(id, action, x, y);
+      } else {
+        this.runtime.pointer(action, x, y);
+      }
     } catch (error) {
       console.warn('[input] njw_pointer failed', error);
     }

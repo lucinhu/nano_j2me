@@ -1752,7 +1752,7 @@ void njw_key(int key, int down)
     (void)runner_queue_event(&ev);
 }
 
-void njw_pointer(int action, int x, int y)
+void njw_pointer_multi(int id, int action, int x, int y)
 {
     nj_event ev;
 
@@ -1774,9 +1774,15 @@ void njw_pointer(int action, int x, int y)
     case NJW_POINTER_UP:   ev.type = NJ_EV_POINTER_UP;   break;
     default:               ev.type = NJ_EV_POINTER_MOVE; break;
     }
+    ev.id = (nj_u1)(id < 0 ? 0 : (id > 255 ? 255 : id));
     ev.x = (nj_s2)x;
     ev.y = (nj_s2)y;
     (void)runner_queue_event(&ev);
+}
+
+void njw_pointer(int action, int x, int y)
+{
+    njw_pointer_multi(0, action, x, y);
 }
 
 void njw_text_input(const char *utf8)

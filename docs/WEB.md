@@ -135,8 +135,10 @@ be served with or without a build:
   Backspace = Clear, digits, `*`/`#`), a standard-mapping gamepad (A = fire,
   B/X/Y/LB = GAME_A..D, RB = clear, LT/Start = soft left, RT/Back = soft right,
   D-pad and left stick with a 0.45 deadzone), an on-screen phone keypad for touch
-  devices with multi-touch and slide-off cancel, pointer pass-through for games
-  that use canvas pointers, and a hidden textarea bridge for MIDlet text fields
+  devices that presses on touch-down and switches the held key when the finger
+  slides to another cap (slide-off cancels), multi-finger pointer pass-through
+  for games that use canvas pointers (the first finger keeps Canvas semantics,
+  every finger reaches `MultipointTouch`), and a hidden textarea bridge for MIDlet text fields
   using the native-editor callbacks (`njw_text_*`). The tools panel's **Keys**
 dialog rebinds the eight game actions (up/down/left/right/fire/soft left/soft
 right/clear) to any keyboard key: click an action, press the new key, Esc
@@ -319,7 +321,7 @@ Groups of functions (see the header for exact signatures and semantics):
 | Options | `njw_options_reset`, `njw_option_int`, `njw_option_string` (`NJW_OPT_SCREEN_WIDTH/HEIGHT/HEAP_BYTES/SPEED_PERCENT/RMS_DIR/FS_DIR/DEVICE/MIDLET_CLASS/LOAD_STATE_PATH`) |
 | Life cycle | `njw_start`, `njw_frame`, `njw_running`, `njw_displayable_ready`, `njw_stop`, `njw_error`, `njw_stop_reason`, `njw_frames` |
 | Display | `njw_framebuffer` (RGBA8888), `njw_width`, `njw_height`, `njw_frame_epoch` |
-| Input | `njw_key`, `njw_pointer`, `njw_text_input`, `njw_text_edit`, `njw_text_replace`, `njw_text_active`, `njw_text_current`, `njw_text_state` |
+| Input | `njw_key`, `njw_pointer`, `njw_pointer_multi`, `njw_text_input`, `njw_text_edit`, `njw_text_replace`, `njw_text_active`, `njw_text_current`, `njw_text_state` |
 | Audio | `njw_audio_available`, `njw_audio_rate`, `njw_audio_channels`, `njw_audio_read`, `njw_audio_note_playing` |
 | Diagnostics | `njw_stats` (heap, GC, bytecode, paint and 3D counters — the same numbers the native `--stats` line prints) |
 | JAR metadata | `njw_probe`, `njw_app_title`, `njw_app_vendor`, `njw_app_version`, `njw_midlet_count`, `njw_midlet_class_at`, `njw_app_icon` |
@@ -347,7 +349,12 @@ next `njw_stop()`; copy or draw it before pumping the next frame.
 numbers (`0`–`9` are 1–10, `NJ_KEY_FIRE = 17`, `NJ_KEY_SOFT_LEFT/RIGHT = 18/19`,
 `NJ_KEY_UP/DOWN/LEFT/RIGHT = 13–16`, …). Queues are drained by the next frame.
 `njw_pointer(action, x, y)` uses device pixels and the same action codes as the
-port contract (`0` = down, `1` = up, `2` = move). Text entry is driven by the
+port contract (`0` = down, `1` = up, `2` = move); it is the first finger
+(pointer id 0). `njw_pointer_multi(id, action, x, y)` queues the same action for
+an explicit pointer id 0–255: the Canvas still tracks one owner (first finger),
+while `com.nokia.mid.ui.MultipointTouch` sees every id. The JS shell maps each
+`PointerEvent.pointerId` to a stable id and falls back to single-pointer
+`pointer` calls when an older bundle lacks the export. Text entry is driven by the
 runtime: poll `njw_text_active()`/`njw_text_state()` from the page's text bridge,
 send committed strings with `njw_text_input()`, editing keys with `njw_text_edit()`,
 and whole-field replacements (paste, IME composition) with `njw_text_replace()`.
