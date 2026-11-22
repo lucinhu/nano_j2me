@@ -238,3 +238,24 @@ also compositing the 2D canvas in GL.  Stages:
   textures), so the frame never returns to CPU mid-frame.
 - Both stay behind the existing capability/option checks; software remains the
   default until measurements show the win on real devices.
+
+## No-readback upper bound (round 199, host RTX 5080)
+
+Before building EGL presentation, the Stage-A payoff was measured by adding a
+benchmark-only switch that skips the colour/depth readback + CPU commit in both
+transaction paths (`NJ_GLES2_SKIP_COMMIT`), keeping all upstream work (texture
+import/upload, seed, draw).  Galaxy on Fire 2, 560 frames @30 fps, forced GL:
+
+| variant | user CPU | note |
+|---|---:|---|
+| software | 3.83-3.90 s | reference |
+| GL, full transaction | 5.20 s | readback + commit included |
+| GL, readback+commit skipped | 4.37 s | 0.83 s saved |
+
+So EGL presentation (removing readback and the CPU commit) would still leave the
+GPU path ~14% slower than software on this workload: the remaining per-flush
+costs (rect import, texture uploads, seed upload, GL state setup) stay around
+0.7-1.0 s.  Consequence: presenting from GL is necessary but not sufficient; the
+renderer must also keep state/textures resident across a whole frame and stop
+re-seeding per transaction, i.e. Stage A+B of the design note are one project,
+not two independent wins.
