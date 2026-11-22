@@ -1910,7 +1910,7 @@ libretro visual probe (300 frames).
 Release: https://github.com/lucinhu/nano_j2me/releases/tag/v0.5.27 - tag
 `v0.5.27` (metadata commit `a3e4229`), eight libretro targets plus five
 per-ABI APKs (`versionCode 527`; no universal APK).  `.info` SHA-256
-`ad619b1aa09830cad2af82ff59d87616774da993f57e27b4075109716c942873`
+`d0e83540d26fb8e0e26bb2fb35b00259029f319168db369c645f7ba6f577289e`
 (`display_version = "0.5.27"`); the tracked super patch applies to
 `libretro-super` master `55e50a81195eaf8dd1b7720a601282459832ced1`.
 
