@@ -211,3 +211,30 @@ Conclusions:
 
 Step 1 is the next concrete milestone; step 3 requires a frontend/EGL
 integration change.
+
+## Pure-3D workload check (round 198, host RTX 5080)
+
+To separate "mixed 2D/3D round-trip" from "GPU path is slow", the Doom3
+M3G loading animation was measured on the host SDL2/GLES2 build (1200 frames
+uncapped, heap 32): software user CPU **2.998 s** (0.166 s sys) vs forced GL
+**4.303 s** (0.222 s sys), with GL committing 1,855,454 triangles in 4331
+batches and one decline.  So even a workload with almost no 2D drawing loses
+in the current backend.
+
+Per-transaction accounting (2672 transactions on Galaxy, full-screen 76,800 px
+each): the synchronous colour+depth readback alone costs ~0.45-0.77 ms per
+full-screen readback on this host, i.e. ~0.9-1.5 ms per frame across the two
+transactions per frame - the same order as the measured 1.1-1.6 ms/frame loss.
+Conclusion: the loss is dominated by the readback round trip, and removing it
+requires presenting from GL (EGL window on Android) and, for mixed content,
+also compositing the 2D canvas in GL.  Stages:
+
+- **A (pure M3G frames)**: keep triangle passes in the resident FBO, composite
+  the 2D canvas texture in GL, present with EGL window swap; no per-frame
+  colour readback.  CPU observers (save state, getRGB, screenshots) keep the
+  existing readback path on demand.
+- **B (mixed 2D/3D frames)**: capture 2D draw calls into a small GL command
+  list (fill/blit/region; text and complex paths rasterised into scratch
+  textures), so the frame never returns to CPU mid-frame.
+- Both stay behind the existing capability/option checks; software remains the
+  default until measurements show the win on real devices.
