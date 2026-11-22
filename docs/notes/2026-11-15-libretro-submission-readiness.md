@@ -1739,3 +1739,25 @@ Super PR #2204 was force-pushed to `efebb07`; docs PR #1239 unchanged
 (`95a1d0a`); both OPEN/MERGEABLE, no merge claimed.  The whole-corpus r55
 visual probe is running and its result is appended to `docs/CORPUS.md` once
 complete.
+
+## Round 223 submission re-check (2026-11-23)
+
+Re-validated the submission materials without changing the release:
+
+- `tools/check_libretro_submission_bundle.sh` -> **32 passed, 0 failed**
+  against the canonical `build/libretro-dist` (r55, 0.5.36).
+- `tools/simulate_ci_builds.sh` -> all three CI build contracts satisfied
+  (linux `.so` 4,218,408 B; windows `.dll` 3,726,069 B; android target
+  12,507,800 B as the template renames it).
+- Upstream baselines unchanged: `libretro-super` master
+  `55e50a81195eaf8dd1b7720a601282459832ced1`, `libretro/docs` master
+  `96ee874e010a33b3fb1a79cf3cf833fc17189cfc` - both PR branches remain valid,
+  no rebase needed.
+- PR state: `libretro/libretro-super#2204` OPEN / MERGEABLE, head
+  `efebb0781f27434ac87ddb8db85998ca48dd9619`, 0 comments, 0 reviews.
+  `libretro/libretro-docs#1239` still OPEN / MERGEABLE head `95a1d0a` (body
+  updated to 0.5.36).  No merge has been requested or claimed.
+
+In parallel a whole-corpus libretro visual probe over the expanded corpus
+(1,705 unique rows: round-176 set + the K700/K800 batch) was started on the
+r55 core; results will be recorded in `docs/CORPUS.md` when it finishes.
