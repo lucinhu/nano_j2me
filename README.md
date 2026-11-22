@@ -26,8 +26,9 @@ browser — the same runtime everywhere, with one small `nj_port` per platform.
 - **Vendor APIs from real games, implemented honestly.** The Nokia UI
   extensions (`MultipointTouch`, `CanvasItem` overlays, `FullCanvas`, the
   clipboard/indicator/notification/gesture families), Siemens
-  `color_game` layers and sprites, Sprint PCS carrier media wrappers and the
-  Immersion VibeTonz stub are all present because shipped games link them;
+  `color_game` layers and sprites, Sprint PCS carrier media wrappers, the
+  Immersion VibeTonz stub and the JSR-177 `pki` certificate/exception linkage
+  surface are all present because shipped games link them;
   where the emulated handset has no hardware (no motor, no carrier audio) the
   call is a documented no-op rather than a fake success.
 - **Every finger.** The Android APK, the libretro core and the headless runner

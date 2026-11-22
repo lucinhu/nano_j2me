@@ -400,3 +400,45 @@ canvas pixel assertions); `test_sprint` is in CTest.  Verified PAC-MAN
 (176x220) 300 frames / gfx=1202, Ms. PAC-MAN Demo (176x220) 330 frames /
 gfx=1600; all 18 Pac-Man-family JARs and the three `util.System` titles
 sweep as ok.
+
+## Round 179: JSR-177 pki linkage surface, and the last audit gap (2026-11-22)
+
+The round-179 audit over the complete corpus — 1048 JARs in `tests/games` plus
+the persistent fetched cache — reported 640 implemented classes and exactly
+**two** JARs with missing API references:
+
+| JAR | Missing class | How it is used |
+| --- | --- | --- |
+| `毁灭战士3_10598.jar` | `javax/microedition/m2g/SVGAnimator` etc. | JSR-226 symbols in `Code` attributes, never loaded |
+| `IstanBUL.jar` | `javax/microedition/pki/CertificateException` | try/catch around the HTTPS bootstrap (`t.class` exception table) |
+
+The Doom3 SVG symbols are unreachable code (the title runs and never throws a
+`NoClassDefFoundError`), so they stay unimplemented by design.  The IstanBUL
+reference is a **catch type**: MIDP resolves the class when the exception is
+dispatched, so an unrelated exception escaping that region would otherwise
+turn into a confusing `NoClassDefFoundError` instead of the `IOException`
+branch the title expects.  That made it the last real linkage gap worth
+closing.
+
+`src/midp/nj_lib_pki.c` therefore adds the JSR-177 package surface only:
+`javax.microedition.pki.Certificate` (the interface, all eight accessors) and
+`javax.microedition.pki.CertificateException extends java.lang.Exception` with
+the reference constructors `()V`, `(Ljava/lang/String;)V`,
+`(I<Certificate>)V`, `(Ljava/lang/String;I<Certificate>)V`, `getReason()I`
+and `getCertificate()`.  The constructors store the message in Throwable's
+`detailMessage`, so `getMessage()` answers what Java code passed.
+
+**This is not a SATSA implementation.**  There is no TLS, no keystore and no
+certificate parsing: `https://` URLs are still answered by `Connector` as
+unsupported, and no code path can obtain a `Certificate` object.  The class
+exists so a catch clause links and so code that declares the interface
+resolves; everything else would be fabricated.
+
+Regression gate: `tests/test_pki.c` (21 checks: interface flag, superclass
+link, all four constructors, message/reason/certificate defaults and
+round-trips, raising through `nj_throw` + `nj_take_exception` keeps the
+class).  `test_pki` is in CTest.
+
+Verification: `IstanBUL.jar` runs 300 frames rc=0, 165 paints, gfx=5775; the
+whole-corpus audit now reports **641 implemented classes and 1 jar with a
+missing API ref** (the unused Doom3 SVG symbols).

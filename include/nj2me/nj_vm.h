@@ -878,6 +878,13 @@ extern const int nj_lib_immersion_class_count;
 extern const nj_native_entry nj_lib_immersion_table[];
 extern const int nj_lib_immersion_count;
 
+/* Built by nj_lib_pki.c: JSR-177's javax.microedition.pki certificate model
+ * and CertificateException type (linkage-only; no secure connections). */
+extern const nj_builtin_class nj_lib_pki_classes[];
+extern const int nj_lib_pki_class_count;
+extern const nj_native_entry nj_lib_pki_table[];
+extern const int nj_lib_pki_count;
+
 /* Built by nj_lib_pim.c (JSR 75's javax.microedition.pim).  The runtime has no
  * contact store: openPIMList(CONTACT_LIST, ...) returns an empty list, a list
  * type it does not have raises PIMException, and every field is unsupported. */
