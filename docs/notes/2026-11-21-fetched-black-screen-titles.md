@@ -344,3 +344,62 @@ state-service timeout; `PAC-MAN (176x220)` is black at every size we can
 configure, its constructor trips over an empty Sprint `Muglet` URI and it then
 waits on carrier state - the FreeJ2ME-Plus reference hangs on it as well, so
 it is treated as a title-side/network limitation.
+
+## Round 178 (2026-11-22): MidnightPool - a paint() busy-wait the libretro clock cannot satisfy
+
+`MidnightPool1_1.0.0_320x240.jar` renders through the CLI at 320x240 (300
+frames, `paints=300 gfx=4933`, ~4.7-5.4k non-black pixels per frame) but is
+pure black through the libretro core at both 300 and 900 frames, with any heap
+option (16 MB or auto).  The state service also refuses its save with
+`retro_serialize(...) returned 0` / `save-state request refused (-8)`.
+
+A temporary frame-dump option in the mock harness (`--dump-dir`,
+`--dump-every`, RGB565->PPM) confirmed every sampled core frame is all zero.
+Instrumenting the port (`--where` through `nj_vm_describe_threads` plus a
+`DBGSTAT` line per 60 `retro_run` calls) showed the VM advances one frame then
+stays inside a single paint forever:
+
+```
+where: thread 2 running depth=5
+where:   java/lang/System.currentTimeMillis()J pc=0
+where:   b.c()V pc=53
+where:   b.paint(Ljavax/microedition/lcdui/Graphics;)V pc=280
+where:   javax/microedition/lcdui/Canvas.serviceRepaints()V pc=0
+where:   b.run()V pc=92
+```
+
+Disassembled `b.c()`:
+
+```
+a = this.b; b = System.currentTimeMillis(); G = (int)(b - a);
+while (G < 50 && !bl) { Thread.yield(); b = System.currentTimeMillis(); G = (int)(b - a); }
+```
+
+so every paint waits for 50 ms of `System.currentTimeMillis()` progress - on a
+handset that is wall time and the loop exits after ~50 ms.  In the libretro
+port `lr_port_millis()` returns the virtual clock during `LR_PHASE_RUN`, and
+that clock only advances on the frontend thread in `retro_run()`; the VM
+thread is inside the paint, the frame never completes, `frames=1 paints=2`
+after 300 `retro_run` calls, and once a save request is pending the 20 s
+clock-assist budget is consumed and the clock freezes (`now=25110` for
+millions of polls) - hence the save refusal.
+
+Two experiments were run and reverted:
+
+* Clock assist during any paint in RUN phase (return
+  `virtual_ms + real_us_since_paint_start` while `nj_vm_in_paint()`), leaving
+  `vclock_us` untouched.  `DBGPAINT` showed the returned value advancing with
+  real time as intended, but the title still failed to complete the paint and
+  stayed black with 162 M `currentTimeMillis` calls per session.
+* Harness pacing changes (16.7/40/80 ms per `retro_run`): no effect.
+
+So the remaining difference is not the pace or the heap; the core and the CLI
+agree on the game's own timer only if paint wins 50 ms of real time, and the
+current VM/frontend handoff does not give it that while a frame is in
+progress.  Documented as a known core-path limitation (see
+`docs/LIBRETRO.md`), not a rendering bug: the title's own paint limiter
+requires wall-clock progress the synchronous frame model does not deliver for
+this shape of app.  `PAC-MAN (176x220)` is a different, title-side case (empty
+Sprint `Muglet` URI); the other landscape titles render fine with the round-177
+per-title screen.
+

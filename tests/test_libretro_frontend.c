@@ -116,6 +116,8 @@ struct config
    int static_ok;
    unsigned min_nonblack;
    int timeout_s;
+   char dump_dir[PATH_MAX];
+   unsigned dump_every;
 
    /* Frontend feature negotiation.  These are decided before the core's
     * retro_set_environment() call, because that is when a core asks whether
@@ -141,8 +143,9 @@ struct config
 };
 
 static struct config cfg = {
-   "", "", "", 180u, 0u, 0, 0, 0, 0, 0, 0, 0u, 0, 0, 1u, 30, 0, 0, 0, 0u,
-   0u, 0, "", "", "", 0u
+   .frames = 180u,
+   .min_nonblack = 1u,
+   .timeout_s = 30
 };
 
 /* ------------------------------------------------------------------ */
@@ -1081,6 +1084,37 @@ static uint64_t fnv1a(uint64_t hash, unsigned char byte)
    return hash;
 }
 
+static void dump_frame_ppm(const char *dir, unsigned long long index,
+                           const unsigned char *frame, unsigned width,
+                           unsigned height, size_t pitch)
+{
+   char path[PATH_MAX];
+   FILE *f;
+   unsigned y, x;
+   snprintf(path, sizeof(path), "%s/frame-%05llu.ppm", dir, index);
+   f = fopen(path, "wb");
+   if (!f)
+      return;
+   fprintf(f, "P6\n%u %u\n255\n", width, height);
+   for (y = 0; y < height; y++)
+   {
+      const unsigned char *row = frame + (size_t)y * pitch;
+      for (x = 0; x < width; x++)
+      {
+         unsigned v = (unsigned)row[x * 2] | ((unsigned)row[x * 2 + 1] << 8);
+         unsigned char rgb[3];
+         unsigned r = (v >> 11) & 0x1fu;
+         unsigned g = (v >> 5) & 0x3fu;
+         unsigned b = v & 0x1fu;
+         rgb[0] = (unsigned char)((r * 255u + 15u) / 31u);
+         rgb[1] = (unsigned char)((g * 255u + 31u) / 63u);
+         rgb[2] = (unsigned char)((b * 255u + 15u) / 31u);
+         fwrite(rgb, 1, 3, f);
+      }
+   }
+   fclose(f);
+}
+
 static void RETRO_CALLCONV h_video(const void *data, unsigned width,
                                    unsigned height, size_t pitch)
 {
@@ -1159,6 +1193,12 @@ static void RETRO_CALLCONV h_video(const void *data, unsigned width,
 
       if (s->frame_hash_count < s->frame_hash_cap)
          s->frame_hashes[s->frame_hash_count++] = hash;
+
+      if (cfg.dump_dir[0] &&
+          (s->video_calls % (cfg.dump_every ? cfg.dump_every : 1) == 0 ||
+           s->video_calls == cfg.frames))
+         dump_frame_ppm(cfg.dump_dir, s->video_calls, frame, width, height,
+                        pitch);
    }
 }
 
@@ -2584,6 +2624,8 @@ static void usage(FILE *out, const char *argv0)
            "  --rotation N       expect SET_ROTATION for N degrees "
            "(0/90/180/270) or raw code 0..3\n"
            "  --set k=v          core option override, repeatable\n"
+           "  --dump-dir DIR     write sampled frames as PPM into DIR (debug)\n"
+           "  --dump-every N     dump every Nth video frame (default 1)\n"
            "  --save-dir PATH    directory reported as system/save directory\n"
            "  --visual-required  enforce non-black and animated frame content\n"
            "  --static-ok        with --visual-required, accept a static frame\n"
@@ -2762,7 +2804,11 @@ static int parse_args(int argc, char **argv)
              cfg.serialize_timing > 32u)
             goto bad_value;
       }
-      else if (strcmp(arg, "--timeout") == 0 && i + 1 < argc)
+      else if (strcmp(arg, "--dump-dir") == 0 && i + 1 < argc)
+      snprintf(cfg.dump_dir, sizeof(cfg.dump_dir), "%s", argv[++i]);
+   else if (strcmp(arg, "--dump-every") == 0 && i + 1 < argc)
+      cfg.dump_every = (unsigned)strtoul(argv[++i], NULL, 0);
+   else if (strcmp(arg, "--timeout") == 0 && i + 1 < argc)
       {
          unsigned value;
          if (!parse_uint(argv[++i], &value))

@@ -1408,3 +1408,44 @@ FreeJ2ME-Plus hangs on it too - its constructor calls
 waits on carrier/network state, so it is title-side. Matrix rows for the five
 landscape titles were re-measured and the table regenerated (1817 titles, 1799
 ok, only those five lines changed).
+
+## Round 178: every probe replays the per-title screen, and the r46 visual probe is clean
+
+The per-title canvas size introduced in round 177 (`tools/corpus_keymap.py`'s
+`screen()`) is now replayed by all corpus probes - deep, motion, audio, states,
+CPU, heap and media - instead of the hardcoded `240x320`.  Rows that carry an
+absolute `jar_path` (fetched titles outside `tests/games`) are resolved from
+the row itself, so ad-hoc sweep directories work too:
+
+| tool | change |
+|---|---|
+| `tools/check_corpus_deep.py` | `--size` from `screen()` |
+| `tools/check_corpus_motion.py` | `--size` from `screen()`; `jar_for(row)` uses `jar_path` |
+| `tools/check_corpus_audio.py` | `--size` from `screen()`; row `jar_path` first |
+| `tools/check_corpus_states.py` | `--size` from `screen()`; row `jar_path` first |
+| `tools/check_corpus_cpu.py` | `--size` from `screen()`; row `jar_path` first |
+| `tools/check_corpus_heap.py` | `--size` from `screen()`; row `jar_path` first |
+| `tools/check_corpus_media.py` | `--size` from `screen()`; row `jar_path` first |
+
+The whole-corpus libretro visual probe was then run with the r46 core over the
+round-176 rows (`compat-20261122-r176`, 1050 rows, 300 frames, 8 jobs, per-row
+canvas size and keys):
+
+**1034 titles: 1028 passed, 2 known limitation(s), 4 failed.**
+
+Known limitations are the two blocking-load titles also seen earlier
+(`台球传奇_87.jar`, `德州扑克2_3884.jar`; `毁灭战士3_10598.jar` is not in this
+row set because its row is `ok` only at the sweep's long budget).  The four
+failures:
+
+| title | failure | adjudication |
+|---|---|---|
+| `MidnightPool1_1.0.0_320x240.jar` | `serialize_writes_state` refused; still black through the core | core-only path: the title renders through the CLI at 320x240 but its own `paint()` busy-waits 50 ms on `System.currentTimeMillis()`; the libretro virtual clock only advances per `retro_run()` while the VM thread is stuck in that paint. See the round-178 note below. |
+| `杀鬼子-敌后武工队_2185.jar` | `unserialize_restores_state` refused | same slow-frame state-service class; the title paints through the CLI and through the core (its save check is the only failure). |
+| `PAC-MAN (176x220) (1.0.0).jar` | black through CLI and core | title-side: the constructor builds its player name from an empty Sprint `Muglet` URI (`String.substring(8,0)` throws `StringIndexOutOfBoundsException`, caught), so it waits on carrier state; FreeJ2ME-Plus hangs on it too. |
+| `Asphalt4EliteRacing_1.0.0_320x240.jar` | `unserialize_after_reset` + `memory_maps_after_restore` | state-service timeout while the title's first frame runs long; the same single-process run fails `serialize_writes_state` too. Open. |
+
+Round 178 also added opt-in frame dumps to the mock harness
+(`--dump-dir DIR`, `--dump-every N`, PPM output) so core-path visuals can be
+compared with `--dump-frames` CLI output.
+

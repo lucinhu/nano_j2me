@@ -920,3 +920,17 @@ game continues`. The core refuses rather than snapshotting an inconsistent VM;
 the same titles save fine from the CLI path (frame boundary) and under Android's
 boundary save. Frontends that retry later in the session can still get a valid
 state once the title reaches its next boundary.
+
+### Harness frame dumps and per-title screens (round 178)
+
+The mock frontend harness accepts `--dump-dir DIR --dump-every N` to write
+sampled RGB565 frames as PPM, which makes core-path visuals comparable with the
+CLI's `--dump-frames` output.  `tools/check_libretro_corpus_visual.py` now
+replays each row's own canvas size (`screen` recorded by
+`tools/sweep_compat.py`) through the `nano_j2me_screen` core option and passes
+`--expect-screen` so the AV geometry check expects the configured canvas.
+Known limitation: titles whose own `paint()` busy-waits on
+`System.currentTimeMillis()` for wall time (e.g. `MidnightPool1`) cannot
+complete a frame under the synchronous libretro frame model; they render in
+the CLI but stay blank through the core, and their state requests time out.
+
