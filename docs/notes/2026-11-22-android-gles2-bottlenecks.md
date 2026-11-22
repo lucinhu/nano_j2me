@@ -401,16 +401,20 @@ no CPU difference against the baseline (GL 5.08/5.20 s vs 5.19 s, software
 4.34-4.46 s in the same session), so the change was reverted; a hash-gated
 reuse cannot help when rectangles do not repeat.
 
-**Where the transactions actually come from.**  Tracing `m3g_journal_flush`
-showed all **1888 flushes in 900 frames (2.1/frame)** originate inside
-`m3g_journal_append`: a packet whose surface/depth differs from the journal's
-current target forces a commit of the old journal, and the batch-size cap
-(`M3G_JOURNAL_BATCH_MAX`) forces the rest.  The six 2D-visible
-`nj_m3g_flush()` call sites (present, `gfx_load`, image reads, screen grab,
-bindTarget, clear) saw `pending=0` in **614,429 calls** - a 2D observer never
-commits a queued batch in this title.  That also explains the earlier
-`intervals pending=0` result: the transactions are not caused by the 2D phase at
-all; they are target-boundary commits during M3G rendering.
+**Where the transactions actually come from (corrected in round 205).**  The
+first trace in this round attached its print *after* the flush call, so the
+attribution below was wrong.  Re-instrumenting *before* every call shows: in a
+900-frame Galaxy run `m3g_journal_flush` enters the "journal exists" path
+**1,870 times** and every one of those had a non-empty journal, but the six
+2D-visible `nj_m3g_flush()` call sites (present, `gfx_load`, image reads, screen
+grab, bindTarget) saw `pending=0` in **614,429 calls**.  All 1,826 non-empty
+flushes carry `pending=1` at the **`Graphics3D.clear()`** site: the clear path
+flushes queued draws before clearing ("queued draws must land before the
+clear").  The remaining 44 carry one packet as well and match the clear path's
+second pass.  So the transactions are clear-driven, not 2D-driven and not
+target-boundary-driven.  A clear flag trace shows every Galaxy clear is
+`_nj_cclear=0, _nj_dclear=1` (depth-only): the colour buffer is preserved, the
+queued draws are the visible 3D scene, and the depth buffer is reset.
 
 Consequence: a frame-scoped FBO must also make the target switch cheap.  The
 next design step is to keep one resident journal/transaction per M3G target
@@ -419,3 +423,31 @@ observed, instead of committing on every target switch.  The 944 single-packet
 flushes per 900 frames are exactly these target-boundary commits, so the
 reduction is measurable (≈2.1 → ≈1 transaction/frame for this title) without
 requiring the 2D-capture phase first.
+
+## Clear-driven transactions cannot be dropped (round 205)
+
+The clear path is where the ~2 GL transactions per frame come from: queued
+draws are committed, then the clear runs.  A tempting optimisation is to drop
+the queued batch instead, because the clear overwrites the same pixels.  The
+measured answer is that this is wrong for this title:
+
+* Every Galaxy clear is **depth-only** (`cclear=0, dclear=1`), so the colour
+  writes of the queued batch are not overwritten - they are the visible scene.
+* Experiment: in `m3g_clear()`, compute the target surface, viewport bounds and
+  depth-clear flag first, then if the journal is non-empty on the same surface
+  with every queued rect inside the clear viewport and depth either cleared or
+  absent, destroy the journal instead of flushing it.  A/B on the 900-frame
+  Galaxy benchmark (each binary run three times, user CPU):
+  keep = 4.83 / 4.91 / 5.08 s; discard = 3.77 / 3.86 / 4.07 s (about 1.0 s
+  saved).  The GL summary reports `triangles=0 batches=0` for the discard runs
+  - the whole 3D scene was dropped - and a gameplay capture (frame 700, via a
+  temporary `NJ_SDL2_CAPTURE_FROM` hook) differs from the keep run in
+  **539,790 pixels (55%)** while both frames have ~984k non-black pixels.  The
+  change was reverted; correctness wins over the 1.0 s.
+* Consequence: the clear flush is a real visibility barrier.  To reduce the
+  transactions, the clear must become part of the same GPU frame instead:
+  keep the frame FBO/journal resident across depth-only clears (clear depth on
+  the GPU, reset the CPU depth array, keep the colour and continue appending),
+  and commit once per target when it is first observed.  That is a session
+  barrier extension of the existing `gfx_triangles_begin/end` API, not a
+  discard rule.
