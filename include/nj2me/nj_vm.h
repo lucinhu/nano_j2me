@@ -1041,6 +1041,8 @@ nj_status nj_lcdui_late_init(nj_vm *vm);
  * the classes exist for the same reason the LCDUI ones are. */
 nj_status nj_media_late_init(nj_vm *vm);
 nj_status nj_nokia_late_init(nj_vm *vm);
+/* Sprint PCS interface constants (com.sprintpcs.media.PlayerListener). */
+nj_status nj_sprint_late_init(nj_vm *vm);
 nj_status nj_io_late_init(nj_vm *vm);
 
 #ifdef __cplusplus

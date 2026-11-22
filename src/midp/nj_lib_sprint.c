@@ -267,6 +267,23 @@ static const nj_builtin_method player_methods[] = {
     M("stop",                "()V", NJ_ACC_PUBLIC | NJ_ACC_STATIC)
 };
 
+/* Interface constants are INLINED by javac at every use site, so a MIDlet
+ * carries the value the compiler saw rather than asking the runtime.  They
+ * must still exist in the class table with the same values: tests/test_consts.c
+ * checks the stubs and the runtime cannot drift apart (see the List.IMPLICIT
+ * incident in that file's header). */
+#define D_INT "I"
+static const nj_builtin_field listener_fields[] = {
+    { "AUDIO_DEVICE_UNAVAILABLE", D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "END_OF_DATA",              D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "ERROR",                    D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "STARTED",                  D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "STOPPED",                  D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "PAUSED",                   D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "RESUME",                   D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "PREEMPTED",                D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL }
+};
+
 static const nj_builtin_method listener_methods[] = {
     M("playerUpdate", "(ILjava/lang/Object;)V", NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT)
 };
@@ -309,7 +326,9 @@ const nj_builtin_class nj_lib_sprint_classes[] = {
       (nj_u2)(sizeof(player_methods) / sizeof(player_methods[0])) },
     { NJ_C_SPLISTEN, NULL,
       NJ_ACC_PUBLIC | NJ_ACC_INTERFACE | NJ_ACC_ABSTRACT,
-      NULL, 0u, listener_methods,
+      listener_fields,
+      (nj_u2)(sizeof(listener_fields) / sizeof(listener_fields[0])),
+      listener_methods,
       (nj_u2)(sizeof(listener_methods) / sizeof(listener_methods[0])) },
     { NJ_C_SPVIB, "java/lang/Object", NJ_ACC_PUBLIC,
       NULL, 0u, vibrator_methods,
@@ -360,3 +379,31 @@ const nj_native_entry nj_lib_sprint_table[] = {
 };
 const int nj_lib_sprint_count =
     (int)(sizeof(nj_lib_sprint_table) / sizeof(nj_lib_sprint_table[0]));
+
+/* ------------------------------------------------------------------ */
+/* Late initialisation                                                 */
+/* ------------------------------------------------------------------ */
+static void sprint_const_int(nj_vm *vm, const char *name, nj_s4 value)
+{
+    nj_field *f = nj_field_lookup(vm, NJ_C_SPLISTEN, name, "I", 1);
+
+    if (f != NULL) {
+        nj_field_write_int(vm, NULL, f, value);
+    }
+}
+
+nj_status nj_sprint_late_init(nj_vm *vm)
+{
+    if (vm == NULL) {
+        return NJ_ERR;
+    }
+    sprint_const_int(vm, "AUDIO_DEVICE_UNAVAILABLE", 0);
+    sprint_const_int(vm, "END_OF_DATA",              1);
+    sprint_const_int(vm, "ERROR",                    2);
+    sprint_const_int(vm, "STARTED",                  3);
+    sprint_const_int(vm, "STOPPED",                  4);
+    sprint_const_int(vm, "PAUSED",                   5);
+    sprint_const_int(vm, "RESUME",                   6);
+    sprint_const_int(vm, "PREEMPTED",                7);
+    return NJ_OK;
+}

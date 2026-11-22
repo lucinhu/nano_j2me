@@ -605,6 +605,9 @@ nj_status nj_lib_late_init(nj_vm *vm)
     if (nj_nokia_late_init(vm) != NJ_OK) {
         return NJ_ERR;
     }
+    if (nj_sprint_late_init(vm) != NJ_OK) {
+        return NJ_ERR;
+    }
     if (nj_io_late_init(vm) != NJ_OK) {
         return NJ_ERR;
     }
