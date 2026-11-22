@@ -596,3 +596,41 @@ not an input problem.
 
 Temporary `RUN task=`/`NJ_TIMER_DBG` tracing was reverted; the worktree is
 clean.
+
+## Round 219: TheMummy loader structure and where the wait really is
+
+Read the full loader chain from the class files (jar at `/tmp/r210-mummy`):
+
+- `TheMummyMidlet.a()` (instance method, called from the 250 ms TimerTask
+  `c.run()`) runs the whole boot sequence: it builds splash canvas `a` with
+  `/L1.png` (`g=-1, c=0`), calls its `a.a()` loading loop; builds `/L2.png`
+  (`g=-1, c=1`), calls `a.c()` (paint gate) then `a.a()`; builds `/L3.png`
+  (`g=28, c=2`) and calls `a.a()`; then (offsets 161+) builds the real
+  canvases, `d`, calls `d.a()` (the game loop) and starts over.
+- Exit conditions inside `a.a()`: it loops while `MIDlet.a < e || a.g != -1`.
+  The clean exit needs `MIDlet.a >= e` **and** `a.g == -1`.  With `a.g` set from
+  the constructor, stages 1-2 (`g=-1`) exit after `e = a+150` ticks (about 3 s
+  at the 20 ms timer).  Stage 3 has `g=28`, so it can only leave through the
+  early branch when `c != 1` and (`f.c[4]` or `f.c[5]`); the `c=1` stage skips
+  that check.
+- `f.c` is written **only inside `f.class`** (by the entity tick `f.g()`);
+  every `b.class` access to `f.c` is a read (`baload`) used by game logic.
+  `f.a()` clears it.  So the flags are entity/alive marks for the world, and
+  they never become true while the boot sequence is still running.
+- Stage 3's loop body is: check shown; maybe `MIDlet.a(1)`/`MIDlet.c()`;
+  `f.g()`; flag check; `Canvas.repaint(); Canvas.serviceRepaints();`.  The
+  whole loader runs on the 250 ms timer helper thread — i.e. inside the
+  scheduler's C-call pump for that thread — and it calls `serviceRepaints()`
+  in a tight loop.
+- The new hypothesis is therefore about the pump, not the clock: when the
+  loader thread calls `serviceRepaints()` while its own C-call pump owns the
+  frame, the paint that the loop waits for cannot run (the nested
+  `in_call_pump` path only sleeps and steps nothing), so the world tick that
+  would set `f.c[4]/f.c[5]` never gets a frame either.  That is consistent with
+  every observation so far (2251 timer-1 ticks, flag-never-set, paint gfx
+  never counted) and with the round-215 stack.
+- Next experiment for round 220: instrument `c_serviceRepaints()` branch
+  selection under a paced TheMummy run (paint wait, inline paint, frame wait,
+  coalesce) and check whether a frame ever completes while the boot thread
+  spins; if the frame wait is the blocker, the fix is to let the outer frame
+  pump step the scheduler instead of sleeping when `in_call_pump` is set.

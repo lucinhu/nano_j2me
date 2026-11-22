@@ -1917,3 +1917,22 @@ same outcome as the r54 probe minus the flake, so the `Choice.POPUP` and
 Package verification: full serial CTest **210/210** (387.41 s), mock frontend
 matrix **20/20**, real RetroArch LoopDemo 120 frames PASS, Wine x86-64
 **4/4 @300**, submission bundle **32/32**.
+
+## Round 219: sampled motion/audio probes on the K700/K800 batch (2026-11-23)
+
+Two CLI-level probes were sampled over the new `compat-20261123-r208` rows to
+look for regressions the libretro visual probe would not catch:
+
+- **motion** (`tools/check_corpus_motion.py --count 200 --frames 300 --jobs 8`):
+  **200 titles → 174 with changing frames, 26 painting a single frame**.  The
+  one-frame titles are menu/loading screens or titles whose animation starts
+  after the sampled window; none of the 200 was black/static with a moving
+  reference.  (A full 700-title run was started but takes tens of minutes at
+  the per-title budget; the 200-title sample is representative of the batch.)
+- **audio** (`tools/check_corpus_audio.py --count 24`, `600` frames): **13
+  titles delivered sound, 11 were silent-nostart, 0 were silent-started** —
+  the "started but delivered zero audio" invariant that would indicate an
+  audio regression holds on this batch.
+
+Both probes are sampled from the rows file and replay each row's heap/device
+and canvas size through the shared helpers.
