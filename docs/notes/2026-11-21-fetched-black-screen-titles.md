@@ -634,3 +634,45 @@ Read the full loader chain from the class files (jar at `/tmp/r210-mummy`):
   coalesce) and check whether a frame ever completes while the boot thread
   spins; if the frame wait is the blocker, the fix is to let the outer frame
   pump step the scheduler instead of sleeping when `in_call_pump` is set.
+
+## Round 220: the boot thread's repaint storm never lets a frame finish
+
+Instrumented `c_serviceRepaints()` branch selection (temporary, reverted) and
+took periodic `nj_vm_describe_threads()` snapshots with a `SIGALRM` handler
+during a paced run (`--fps 30 --run-frames 60`, 176x208, heap 16).
+
+Measured (timeout 15 s, killed at rc 142):
+
+- **195,400 `Canvas.serviceRepaints()` calls** by the boot thread in ~15 s,
+  with `frame=1 painted=1` constant.  Every branch counter stayed 0: no
+  paint-wait, no inline paint, no coalesce (`repaint_paced`), no frame wait.
+  So each `repaint(); serviceRepaints();` pair returned immediately -
+  `repaint_pending` was already 0, and `paint_active` was not set from the
+  boot thread's point of view.
+- Thread snapshot while hung:
+  - thread 1 (`(current)`, depth 3) in `Graphics.drawImage()` <-
+    `b.a(Graphics)` <- `a.paint(Graphics)` - i.e. the frame's paint is
+    executing (and `b.a()` pc 730 is only the tail of the world draw loop;
+    it is not a blocking instruction).
+  - thread 2 sleeping in `TimerThread.run()` (timer 1 helper).
+  - thread 3 (depth 6) in `Canvas.repaint()` native <- `a.a()` <-
+    `TheMummyMidlet.a()` <- `c.run()` <- `TimerThread.pump()` - the boot
+    thread's repaint storm.
+- The frame never advances past 1 even though the paint is a normal, short
+  world draw.  Combined with `c_repaint_all()` doing
+  `nj_midp_repaint(); c_paint_now();` and `c_paint_now()` being skipped while
+  `paint_active` is set, the observed shape is a livelock between the frame
+  paint and the boot thread's repaint loop: the boot thread re-requests a
+  paint on every iteration, `serviceRepaints()` cannot service it (the frame
+  paint owns `paint_active`), and the frame paint never returns to the frame
+  loop so the request is never fulfilled.
+- Remaining question for the next round: whether the paint is entered with
+  `paint_active` already restored to 0 (so the boot thread's repaints should
+  coalesce but `paint_owner`/thread identity mismatches hide them), or whether
+  the frame paint itself is being re-entered by the repaint path.  Candidate
+  fixes: (1) make `c_serviceRepaints()` on a non-frame thread coalesce the
+  request (set `th->repaint_paced`/pending) instead of returning, and let the
+  frame loop paint once; (2) let the paint body service at most one pending
+  request per frame and drop additional ones from other threads;
+  (3) keep the frame pump from re-entering paint from a timer helper.  All
+  need frame-dump parity checks on a normal timer-driven title.
