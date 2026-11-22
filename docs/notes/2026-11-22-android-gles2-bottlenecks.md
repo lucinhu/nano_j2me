@@ -451,3 +451,41 @@ measured answer is that this is wrong for this title:
   and commit once per target when it is first observed.  That is a session
   barrier extension of the existing `gfx_triangles_begin/end` API, not a
   discard rule.
+
+## In-session depth-clear barrier (round 206, rejected)
+
+The round-205 result said the reduction has to come from keeping the session
+resident across a depth-only clear, with the depth reset executed inside the GPU
+session instead of committing first.  That was implemented as a prototype:
+
+* `nj_gfx_triangles_depth_clear` session hook (new optional port field, SDL2
+  wiring), clearing the session depth attachment to `1.0` and the depth-rank
+  "keys" attachment to zero — the seed shader maps CPU depth 0 (far) to GL depth
+  1.0, so the two stay consistent with the CPU `memset(z, 0, ...)`.
+* `m3g_journal_pump_cover()` grows a session opened at the clear to cover the
+  clear rectangle, and `m3g_clear()` skips the commit (`nj_m3g_flush`) when
+  `_nj_cclear == 0 && _nj_dclear == 1 && _nj_img == NULL`, absorbs the clear
+  into the open session, and then continues with the CPU depth reset.
+
+Measurement on Galaxy on Fire 2 (900 frames @ 60 fps, RTX 5080, forced GL via
+`--graphics gles2`, deep keys), interleaved A/B runs with the barrier gated by
+`NJ_GLES2_NO_BARRIER`:
+
+| run | user CPU |
+| --- | --- |
+| barrier on | 4.900 s, 5.091 s, 5.063 s |
+| barrier off | 5.008 s, 4.785 s, 5.035 s |
+
+The barrier did activate — 5,853 depth-only clears were absorbed into resident
+sessions over the run, and the GL transaction count dropped from 1,764 to 1,041
+(profiler) — but the CPU time was statistically identical (the spread between
+repeat runs is larger than any saving).  Creating the larger session also pulls
+the seed/readback cost from the small per-transaction rectangles to a full
+session-sized rectangle, cancelling the fewer-transactions win.
+
+Conclusion: transaction count is not the cost driver on this path; the
+per-transaction cost that survives is dominated by pixel-scaled work (seed
+import/upload, readback, commit), not the fixed setup/driver overhead.  A real
+win still requires the whole-frame design (no per-transaction readback and no
+CPU commit except when an observer asks), which is the next multi-round step.
+The prototype, the hook and the SDL2 wiring were reverted in full.
