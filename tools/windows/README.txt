@@ -1,4 +1,4 @@
-nano_j2me 0.5.34 - Windows x86_64
+nano_j2me 0.5.35 - Windows x86_64
 ================================
 
 nano_j2me 是用 C99 写成的 J2ME（CLDC 1.1 / MIDP 2.0）运行时。
