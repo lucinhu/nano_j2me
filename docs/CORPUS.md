@@ -1666,3 +1666,38 @@ whole game loop inside the MIDlet constructor). A one-off experiment with
 `LR_STATE_TIMEOUT_MS` raised 4 s -> 15 s still failed all three (wall time grew
 to ~17 s), so these are not "slightly too slow" frames and the 4 s bound is not
 worth loosening: a frontend would only block longer before the same refusal.
+
+## Round 192: 0.5.32 corpus revalidation (2026-11-22)
+
+Re-ran the complete measured corpus on the 0.5.32 CLI (the TextEditor /
+field-audit release) to prove the new API surface is compat-neutral.
+
+Full sweep (`tests/games` + the 646-file fetched cache, 18 workers,
+`.local-tools/debug-runs/compat-20261122-r192`): **1050 rows -> 1036 ok /
+4 title-exception / 4 bad-jar / 2 timeout / 2 title-exit / 2 no-frame**, a
+**byte-identical verdict set to the 0.5.31 sweep (0 changes)**.  The same
+eleven title-side rows remain (four unusable archives, two self-exiting
+titles, two no-frame licence checks, Glomo/JewelQuest/4in1 title code,
+`assassins_creed` and `gangstar_2` self-paced timeouts).
+
+The 1050 fresh rows were overlaid into
+`.local-tools/debug-runs/compat-matrix-r167/rows.jsonl` (backup
+`rows.jsonl.pre192.bak`; sources note the round-192 batch) and
+`docs/COMPATIBILITY_MATRIX.md` was regenerated with its explicit rows-dir
+argument: **1817 titles / 1799 ok** (4 title-exception, 4 bad-jar, 3 timeout,
+3 title-exit, 2 failure, 2 no-frame), two renders `cmp`-identical.  The 935
+changed lines are measurement noise in bytecode/paint counters, not verdict
+changes.
+
+Whole-corpus libretro visual probe on the r51 core (`build/libretro-dist`,
+300 frames, 8 jobs, per-title screen and keys, out
+`.local-tools/debug-runs/r192-visual`): **1036 titles -> 1030 passed,
+3 known limitations, 3 failed**.  Known: `台球传奇_87` and `德州扑克2_3884`
+(blocking loads behind the generic key script) and `毁灭战士3_10598` (whole
+game loop inside the MIDlet constructor).  Failed: `MidnightPool1_1.0.0_320x240`
+(paint-loop clock limitation plus the state-service timeout),
+`PAC-MAN (176x220) (1.0.0)` (title-side: empty Sprint Muglet URI; the
+FreeJ2ME reference hangs too) and `Asphalt4EliteRacing_1.0.0_320x240`
+(unserialize-after-reset / memory-map republish, the documented long-frame
+state-service class; it passed the previous probe run, so this is the known
+load-timing sensitivity, not a regression).

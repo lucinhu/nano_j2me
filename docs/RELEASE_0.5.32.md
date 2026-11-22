@@ -95,3 +95,10 @@ screenshots exactly as on the canvas.
   `55e50a8`; OPEN/MERGEABLE, no merge claimed.
 * Docs PR: https://github.com/libretro/docs/pull/1239 — branch at
   `95a1d0a` against docs master `96ee874`; OPEN/MERGEABLE, no merge claimed.
+
+* Post-release revalidation: the full 1050-row sweep on the released 0.5.32
+  CLI reproduces the 0.5.31 verdicts exactly (**0 changes**, 1036 `ok`), the
+  compatibility matrix is refreshed (1817 titles / 1799 ok), and the whole
+  corpus through the r51 core probes **1030 passed, 3 known limitations,
+  3 failed** (the documented paint-clock, title-side and state-service
+  classes).
