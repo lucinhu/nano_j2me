@@ -598,3 +598,23 @@ takes about 3 s; when the fetched cache is present it also scans it (a couple
 of minutes) and still passes. Any *new* unresolved member from a class outside
 the allowlist fails the suite, so the round-186 "28 gaps down to title-side
 only" state is protected by CI rather than by memory.
+
+## Round 190: field-level member audit (2026-11-22)
+
+The builtin-API dump (`nj_dump_builtin_api()`, `nj2me --dump-builtin-api`)
+now also prints the field-table flags, and `tools/check_vendor_members.py`
+collects `Fieldref` constant-pool entries in addition to
+`Methodref`/`InterfaceMethodref`.  Resolution walks the dumped superclass
+chain for both kinds, filters classes the JAR itself ships, and accepts the
+three title-side prefixes in `tools/api_member_allowlist.txt`.
+
+Result over the whole measured corpus (1050 archives, 296,486 member
+references over 195 referenced classes): **0 classes with missing fields, 0
+signatures**, and the unchanged method list (3 title-side classes / 21
+signatures accepted by the allowlist).  So every field a corpus class
+references — every constant and every instance field — resolves against the
+runtime tables; the only remaining static-audit hits are the title-side
+patched-ABI cases already documented in round 185.
+
+The `check_vendor_members` CTest gate exercises the same path (`--bin` with
+the freshly built CLI), so both member kinds are now protected.

@@ -35,7 +35,7 @@ LIMIT = 400
 def class_refs(b):
     """Return [(owner, name, desc)] for METHOD/INTERFACE_METHOD refs."""
     if len(b) < 10 or b[:4] != b"\xca\xfe\xba\xbe":
-        return []
+        return [], []
     n = struct.unpack(">H", b[8:10])[0]
     off = 10
     tags = [None] * n
@@ -64,11 +64,12 @@ def class_refs(b):
         elif tag == 15:
             off += 3
         else:
-            return []
+            return [], []
         i += 1
     out = []
+    field_out = []
     for j in range(1, n):
-        if tags[j] not in (10, 11):
+        if tags[j] not in (9, 10, 11):
             continue
         ci, nti = vals[j]
         owner = vals[vals[ci]] if tags[ci] == 7 else None
@@ -79,8 +80,8 @@ def class_refs(b):
         name = vals[name_i] if tags[name_i] == 1 else None
         desc = vals[desc_i] if tags[desc_i] == 1 else None
         if isinstance(owner, str) and isinstance(name, str) and isinstance(desc, str):
-            out.append((owner, name, desc))
-    return out
+            (field_out if tags[j] == 9 else out).append((owner, name, desc))
+    return out, field_out
 
 
 def eval_c_string(expr, macros):
@@ -165,23 +166,25 @@ def jars_under(paths):
 
 
 def tables_from_binary(binary):
-    """Ask the CLI for the authoritative builtin table dump."""
+    """Ask the CLI for the authoritative builtin member dump."""
     with tempfile.NamedTemporaryFile(delete=False, suffix=".tsv") as tmp:
         path = tmp.name
     try:
         subprocess.run([binary, "--dump-builtin-api", path], check=True,
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        tables = defaultdict(set)
+        methods = defaultdict(set)
+        fields = defaultdict(set)
         supers = {}
         with open(path, encoding="utf-8") as fh:
             for line in fh:
                 parts = line.rstrip("\n").split("\t")
                 if len(parts) >= 5 and parts[2] == "method":
-                    tables[parts[0]].add((parts[3], parts[4]))
+                    methods[parts[0]].add((parts[3], parts[4]))
+                elif len(parts) >= 5 and parts[2] == "field":
+                    fields[parts[0]].add((parts[3], parts[4]))
                 elif len(parts) >= 4 and parts[2] == "class":
                     supers[parts[0]] = parts[1] or None
-        tables["__supers__"] = supers  # type: ignore[assignment]
-        return tables
+        return methods, fields, supers
     finally:
         try:
             os.unlink(path)
@@ -232,9 +235,9 @@ def main():
                      for v in vendor]
         src_paths = [p for p in src_paths if os.path.exists(p)]
     supers = {}
+    fields = defaultdict(set)
     if args.bin and os.path.exists(args.bin):
-        tables = tables_from_binary(args.bin)
-        supers = tables.pop("__supers__", {})
+        tables, fields, supers = tables_from_binary(args.bin)
         print(f"member tables: {len(tables)} classes from {args.bin} dump")
     else:
         tables = parse_tables(src_paths)
@@ -242,6 +245,7 @@ def main():
               f"module(s)")
 
     missing = defaultdict(set)
+    missing_fields = defaultdict(set)
     who = defaultdict(set)
     checked = 0
     ref_classes = set()
@@ -261,34 +265,42 @@ def main():
                 refs = class_refs(z.read(entry))
             except Exception:
                 continue
-            for owner, name, desc in refs:
-                if owner in provided:
-                    continue          # the jar ships its own copy
-                methods = tables.get(owner)
-                if methods is None:
-                    continue
-                ref_classes.add(owner)
-                checked += 1
-                # JVM resolution walks the superclass chain.
-                found = False
-                cur = owner
-                for _ in range(64):
-                    if (name, desc) in tables.get(cur, ()):
-                        found = True
-                        break
-                    cur = supers.get(cur)
-                    if not cur:
-                        break
-                if found:
-                    continue
-                missing[owner].add((name, desc))
-                who[(owner, name, desc)].add(base)
+            method_refs, field_refs = refs
+            for is_field, entries in ((False, method_refs), (True, field_refs)):
+                for owner, name, desc in entries:
+                    if owner in provided:
+                        continue      # the jar ships its own copy
+                    pool = fields if is_field else tables
+                    if owner not in pool:
+                        continue
+                    ref_classes.add(owner)
+                    checked += 1
+                    # JVM resolution walks the superclass chain.
+                    found = False
+                    cur = owner
+                    for _ in range(64):
+                        if (name, desc) in pool.get(cur, ()):
+                            found = True
+                            break
+                        cur = supers.get(cur)
+                        if not cur:
+                            break
+                    if found:
+                        continue
+                    if is_field:
+                        missing_fields[owner].add((name, desc))
+                    else:
+                        missing[owner].add((name, desc))
+                    who[(is_field, owner, name, desc)].add(base)
 
     total = sum(len(v) for v in missing.values())
+    total_fields = sum(len(v) for v in missing_fields.values())
     print(f"scanned {scanned} archives, checked {checked} member refs over "
           f"{len(ref_classes)} referenced classes "
           f"({sum(1 for c in ref_classes if c in tables)} of them audited), "
-          f"{len(missing)} classes with missing members, {total} signature(s)")
+          f"{len(missing)} classes with missing methods, {total} signature(s); "
+          f"{len(missing_fields)} classes with missing fields, "
+          f"{total_fields} signature(s)")
     allow = []
     if args.allow:
         with open(args.allow, encoding="utf-8") as f:
@@ -302,23 +314,30 @@ def main():
             if any(owner.startswith(p) for p in allow):
                 allowed += len(missing[owner])
                 del missing[owner]
+        for owner in list(missing_fields):
+            if any(owner.startswith(p) for p in allow):
+                allowed += len(missing_fields[owner])
+                del missing_fields[owner]
     if allowed:
         print(f"{allowed} title-side gap(s) accepted by {args.allow}")
 
     shown = 0
     truncated = False
-    for owner in sorted(missing):
-        if args.only and not any(owner.startswith(p) for p in args.only):
-            continue
-        print(f"{owner}")
-        for name, desc in sorted(missing[owner]):
-            if shown >= LIMIT:
-                truncated = True
+    for is_field, groups in ((False, missing), (True, missing_fields)):
+        for owner in sorted(groups):
+            if args.only and not any(owner.startswith(p) for p in args.only):
+                continue
+            print(f"{owner}{' (field)' if is_field else ''}")
+            for name, desc in sorted(groups[owner]):
+                if shown >= LIMIT:
+                    truncated = True
+                    break
+                jars = sorted(who[(is_field, owner, name, desc)])
+                extra = f"  <- {', '.join(jars[:3])}" if args.verbose else ""
+                print(f"   {name}{desc}{extra}")
+                shown += 1
+            if truncated:
                 break
-            jars = sorted(who[(owner, name, desc)])
-            extra = f"  <- {', '.join(jars[:3])}" if args.verbose else ""
-            print(f"   {name}{desc}{extra}")
-            shown += 1
         if truncated:
             break
     if truncated:

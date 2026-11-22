@@ -152,9 +152,10 @@ int nj_dump_builtin_api(const char *path)
                         bc->methods[j].name, bc->methods[j].desc);
             }
             for (j = 0; j < bc->nfields; j++) {
-                fprintf(f, "%s\t%s\tfield\t%s\t%s\n", bc->name,
+                fprintf(f, "%s\t%s\tfield\t%s\t%s\t%u\n", bc->name,
                         bc->super ? bc->super : "",
-                        bc->fields[j].name, bc->fields[j].desc);
+                        bc->fields[j].name, bc->fields[j].desc,
+                        (unsigned)bc->fields[j].flags);
             }
         }
     }
