@@ -1700,3 +1700,14 @@ gate and the upstream docs option row.  Validation: full serial CTest
 **210/210**, mock frontend matrix **37/37**, real RetroArch LoopDemo PASS,
 Wine **4/4 @300**, bundle **32/32**.  Super PR branch `b32e30c`, docs PR
 `95a1d0a`; both OPEN/MERGEABLE, no merge claimed.
+
+
+## Round 200 (2026-11-22): 0.5.34 / r53 package
+
+Version **0.5.34** (metadata commit `61feb9c`, `.info` SHA-256
+`92b9a29732369dc5ffa1d7940020923fe366e6f132bd282e784bc3c4242ead30`), r53 cores
+built from a clean worktree at that commit, five per-ABI GLES2/legacy APKs
+(versionCode 534).  Full serial CTest **210/210** (397.23 s), mock matrix
+**20/20**, real RetroArch LoopDemo PASS, Wine **4/4 @300**, bundle **32/32**.
+Super branch `a6d3f34` (parent `55e50a8`), docs PR head `95a1d0a`; both
+OPEN/MERGEABLE, no merge claimed.

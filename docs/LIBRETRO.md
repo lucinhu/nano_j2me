@@ -84,8 +84,14 @@ Outputs go to `build/libretro-dist/<target>/`, with a library and its metadata.
 Use `--no-strip` to retain symbols. `all` selects the script's supported targets
 and requires all of their toolchains.
 
-The eight candidates currently in `build/libretro-dist/` are the r52 package
-(the 0.5.33 release) built on 2026-11-22 from revision `ea55efa`.  r52 adds the
+The eight candidates currently in `build/libretro-dist/` are the r53 package
+(the 0.5.34 release) built on 2026-11-22 from revision `61feb9c`.  r53 adds the
+web multi-finger canvas pointers (per-id pass-through to `MultipointTouch`,
+multi-pointer tracking in `web/js/input.js`), touch-down on-screen keys, the
+Android `stats: gpu …` / `m3g_accel=force` diagnostics with per-thread EGL
+current caching, and the measured GLES2 investigation notes (the current
+per-transaction backend is slower than software even without readback; the
+whole-frame renderer design is staged).  r52 adds the
 `nano_j2me_deterministic` option: `retro_run()` advances the virtual clock by
 exactly one 16667 µs tick and `java.util.Random()`'s default constructor is
 seeded from a VM-level 64-bit LCG counter, so replay-oriented runs are

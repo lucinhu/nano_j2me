@@ -2091,3 +2091,22 @@ Validation: full serial CTest **210/210** (366 s), mock frontend matrix
 **37/37**, real RetroArch LoopDemo 120 frames PASS, Wine x86-64 **4/4 @300**,
 submission bundle **32/32**.  Super PR branch `b32e30c`, docs PR head
 `95a1d0a` (baseline `96ee874`); both OPEN/MERGEABLE, no merge claimed.
+
+
+### 0.5.34 / r53 (2026-11-22)
+
+Release: https://github.com/lucinhu/nano_j2me/releases/tag/v0.5.34 - tag
+`v0.5.34` (metadata commit `61feb9c`), eight libretro targets plus five
+per-ABI Android APKs (versionCode 534; four GLES2 phone builds and the software
+legacy build); `.info` SHA-256
+`92b9a29732369dc5ffa1d7940020923fe366e6f132bd282e784bc3c4242ead30`
+(`display_version = "0.5.34"`); the tracked super patch applies to
+`libretro-super` master `55e50a8` as fork commit `a6d3f34`.  r53 ships the web
+multi-touch + touch-down keypad work, the Android GLES2 diagnostics/probe
+caching changes and the real-GPU measurement notes; the README documents that
+Android 2.x-4.4 devices should use the legacy APK.
+
+Validation: full serial CTest **210/210** (397.23 s), mock frontend matrix
+**20/20**, real RetroArch LoopDemo PASS, Wine **4/4 @300**, bundle **32/32**.
+Super PR branch `a6d3f34`, docs PR `95a1d0a`; both OPEN/MERGEABLE, no merge
+claimed.
