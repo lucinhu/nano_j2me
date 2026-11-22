@@ -716,3 +716,46 @@ What this rules out and what it does not:
   pumping and let the task run to completion/timeout.  This is dangerous for
   titles that rely on pumped frames during a blocking native (纽约人生_1339),
   so it needs the corpus visual probe as the regression gate.
+
+## Round 222: the loader is not hung - it advances its stages and then waits for a boot handshake we never perform
+
+Direct probes of the game's own statics during a paced run (temporary
+`isShown()` instrumentation, reverted; class names corrected to
+`themummy/TheMummyMidlet`, `a`, `f`):
+
+- `TheMummyMidlet.a:I` (the 20 ms timer 1 tick counter) grows exactly one per
+  20 ms - 37 at 0.6 s, 259 at ~6 s, 418 at ~9 s.  Timer handling is correct.
+- Loader stages advance on schedule: stage 1 (`a.g=-1`, `a.c=0`) until
+  `MID.a >= e` (~150 ticks = 3 s); stage 2 (`a.g=-1`, `a.c=1`) another 3 s;
+  **stage 3 (`a.g=28`, `a.c=2`) starts around `MID.a=418` (~8.5 s)** and then
+  stays forever.
+- The boot handshake flags are never set: **`MID.b:Z = 0` and `MID.d:I = 0`**
+  for the whole run.  `TheMummyMidlet.a(I)` (which sets both and calls
+  `f.a()`) is only invoked from the loader loop's `if (!isShown())` branch;
+  our `Displayable.isShown()` returns true for the current canvas from the
+  very first frame (deliberate design, see `d_isShown`), so the branch never
+  runs.  `TheMummyMidlet.c()` - which clears `MID.b` and calls `f.a()` - is
+  gated on `MID.b` being true, so world init never runs either.
+- Stage 3's exit condition (from `a.a()` bytecode) is `c:I != 1` and
+  (`f.c[4]` or `f.c[5]`); the background loop condition is
+  `MID.a < e || g != -1`, and with `g=28` only the early exit can leave.
+- `f.c[]` is written only by `b.class`'s collision/update code
+  (`getstatic f.c:[Z; ... bastore` around bytecode 4965-5042) i.e. from the
+  game update, which needs the world init above; consistent with
+  `f.c[4]/f.c[5]` staying 0.
+
+Experiment: temporarily made `isShown()` return `F_C_VISIBLE` (false until the
+first paint delivers showNotify, environment switch) - behaviour did not
+change: `MID.b` still 0, stage 3 still reached, `f.c` still 0.  Reverted; the
+design comment already records that using `F_C_VISIBLE` there broke startup
+wrappers on other titles, so that is not the fix.
+
+Conclusion / next step: TheMummy is not hung and not timer-starved - it waits
+for a MIDP boot handshake (`isShown()` false at least once right after
+`Display.setCurrent()` so `MIDlet.a(1)` runs) that our synchronous
+`setCurrent`/`isShown` model never produces.  Next probes: (1) count
+`TheMummyMidlet.a(I)`/`c()` invocations to confirm neither runs; (2) check what
+`TheMummyMidlet.a(I)` and `c()` do to world state; (3) decide whether a
+narrow, opt-in "shown only after first showNotify" model is worth trying for
+`com.nokia.mid.ui.FullCanvas` titles, with the 开心农场/startup-wrapper
+regressions as the guard.
