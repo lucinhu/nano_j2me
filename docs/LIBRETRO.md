@@ -928,16 +928,20 @@ reproduction commands and the working hypothesis are in
 `docs/notes/2026-11-15-libretro-async-load-early-state.md`; the r25 release
 package is held until this is resolved or accepted as a documented limitation.
 
-**Save-state service limitation (round 176).** `retro_serialize()` is served at a
-frame boundary by the core's frame loop. A title whose single frame runs longer
-than the 4 s service timeout - observed with `MidnightPool1` and
-`Asphalt4EliteRacing`, where the VM thread stayed inside one `nj_midp_frame()`
-while the frontend had already called `retro_run()` hundreds of times - makes
+**Save-state service limitation (round 176, measured round 189).**
+`retro_serialize()` is served at a frame boundary by the core's frame loop. A
+title whose single frame never completes under the virtual clock - a blocking
+load, or a paint loop busy-waiting on `System.currentTimeMillis()` - makes
 `retro_serialize()` return false and log `save-state request refused (-8); the
-game continues`. The core refuses rather than snapshotting an inconsistent VM;
-the same titles save fine from the CLI path (frame boundary) and under Android's
-boundary save. Frontends that retry later in the session can still get a valid
-state once the title reaches its next boundary.
+game continues`, because the VM thread stays inside one `nj_midp_frame()` while
+the frontend's 4 s service timeout expires. The full-corpus probe (1036 titles,
+120 frames each) has exactly three such titles: `MidnightPool1`,
+`Asphalt4EliteRacing`, and the `毁灭战士3` constructor-loading build. Raising the
+bound from 4 s to 15 s rescued none of them (wall time merely grew to ~17 s per
+title), so the 4 s bound stays. The core refuses rather than snapshotting an
+inconsistent VM; the same titles save fine from the CLI path (frame boundary)
+and under Android's boundary save. Frontends that retry later in the session
+can still get a valid state once the title reaches its next boundary.
 
 ### Harness frame dumps and per-title screens (round 178)
 
