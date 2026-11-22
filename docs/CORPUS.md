@@ -1794,4 +1794,4 @@ downloaded directly and its members were extracted with the fetcher's rules:
   sphere-map slot) and `Graphics3D.dispose()` (no handset resources to free).
   The only remaining gaps are the three title-side patched-ABI classes already
   accepted in `tools/api_member_allowlist.txt` (`java/io/PrintStream`,
-  `panic` `Graphics`/`Image` obfuscated overloads).
+  `Graphics`/`Image` obfuscated overloads).
