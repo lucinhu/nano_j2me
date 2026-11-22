@@ -1,7 +1,7 @@
-From a4859b5903d8ac2624f3c891e6d7b00cd80b02eb Mon Sep 17 00:00:00 2001
+From b32e30c53c00993a09157192ca3efcdd79f7ab38 Mon Sep 17 00:00:00 2001
 From: lucinhu <lucinhu@users.noreply.github.com>
-Date: Sun, 22 Nov 2026 18:01:30 +0800
-Subject: [PATCH] info: add nano_j2me 0.5.32
+Date: Sun, 22 Nov 2026 20:14:37 +0800
+Subject: [PATCH] info: add nano_j2me 0.5.33
 
 ---
  dist/info/nano_j2me_libretro.info | 31 +++++++++++++++++++++++++++++++
@@ -10,7 +10,7 @@ Subject: [PATCH] info: add nano_j2me 0.5.32
 
 diff --git a/dist/info/nano_j2me_libretro.info b/dist/info/nano_j2me_libretro.info
 new file mode 100644
-index 0000000..a3bf64d
+index 0000000..b62c4f1
 --- /dev/null
 +++ b/dist/info/nano_j2me_libretro.info
 @@ -0,0 +1,31 @@
@@ -27,7 +27,7 @@ index 0000000..a3bf64d
 +# Preserve all applicable MIT, OFL and Apache license/notice files in packages.
 +license = "MIT|OFL-1.1|Apache-2.0"
 +permissions = ""
-+display_version = "0.5.32"
++display_version = "0.5.33"
 +supports_no_game = "false"
 +# Manual states only; architecture/ABI/build dependent, with external resources omitted.
 +savestate = "true"
