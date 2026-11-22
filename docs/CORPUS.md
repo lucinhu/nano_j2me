@@ -1478,3 +1478,38 @@ changes), so the Android acceleration and cheat-search work is compat-neutral
 for the games.  The rows were merged into the compatibility matrix
 (`docs/COMPATIBILITY_MATRIX.md`, **1817 titles / 1799 ok**, deterministic
 regeneration).
+
+## Round 183: member-level linkage scan and the r48 visual probe
+
+The round-179 audit only compares class names.  A game that links every class
+but misses a *member* catches the resulting error, keeps painting, and still
+records `ok`.  `tools/check_corpus_linkage.py` closes that gap: it replays each
+row for 120 frames (per-row screen/heap/device, per-title key script) and
+reports every linkage-class error (`NoClassDefFoundError`, `NoSuchMethodError`,
+`NoSuchFieldError`, `AbstractMethodError`, `IllegalAccessError`,
+`IncompatibleClassChangeError`, `UnsatisfiedLinkError`, `ClassFormatError`,
+`ExceptionInInitializerError`).
+
+Result over the 1046-title 0.5.29 sweep: **1046 scanned, 1 title with a
+linkage hit** — `ArcadePark2.jar` (`GlomoReg/GlomoCountry` is genuinely absent
+from the JAR; title-side packaging bug).  The scan found two real runtime bugs
+that the sweep called `ok`:
+
+- `snowboardr_m6km8xw5.jar`: `AbstractMethodError: v does not implement
+  s.getGameAction` — interface dispatch skipped the inherited Canvas method
+  because `getGameAction`/`getKeyCode`/`getKeyName` were declared static only.
+  Added instance entries next to the static ones; the title now runs 300
+  frames/300 paints/gfx=6719/tris=14990.
+- `mini3draci_ix48iqod.jar` (`MINI 3D`): `NoSuchMethodError:
+  AffineTrans.set(IIIIIIIIIIII)V`.  Added the 12-int overload; the title now
+  runs 300 frames/216 paints/gfx=2477/tris=3436 with zero linkage errors (was
+  431 throws and tris=0).
+
+Whole-corpus libretro visual probe on the r48 core over the 1036 rendered
+titles (300 frames, 8 jobs): **1029 passed / 2 known limitations / 5 failed**.
+Known: `毁灭战士3_10598` slow loader, `台球传奇_87` blocking load.  Failures
+are the documented classes: `MidnightPool1` (paint-clock limitation and its
+save times out), `PAC-MAN (176x220)` (title-side/network), and the state-service
+timeout group (`杀鬼子-敌后武工队`, `Asphalt4EliteRacing`,
+`3D_Autobahn_Raser_World_Challenge`) whose frames run longer than the 4 s
+serialize window.

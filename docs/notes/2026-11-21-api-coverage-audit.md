@@ -442,3 +442,45 @@ class).  `test_pki` is in CTest.
 Verification: `IstanBUL.jar` runs 300 frames rc=0, 165 paints, gfx=5775; the
 whole-corpus audit now reports **641 implemented classes and 1 jar with a
 missing API ref** (the unused Doom3 SVG symbols).
+
+## Round 183: member-level audit (the class list was not the whole story)
+
+The round-179 audit compares only **class names**.  A game can link every
+class it needs and still fail on a missing *member*: it catches the resulting
+`NoSuchMethodError`/`AbstractMethodError`, keeps painting, and the sweep
+records the row as `ok`.  Round 183 closed that hole with a member-level probe:
+
+`tools/check_corpus_linkage.py` replays every sweep row for a short window
+(120 frames by default, per-row screen/heap/device and per-title key script)
+and greps stderr for the linkage error family —
+`NoClassDefFoundError`, `NoSuchMethodError`, `NoSuchFieldError`,
+`AbstractMethodError`, `IllegalAccessError`, `IncompatibleClassChangeError`,
+`UnsatisfiedLinkError`, `ClassFormatError`, `ExceptionInInitializerError`.
+
+The first run used the stale `build/nj2me` binary and reported nine false gaps
+that the current source already implements (Immersion VibeTonz, Sprint Muglet,
+Siemens Light).  With `NJ_BIN` pointing at the 0.5.29 CLI the 1050-row corpus
+has exactly **two** titles with member-level linkage errors, and both are real
+runtime bugs:
+
+| Title | Error | Cause | Fix |
+| --- | --- | --- | --- |
+| `snowboardr_m6km8xw5.jar` | `AbstractMethodError: v does not implement s.getGameAction` | `v extends com.nokia.mid.ui.FullCanvas implements s`; the interface method is inherited from `Canvas`, but our `getGameAction`/`getKeyCode`/`getKeyName` were declared **static only** for the obfuscated invokevirtual games, and `nj_method_lookup()` skips statics | keep the static entries *and* add instance entries after them: CP resolution still links the static one first (invokestatic games unchanged), while interface dispatch finds the instance one |
+| `mini3draci_ix48iqod.jar` (`MINI 3D`) | `NoSuchMethodError: AffineTrans.set(IIIIIIIIIIII)V` | the 12-int overload was never implemented (the int[] form was) | added `mascot_xf_set_int12` writing `m00..m23` row-major, method entry and native-table entry |
+
+Both fixes are covered by tests: `tests/test_lcdui.c` now asserts the three
+methods also resolve as non-static instance entries and checks instance
+dispatch (`Canvas.getGameAction(KEY_DOWN) -> 6`); `tests/test_mascot.c` checks
+the 12-int `set` stores all twelve entries in row-major order.  Rebuilds show
+`snowboardr` at 300 frames / 300 paints / gfx=6719 / tris=14990 and
+`mini3draci` at 300 frames / 216 paints / gfx=2477 / tris=3436, with zero
+linkage errors (was 431 thrown `NoSuchMethodError` and tris=0).
+
+Remaining member-level hit: `ArcadePark2.jar` resolves
+`GlomoReg/GlomoCountry` from `GlomoConfig.<clinit>` but ships only
+`GlomoCountryShort` — a title-side packaging bug that fails the same way on a
+real handset, so it stays a documented limitation rather than a stub.
+
+The lesson generalises: class-completeness plus a clean `ok` verdict does not
+prove the API surface works; a dedicated linkage-error scan is cheap and found
+two silently-degraded 3D-capable titles.

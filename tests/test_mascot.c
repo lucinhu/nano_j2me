@@ -1596,6 +1596,32 @@ int main(void)
               field(vm, m, XF, "m22") == ONE && field(vm, m, XF, "m01") == 0 &&
               field(vm, m, XF, "m03") == 0, "a new AffineTrans is the identity");
 
+        /*
+         * The twelve-int overload: some titles (MINI 3D) pass the matrix
+         * entries directly instead of an int[].  Row-major m00..m23, the
+         * same order set(int[]) uses.
+         */
+        {
+            static const char *names12[12] = {
+                "m00", "m01", "m02", "m03", "m10", "m11",
+                "m12", "m13", "m20", "m21", "m22", "m23"
+            };
+            nj_value av12[12], r12;
+            int i, ok12 = 1;
+
+            for (i = 0; i < 12; ++i) {
+                av12[i].i = 100 + i;
+            }
+            (void)call(vm, m, XF, "set", "(IIIIIIIIIIII)V", av12, &r12);
+            for (i = 0; i < 12; ++i) {
+                if (field(vm, m, XF, names12[i]) != 100 + i) {
+                    ok12 = 0;
+                }
+            }
+            check(ok12,
+                  "set(m00..m23) stores all twelve entries in row-major order");
+        }
+
         /* 1024 of 4096 is a quarter turn: exact, which is the point of doing
          * this in integers. */
         args[0].i = ONE / 4;

@@ -11856,6 +11856,16 @@ static const nj_builtin_method canvas_methods[] = {
     M("getGameAction",     "(I)I", NJ_ACC_STATIC | NJ_ACC_PUBLIC),
     M("getKeyCode",        "(I)I", NJ_ACC_STATIC | NJ_ACC_PUBLIC),
     M("getKeyName",        "(I)Ljava/lang/String;", NJ_ACC_STATIC | NJ_ACC_PUBLIC),
+    /* The real MIDP declarations are instance methods, and a Canvas subclass
+     * that implements an interface through the inherited getGameAction()
+     * (Pro Snowboard's `v implements s`) is resolved by name walking the
+     * receiver's class chain - which skips statics.  Keep the static entries
+     * above for the obfuscated games that emit invokevirtual and rely on the
+     * linker's instance-then-static fallback, and add the instance entries
+     * here so interface dispatch finds them. */
+    M("getGameAction",     "(I)I", NJ_ACC_PUBLIC),
+    M("getKeyCode",        "(I)I", NJ_ACC_PUBLIC),
+    M("getKeyName",        "(I)Ljava/lang/String;", NJ_ACC_PUBLIC),
     M("repaint",           "()V", 0),
     M("repaint",           "(IIII)V", 0),
     M("serviceRepaints",   "()V", 0),

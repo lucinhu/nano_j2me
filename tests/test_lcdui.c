@@ -2935,6 +2935,18 @@ static void test_canvas_key_methods(nj_vm *vm)
                nj_native_find(vm, NJ_C_CANVAS, names[i], descs[i]) != NULL,
                "%s must resolve", names[i]);
     }
+    /*
+     * The same three methods also exist as instance entries: a Canvas subclass
+     * that implements an interface through the inherited getGameAction() is
+     * resolved by nj_method_lookup(), which walks the class chain skipping
+     * statics.  Pro Snowboard's `v implements s` needs exactly this, while the
+     * static entries above keep the obfuscated invokevirtual games linking.
+     */
+    for (i = 0; i < 3; ++i) {
+        nj_method *inst = nj_method_lookup(cls, names[i], descs[i]);
+        OK_MSG(inst != NULL && (inst->flags & NJ_ACC_STATIC) == 0,
+               "%s must also resolve as an instance method", names[i]);
+    }
     {
         static const int actions[] = { 1, 2, 5, 6, 8, 9, 10, 11, 12 };
         static const int codes[] = {
@@ -2948,6 +2960,15 @@ static void test_canvas_key_methods(nj_vm *vm)
             a[0] = iref(actions[i]);
             OK(call_static_int(vm, NJ_C_CANVAS, "getKeyCode", "(I)I", a, &ok) == codes[i] && ok);
         }
+    }
+    {
+        /* Instance dispatch reaches the same native (the receiver is passed in
+         * args[-1] by nj_call).  Before the instance entries existed this was
+         * the interface-dispatch failure path. */
+        a[0] = iref(NJ_MIDP_KEY_DOWN);
+        r.i = 0;
+        OK(nj_call(vm, canvas, NJ_C_CANVAS, "getGameAction", "(I)I", a, &r) == NJ_OK);
+        OK_MSG(r.i == 6, "Canvas.getGameAction instance call: DOWN -> 6");
     }
     a[0] = iref(NJ_MIDP_KEY_LEFT);
     OK(nj_call_static(vm, NJ_C_CANVAS, "getKeyName", "(I)Ljava/lang/String;", a, &r) == NJ_OK);

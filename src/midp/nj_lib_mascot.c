@@ -414,6 +414,9 @@ static const nj_builtin_method xf_methods[] = {
     M("set", "([I)V", 0),
     M("set", "([II)V", 0),
     M("set", "([[I)V", 0),
+    /* Mascot Capsule's argument-list overload; corpus titles (MINI 3D) call it
+     * with the twelve matrix entries in row-major m00..m23 order. */
+    M("set", "(IIIIIIIIIIII)V", 0),
     M("<init>", "(L" NJ_C_XF ";)V", 0),
     M("<init>", "([I)V", 0),
     M("<init>", "([[I)V", 0),
@@ -660,6 +663,17 @@ static nj_status m3_transform_java(nj_vm *vm,const nj_value *args,nj_value *ret,
     if(!target)return NJ_ERR;
     v3_put3(vm,target,r[0],r[1],r[2]);ret->r=target;return NJ_OK;
 }
+/* AffineTrans.set(m00..m23): the twelve-int overload some obfuscated titles
+ * use instead of the int[] form.  Same entry order as set([I). */
+NJFN(mascot_xf_set_int12)
+{
+    nj_s4 m[M3_NXF];
+    int i;
+    for (i = 0; i < M3_NXF; i++) { m[i] = NJ_ARG_INT(args, i); }
+    xf_write(vm, NJ_THIS(args), m);
+    return NJ_OK;
+}
+
 NJFN(mascot_xf_transform){return m3_transform_java(vm,args,ret,0);}
 NJFN(mascot_xf_transform_copy){return m3_transform_java(vm,args,ret,1);}
 
@@ -1624,6 +1638,7 @@ const nj_native_entry nj_lib_mascot_table[] = {
     { NJ_C_XF, "set", "([I)V", mascot_xf_set_arr },
     { NJ_C_XF, "set", "([II)V", mascot_xf_set_arr_at },
     { NJ_C_XF, "set", "([[I)V", mascot_xf_set_2d },
+    { NJ_C_XF, "set", "(IIIIIIIIIIII)V", mascot_xf_set_int12 },
     { NJ_C_XF, "mul", "(L" NJ_C_XF ";L" NJ_C_XF ";)V", mascot_xf_multiply },
     { NJ_C_XF, "lookAt", "(L" NJ_C_V3 ";L" NJ_C_V3 ";L" NJ_C_V3 ";)V", mascot_xf_set_view },
     { NJ_C_XF, "setRotationX", "(I)V", mascot_xf_rot_x },
