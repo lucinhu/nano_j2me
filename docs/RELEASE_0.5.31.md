@@ -53,6 +53,10 @@ of a hand-parsed copy.
   (362.65 s); `check_vendor_members` fails on any new unresolved runtime
   member outside the tracked title-side allowlist.
 
+* Memory safety (round 188): the whole 1050-title corpus was executed once
+  under an ASan+UBSan build (`tools/check_corpus_asan.py`, 120 frames per
+  title, per-row screen/heap/device) with **0 sanitizer findings**.
+
 ## Artifacts
 
 Cores (`nj2me-0.5.31-libretro-cores.zip`, SHA-256

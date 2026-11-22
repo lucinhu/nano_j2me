@@ -1604,3 +1604,33 @@ The static member audit became a CTest gate this round: `check_vendor_members`
 runs the CLI's `--dump-builtin-api` over the corpus and fails on any new
 unresolved runtime member outside `tools/api_member_allowlist.txt` (three
 title-side classes). See `docs/notes/2026-11-21-api-coverage-audit.md` round 187.
+
+## Round 188: whole-corpus ASan+UBSan campaign (2026-11-22)
+
+The fuzzers mutate containers, but ordinary titles still drive code paths no
+mutation reaches: a truncated archive that happens to load, an odd sprite
+sheet, a handset API used once in a startup branch. To cover that, the CLI was
+built with `-DNJ_SANITIZE=ON` (ASan + UBSan, `RelWithDebInfo`, separate build
+tree) and every row of the 0.5.31 sweep was executed once:
+
+```
+python3 tools/check_corpus_asan.py .local-tools/debug-runs/compat-20261122-r187 \
+    --bin /var/tmp/nj2me-asan/nj2me --out .local-tools/debug-runs/asan-r188 --jobs 8
+```
+
+Each title ran 120 frames at its own screen/heap/device from the sweep row,
+with the generic input replay, under `ASAN_OPTIONS=detect_leaks=0:
+abort_on_error=0:handle_segv=1` and `UBSAN_OPTIONS=halt_on_error=0`; only a
+genuine sanitizer report (AddressSanitizer line or UBSan `runtime error:`)
+counts as a hit, so intentionally restored snapshot state and known JAR-level
+faults do not produce false positives.
+
+Result: **1050 titles, 0 findings** (`check_corpus_asan: clean (1050 titles)`,
+about 11 minutes at 8 jobs, logs under `.local-tools/debug-runs/asan-r188`).
+That is the memory-safety counterpart of the bytecode-level fuzz gates: the
+whole measured corpus, including the 646 fetched titles, runs under ASan/UBSan
+without a single report at 120 frames.
+
+The campaign stays a manual release-branch check (the sanitizer build is not
+part of the default tree and the run is far too slow for CTest); the wrapper
+is tracked as `tools/check_corpus_asan.py` and exits 1 on any finding.
