@@ -1701,3 +1701,26 @@ FreeJ2ME reference hangs too) and `Asphalt4EliteRacing_1.0.0_320x240`
 (unserialize-after-reset / memory-map republish, the documented long-frame
 state-service class; it passed the previous probe run, so this is the known
 load-timing sensitivity, not a regression).
+
+## Round 201: 0.5.34 corpus probe and Android APK smoke (2026-11-22)
+
+Whole-corpus libretro visual probe on the released r53 core
+(`build/libretro-dist`, 300 frames, 6 jobs, per-title screen and keys, out
+`.local-tools/debug-runs/r201-visual`): **1036 titles -> 1030 passed,
+2 known limitations, 4 failed**.  Known: `台球传奇_87` (generic key script can
+land inside its multi-second blocking load) and `毁灭战士3_10598` (whole game
+loop inside the MIDlet constructor).  Failed, all previously documented:
+`MidnightPool1_1.0.0_320x240` (paint-loop clock limitation + state timeout),
+`PAC-MAN (176x220) (1.0.0)` (title-side empty Sprint Muglet URI; the FreeJ2ME
+reference hangs too), `Asphalt4EliteRacing_1.0.0_320x240` (long-frame
+state-service class) and `杀鬼子-敌后武工队_2185` (same class: serialize
+refused inside its first long frame).  `德州扑克2_3884` now passes, so the
+known set is two titles rather than three.
+
+The 0.5.34 split APK was smoke-tested on the headless `Medium_Phone_API_36.1`
+emulator (API 36): `nj2me-0.5.34-x86_64.apk` (versionCode 534)
+installed and launched, the library listed a pushed LoopDemo jar, tapping it
+started the title (240x320 canvas plus the on-screen keypad rendered) and
+logcat reported `gles2: enabled renderer=Android Emulator OpenGL ES Translator
+(Google SwiftShader) (private pbuffer)` with `running LoopDemo`.  Screenshots
+are kept in `.local-tools/debug-runs/r201/` (untracked evidence).

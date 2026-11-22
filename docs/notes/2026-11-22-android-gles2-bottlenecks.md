@@ -259,3 +259,27 @@ costs (rect import, texture uploads, seed upload, GL state setup) stay around
 renderer must also keep state/textures resident across a whole frame and stop
 re-seeding per transaction, i.e. Stage A+B of the design note are one project,
 not two independent wins.
+
+## Software rasteriser headroom (round 201)
+
+The alternative to the GLES2 rework is making the software rasteriser faster
+(SIMD and/or threads).  Before investing there, the current headroom was
+measured on unpaced 3000-frame runs with a `-pg -O2 -g` CLI build:
+
+| title | wall | CPU | paints | gfx calls |
+|---|---:|---:|---:|---:|
+| 合金弹头4 | 9.9 s | 0.208 s | 2193 | 101,679 |
+| 雷霆战机2012BT | 10.0 s | 0.359 s | 1724 | 71,602 |
+| 火影忍者 | 10.0 s | 0.151 s | 3000 | 3,004 |
+| Minecraft PE | -- | 0.907 s | 1 | 585,695 |
+
+The 10 s walls are the pacer, not work.  gprof flat profiles are dominated by
+interpreter dispatch and field access (`nj_interp_run`, `nj_field_read_int`,
+`nj_field_write_int`, `nj_frame_push`), not by 2D raster primitives, so a
+faster rasteriser would not move typical titles.  One concrete overhead was
+tested and rejected: `gfx_load()` resolved the Java font for every graphics
+call even when no text was drawn; moving the lookup into the five text
+primitives produced differences inside noise (合金弹头 0.148/0.121/0.141 s vs
+0.121/0.140 s; Minecraft 0.517-0.524 s both), so it was reverted under the
+"reject neutral changes" rule.  Conclusion: option B has little headroom for
+the general corpus; the heavy titles are waiting/loading loops, not drawing.

@@ -69,6 +69,10 @@ the legacy APK is software-only):
 * real RetroArch 1.22.2 LoopDemo, 120 frames: **PASS** (core log markers verified)
 * Windows x86_64 under Wine, 300 frames: **4/4**
 * submission bundle validator: **32/32**
+* post-release Android smoke (headless API 36 emulator, x86_64 split APK,
+  versionCode 534): installs and launches, library lists a pushed jar, LoopDemo
+  renders its canvas and on-screen keypad; logcat shows the GLES2 private
+  pbuffer path and `running LoopDemo`
 
 ## Upgrade notes
 
