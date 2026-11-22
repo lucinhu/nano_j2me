@@ -1469,3 +1469,12 @@ and `时光樱花册-遗失之心` loads in 29.8 s standalone (round 125 measure
 same under contention).  The 11 early exits are the known `notifyDestroyed()`
 titles (Lab Hamster, SlimeVolleyBall, Snake, 都市摩天楼, 龙珠Z传说, 明星麻将馆,
 杀鬼子-敌后武工队, Hotguys Rhapsody and the newer fetched builds).
+
+The full 1050-row sweep was then re-run on the **0.5.29 CLI** (18 workers,
+`.local-tools/debug-runs/compat-20261122-r182`): **1036 ok / 4 title-exception /
+4 bad-jar / 2 timeout / 2 title-exit / 2 no-frame** — the verdict set is
+byte-for-byte identical to the round-181 sweep on 0.5.28 (zero verdict
+changes), so the Android acceleration and cheat-search work is compat-neutral
+for the games.  The rows were merged into the compatibility matrix
+(`docs/COMPATIBILITY_MATRIX.md`, **1817 titles / 1799 ok**, deterministic
+regeneration).

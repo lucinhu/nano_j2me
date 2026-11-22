@@ -75,6 +75,11 @@ from the top and from the platform table.
   11 early exits, 2 load/budget timeouts** (`TETRIS®`, `时光樱花册-遗失之心` —
   both self-paced/load-heavy titles that pass standalone).
 
+
+* Full 1050-row corpus sweep on the 0.5.29 CLI: **1036 ok / 4 title-exception /
+  4 bad-jar / 2 timeout / 2 title-exit / 2 no-frame** — identical verdict set
+  to 0.5.28 (zero changes); matrix merged to **1817 titles / 1799 ok**.
+
 ## Download
 
 | File | Size (bytes) | SHA-256 |
