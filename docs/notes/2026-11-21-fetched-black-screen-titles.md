@@ -326,3 +326,21 @@ draws black (a Sprite/LayerManager consumer) or a title-side wait for input
 that the generic key script does not satisfy. Next step is to dump the canvas
 draw calls and check whether images decode, then compare against FreeJ2ME-Plus
 for one title.
+
+## Round 177: the blank class was mostly a canvas-size mismatch (2026-11-22)
+
+Re-tested all six titles with explicit canvas sizes. `Carcassonne`,
+`Catan The Seafarers`, `Jewel Explosion`, `Xmas Jewel Explosion` and
+`MidnightPool1` are landscape (`320x240`) builds. On the default portrait
+canvas they poll for portrait assets they do not ship; on 320x240 the four
+purely 2D ones render in both the CLI and the libretro core. This was a probe
+configuration error, not a renderer defect: the probe now selects the row's
+screen size (`tools/corpus_screens/` plus a `_<w>x<h>` name suffix rule, with
+`nano_j2me_screen` and `--expect-screen` on the libretro side).
+
+Still open: `MidnightPool1` renders under the CLI at 320x240 but stays black
+through the core and its `retro_serialize()` is refused with the round-176
+state-service timeout; `PAC-MAN (176x220)` is black at every size we can
+configure, its constructor trips over an empty Sprint `Muglet` URI and it then
+waits on carrier state - the FreeJ2ME-Plus reference hangs on it as well, so
+it is treated as a title-side/network limitation.

@@ -40,6 +40,8 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 ROOT = Path(os.environ.get("NJ_ROOT", Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(ROOT / "tools"))
+from corpus_keymap import screen as resolve_screen  # noqa: E402
 HARNESS = Path(os.environ.get("NJ_LIBRETRO_HARNESS",
                               ROOT / "build" / "test_libretro_frontend"))
 CORE = Path(os.environ.get(
@@ -118,11 +120,15 @@ def run_one(row, frames, timeout):
     # The harness has its own watchdog (default 30 s); a paced 300-frame run
     # plus the state round trips can take that long for heavy titles, so give
     # it the probe's timeout instead of letting it kill a healthy session.
+    size = resolve_screen(jar.name, "240x320")
     cmd = [str(HARNESS), "--core", str(CORE), "--jar", str(jar),
            "--frames", str(frames), "--pace-us", "16667",
            "--timeout", str(max(60, timeout)),
            "--visual-required", "--static-ok", "--min-nonblack", "8",
            "--save-dir", tempfile.mkdtemp(prefix="lj-vis-")]
+    if size != "240x320":
+        cmd += ["--set", "nano_j2me_screen=" + size,
+                "--expect-screen", size]
     # Replay the row's own input recipe: "none" means the sweep found the
     # generic recipe made the title exit, a bare filename is a per-title
     # script under tools/corpus_keys/, otherwise fall back to the generic one.

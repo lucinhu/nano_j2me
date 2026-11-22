@@ -22,6 +22,7 @@ OUT = os.sys.argv[1] if len(os.sys.argv) > 1 else os.path.join(
 BIN = os.environ.get("NJ_BIN") or os.path.join(ROOT, "build", "nj2me")
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from corpus_keymap import resolve as resolve_keys  # noqa: E402
+from corpus_keymap import screen as resolve_screen  # noqa: E402
 RUN = 600
 # Generic input recipe.  No pointer taps: several titles treat an arbitrary
 # tap on the canvas as "select the button under the finger", and a tap at a
@@ -103,8 +104,13 @@ def manifest(path):
 
 def one(job):
     path, base = job
+    # A landscape retail build (the common `_320x240` suffix) renders black or
+    # aborts on the default portrait canvas: measure it at its own size.
+    size = resolve_screen(base, "240x320")
     row = {"file": base, "size": os.path.getsize(path),
            "jar_path": os.path.abspath(path)}
+    if size != "240x320":
+        row["screen"] = size
     attrs, apis, nclass = manifest(path)
     row.update({"name": attrs.get("midlet-name", ""), "version": attrs.get("MIDlet-Version", ""),
                 "profile": attrs.get("MicroEdition-Profile", ""),
@@ -120,7 +126,7 @@ def one(job):
         row["keys"] = os.path.basename(keys)
     for heap in (16, 32):
         rms = os.path.join(OUT, "rms", base.replace(".jar", "") + "-" + str(heap))
-        cmd = [BIN, "--port", "headless", "--size", "240x320",
+        cmd = [BIN, "--port", "headless", "--size", size,
                "--heap", str(heap), "--fps", "30", "--run-frames", str(RUN),
                "--keys", "@" + keys, "--rms-dir", rms, "--stats", path]
         try:
@@ -220,7 +226,7 @@ def one(job):
         if not os.path.exists(none_path):
             with open(none_path, "w", encoding="utf-8") as fh:
                 fh.write("# deliberately empty: run without input\n")
-        cmd = [BIN, "--port", "headless", "--size", "240x320",
+        cmd = [BIN, "--port", "headless", "--size", size,
                "--heap", str(row.get("heap", 16)), "--fps", "30",
                "--run-frames", str(RUN), "--keys", "@" + none_path,
                "--rms-dir", os.path.join(OUT, "rms", base.replace(".jar", "") + "-nokeys"),
@@ -253,7 +259,7 @@ def one(job):
         if not os.path.exists(none_path):
             with open(none_path, "w", encoding="utf-8") as fh:
                 fh.write("# deliberately empty: run without input\n")
-        cmd = [BIN, "--port", "headless", "--size", "240x320",
+        cmd = [BIN, "--port", "headless", "--size", size,
                "--heap", str(row.get("heap", 16)), "--fps", "30",
                "--run-frames", str(RUN), "--keys", "@" + none_path,
                "--rms-dir", os.path.join(OUT, "rms", base.replace(".jar", "") + "-nokeys-te"),
@@ -286,7 +292,7 @@ def one(job):
         if not os.path.exists(none_path):
             with open(none_path, "w", encoding="utf-8") as fh:
                 fh.write("# deliberately empty: run without input\n")
-        cmd = [BIN, "--port", "headless", "--size", "240x320",
+        cmd = [BIN, "--port", "headless", "--size", size,
                "--heap", str(row.get("heap", 16)), "--fps", "30",
                "--run-frames", str(RUN), "--keys", "@" + none_path,
                "--rms-dir", os.path.join(OUT, "rms", base.replace(".jar", "") + "-nokeys-timeout"),
@@ -312,7 +318,7 @@ def one(job):
         # frame pace is removed: the runtime is healthy and the 30 fps budget
         # just does not cover the title's own delays.  Measure it unpaced once
         # so the row records the distinction instead of a bare timeout.
-        cmd = [BIN, "--port", "headless", "--size", "240x320",
+        cmd = [BIN, "--port", "headless", "--size", size,
                "--heap", str(row.get("heap", 16)), "--fps", "0",
                "--run-frames", str(RUN), "--keys", "@" + keys,
                "--rms-dir", os.path.join(OUT, "rms", base.replace(".jar", "") + "-unpaced"),
@@ -339,7 +345,7 @@ def one(job):
         # A title that reads Nokia device properties cannot start on the generic
         # handset; retry once with a real profile so the row measures the title
         # instead of the recipe.
-        cmd = [BIN, "--port", "headless", "--size", "240x320",
+        cmd = [BIN, "--port", "headless", "--size", size,
                "--heap", "32", "--device", "nokia6230", "--fps", "30",
                "--run-frames", str(RUN), "--keys", "@" + keys,
                "--rms-dir", os.path.join(OUT, "rms", base.replace(".jar", "") + "-dev"),
@@ -376,7 +382,7 @@ def main():
     args = [a for a in os.sys.argv[1:]]
     if args and args[0] in ("-h", "--help"):
         print("usage: tools/sweep_compat.py [output directory]")
-        print("  env: NJ_BIN, NJ_SWEEP_DIRS, NJ_SWEEP_REPO, NJ_KEYS_DIR")
+        print("  env: NJ_BIN, NJ_SWEEP_DIRS, NJ_SWEEP_REPO, NJ_KEYS_DIR, NJ_SCREENS_DIR")
         return 0
     if args and args[0].startswith("-"):
         print("sweep_compat: unknown option", args[0], file=os.sys.stderr)

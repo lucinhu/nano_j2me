@@ -536,14 +536,14 @@ Built from `HEAD`, 2026-11-22 (recorded by `tools/sweep_compat.py`).
 | vault/California Gold Rush Bonanza_1.0.7_320x240.jar | 841 | California Gold Rush | - | 1.0.4 | MIDP-2.0 | nokia-ui | 62 | 16 | 600 | 16741140 | 0 | java/io/EOFException,java/lang/C | 运行正常 |  |
 | vault/Cannon Rats.jar | 1050 | Cannon Rats | - | 1.1.5 | MIDP-2.0 | - | 49 | 16 | 600 | 197684627 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/CannonRats_1.1.6_320x240.jar | 819 | Cannon Rats | - | 1.1.6 | MIDP-2.0 | - | 49 | 16 | 600 | 852417568 | 0 | java/lang/NullPointerException | 运行正常 |  |
-| vault/Carcassonne_1.0.8_320x240.jar | 652 | Carcassonne | - | 1.0.8 | MIDP-2.0 | nokia-ui | 82 | 16 | 600 | 93915 | 0 | java/io/IOException,java/lang/Nu | 运行正常 |  |
+| vault/Carcassonne_1.0.8_320x240.jar | 652 | Carcassonne | - | 1.0.8 | MIDP-2.0 | nokia-ui | 82 | 16 | 600 | 2546981291 | 0 | java/io/IOException,javax/microe | 运行正常 |  |
 | vault/Castle of Magic.jar | 946 | Castle of Magic | - | 1.1.3 | MIDP-2.0 | - | 12 | 16 | 600 | 454394165 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
 | vault/Castlevania - Aria of Sorrow.jar | 405 | Castlevania Aria Of Sorrow | - | 1.0.0 | MIDP-2.0 | - | 4 | 16 | 600 | 8945551 | 0 | javax/microedition/rms/InvalidRe | 运行正常 |  |
 | vault/Castlevania - Dawn of Sorrow.jar | 610 | Castlevania Dawn of Sorrow | - | 1.0.0 | MIDP-2.0 | - | 19 | 16 | 600 | 4025754 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
 | vault/Castlevania - Order of Shadows.jar | 521 | CastlevaniaOoS | - | 0.0.7 | MIDP-2.0 | - | 66 | 16 | 600 | 1037964 | 0 | javax/microedition/rms/InvalidRe | 运行正常 |  |
 | vault/Castlevania Order Of Shadows_320x240.jar | 523 | Castlevania 2 | - | 0.0.10 | MIDP-2.0 | - | 66 | 16 | 601 | 1592530 | 0 | javax/microedition/rms/InvalidRe | 运行正常 |  |
 | vault/Castlevania-AriaOfSorrow_N80.jar | 403 | Castlevania Aria Of Sorrow | - | 1.0.0 | MIDP-2.0 | - | 4 | 16 | 600 | 11739659 | 0 | javax/microedition/rms/InvalidRe | 运行正常 |  |
-| vault/Catan The Seafarers_320x240_Nokia_E71.jar | 504 | Catan2 | - | 1.0.5 | MIDP-2.0 | nokia-ui | 110 | 16 | 600 | 3738613599 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| vault/Catan The Seafarers_320x240_Nokia_E71.jar | 504 | Catan2 | - | 1.0.5 | MIDP-2.0 | nokia-ui | 110 | 16 | 600 | 3435845900 | 0 | java/io/IOException,javax/microe | 运行正常 |  |
 | vault/CatanTheFirstIsland_1.0.2_320x240.jar | 418 | Catan | - | 1.0.2 | MIDP-2.0 | nokia-ui | 103 | 16 | 600 | 3619615613 | 0 | java/lang/NumberFormatException, | 运行正常 |  |
 | vault/Chainz.jar | 101 | Chainz | - | 1.0.13 | MIDP-2.0 | nokia-ui | 12 | 16 | 600 | 625749465 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
 | vault/ChampionshipStreetRacing_1.0.0_320x240.jar | 556 | ChampStreetRacing | - | 1.0.0 | MIDP-2.0 | - | 95 | 16 | 600 | 12694219 | 0 | java/io/IOException,java/lang/Nu | 运行正常 |  |
@@ -724,7 +724,7 @@ Built from `HEAD`, 2026-11-22 (recorded by `tools/sweep_compat.py`).
 | vault/James Cameron's Avatar.jar | 998 | Avatar | - | 1.0.6 | MIDP-2.0 | - | 9 | 16 | 600 | 21523502 | 0 | - | 运行正常 |  |
 | vault/JetSetWilly.jar | 177 | Jet Set Willy | - | 1.0.1 | MIDP-1.0 | nokia-ui | 14 | 16 | 600 | 1084706 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
 | vault/Jewel Conquest__320x240.jar | 270 | Jewel | - | 1.0 | MIDP-2.0 | - | 8 | 16 | 600 | 7196419 | 0 | - | 运行正常 |  |
-| vault/Jewel Explosion_320x240.jar | 354 | Jewel Explosion | - | 1.0.0 | MIDP-2.0 | - | 35 | 16 | 600 | 4450206569 | 0 | java/io/IOException | 运行正常 |  |
+| vault/Jewel Explosion_320x240.jar | 354 | Jewel Explosion | - | 1.0.0 | MIDP-2.0 | - | 35 | 16 | 600 | 2198993386 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
 | vault/Jewel Quest III World Adventure_320x240_Nokia_E71.jar | 764 | Jewel Quest III World Advent | - | 4.5.57 | MIDP-2.0 | - | 25 | 16 | 600 | 10956380 | 0 | - | 运行正常 |  |
 | vault/JewelPack2in1_2.0_320x240.jar | 394 | Jewel Pack 2in1 | - | 2.0 | MIDP-2.0 | - | 77 | 16 | 600 | 5064995283 | 0 | - | 运行正常 |  |
 | vault/JewelQuest.jar | 164 | Jewel Quest | - | 1.0.5 | MIDP-1.0 | - | 19 | 16 | 600 | 440281 | 0 | java/io/IOException | 运行正常 |  |
@@ -804,7 +804,7 @@ Built from `HEAD`, 2026-11-22 (recorded by `tools/sweep_compat.py`).
 | vault/Midnight Pool.jar | 598 | Midnight Pool | - | 1.0.3 | MIDP-2.0 | - | 6 | 16 | 600 | 1838293 | 0 | - | 运行正常 |  |
 | vault/MidnightBowling2_1.0.1_320x240.jar | 558 | Midnight Bowling 2 | - | 1.0.1 | MIDP-2.0 | nokia-ui | 5 | 16 | 600 | 274384735 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
 | vault/MidnightDarts_1.0.3_320x240.jar | 563 | MIDNIGHT DARTS | - | 1.0.3 | MIDP-2.0 | - | 6 | 16 | 600 | 13368625 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
-| vault/MidnightPool1_1.0.0_320x240.jar | 205 | Midnight Pool | - | 1.0.0 | MIDP-2.0 | - | 5 | 16 | 600 | 5757741420 | 0 | - | 运行正常 |  |
+| vault/MidnightPool1_1.0.0_320x240.jar | 205 | Midnight Pool | - | 1.0.0 | MIDP-2.0 | - | 5 | 16 | 600 | 6236361620 | 0 | - | 运行正常 |  |
 | vault/MidnightPool2_1.0.1_320x240.jar | 406 | Midnight Pool 2 | - | 1.0.1 | MIDP-2.0 | - | 14 | 16 | 600 | 3250235636 | 0 | java/lang/ClassNotFoundException | 运行正常 |  |
 | vault/MidnightPool3_1.2.4_320x240.jar | 1265 | Midnight Pool 3 | - | 1.2.4 | MIDP-2.0 | - | 29 | 16 | 600 | 103087954 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/Mig 2D Retro Shooter.jar | 1494 | Mig29 2D Retro Shooter | - | 1.0.0 | MIDP-2.0 | - | 75 | 16 | 600 | 36769345 | 0 | java/io/EOFException,java/io/IOE | 运行正常 |  |
@@ -1349,7 +1349,7 @@ Built from `HEAD`, 2026-11-22 (recorded by `tools/sweep_compat.py`).
 | vault/Worms Reloaded.jar | 757 | Worms Reloaded | - | 4.4.53 | MIDP-2.0 | - | 35 | 16 | 600 | 12965135 | 0 | - | 运行正常 |  |
 | vault/Wrath of the Titans.jar | 1557 | Wrath of the Titans | - | 1.3.2 | MIDP-2.0 | - | 20 | 16 | 600 | 175367175 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/XIII - Covert Identity.jar | 598 | XIII_2 | - | 1.0.0 | MIDP-2.0 | - | 5 | 16 | 600 | 530645441 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
-| vault/Xmas Jewel Explosion__320x240.jar | 180 | X-mas Jewel Explosion | - | 1.0.2 | MIDP-2.0 | - | 36 | 16 | 600 | 4379359160 | 0 | java/io/IOException | 运行正常 |  |
+| vault/Xmas Jewel Explosion__320x240.jar | 180 | X-mas Jewel Explosion | - | 1.0.2 | MIDP-2.0 | - | 36 | 16 | 600 | 2138407702 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
 | vault/Zombie Infection 2.jar | 1224 | Zombie Infection 2 | - | 1.1.9 | MIDP-2.0 | - | 13 | 16 | 600 | 202116318 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/Zombie Infection.jar | 1013 | Zombie Infection | - | 1.2.0 | MIDP-2.0 | - | 8 | 16 | 601 | 22099539 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
 | vault/Zombie Mob Defense.jar | 772 | Zombie Mob | - | 1.0.0 | MIDP-2.0 | - | 39 | 16 | 600 | 4088760 | 0 | java/io/EOFException,javax/micro | 运行正常 |  |

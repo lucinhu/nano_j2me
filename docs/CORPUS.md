@@ -1364,3 +1364,47 @@ limitations, 8 failed**. Two failure classes were isolated:
 
 Known failures (3): `毁灭战士3_10598` slow loader, `台球传奇_87` and
 `德州扑克2_3884` blocking loads.
+
+## Round 177: the "paints but black" class was a canvas-size mismatch (2026-11-22)
+
+The six blank-but-painting titles found by the round-176 libretro probe were
+re-examined with the CLI. Four of them are landscape retail builds: on the
+default portrait 240x320 canvas they request portrait assets that their own
+JAR does not ship (`Carcassonne` asks for `/splash_portrait.png` but only
+ships `splash_landscape.png`), throw during startup and stay black; on
+320x240 they run normally. Measured with frame dumps at 300 frames:
+
+| Title | 240x320 (default) | 320x240 |
+|---|---|---|
+| Carcassonne_1.0.8_320x240 | black, uncaught NPE after missing splash | **76,397 non-black px** |
+| Catan The Seafarers_320x240_Nokia_E71 | black | **7,084 px** |
+| Jewel Explosion_320x240 | black | **16,513 px** |
+| Xmas Jewel Explosion__320x240 | black | **10,622 px** |
+| MidnightPool1_1.0.0_320x240 | black | **5,401 px** |
+| PAC-MAN (176x220) (1.0.0) | black | black at every size (title-side) |
+
+Probe tooling now honours a per-title screen size so a portrait probe cannot
+mislabel a landscape build:
+
+- `tools/corpus_keymap.py` gained `screen()`: an explicit file under
+  `tools/corpus_screens/<jar stem>.txt` wins, otherwise a `_<w>x<h>` device
+  suffix in the JAR name selects that size (the common `_320x240` retail
+  marker), otherwise 240x320. Known sizes only: 240x320, 320x240, 176x208,
+  128x160.
+- `tools/sweep_compat.py` records `screen` on the row and passes `--size`.
+- `tools/check_libretro_corpus_visual.py` passes
+  `--set nano_j2me_screen=<size>` and the harness `--expect-screen <size>`
+  (the AV geometry check has to expect the configured canvas, not always
+  240x320).
+
+Re-probe of the six titles through the r46 core with the per-title size:
+**4 passed** (`Carcassonne`, `Catan The Seafarers`, `Jewel Explosion`,
+`Xmas Jewel Explosion`), 0 known, 2 failed: `MidnightPool1` is still black and
+still fails `retro_serialize()` through the core (900 frames, same
+`save-state request refused (-8)` timeout), while it renders fine under the
+CLI at 320x240; `PAC-MAN (176x220)` stays black at 176x208/128x160/240x320 and
+FreeJ2ME-Plus hangs on it too - its constructor calls
+`String.substring(8,0)` on an empty Sprint `Muglet` URI (caught) and it then
+waits on carrier/network state, so it is title-side. Matrix rows for the five
+landscape titles were re-measured and the table regenerated (1817 titles, 1799
+ok, only those five lines changed).
