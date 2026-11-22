@@ -518,3 +518,44 @@ the post-load paint/loader handshake (the round-212 `repaint()` +
 Regression evidence: full serial CTest 210/210 in 365.99 s with the change
 (`/tmp/r214-ctest.log`), including `test_vm`, `test_thread`, `test_save`,
 `test_libretro_frontend`, `check_stack_trace`, `test_classinit`.
+
+## Round 215: after the timer runs, the splash loader spins against the frame pump
+
+With the round-214 fix the second timer's one-shot task now executes. What it
+does is a three-stage splash loader: `TheMummyMidlet.a()` builds `/L0.png`,
+`/L1.png`, `/L2.png` canvases in turn, and each stage runs
+`a.a()` — a loop that calls `f.g()` (the game tick), then
+`Canvas.repaint()` + `Canvas.serviceRepaints()`, and exits only once the
+MIDlet's tick counter `a` reaches the per-canvas deadline `e = a + 150`.
+
+Evidence from a thread-stack dump (temporary `NJ_WHERE_EVERY` hook, reverted):
+
+```
+thread 3 running depth=6
+  f.g()V pc=24
+  a.a()V pc=43
+  themummy/TheMummyMidlet.a()V pc=150
+  c.run()V pc=7
+  nj2me/util/TimerThread.pump(Ljava/lang/Object;)Z pc=0
+  nj2me/util/TimerThread.run()V pc=7
+```
+
+The loop never advances `a`: the tick counter is incremented by timer 1's
+`h.run()` every 20 ms, but while the loader spins inside
+`serviceRepaints()` the timer helper's native pump is the only thing that could
+deliver the tick, and the nested C-call pump path (`vm->in_call_pump` set) only
+sleeps 1 ms per pass instead of stepping the scheduler. So the splash loop
+waits for a deadline nothing can advance, the frame budget never completes, and
+the title hangs (paced only; `--fps 0` finishes 30 frames in 4 ms because the
+virtual clock never reaches the 250 ms timer, and a 5-frame paced run exits
+before the timer fires).
+
+So the TheMummy black screen is a frame-pump reentrancy problem in disguise:
+`repaint()`/`serviceRepaints()` called from a timer-task thread inside a native
+pump must be able to deliver the tick that its own loop waits for. Next:
+instrument `vm_invoke`'s nested pump to confirm the missing scheduler step, then
+either step the scheduler from the nested pump or let `serviceRepaints()`
+deliver a synchronous paint on the calling thread.
+
+Temporary `NJ_TIMER_DBG` and `NJ_WHERE_EVERY` instrumentation was reverted; the
+worktree is clean.
