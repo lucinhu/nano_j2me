@@ -1688,3 +1688,15 @@ zero runtime-owned field gaps).  Validation: full serial CTest **209/209**
 (364.01 s), mock matrix **20/20**, real RetroArch LoopDemo PASS, Wine
 **4/4** @300, bundle **32/32**.  Super PR branch `a4859b5`, docs PR unchanged
 at `95a1d0a` (baseline `96ee874`); both OPEN/MERGEABLE, no merge claimed.
+
+Round 194 (2026-11-22): released **0.5.33 / r52**.  Metadata commit
+`ea55efa`; `.info` SHA-256
+`b2a787ef50284497e768a6061a0d198c4c26949eb18b5768aa619d44ca9e49d8`
+(`display_version = "0.5.33"`); tracked super patch rebased on
+`libretro-super` master `55e50a8` as fork commit `b32e30c`.  r52 ships the
+`nano_j2me_deterministic` libretro option (fixed 60 Hz virtual tick and
+deterministic `java.util.Random` seeding), the `check_libretro_determinism`
+gate and the upstream docs option row.  Validation: full serial CTest
+**210/210**, mock frontend matrix **37/37**, real RetroArch LoopDemo PASS,
+Wine **4/4 @300**, bundle **32/32**.  Super PR branch `b32e30c`, docs PR
+`95a1d0a`; both OPEN/MERGEABLE, no merge claimed.

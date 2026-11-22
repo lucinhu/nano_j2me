@@ -2071,3 +2071,23 @@ PR **libretro/docs#1239** head is `95a1d0a` (patch against docs master
 Validation: full serial CTest **206/206** (381.46 s), mock matrix **20/20**,
 real RetroArch loopdemo 120 frames PASS, Windows x86_64 Wine **4/4** at 300
 frames, submission bundle **32/32**.
+
+### 0.5.33 / r52 (2026-11-22)
+
+Release: https://github.com/lucinhu/nano_j2me/releases/tag/v0.5.33 - tag
+`v0.5.33` (metadata commit `ea55efa`), eight libretro targets plus five
+per-ABI Android APKs (versionCode 533; four GLES2 phone builds and the
+software legacy build); `.info` SHA-256
+`b2a787ef50284497e768a6061a0d198c4c26949eb18b5768aa619d44ca9e49d8`
+(`display_version = "0.5.33"`); the tracked super patch applies to
+`libretro-super` master `55e50a8` as fork commit `b32e30c`.  r52 ships the
+`nano_j2me_deterministic` core option (fixed 16667 µs virtual clock per
+`retro_run()` plus VM-level deterministic `java.util.Random` seeding), the
+`check_libretro_determinism` CTest gate (two alphademo runs byte-identical)
+and the regenerated `libretro/docs` option row.  Measured: frame-driven titles
+replay byte-identically; clock-sampling titles and teardown timing still vary;
+netplay is documented as not yet supported (frame-locked execution missing).
+Validation: full serial CTest **210/210** (366 s), mock frontend matrix
+**37/37**, real RetroArch LoopDemo 120 frames PASS, Wine x86-64 **4/4 @300**,
+submission bundle **32/32**.  Super PR branch `b32e30c`, docs PR head
+`95a1d0a` (baseline `96ee874`); both OPEN/MERGEABLE, no merge claimed.

@@ -84,141 +84,23 @@ Outputs go to `build/libretro-dist/<target>/`, with a library and its metadata.
 Use `--no-strip` to retain symbols. `all` selects the script's supported targets
 and requires all of their toolchains.
 
-The eight candidates currently in `build/libretro-dist/` are the r51 package
-(the 0.5.32 release) built on 2026-11-22 from revision `1933320`.  r51 adds
-the Nokia `TextEditor`/`TextEditorListener` overlay family (a real CanvasItem
-subclass with content/caret/selection/colour/listener behaviour, composited
-after the canvas paint) and the field-level half of the builtin-API audit:
-`nj2me --dump-builtin-api` also emits field flags and
-`tools/check_vendor_members.py` diffs every corpus `Fieldref` through the
-superclass chain (zero runtime-owned missing fields on the measured corpus).
-Core options and save-state semantics are unchanged from r50; the libretro
-core binary is functionally the r50 one plus the enlarged Nokia module.  r50
-added the member-level audit (radix `parseByte`/`parseShort`,
+The eight candidates currently in `build/libretro-dist/` are the r52 package
+(the 0.5.33 release) built on 2026-11-22 from revision `ea55efa`.  r52 adds the
+`nano_j2me_deterministic` option: `retro_run()` advances the virtual clock by
+exactly one 16667 µs tick and `java.util.Random()`'s default constructor is
+seeded from a VM-level 64-bit LCG counter, so replay-oriented runs are
+repeatable.  `check_libretro_determinism` runs `alphademo.jar` twice through the
+real core and requires byte-identical frame dumps.  Frame-driven titles are
+byte-identical (alphademo, 家园5汉化版, 雷霆战机2012BT); titles that sample
+`System.currentTimeMillis()` inside paint (loopdemo) and teardown timing still
+vary, and netplay stays unadvertised pending frame-locked single-step
+execution (see the note below).  r51 added the Nokia
+`TextEditor`/`TextEditorListener` overlay family and the field-level builtin-API
+audit; r50 added the member-level audit (radix `parseByte`/`parseShort`,
 `Double.parseDouble`, `Float.valueOf(String)`, `Float.intValue`, the
 `InputConnection`/`OutputConnection` superclass bug, `RateControl` rates,
 `PIMItem` declarations, the JSR-82 Bluetooth surface and JSR-75
-`FileConnection.directorySize`); its core binary was functionally the r49
-one.  r48 is an
-Android-facing release: the Android APKs build and enable the GLES2 backend by
-default (software fallback stays a panel toggle) and the cheat panel gained
-control-variable change search (baseline + changed/unchanged/increased/
-decreased filters) with single-write and continuous-write actions; the libretro
-core binary itself is functionally the r47 one.  r47 adds the
-JSR-177 `javax.microedition.pki` linkage surface (certificate interface and
-`CertificateException`, so IstanBUL's catch clause resolves; a 1048-JAR audit
-now leaves only Doom3's unreachable JSR-226 SVG symbols missing), opt-in
-frame dumps in the mock harness (`--dump-dir`/`--dump-every`) and per-title
-canvas sizes in every corpus probe.  r46 adds the
-Sprint PCS carrier wrappers (`Clip`, `Player`, `PlayerListener`, `Vibrator`,
-`Muglet`, `System`) so the Pac-Man mobile archive links and paints, and the
-corpus sweep now retries key-induced title exceptions without input; the
-fetched corpus (646 JARs) is merged into the compatibility matrix (1817
-titles, 1796 ok).  r45 fixes
-two black-screen titles by making lazy reference points match MIDP/JVMS
-semantics: the first `Canvas.sizeChanged()` is now delivered from
-`Display.setCurrent()` while the MIDlet thread still owns the stack (NeonRunner
-lost its boot renderer to a late delivery), and `Class.forName()` now
-initialises the class (GoldenSolitaire's resource manager sizes its archive
-tables from an interface static initialiser forced that way).  Both have CTest
-gates (`test_sizeorder`, `test_classinit`).  r44 adds
-runtime API support that previously failed to link: the `resource:` Connector
-scheme (with a `nano_j2me/ResourceStream` that keeps the handset chunk-read
-contract), the Siemens `color_game`/`game` family (`Layer`, `LayerManager`,
-`Sprite`, `ExtendedImage`, `Light`) and the Immersion VibeTonz vibration
-stub; Wizardry and Dig Dug became playable as a result.  r43 rendered
-Nokia's overlay items: a `CanvasGraphicsItem` attached to a `Canvas` is
-composited after the canvas paint (translate + clip onto the backing image, per
-visible item, exceptions in an item's paint stop only the overlay pass) instead
-of staying invisible.  r42 added API surface only:
-`javax.microedition.location` (JSR-179) with a fixed Helsinki provider and the
-in-memory `LandmarkStore`, plus the remaining small Nokia UI classes
-(`Clipboard`, `GlobalIndicators`, `TactileFeedback`, `SoftNotification`, the
-gestures family, `JoystickEventListener`, `DirectGraphicsImplemented`) - classes
-behave per spec where the emulated handset can and are honest no-ops where it
-has no hardware.  r41 raises
-the default static field area (`NJ_MAX_STATICS` 4096 -> 16384) so class-heavy
-titles link instead of silently half-rendering (`Plants vs Zombies (240x320)`);
-an exhausted area now throws an explicit `OutOfMemoryError` naming the knob,
-not a bare `NoClassDefFoundError` for a class that is present.  r40 makes
-the Android in-app 保存状态 work for frame-driven titles: a port that only gets
-control from the frame hook (the launcher serves the save from its input poll)
-can call `nj_vm_save_file_boundary()` and the runtime stores a thread parked in
-`serviceRepaints()` as resumed-after-the-call (`docs/notes/2026-11-21-android-save-state-limitation.md`);
-`LoopDemo` saves a 330,016-byte state and 恢复进度 restores it.  r40 also keeps a
-bare pointer move on the single pointer (the multi-touch owner gate dropped
-moves without a recorded down) and makes `test_pointer` test the built binary
-instead of a shared tree.  The libretro core itself is feature-identical to r39
-except for that pointer fix.  r39 adds the
-`java.lang.Boolean.TRUE`/`FALSE` constants that J2SE-shaped ports read with
-`getstatic` (`src/core/nj_lib_boxing.c`; `Alco Bench.jar` and other titles that
-died with `NoSuchFieldError` now start).  r38 applies
-full-screen mode changes requested on a visible `Canvas` instead of throwing
-`IllegalStateException` (`docs/notes/2026-11-20-fullscreen-visible-toggle.md`);
-titles such as `The Sims 3 Winter Edition`, which switch the mode from their
-paint loop, painted pure black before and now render normally. r37 folded in
-the blit-path field cache (Image width/height/pixels resolved once per VM
-through `nj_hot_field`, byte-exact, -4.2 %/-5.1 % on the unpaced Minecraft
-loader; `docs/PERFORMANCE.md`), so the libretro core gains the same runtime
-speed-up as the CLI and APK. r36 added
-live candidate values to the Android cheat search and kept one cheat line per
-address (`docs/notes/2026-11-19-cheat-search.md`); that release left the
-libretro core functionally unchanged from r35. r35 was the
-Android in-game cheat-editor + value-search release: the game panel's 作弊码
-row opens the title's cheat file, writes it and reloads the running VM's table
-at the next frame boundary, and its 搜索作弊数值 row scans the arena for a
-value the player can see, narrows the candidate list and appends the generated
-code (`docs/notes/2026-11-19-android-cheat-editor.md`,
-`docs/notes/2026-11-19-cheat-search.md`). The libretro core itself is
-feature-identical to r33/r34 — the search helpers are a new runtime API used by
-the Android panel, and libretro frontends keep using their own cheat search —
-and r33 moved the cheat engine into the runtime so the libretro core, the
-headless CLI (`--cheat`/`--cheat-file`) and the Android build share one table
-(`docs/notes/2026-11-19-core-cheat-engine.md`). r32 added the arena-offset
-cheat codes documented under [Cheats](#cheats) and the corrected
-mock-frontend pointer-key parsing
-(`docs/notes/2026-11-17-harness-pointer-keys.md`). r31 shipped the
-multi-touch input path: the core follows `RETRO_DEVICE_ID_POINTER_COUNT`,
-reports every finger the frontend sends with its own event id, and keeps the
-MIDP `Canvas` pointer with the first finger
-(`docs/notes/2026-11-16-multitouch-support.md`); the same release ships
-multi-touch through the Android APKs. r30 added the pacer-owned idle nap, so a
-paced run no longer burns a CPU core while it waits for the next frame
-(`docs/PERFORMANCE.md`, "Paced-run CPU burn: the pacer owns the nap"); the
-0.5.10 release in between added Android Vibrator-based rumble through JNI and
-the 64-bit APK work. Before that, r27 fixes the
-save-state buffer bound for object-dense titles
-(`docs/notes/2026-11-16-state-buffer-bound.md`) and bumps the metadata to
-0.5.9; before it, r26 added the version bump, the monitor acquisition for
-synchronized JNI-bridge callbacks
-(`docs/notes/2026-11-16-bridge-synchronized-callbacks.md`), and keeps
-everything below. r25 added the malformed-bytecode
-array-operand ownership guards and the GIF canvas pixel budget from
-`a296ce8`, publishes the `SYSTEM_RAM` memory map and cheat-search window from
-r24, and moves MIDlet construction onto the VM thread (`a2abdee`) with the
-blocked-constructor watchdog tuning from `68bffb9`; on top of that it includes
-the r22 real-time pacing and the M3G Gouraud-textured span fast path (see
-`docs/PERFORMANCE.md`), so they include the load-lifecycle fix, the
-monitor and repaint-blocking fixes, the CLI/manual-state boundary work, the
-input-bitmask/rumble support and the `nano_j2me_screen`/`nano_j2me_locale`
-options, bounded load/save state clock assistance including the paused
-`System.currentTimeMillis()` poll assist (paint-aware and stalled-frame gated),
-the level-3 Player-start diagnostics, and three corpus rendering fixes (stray
-paint waiters, pre-show `Displayable` sizes, longer startup grace), plus the
-device-property answers and the generic-handset load retry described above, and
-the M3G software-raster fast path for the Gouraud + nearest-textured +
-MODULATE span class (about -4.6% CPU on the profiled 3D title; the opening
-deterministic frames of that title are byte-identical to the previous build).
-The report also records the whole-corpus rendering probe, which is what found
-those rendering bugs. Windows cores are linked with a zero COFF timestamp and no
-build-id, and are stripped at link time, so the whole package is byte-reproducible
-across clean rebuilds (verified twice for both Windows targets).
-`build/libretro-final-report-20261115.md` records sizes, SHA-256 values
-and what was run per target: linux-x86_64 in the mock frontend and real
-RetroArch, windows-x86_64 under Wine, and ABI/dependency checks only for the
-Android and ARM-Linux cores (no device run in this rebuild). That report also
-records the offline simulations of the libretro GitLab CI template commands for
-Linux and Android, which are part of the upstream submission preparation.
+`directorySize`).
 
 | Target | Toolchain / artifact baseline | Verification scope |
 | --- | --- | --- |
