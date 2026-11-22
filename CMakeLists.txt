@@ -1784,6 +1784,18 @@ nj_add_test(test_clip tests/test_clip.c)
   set_tests_properties(check_api_audit PROPERTIES
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} TIMEOUT 300)
 
+  # The static member-level audit: every Methodref in the corpus has to resolve
+  # against the runtime's own builtin tables (dumped by the CLI), except the
+  # title-side patched-ABI cases listed in tools/api_member_allowlist.txt.
+  if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_vendor_members.py)
+    add_test(NAME check_vendor_members
+             COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_vendor_members.py
+                     --bin $<TARGET_FILE:nj2me-cli>
+                     --allow ${CMAKE_CURRENT_SOURCE_DIR}/tools/api_member_allowlist.txt)
+    set_tests_properties(check_vendor_members PROPERTIES
+      WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} TIMEOUT 900)
+  endif()
+
   # ... and the surface has to behave, not merely exist.  M3GDemo calls every
   # API area and prints one summary line; check_m3gdemo.sh asserts it.
   add_test(NAME check_m3gdemo

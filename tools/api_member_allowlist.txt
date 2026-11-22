@@ -1,0 +1,15 @@
+# Classes whose missing member references are title-side, not runtime gaps.
+#
+# A JAR that ships a patched/obfuscated copy of a MIDP or vendor class may
+# reference members that exist only in its patched ABI.  The runtime must not
+# invent an incompatible member to satisfy such a constant pool entry; this
+# list keeps the static audit actionable by recording the accepted cases.
+#
+# java.io.PrintStream.getResourceAsStream(Class,String): a desktop-API
+# assumption in one title, not a MIDP member.
+java/io/PrintStream
+#
+# Two JARs bundle com/nokia/mid/ui/DirectGraphics.class and were compiled
+# against a patched LCDUI (obfuscated Graphics/Image methods a/s/t/z/...).
+javax/microedition/lcdui/Graphics
+javax/microedition/lcdui/Image

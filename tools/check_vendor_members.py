@@ -202,6 +202,9 @@ def main():
                     help="also list the jars that produced each reference")
     ap.add_argument("--all-modules", action="store_true",
                     help="audit every nj_lib_*.c table, not just vendor modules")
+    ap.add_argument("--allow", default=None,
+                    help="file of class prefixes whose missing members are "
+                         "accepted (title-side patched ABIs, etc.)")
     ap.add_argument("--bin", default=os.environ.get("NJ_BIN"),
                     help="runtime binary to dump the authoritative member "
                          "tables from (preferred; else parse the C sources)")
@@ -286,6 +289,22 @@ def main():
           f"{len(ref_classes)} referenced classes "
           f"({sum(1 for c in ref_classes if c in tables)} of them audited), "
           f"{len(missing)} classes with missing members, {total} signature(s)")
+    allow = []
+    if args.allow:
+        with open(args.allow, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#"):
+                    allow.append(line)
+    allowed = 0
+    if allow:
+        for owner in list(missing):
+            if any(owner.startswith(p) for p in allow):
+                allowed += len(missing[owner])
+                del missing[owner]
+    if allowed:
+        print(f"{allowed} title-side gap(s) accepted by {args.allow}")
+
     shown = 0
     truncated = False
     for owner in sorted(missing):

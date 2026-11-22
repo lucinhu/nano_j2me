@@ -577,3 +577,24 @@ plus the pre-existing `fileSize`; 403 passed/0 failed). The audit now reports on
 assumption) and the `Graphics`/`Image` obfuscated refs from two JARs that bundle a
 patched `DirectGraphics` (title-side ABI) — i.e. no gap left inside the runtime's own
 class surface.
+
+## Round 187: the static member audit becomes a CTest gate
+
+The audit is only useful if it fails when a member disappears, so it is now a
+test. `tools/check_vendor_members.py` gained `--allow FILE`: each non-comment
+line is a class prefix whose missing members are accepted as title-side. The
+tracked list is `tools/api_member_allowlist.txt` and contains exactly the three
+classes round 186 classified:
+
+* `java/io/PrintStream` — a desktop-API `getResourceAsStream(Class,String)`
+  assumption in one title, not a MIDP member;
+* `javax/microedition/lcdui/Graphics` and `javax/microedition/lcdui/Image` —
+  two JARs that bundle their own `com/nokia/mid/ui/DirectGraphics` and were
+  compiled against an obfuscated patched LCDUI.
+
+The new CTest `check_vendor_members` runs the tool with the in-tree CLI's
+`--dump-builtin-api` and the allowlist. On the 404-JAR repository corpus it
+takes about 3 s; when the fetched cache is present it also scans it (a couple
+of minutes) and still passes. Any *new* unresolved member from a class outside
+the allowlist fails the suite, so the round-186 "28 gaps down to title-side
+only" state is protected by CI rather than by memory.
