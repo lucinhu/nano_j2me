@@ -676,3 +676,43 @@ Measured (timeout 15 s, killed at rc 142):
   request per frame and drop additional ones from other threads;
   (3) keep the frame pump from re-entering paint from a timer helper.  All
   need frame-dump parity checks on a normal timer-driven title.
+
+## Round 221: paint is healthy - the nested frame pump is the livelock
+
+Follow-up instrumentation (temporary, reverted): entry/exit counters around
+`nj_midp_paint()` printing thread id, `prev=paint_active` and `in_frame` for a
+paced TheMummy run (8 s, killed at rc 124).
+
+Result: **683,229 paint() entries and the same number of exits in 8 s**, every
+one on **thread 1**, with `prev=0` (no nesting), `in_frame=1` constant and
+`st=NJ_OK, exc=0`.  So paint returns normally every time; round 220's "frame
+paint stuck inside `drawImage`" reading was an alarm-sample artifact.  The
+problem is the rate: ~85k paints/s inside a single in-flight frame.
+
+Interpretation: the splash loader runs entirely inside the 250 ms timer
+thread's nested `nj_call()` and never returns, so the runtime's frame pump
+(`vm_invoke`'s frame hook while a native call is in progress) keeps pumping
+frames; each pumped frame paints the splash canvas and presents, but the
+loader's own `repaint(); serviceRepaints();` storm keeps the frame from ever
+completing (in_frame pinned at 1).  The loader therefore never sees the
+world-tick state it waits on (`f.c[4]/f.c[5]`), and the run spins with paint
+at 100% CPU forever.
+
+What this rules out and what it does not:
+
+- Not a paint bug, not a paint deadlock, not a stuck scheduler step: paint
+  executes and returns, exceptions are clear.
+- Not (only) timer starvation: timer 1 ticks at exactly 20 ms and timer 2's
+  250 ms task does run (rounds 214/216).
+- Still open: why the loader's early stage-3 exit condition never becomes
+  true while the world tick `f.g()` is called from the loader loop at 50 Hz.
+  Next diagnostic should record `f.c[4]/f.c[5]` (and the `f` world state
+  flags they depend on) at a few points instead of only at the end: a
+  read-only `--watch-static` style probe on `f.c` would show whether the
+  flags are ever written and then cleared, or never written at all.
+- Candidate runtime fix (unchanged, needs a real trigger): bound the nested
+  frame pumping for a timer-task helper so a non-returning task cannot pin
+  `in_frame` forever; e.g. after N pumped frames without progress, stop
+  pumping and let the task run to completion/timeout.  This is dangerous for
+  titles that rely on pumped frames during a blocking native (纽约人生_1339),
+  so it needs the corpus visual probe as the regression gate.
