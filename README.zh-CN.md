@@ -16,6 +16,13 @@
 `.jar` 游戏跑在 PC、手机、单片机和网页浏览器上——各处是同一个运行时，每个平台只
 需要一份很小的 `nj_port` 实现。
 
+> **AI 编程驱动。** 本项目由 AI 编程驱动：设计、实现、调试与验证的闭环由
+> DeepSeek Harness 中的 DeepSeek 编程模型完成。感谢 **DeepSeek**。
+>
+> **马上试试：**[网页模拟器](https://lucinhu.github.io/nano_j2me/) ·
+> [ESP32-S3（Korvo）移植版](https://github.com/lucinhu/esp32s31-korvo-nano-j2me) ·
+> [最新版本](https://github.com/lucinhu/nano_j2me/releases/latest)
+
 - **是整台手机，不是一个子集。** CLDC 1.1 字节码包含 `long`、`double`、异常、
   `synchronized` 和 `jsr`/`ret`；MIDP 2.0 的 LCDUI 与游戏 API；RMS、JSR 75 文件、
   JSR 135 媒体、JSR 184 M3G、Mascot Capsule Micro3D、JSR 82 蓝牙发现和 JSR 256
@@ -91,9 +98,9 @@
 | **Windows** x86_64 | `nj2me.exe`（mingw-w64）：命令行运行器加同一个游戏库客户端，UTF-8 路径，已在 Wine 下验证 |
 | **Android 5.0+** | 单个 APK，含 arm64-v8a / armeabi-v7a / x86 / x86_64：启动器、浮动键盘、AAudio/OpenSL ES 声音 |
 | **Android 2.x 旧版** | ARMv5 `armeabi` 版本，配轻量启动器——见 [docs/ANDROID_LEGACY.md](docs/ANDROID_LEGACY.md) |
-| **网页浏览器** | Emscripten 模块加零依赖 ES-module 外壳——见 [docs/WEB.md](docs/WEB.md) |
+| **网页浏览器** | Emscripten 模块加零依赖 ES-module 外壳——[在线演示](https://lucinhu.github.io/nano_j2me/)，见 [docs/WEB.md](docs/WEB.md) |
 | **RetroArch / libretro** | Linux（x86_64、aarch64、armv7）和 Android（arm64、armv7、x86_64）原生核心 |
-| **ESP32-S3 / ESP32-C3** | ESP-IDF 板上的完整运行时和 MIDlet（VM 需要 PSRAM） |
+| **ESP32-S3 / ESP32-C3** | ESP-IDF 板上的完整运行时和 MIDlet（VM 需要 PSRAM）；Korvo 开发板移植版在 [lucinhu/esp32s31-korvo-nano-j2me](https://github.com/lucinhu/esp32s31-korvo-nano-j2me) |
 | **无头（headless）** | 测试套件使用的参考移植层，也适合嵌入和 CI |
 
 Arch Linux 上，AUR 包会安装桌面客户端、静态库和头文件、libretro 核心以及桌面

@@ -16,6 +16,15 @@ A J2ME (CLDC 1.1 / MIDP 2.0) runtime written in portable C99. It runs the `.jar`
 games written for feature phones on a PC, a phone, a microcontroller, or a web
 browser — the same runtime everywhere, with one small `nj_port` per platform.
 
+> **AI-driven development.** This is an AI-programming-driven project: the
+> design, implementation, debugging and verification loop is driven by
+> DeepSeek's coding models running inside the DeepSeek Harness. Thanks to
+> **DeepSeek** for making this possible.
+>
+> **Try it now:** [web emulator](https://lucinhu.github.io/nano_j2me/) ·
+> [ESP32-S3 (Korvo) port](https://github.com/lucinhu/esp32s31-korvo-nano-j2me) ·
+> [latest release](https://github.com/lucinhu/nano_j2me/releases/latest)
+
 - **The whole phone, not a subset.** CLDC 1.1 bytecodes including `long`,
   `double`, exceptions, `synchronized` and `jsr`/`ret`; MIDP 2.0 LCDUI and game
   APIs; RMS, JSR 75 files, JSR 135 media, JSR 184 M3G, Mascot Capsule Micro3D,
@@ -103,9 +112,9 @@ MPEG-4 intro movie with its own AMR-NB track.
 | **Windows** x86_64 | `nj2me.exe` (mingw-w64): console runner plus the same library client, UTF-8 paths, verified under Wine |
 | **Android 5.0+** | release ships one APK per ABI (arm64-v8a / armeabi-v7a / x86 / x86_64): launcher, floating keypads, AAudio/OpenSL ES sound, **GLES2 hardware acceleration on by default** (M3G triangle/raster paths, software fallback toggle in the panel); `tools/build_android.sh` makes a universal APK for local use |
 | **Android 2.x legacy** | ARMv5 `armeabi` edition with a lightweight launcher — see [docs/ANDROID_LEGACY.md](docs/ANDROID_LEGACY.md) |
-| **Web browsers** | Emscripten module plus a dependency-free ES-module shell — see [docs/WEB.md](docs/WEB.md) |
+| **Web browsers** | Emscripten module plus a dependency-free ES-module shell — [live demo](https://lucinhu.github.io/nano_j2me/), see [docs/WEB.md](docs/WEB.md) |
 | **RetroArch / libretro** | native cores for Linux (x86_64, aarch64, armv7) and Android (arm64, armv7, x86_64) |
-| **ESP32-S3 / ESP32-C3** | full runtime and MIDlet on an ESP-IDF board (PSRAM required for the VM) |
+| **ESP32-S3 / ESP32-C3** | full runtime and MIDlet on an ESP-IDF board (PSRAM required for the VM); the Korvo board port lives in [lucinhu/esp32s31-korvo-nano-j2me](https://github.com/lucinhu/esp32s31-korvo-nano-j2me) |
 | **headless** | the reference port used by the test suite, for embedding and CI |
 
 On Arch Linux the AUR packages install the desktop client, the static library and
@@ -225,7 +234,9 @@ Load the libretro core in RetroArch as **Mobile - J2ME (nano_j2me)** and pick a
 `.jar`; controls, core options and save locations are in
 [docs/LIBRETRO.md](docs/LIBRETRO.md). For the ESP32-S3 see
 [docs/PORTING.md](docs/PORTING.md) and `tests/embedded/idf/`; the port is
-exercised under Espressif's `esp-emu` with `tools/run_esp_emulator.sh`.
+exercised under Espressif's `esp-emu` with `tools/run_esp_emulator.sh`. The
+ready-to-flash Korvo board port is
+[lucinhu/esp32s31-korvo-nano-j2me](https://github.com/lucinhu/esp32s31-korvo-nano-j2me).
 
 Optional accelerators stay off by default outside the Android release APKs
 (which already build the GLES2 backend and enable it, see
