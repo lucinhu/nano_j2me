@@ -1513,3 +1513,27 @@ save times out), `PAC-MAN (176x220)` (title-side/network), and the state-service
 timeout group (`杀鬼子-敌后武工队`, `Asphalt4EliteRacing`,
 `3D_Autobahn_Raser_World_Challenge`) whose frames run longer than the 4 s
 serialize window.
+
+## Round 184: 0.5.30 sweep, matrix refresh and the two fixed titles
+
+Full corpus sweep on the 0.5.30 CLI (rebuild of commit `b9f6abe`, 18 workers,
+`.local-tools/debug-runs/compat-20261122-r184`, log `/tmp/r184-sweep.log`):
+**1050 rows → 1036 ok / 4 title-exception / 4 bad-jar / 2 timeout /
+2 title-exit / 2 no-frame** — verdicts byte-identical to the 0.5.29 sweep
+(0 verdict changes), so the Canvas-instance and Mascot `AffineTrans` fixes are
+compat-neutral for everything that already ran.
+
+The two target titles improved measurably:
+`snowboardr_m6km8xw5.jar` gfx 17,405 → 22,319 (no more `AbstractMethodError`);
+`mini3draci_ix48iqod.jar` gfx 3,556 → 6,321 and **tris 0 → 69,016** (its Mascot
+3D scene draws now that the twelve-int `set` overload exists; was 431
+`NoSuchMethodError`).
+
+Through the r49 libretro core both titles pass the mock harness end to end
+(`--keys tools/corpus_keys/generic.txt --frames 300 --visual-required`,
+47 checks / 0 failed each).
+
+Matrix refresh: the 1050 fresh rows overlaid by file name into the matrix rows
+directory (backup `rows.jsonl.pre184.bak`, meta sources note the 0.5.30 batch)
+and `docs/COMPATIBILITY_MATRIX.md` regenerated — 1817 titles, 1799 ok
+(distribution unchanged).

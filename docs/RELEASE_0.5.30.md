@@ -69,7 +69,13 @@ The core `.info` is identical to the tracked source copy
 - Windows x86_64 Wine audiodemo: **4/4 passed** at 300 frames;
 - submission bundle validator: **32/32 passed**;
 - full 1046-title linkage scan: **1 hit** (`ArcadePark2`, title-side);
-- corpus sweep on the 0.5.30 CLI: reported with the release notes update.
+- corpus sweep on the 0.5.30 CLI: **1050 rows → 1036 ok / 4 title-exception /
+  4 bad-jar / 2 timeout / 2 title-exit / 2 no-frame**, verdict-identical to
+  0.5.29 (0 changes); matrix refreshed (1817 titles / 1799 ok);
+- both fixed titles pass the libretro mock harness through the release core
+  (`--keys tools/corpus_keys/generic.txt --frames 300 --visual-required`,
+  47 checks / 0 failed each), with `snowboardr` gfx 17,405 -> 22,319 and
+  `mini3draci` tris 0 -> 69,016 in the sweep.
 
 ## Upgrade notes
 

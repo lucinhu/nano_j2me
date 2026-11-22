@@ -1930,8 +1930,9 @@ Validation: full serial CTest **207/207** (362.16 s), mock matrix **20/20**,
 real RetroArch loopdemo 120 frames PASS, Windows x86_64 Wine **4/4** at 300
 frames, submission bundle **32/32**; full 1046-title linkage scan leaves one
 known title-side hit (`ArcadePark2`'s missing `GlomoCountry`).
-The corpus sweep on the 0.5.30 CLI is recorded in `docs/CORPUS.md` after it
-completes.
+Corpus sweep on the 0.5.30 CLI: 1050 rows with the same verdict distribution
+as 0.5.29 (0 changes; 1036 ok), and both fixed titles pass the mock harness
+through the release core (47 checks each).
 
 ### 0.5.29 / r48 (2026-11-22)
 
