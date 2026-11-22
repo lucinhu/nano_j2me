@@ -432,6 +432,12 @@ void nj_vm_get_stats(nj_vm *vm, nj_vm_stats *out);
  */
 void nj_vm_set_speed(nj_vm *vm, int percent);
 
+/* Deterministic replay/netplay: when enabled, java.util.Random's no-argument
+ * constructor seeds from a VM counter (in construction order) instead of the
+ * port clock.  The libretro core sets this for its "deterministic timing"
+ * option; normal play leaves it off. */
+void nj_vm_set_deterministic(nj_vm *vm, int enabled);
+
 int nj_vm_speed(const nj_vm *vm);
 
 /*

@@ -154,6 +154,17 @@ void nj_vm_set_speed(nj_vm *vm, int percent)
     vm->speed_percent = percent;
 }
 
+/* Deterministic replay/netplay: seed default-constructed Random instances from
+ * a per-VM counter so identical input sequences produce identical games.  The
+ * counter is reset on enable; saved Random objects keep their Java state, so
+ * rolling back a state restores their sequence too. */
+void nj_vm_set_deterministic(nj_vm *vm, int enabled)
+{
+    if (!vm) return;
+    vm->deterministic = enabled != 0;
+    vm->deterministic_seed = 0x4E4F4A3200000001ull;
+}
+
 int nj_vm_speed(const nj_vm *vm)
 {
     return vm ? vm->speed_percent : 100;

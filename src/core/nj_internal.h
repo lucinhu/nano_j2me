@@ -549,6 +549,14 @@ struct nj_vm {
      */
     nj_s8      scheduler_ticks;
 
+    /* Deterministic replay/netplay mode: the default Random() seed comes from
+     * this VM counter instead of the wall clock, so two runs that construct
+     * the same Random sequence in the same order seed identically.  Set by
+     * the libretro port when "deterministic timing" is enabled; zero for
+     * normal play, CLI and Android. */
+    int        deterministic;
+    nj_u8      deterministic_seed;
+
     /*
      * How fast the MIDlet's clock runs, in percent of real time.
      *

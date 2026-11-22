@@ -135,8 +135,11 @@ directories. Frontend save-state files are separate from these in-game files.
 Rotation occurs inside the core; do not add the same rotation in the frontend.
 The handset canvas coordinates remain unchanged. A game's own animation rate
 can be below the reported frontend rate. Pause/fast-forward/slow motion affect
-virtual time; threaded execution and external resources prevent a deterministic
-execution guarantee.
+virtual time.  Normal play follows real time and gives no deterministic
+execution guarantee (threaded execution, external resources, wall-clock
+sampling).  The opt-in `nano_j2me_deterministic` option provides a
+reproducible baseline for replay and a future netplay path; see
+*Deterministic timing* below.
 
 ## Core options
 
@@ -153,6 +156,7 @@ applied immediately. Defaults are bold.
 | Frame rate limit (`nano_j2me_fps`) | 15, 20, **30**, 60, 0 | presentation cap in frames per second; 0 means unlimited; applied without a reload |
 | Java heap (`nano_j2me_heap`) | **auto**, 16, 32, 64, 128 | MB; auto selects host RAM / 16, clamped to 32–128 MB in 8 MB steps; unknown RAM uses 32 MB |
 | Font (`nano_j2me_font`) | **auto**, system, builtin | external TrueType font selection, see below |
+| Deterministic timing (`nano_j2me_deterministic`) | **disabled**, enabled | fixed 60 Hz virtual clock, 60 fps cap and counter-seeded default `Random`; two runs with the same input then present identical frames for frame-driven titles. See *Deterministic timing* below |
 | Audio output (`nano_j2me_sound`) | **enabled**, disabled | PCM and tone output |
 | Touchscreen pointer (`nano_j2me_pointer`) | **enabled**, disabled | canvas pointer events |
 | Button A (`nano_j2me_btn_a`) | **FIRE**, any binding below | A key |
@@ -171,6 +175,19 @@ it. Rotation stays a core-side transform on top of that canvas.
 Each button option accepts `NONE`, `FIRE`, `UP`, `DOWN`, `LEFT`, `RIGHT`, `0`–`9`,
 `STAR`, `POUND`, `SOFT_LEFT`, `SOFT_RIGHT`, `CLEAR`, `GAME_A`–`GAME_D`, `VOLUP`,
 `VOLDOWN` and `POWER`.
+
+## Deterministic timing
+
+`nano_j2me_deterministic` (default **disabled**) replaces real-time pacing with
+a fixed schedule: every `retro_run()` advances the MIDlet clock by exactly one
+60 Hz step, the frame cap is forced to 60 fps, and default
+`java.util.Random()` instances are seeded from a VM counter in construction
+order instead of the port clock.  With it enabled, frame-driven titles present
+byte-identical frames across identical runs (verified in the project's
+`check_libretro_determinism` test).  Titles that sample the clock inside a
+frame can still differ between runs because the VM thread runs asynchronously
+with the frontend tick, so **netplay is not advertised** yet: it additionally
+needs frame-locked single-step execution.
 
 ## Fonts
 

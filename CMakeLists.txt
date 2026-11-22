@@ -2363,6 +2363,20 @@ if(NJ_BUILD_TESTS AND NJ_BUILD_LIBRETRO AND UNIX
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
     TIMEOUT 120)
 
+  # Deterministic timing (replay/netplay baseline): the fixed 60 Hz virtual
+  # clock plus counter-seeded default Random instances must make two identical
+  # runs present byte-identical frames.
+  add_test(NAME check_libretro_determinism
+           COMMAND ${CMAKE_COMMAND} -E env
+                   CORE=$<TARGET_FILE:nano_j2me_libretro>
+                   HARNESS=$<TARGET_FILE:test_libretro_frontend>
+                   JAR=${NJ_FIXTURES}/alphademo.jar
+                   FRAMES=60
+                   ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_libretro_determinism.sh)
+  set_tests_properties(check_libretro_determinism PROPERTIES
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    TIMEOUT 180)
+
   # retro_cheat_set() patches the SYSTEM_RAM arena window and re-applies the
   # bytes every frame; disabled/malformed codes must not touch memory.
   add_test(NAME check_libretro_cheat

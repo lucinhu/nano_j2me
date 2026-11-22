@@ -387,6 +387,7 @@ typedef struct nj_lr {
     int                      rumble_active;
     int                      rumble_sent;
     int                      fastforward;   /* frontend fast-forward */
+    int                      deterministic; /* fixed timestep + virtual clock */
     int                      rumble_logs;   /* diagnostic: logged requests */
     uint64_t                 rumble_deadline_ms;
     int                      rumble_warned;
@@ -1225,6 +1226,14 @@ static const lr_option_meta lr_options[] = {
       "Titles that pace themselves with Thread.sleep() are not slowed below "
       "their own rate by a cap at or above it.",
       "system", "30", lr_fps_values },
+    { "nano_j2me_deterministic", "Deterministic timing (restart required)",
+      "Fix the virtual clock to exactly one 60 Hz step per frame instead of "
+      "following real time. Two runs with the same input then advance the "
+      "MIDlet's clock, timers and default Random seeds identically, which is "
+      "the baseline netplay and replay need. Leave it off for normal play so "
+      "the virtual clock still matches real time. Reload content after "
+      "changing it.",
+      "system", "disabled", lr_switch_values },
     { "nano_j2me_font", "Font (restart required)",
       "Auto tries nano_j2me/font.ttf or font.ttc in the frontend system directory, "
       "then common OS fonts. Unsupported/missing fonts use built-in bitmaps.",
@@ -2828,11 +2837,24 @@ static void lr_port_init(nj_lr *s)
     {
         const char *fps = lr_option(s, "nano_j2me_fps", "30");
         int cap = fps ? atoi(fps) : 30;
+        if (s->deterministic) {
+            /* One frontend call is one 60 Hz tick; a title that paces itself
+             * slower would not present a frame on every tick and the
+             * deterministic handshake would stall. */
+            cap = 60;
+        }
         if (cap < 0) cap = 0;
         if (cap > 240) cap = 240;
         s->port.fps_cap = cap;
         lr_log(s, RETRO_LOG_INFO, "frame rate limit: %d fps%s", cap,
                cap == 0 ? " (unlimited)" : "");
+        s->deterministic =
+            strcmp(lr_option(s, "nano_j2me_deterministic", "disabled"),
+                   "enabled") == 0;
+        if (s->deterministic) {
+            lr_log(s, RETRO_LOG_INFO,
+                   "deterministic timing: fixed 60 Hz virtual clock");
+        }
     }
     s->port.rms_dir = s->base_dir;
     s->port.fs_dir = s->fs_dir;
@@ -3554,6 +3576,7 @@ static bool lr_load(const struct retro_game_info *info, int resetting)
         lr_unload(s);
         return false;
     }
+    nj_vm_set_deterministic(s->vm, s->deterministic);
     lr_load_font(s);
     /* The largest blob this VM can produce; retro_serialize_size() reports it
      * so the frontend can allocate the state file in one piece. */
@@ -3885,6 +3908,11 @@ RETRO_API void retro_run(void)
             delta = now_us - s->last_run_us;
         }
         s->last_run_us = now_us;
+        if (s->deterministic) {
+            /* Netplay/replay: one committed frame is exactly one 60 Hz tick,
+             * independent of how wall time happened to pass between calls. */
+            delta = 16667ull;
+        }
         if (delta > 100000ull) {
             /* After a pause or a long stall, resume at normal speed instead of
              * fast-forwarding the whole gap. */

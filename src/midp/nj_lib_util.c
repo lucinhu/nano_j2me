@@ -1615,7 +1615,17 @@ NJFN(rnd_init)
 {
     nj_value seed[2];
     memset(seed, 0, sizeof(seed));
-    seed[0].j = nj_now_ms(vm);
+    if (vm->deterministic) {
+        /* Replay/netplay: identical construction order => identical seeds.
+         * A 64-bit LCG keeps successive instances independent enough for
+         * ordinary game use while staying bit-reproducible. */
+        nj_u8 v = vm->deterministic_seed;
+        vm->deterministic_seed = v * 6364136223846793005ull
+                               + 1442695040888963407ull;
+        seed[0].j = (nj_s8)v;
+    } else {
+        seed[0].j = nj_now_ms(vm);
+    }
     /* CLDC constructors invoke the overridable setSeed. The VM bridge builds
      * a real receiver/argument window; never fake NJ_THIS with a local array. */
     return nj_call(vm, NJ_THIS(args), RND_CLS, "setSeed", "(J)V", seed, ret);

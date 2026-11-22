@@ -10,6 +10,21 @@ acceptance into the RetroArch Core Downloader. See the
 [submission kit](LIBRETRO_SUBMISSION.md) for the current evidence, license review
 and remaining upstream steps, and the [library page draft](libretro/nano_j2me.md).
 
+## Deterministic timing (replay/netplay baseline)
+
+The core option `nano_j2me_deterministic` (System category, off by default)
+trades real-time pacing for reproducibility: each `retro_run()` advances the
+MIDlet clock by exactly one 60 Hz step, the frame cap is forced to 60 fps, and
+default `java.util.Random()` instances are seeded from a VM counter instead of
+the port clock.  With it enabled, frame-driven titles present byte-identical
+frames across runs (measured: alphademo 61/61, 家园5 77/77, 雷霆战机 107/107
+frames identical; see `docs/notes/2026-11-22-deterministic-timing.md`).
+Titles that sample the clock inside a frame can still differ because the VM
+thread runs asynchronously with the frontend tick; netplay therefore remains
+unsupported until frame-locked single-step execution is added.  The regression
+gate is `tools/check_libretro_determinism.sh` / CTest
+`check_libretro_determinism`.
+
 ## Build and install
 
 For a core without the CLI, SDL or networking dependencies:
