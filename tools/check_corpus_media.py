@@ -28,6 +28,8 @@ import tempfile
 import zipfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+sys.path.insert(0, os.path.join(ROOT, "tools"))
+from corpus_keymap import screen as resolve_screen  # noqa: E402
 BIN = os.environ.get("NJ_BIN", os.path.join(ROOT, "build", "nj2me"))
 SEARCH = [os.path.join(ROOT, "tests", "games")]
 MEDIA_EXTS = (".mid", ".midi", ".mp3", ".amr", ".wav", ".imy", ".mld", ".3gp",
@@ -98,7 +100,9 @@ def main():
     for row in ok:
         if seen >= args.count:
             break
-        path = find(os.path.basename(row["file"]))
+        path = row.get("jar_path")
+        if not path or not os.path.exists(path):
+            path = find(os.path.basename(row["file"]))
         if path is None:
             continue
         assets = media_assets(path)
@@ -110,8 +114,9 @@ def main():
             continue
         seen += 1
         with tempfile.TemporaryDirectory() as rms:
+            size = resolve_screen(os.path.basename(str(path)), "240x320")
             cp = subprocess.run(
-                [BIN, "--port", "headless", "--size", "240x320", "--heap", "16",
+                [BIN, "--port", "headless", "--size", size, "--heap", "16",
                  "--fps", "30", "--run-frames", str(args.frames),
                  "--keys", "@" + keys, "--rms-dir", rms, "--verbose", "3",
                  "--stats", path],

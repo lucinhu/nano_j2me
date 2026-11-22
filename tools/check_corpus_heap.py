@@ -31,6 +31,8 @@ import subprocess
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+sys.path.insert(0, os.path.join(ROOT, "tools"))
+from corpus_keymap import screen as resolve_screen  # noqa: E402
 BIN = os.environ.get("NJ_BIN", os.path.join(ROOT, "build", "nj2me"))
 SEARCH = [os.path.join(ROOT, "tests", "games"), "/tmp/vault/Roms",
           "/tmp/vault2", "/tmp/vault3"]
@@ -48,7 +50,8 @@ def find(name):
 
 
 def run(path, heap, frames, keys):
-    cmd = [BIN, "--port", "headless", "--size", "240x320",
+    size = resolve_screen(os.path.basename(str(path)), "240x320")
+    cmd = [BIN, "--port", "headless", "--size", size,
            "--heap", str(heap), "--fps", "30",
            "--run-frames", str(frames), "--stats",
            "--keys", "@" + keys, path]
@@ -93,7 +96,9 @@ def main():
     for row in ok:
         if seen >= args.count:
             break
-        path = find(os.path.basename(row["file"]))
+        path = row.get("jar_path")
+        if not path or not os.path.exists(path):
+            path = find(os.path.basename(row["file"]))
         if path is None:
             continue
         seen += 1

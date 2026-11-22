@@ -33,6 +33,8 @@ import tempfile
 import zipfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+sys.path.insert(0, os.path.join(ROOT, "tools"))
+from corpus_keymap import screen as resolve_screen  # noqa: E402
 BIN = os.environ.get("NJ_BIN", os.path.join(ROOT, "build", "nj2me"))
 SEARCH = [os.path.join(ROOT, "tests", "games")]
 # Same extra corpus directories as tools/sweep_compat.py (NJ_SWEEP_DIRS).
@@ -86,7 +88,9 @@ def main():
     for row in ok:
         if seen >= args.count:
             break
-        path = find(os.path.basename(row["file"]))
+        path = row.get("jar_path")
+        if not path or not os.path.exists(path):
+            path = find(os.path.basename(row["file"]))
         if path is None:
             continue
         assets = audio_assets(path)
@@ -105,7 +109,8 @@ def main():
         else:
             row_keys = resolve_keys(os.path.basename(path), keys)
         with tempfile.TemporaryDirectory() as rms:
-            cmd = [BIN, "--port", "headless", "--size", "240x320", "--heap", "16",
+            size = resolve_screen(os.path.basename(path), "240x320")
+            cmd = [BIN, "--port", "headless", "--size", size, "--heap", "16",
                    "--fps", "30", "--run-frames", str(args.frames),
                    "--rms-dir", rms, "--stats", "--verbose", "3"]
             if row_keys:

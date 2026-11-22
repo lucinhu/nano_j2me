@@ -38,6 +38,8 @@ import sys
 import tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+sys.path.insert(0, os.path.join(ROOT, "tools"))
+from corpus_keymap import screen as resolve_screen  # noqa: E402
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from corpus_keymap import resolve as resolve_keys  # noqa: E402
@@ -67,7 +69,8 @@ def run(cmd, timeout):
 
 def phases(binary, jar, frames, state_frame, state, keys, scratch):
     """Run one save pass and one restore pass; return (ok, detail)."""
-    common = [binary, "--port", "headless", "--size", "240x320",
+    size = resolve_screen(os.path.basename(str(jar)), "240x320")
+    common = [binary, "--port", "headless", "--size", size,
               "--heap", "16", "--fps", "30"]
     save = common + ["--run-frames", str(frames),
                      "--save-state", state,
@@ -137,7 +140,9 @@ def main():
         for row in ok:
             if seen >= args.count:
                 break
-            path = find(os.path.basename(row["file"]))
+            path = row.get("jar_path")
+            if not path or not os.path.exists(path):
+                path = find(os.path.basename(row["file"]))
             if path is None:
                 continue
             seen += 1

@@ -31,6 +31,8 @@ import tempfile
 from concurrent.futures import ThreadPoolExecutor
 
 ROOT = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+sys.path.insert(0, os.path.join(ROOT, "tools"))
+from corpus_keymap import screen as resolve_screen  # noqa: E402
 # Same override as tools/sweep_compat.py: the corpus may run a binary built
 # outside the tree (e.g. /var/tmp/nj2me-goal13-build/nj2me).
 BIN = os.environ.get("NJ_BIN", os.path.join(ROOT, "build", "nj2me"))
@@ -78,6 +80,18 @@ def find(name):
     return None
 
 
+def jar_for(row):
+    """Resolve a row's JAR, preferring the absolute path the sweep recorded.
+
+    Fetched titles live in the persistent cache (or an ad-hoc directory), so a
+    rows directory produced from them cannot be replayed by bare file name.
+    """
+    path = row.get("jar_path")
+    if path and os.path.exists(path):
+        return path
+    return find(os.path.basename(row["file"]))
+
+
 def _dump_every(frames):
     """Spacing between dumped frames.
 
@@ -98,8 +112,9 @@ def _dump_every(frames):
 def probe(path, frames, keys, heap=16, device=None):
     """Run one title and return (unique_dumps, non_black_ratio)."""
     with tempfile.TemporaryDirectory() as out:
+        size = resolve_screen(os.path.basename(str(path)), "240x320")
         cmd = [BIN, "--port", "headless",
-               "--size", "240x320", "--heap", str(heap), "--fps", "30",
+               "--size", size, "--heap", str(heap), "--fps", "30",
                "--run-frames", str(frames), "--dump-frames", out,
                "--dump-every", str(_dump_every(frames)),
                "--keys", "@" + keys,
@@ -140,7 +155,7 @@ def main():
     random.Random(args.seed).shuffle(ok)
 
     seen, moving, static = 0, 0, 0
-    jobs = [r for r in ok if find(os.path.basename(r["file"])) is not None]
+    jobs = [r for r in ok if jar_for(r) is not None]
     jobs = jobs[:max(args.count, 0)]
     generic_keys = args.keys or os.path.join(args.rows, "keys.txt")
     # Honor the recipe the sweep had to use for a title: a device retry also
@@ -160,7 +175,7 @@ def main():
             keys = none_keys
         elif row.get("keys"):
             keys = os.path.join(ROOT, "tools", "corpus_keys", row["keys"])
-        return (find(os.path.basename(row["file"])),
+        return (jar_for(row),
                 int(row.get("heap") or 16), row.get("device"), keys)
 
     specs = [spec_for(r) for r in jobs]

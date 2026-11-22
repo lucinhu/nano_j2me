@@ -47,6 +47,7 @@ ROW_PATH_KEYS = ("jar_path", "path", "jar", "file")
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from corpus_keymap import resolve as resolve_keys  # noqa: E402
+from corpus_keymap import screen as resolve_screen  # noqa: E402
 
 
 def corpus_dirs():
@@ -98,9 +99,10 @@ def run_one(row, args, keys, work):
             "note": "JAR not found (set NJ_SWEEP_DIRS)",
         }
     name = row.get("name") or jar.name
+    size = resolve_screen(jar.name, "240x320")
     rms = work / ("rms-" + re.sub(r"[^A-Za-z0-9_.-]", "_", name))
     cmd = [
-        str(BIN), "--port", "headless", "--size", "240x320",
+        str(BIN), "--port", "headless", "--size", size,
         "--heap", str(row.get("heap") or args.heap), "--fps", str(args.fps),
         "--run-frames", str(args.frames), "--stats",
         "--rms-dir", str(rms),

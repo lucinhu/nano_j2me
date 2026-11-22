@@ -26,6 +26,8 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(ROOT, "tools"))
+from corpus_keymap import screen as resolve_screen  # noqa: E402
 GAMES = os.path.join(ROOT, "tests", "games")
 PAT = {
     "frames": re.compile(r"frames=(\d+)"),
@@ -47,14 +49,15 @@ def stats_from(text):
 
 
 def run_one(binary, row, frames, heap, timeout):
-    jar = os.path.join(GAMES, row["file"])
+    jar = row.get("jar_path") or os.path.join(GAMES, row["file"])
     if not os.path.exists(jar):
         return None
     rms = tempfile.mkdtemp(prefix="nj-cpu-rms-")
     log = tempfile.TemporaryFile(mode="w+")
     try:
+        size = resolve_screen(os.path.basename(jar), "240x320")
         proc = subprocess.Popen(
-            [binary, "--port", "headless", "--size", "240x320",
+            [binary, "--port", "headless", "--size", size,
              "--heap", str(heap), "--fps", "0", "--run-frames", str(frames),
              "--stats", "--rms-dir", rms, jar],
             stdout=log, stderr=subprocess.STDOUT)
