@@ -1002,6 +1002,24 @@ NJFN(svcrec_get_url)
     return NJ_OK;
 }
 
+NJFN(svcrec_set_classes)
+{
+    nj_field *f = nj_field_lookup(vm, NJ_C_SVCREC, "_svcClass", "I", 0);
+
+    if (f != NULL) {
+        nj_field_write_int(vm, NJ_THIS(args), f, NJ_ARG_INT(args, 0));
+    }
+    return NJ_OK;
+}
+
+NJFN(svcrec_get_classes)
+{
+    nj_field *f = nj_field_lookup(vm, NJ_C_SVCREC, "_svcClass", "I", 0);
+
+    ret->i = f ? nj_field_read_int(vm, NJ_THIS(args), f) : 0;
+    return NJ_OK;
+}
+
 NJFN(svcrec_get_attr)
 {
     nj_ref ids = bget_ref(vm, NJ_THIS(args), NJ_C_SVCREC, F_RIDS, "[I");
@@ -2180,6 +2198,9 @@ static const nj_builtin_field svcrec_fields[] = {
     FLD(F_RUUID, "Ljavax/bluetooth/UUID;", NJ_ACC_PRIVATE),
     FLD(F_RIDS,  "[I", NJ_ACC_PRIVATE),
     FLD(F_RVALS, "[Ljava/lang/Object;", NJ_ACC_PRIVATE),
+    /* setDeviceServiceClasses(): JSR-82 exposes the service-class bits the
+     * record advertises; no stack needs them, so store and report them. */
+    FLD("_svcClass", "I", NJ_ACC_PRIVATE),
 
     CONST("NOAUTHENTICATE_NOENCRYPT"), CONST("AUTHENTICATE_NOENCRYPT"),
     CONST("AUTHENTICATE_ENCRYPT")
@@ -2191,7 +2212,9 @@ static const nj_builtin_method svcrec_methods[] = {
     M("setAttributeValue",  "(ILjavax/bluetooth/DataElement;)Z", NJ_ACC_PUBLIC),
     M("removeAttributeValue", "(IZ)V", NJ_ACC_PUBLIC),
     M("getAttributeIDs",    "()[I", NJ_ACC_PUBLIC),
-    M("getHostDevice",      "()Ljavax/bluetooth/RemoteDevice;", NJ_ACC_PUBLIC)
+    M("getHostDevice",      "()Ljavax/bluetooth/RemoteDevice;", NJ_ACC_PUBLIC),
+    M("setDeviceServiceClasses", "(I)V", NJ_ACC_PUBLIC),
+    M("getDeviceServiceClasses", "()I", NJ_ACC_PUBLIC)
 };
 
 static const nj_builtin_field remote_fields[] = {
@@ -2441,6 +2464,8 @@ const nj_native_entry nj_lib_bt_table[] = {
     { NJ_C_SVCREC, "removeAttributeValue", "(IZ)V", svcrec_remove_attr },
     { NJ_C_SVCREC, "getAttributeIDs",      "()[I", svcrec_attr_ids },
     { NJ_C_SVCREC, "getHostDevice",        "()Ljavax/bluetooth/RemoteDevice;", svcrec_host },
+    { NJ_C_SVCREC, "setDeviceServiceClasses", "(I)V", svcrec_set_classes },
+    { NJ_C_SVCREC, "getDeviceServiceClasses", "()I", svcrec_get_classes },
 
     { NJ_C_REMOTE, "<init>",                 "(Ljava/lang/String;)V", remote_init_str },
     { NJ_C_REMOTE, "isTrustedDevice",        "()Z", remote_is_trusted },

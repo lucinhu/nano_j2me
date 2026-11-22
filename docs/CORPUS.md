@@ -1782,3 +1782,16 @@ downloaded directly and its members were extracted with the fetcher's rules:
   re-measurement): **2462 titles, 2420 ok** (15 bad-jar, 10 title-exception,
   6 timeout, 5 failure, 3 no-frame, 3 title-exit). Regeneration is
   byte-deterministic.
+- **Member audit closed the remaining non-title-side gaps.** The new titles
+  pushed `check_vendor_members` past its allowlist: it now checks 410,283
+  references over 196 audited classes. Added the missing members instead of
+  allowlisting them: `java.lang.Integer.longValue()J`,
+  `CustomItem.invalidate()V` (marks the item dirty; `repaint()` still draws
+  immediately), `ServiceRecord.set/getDeviceServiceClasses(I)` (the value is
+  stored on the record; there is no stack to advertise it),
+  `AffineTrans(IIIIIIIIIIII)V` (constructor form of the twelve-int matrix set),
+  `Effect3D.set/getSphereTexture()` (the JSR-184 spelling of the existing
+  sphere-map slot) and `Graphics3D.dispose()` (no handset resources to free).
+  The only remaining gaps are the three title-side patched-ABI classes already
+  accepted in `tools/api_member_allowlist.txt` (`java/io/PrintStream`,
+  `panic` `Graphics`/`Image` obfuscated overloads).

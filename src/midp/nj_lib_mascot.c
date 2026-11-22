@@ -417,6 +417,7 @@ static const nj_builtin_method xf_methods[] = {
     /* Mascot Capsule's argument-list overload; corpus titles (MINI 3D) call it
      * with the twelve matrix entries in row-major m00..m23 order. */
     M("set", "(IIIIIIIIIIII)V", 0),
+    M("<init>", "(IIIIIIIIIIII)V", 0),
     M("<init>", "(L" NJ_C_XF ";)V", 0),
     M("<init>", "([I)V", 0),
     M("<init>", "([[I)V", 0),
@@ -674,6 +675,13 @@ NJFN(mascot_xf_set_int12)
     return NJ_OK;
 }
 
+/* Constructor form of the twelve-int set(): some bundles build their matrix
+ * with `new AffineTrans(m00..m23)` instead of a zero-arg object plus set. */
+NJFN(mascot_xf_init_int12)
+{
+    return mascot_xf_set_int12(vm, th, args, ret);
+}
+
 NJFN(mascot_xf_transform){return m3_transform_java(vm,args,ret,0);}
 NJFN(mascot_xf_transform_copy){return m3_transform_java(vm,args,ret,1);}
 
@@ -832,6 +840,9 @@ static const nj_builtin_method fx_methods[] = {
     M("setLight", "(L" NJ_C_LIG ";)V", 0),
     M("getLight", "()L" NJ_C_LIG ";", 0),
     M("setSphereMap", "(L" NJ_C_TEX ";)V", 0),
+    /* The JSR-184 spelling of the same sphere-map slot. */
+    M("setSphereTexture", "(L" NJ_C_TEX ";)V", 0),
+    M("getSphereTexture", "()L" NJ_C_TEX ";", 0),
     M("setShading", "(I)V", 0),
     M("setSemiTransparentEnabled", "(Z)V", 0),
     M("setTransparency", "(Z)V", 0),
@@ -872,6 +883,7 @@ static const nj_builtin_method g3d_methods[] = {
     M("bind", "(Ljavax/microedition/lcdui/Graphics;)V", 0),
     M("release", "(Ljavax/microedition/lcdui/Graphics;)V", 0),
     M("flush", "()V", 0),
+    M("dispose", "()V", 0),
     M("renderPrimitives", "(L" NJ_C_TEX ";IIL" NJ_C_FL ";L" NJ_C_FX ";II[I[I[I[I)V", 0),
     M("drawCommandList", "(L" NJ_C_TEX ";IIL" NJ_C_FL ";L" NJ_C_FX ";[I)V", 0),
     M("drawCommandList", "([L" NJ_C_TEX ";IIL" NJ_C_FL ";L" NJ_C_FX ";[I)V", 0),
@@ -1345,6 +1357,12 @@ NJFN(mascot_fx_sphere)
     return NJ_OK;
 }
 
+NJFN(mascot_fx_get_sphere_texture)
+{
+    ret->r = m3_ref(vm, NJ_THIS(args), "_sph", "L" NJ_C_TEX ";");
+    return NJ_OK;
+}
+
 
 
 NJFN(mascot_fx_semi)
@@ -1368,6 +1386,15 @@ NJFN(mascot_fx_semi)
 
 
 /* Graphics3D */
+
+/* dispose() frees handset resources; this renderer holds none beyond the
+ * bound Graphics, which the caller owns. */
+NJFN(mascot_g3d_dispose)
+{
+    (void)vm; (void)th; (void)args; (void)ret;
+    return NJ_OK;
+}
+
 
 
 
@@ -1657,6 +1684,7 @@ const nj_native_entry nj_lib_mascot_table[] = {
     { NJ_C_V3, "setZ", "(I)V", mascot_v3_set_z },
 
     { NJ_C_XF, "<init>", "()V", mascot_xf_init },
+    { NJ_C_XF, "<init>", "(IIIIIIIIIIII)V", mascot_xf_init_int12 },
     { NJ_C_XF, "<init>", "(L" NJ_C_XF ";)V", mascot_xf_init_copy },
     { NJ_C_XF, "<init>", "([I)V", mascot_xf_init_arr },
     { NJ_C_XF, "<init>", "([[I)V", mascot_xf_init_2d },
@@ -1722,6 +1750,8 @@ const nj_native_entry nj_lib_mascot_table[] = {
     { NJ_C_FX, "setLight", "(L" NJ_C_LIG ";)V", mascot_fx_light },
     { NJ_C_FX, "getLight", "()L" NJ_C_LIG ";", mascot_fx_get_light },
     { NJ_C_FX, "setSphereMap", "(L" NJ_C_TEX ";)V", mascot_fx_sphere },
+    { NJ_C_FX, "setSphereTexture", "(L" NJ_C_TEX ";)V", mascot_fx_sphere },
+    { NJ_C_FX, "getSphereTexture", "()L" NJ_C_TEX ";", mascot_fx_get_sphere_texture },
     { NJ_C_FX, "setShading", "(I)V", mascot_scene_fx_shading },
     { NJ_C_FX, "setSemiTransparentEnabled", "(Z)V", mascot_fx_semi },
     { NJ_C_FX, "setTransparency", "(Z)V", mascot_fx_semi },
@@ -1735,6 +1765,7 @@ const nj_native_entry nj_lib_mascot_table[] = {
     { NJ_C_G3D, "bind", "(Ljavax/microedition/lcdui/Graphics;)V", mascot_scene_bind },
     { NJ_C_G3D, "release", "(Ljavax/microedition/lcdui/Graphics;)V", mascot_scene_release },
     { NJ_C_G3D, "flush", "()V", mascot_scene_flush },
+    { NJ_C_G3D, "dispose", "()V", mascot_g3d_dispose },
     { NJ_C_G3D, "drawCommandList", "(L" NJ_C_TEX ";IIL" NJ_C_FL ";L" NJ_C_FX ";[I)V", mascot_cmd_draw_list },
     { NJ_C_G3D, "drawCommandList", "([L" NJ_C_TEX ";IIL" NJ_C_FL ";L" NJ_C_FX ";[I)V", mascot_cmd_draw_list_array },
     { NJ_C_G3D, "renderPrimitives",

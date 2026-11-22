@@ -39,6 +39,13 @@ NJFN(int_intValue)
     return NJ_OK;
 }
 
+NJFN(int_longValue)
+{
+    nj_field *f = vf(vm, "java/lang/Integer", "I");
+    ret->j = f ? (nj_s8)nj_field_read_int(vm, NJ_THIS(args), f) : 0;
+    return NJ_OK;
+}
+
 NJFN(int_shortValue)
 {
     nj_field *f = vf(vm, "java/lang/Integer", "I");
@@ -1601,6 +1608,7 @@ static const nj_builtin_field Double_fields[] = {
 static const nj_builtin_method Integer_methods[] = {
     M("<init>",        "(I)V", 0),
     M("intValue",      "()I",  0),
+    M("longValue",     "()J",  0),
     M("byteValue",     "()B",  0),
     M("shortValue",    "()S",  0),
     M("parseInt",      "(Ljava/lang/String;)I", NJ_ACC_STATIC),
@@ -1793,6 +1801,7 @@ nj_status nj_boxing_init(nj_vm *vm)
 const nj_native_entry nj_lib_boxing_table[] = {
     { "java/lang/Integer",   "<init>",       "(I)V", int_init },
     { "java/lang/Integer",   "intValue",     "()I",  int_intValue },
+    { "java/lang/Integer",   "longValue",    "()J",  int_longValue },
     { "java/lang/Integer",   "parseInt",     "(Ljava/lang/String;)I", int_parseInt },
     { "java/lang/Integer",   "parseInt",     "(Ljava/lang/String;I)I", int_parseInt_radix },
     { "java/lang/Integer",   "byteValue",    "()B",                   int_byteValue },

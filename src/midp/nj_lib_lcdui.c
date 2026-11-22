@@ -7087,6 +7087,14 @@ NJFN(ci_repaint)
     return NJ_OK;
 }
 
+/* CustomItem.invalidate(): mark the item dirty and let the next Form paint
+ * pick the change up.  repaint() draws immediately; invalidate() must not. */
+NJFN(ci_invalidate)
+{
+    nj_midp_repaint(vm);
+    return NJ_OK;
+}
+
 /*
  * The modes the Form dispatcher actually delivers to a focused CustomItem:
  * key press, release and repeat.  Pointer events go to a Canvas only, and
@@ -12025,6 +12033,7 @@ static const nj_builtin_method customitem_methods[] = {
     M("getContentHeight",     "()I", 0),
     M("sizeChanged", "(II)V", 0),
     M("repaint",     "()V", 0),
+    M("invalidate",  "()V", 0),
     M("setPreferredSize", "(II)V", 0),
     M("getInteractionModes", "()I", 0),
     M("traverse", "(III[I)Z", 0),
@@ -12770,6 +12779,7 @@ const nj_native_entry nj_lib_lcdui_table[] = {
     { NJ_C_CUSTOMITEM, "getContentHeight",     "()I", ci_getContentHeight },
     { NJ_C_CUSTOMITEM, "sizeChanged", "(II)V", ci_sizeChanged },
     { NJ_C_CUSTOMITEM, "repaint",     "()V", ci_repaint },
+    { NJ_C_CUSTOMITEM, "invalidate",  "()V", ci_invalidate },
     { NJ_C_CUSTOMITEM, "setPreferredSize", "(II)V", ci_setPreferredSize },
     { NJ_C_CUSTOMITEM, "getInteractionModes", "()I", ci_getInteractionModes },
     { NJ_C_CUSTOMITEM, "traverse", "(III[I)Z", ci_traverse },
