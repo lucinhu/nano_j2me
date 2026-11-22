@@ -68,8 +68,10 @@ Android APKs (versionCode 535, one ABI each; the legacy build is ARMv5/API 5):
 - Real RetroArch 1.22.2 LoopDemo, 120 frames: PASS.
 - Windows x86_64 under Wine, 300 frames: **4/4**.
 - Submission bundle validator: **32/32**.
-- Whole-corpus libretro visual probe (r54 core, 300 frames, per-title canvas
-  sizes): see `docs/CORPUS.md` round-209 section.
+- Whole-corpus libretro visual probe on the r54 core (1036 rows, 300 frames,
+  per-title canvas sizes): **1029 passed, 3 known limitations, 4 failed** -
+  the same failure set as r53 (`MidnightPool1`, `PAC-MAN`, `Asphalt4EliteRacing`,
+  `杀鬼子-敌后武工队`), no regression from the runtime fixes.
 
 ## Upgrade notes
 

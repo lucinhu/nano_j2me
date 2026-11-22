@@ -1795,3 +1795,32 @@ downloaded directly and its members were extracted with the fetcher's rules:
   The only remaining gaps are the three title-side patched-ABI classes already
   accepted in `tools/api_member_allowlist.txt` (`java/io/PrintStream`,
   `Graphics`/`Image` obfuscated overloads).
+
+## Round 209 (2026-11-23): 0.5.35 / r54 release
+
+Version 0.5.35 ships the round-208 runtime fixes (same-package
+`Class.newInstance()` access, Sprint `PlayerListener` constants, six vendor
+member families) on top of the 1316-file cache.  Validation on the shipped
+tree: full serial CTest **210/210** (377.06 s), mock frontend matrix **20/20**,
+real RetroArch LoopDemo 120 frames PASS, Wine x86-64 **4/4 @300**, submission
+bundle **32/32**.
+
+Whole-corpus libretro visual probe on the r54 core (the 1036 measured rows,
+300 frames, 8 jobs, per-title canvas sizes):
+
+| result | count |
+| --- | --- |
+| passed | 1029 |
+| known limitation | 3 |
+| failed | 4 |
+
+The three known rows are `台球传奇_87` (the generic key script can land inside
+a multi-second blocking load), `德州扑克2_3884` (same class) and
+`毁灭战士3_10598` (game loop inside the MIDlet constructor).  The four failures
+are the documented `MidnightPool1` (paint-clock limitation + state timeout),
+`PAC-MAN (176x220)` (title-side empty Sprint Muglet URI; the FreeJ2ME reference
+hangs too), `Asphalt4EliteRacing_1.0.0_320x240` and `杀鬼子-敌后武工队_2185`
+(both the long-first-frame state-service class).  This is the same failing set
+as the r53 probe, so the round-208 runtime changes introduced no visual
+regression; the only delta is `德州扑克2_3884`, whose blocking-load timing
+moved it from passed to known.
