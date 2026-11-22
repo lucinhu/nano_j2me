@@ -618,3 +618,52 @@ patched-ABI cases already documented in round 185.
 
 The `check_vendor_members` CTest gate exercises the same path (`--bin` with
 the freshly built CLI), so both member kinds are now protected.
+
+## Round 190: Nokia TextEditor / TextEditorListener (2026-11-22)
+
+The KEmulator reference has a full `com.nokia.mid.ui.TextEditor` implementation
+on top of its CanvasItem overlay hook, and four of its classes showed up in the
+earlier class-presence audit.  This round implements the useful part of that
+family in `src/midp/nj_lib_nokia.c`:
+
+- `TextEditor extends com.nokia.mid.ui.CanvasItem`: factories
+  `createTextEditor(String,int,int,int,int)` and
+  `createTextEditor(int,int,int,int)`, content (`get/setContent`, `insert`,
+  `delete`, `size`, `get/setMaxSize` with truncation, `setConstraints`,
+  initial input mode), caret (`setCaret`, `getCaretPosition`,
+  `getVisibleContentPosition`), selection (`setSelection`, `getSelection`,
+  only while focused), font and colours (including focus colours),
+  `setFocus`/`hasFocus`, size/visibility/z inherited from CanvasItem, and the
+  runtime-facing `_invokePaint(Graphics)` / `_contentChanged(String)` /
+  `_inputAction(int)`.
+- `TextEditorListener`: the interface with `inputAction(TextEditor,int)` and the
+  twelve `ACTION_*` constants (0x1 content change … 0x800 scrollbar changed).
+- Painting is item-local: the CanvasItem painter in this file already
+  translates to the item position and clips to its rectangle, so
+  `_invokePaint` draws at `(0,0)`; the first version used absolute
+  `ciX/ciY` and painted the editor at a double offset (caught by the pixel
+  gate).
+- One infrastructure fix was required: the overlay painter dispatched
+  `_invokePaint` with the fixed owner `CanvasGraphicsItem`, which would have
+  made every TextEditor paint call fail.  It now dispatches on
+  `nj_ref_class_name(item)`.
+- Two bring-up bugs: `_contentChanged` stored the new text but never told the
+  listener (fixed with `ACTION_CONTENT_CHANGE`), and the ordering of the
+  `NJ_C_TEXTEDITOR`/`NJ_C_TELISTENER` macros after `nj_nokia_late_init()`
+  broke the constants' first build (moved next to `NJ_C_GRAPHICS`).
+
+Gate: `tests/texteditordemo/TextEditDemo.java` + `tools/make_texteditor_jar.sh`
++ `tools/check_texteditor.sh` (CTest `test_texteditor`): the fixture attaches a
+60x20 editor at (10,10) over a yellow canvas and checks content round trips,
+insert/delete, max-size truncation, caret, selection, listener callbacks,
+two `IllegalArgumentException`s and focus gating; the gate also asserts the
+frame dump (editor blue inside (10,10)…(69,29), canvas yellow outside).  The
+check fails if the item is not composited or any API line is missing.
+
+Verification: full serial CTest **209/209 (364.49 s)**; rebuilt libretro core
+mock matrix **20/20** and real RetroArch loopdemo 120 frames **PASS**.
+Limitations: `TextEditorTouchControl`, `TextEditorExtensionAccess`, and the
+S40/S60 subclasses remain unimplemented (the class-presence stubs still keep
+them out of the audit); only one text line is laid out, no scrolling, and the
+touch-control panel is not modelled.  No in-repo corpus title references
+TextEditor, so this is API-coverage work rather than a compatibility fix.

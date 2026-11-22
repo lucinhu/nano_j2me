@@ -32,6 +32,8 @@
 #define NJ_C_DUTILS    "com/nokia/mid/ui/DirectUtils"
 #define NJ_C_DGRAPHICS "com/nokia/mid/ui/DirectGraphics"
 #define NJ_C_GRAPHICS "javax/microedition/lcdui/Graphics"
+#define NJ_C_TEXTEDITOR "com/nokia/mid/ui/TextEditor"
+#define NJ_C_TELISTENER "com/nokia/mid/ui/TextEditorListener"
 #define NJ_C_FSELECT   "com/nokia/mid/ui/FileSelect"
 #define NJ_C_FSDETAIL  "com/nokia/mid/ui/FileSelectDetail"
 #define NJ_C_SOUND     "com/nokia/mid/sound/Sound"
@@ -446,6 +448,20 @@ nj_status nj_nokia_late_init(nj_vm *vm)
         nokia_const_int(vm, fc, "KEY_SOFTKEY2", -7);
         nokia_const_int(vm, fc, "KEY_SOFTKEY3", -8);
     }
+    nokia_const_int(vm, NJ_C_TELISTENER, "ACTION_CONTENT_CHANGE", 0x1);
+    nokia_const_int(vm, NJ_C_TELISTENER, "ACTION_OPTIONS_CHANGE", 0x2);
+    nokia_const_int(vm, NJ_C_TELISTENER, "ACTION_CARET_MOVE", 0x4);
+    nokia_const_int(vm, NJ_C_TELISTENER, "ACTION_TRAVERSE_PREVIOUS", 0x8);
+    nokia_const_int(vm, NJ_C_TELISTENER, "ACTION_TRAVERSE_NEXT", 0x10);
+    nokia_const_int(vm, NJ_C_TELISTENER, "ACTION_PAINT_REQUEST", 0x20);
+    nokia_const_int(vm, NJ_C_TELISTENER, "ACTION_DIRECTION_CHANGE", 0x40);
+    nokia_const_int(vm, NJ_C_TELISTENER, "ACTION_INPUT_MODE_CHANGE", 0x80);
+    nokia_const_int(vm, NJ_C_TELISTENER, "ACTION_LANGUAGE_CHANGE", 0x100);
+    nokia_const_int(vm, NJ_C_TELISTENER, "ACTION_TRAVERSE_OUT_SCROLL_UP",
+                    0x200);
+    nokia_const_int(vm, NJ_C_TELISTENER, "ACTION_TRAVERSE_OUT_SCROLL_DOWN",
+                    0x400);
+    nokia_const_int(vm, NJ_C_TELISTENER, "ACTION_SCROLLBAR_CHANGED", 0x800);
     return NJ_OK;
 }
 
@@ -1969,7 +1985,9 @@ void nj_nokia_paint_canvas_items(nj_vm *vm, nj_ref canvas, nj_ref buffer)
             break;
         }
         a[0].r = g;
-        st = nj_call(vm, item, NJ_C_CANVASGFXITEM, "_invokePaint",
+        /* Dispatch on the item's real class so TextEditor (and any other
+         * CanvasItem subclass declaring _invokePaint) paints itself. */
+        st = nj_call(vm, item, nj_ref_class_name(item), "_invokePaint",
                      "(L" NJ_C_GRAPHICS ";)V", a, NULL);
         if (st != NJ_OK) {
             nj_clear_exception(vm);
@@ -1977,6 +1995,858 @@ void nj_nokia_paint_canvas_items(nj_vm *vm, nj_ref canvas, nj_ref buffer)
         }
     }
     nj_root_release(vm, mark);
+}
+
+/* ---- Nokia TextEditor (round 190) ------------------------------------- */
+
+#define NJ_C_STRING "java/lang/String"
+
+static const nj_builtin_field texteditor_fields[] = {
+    { "teContent",    "Ljava/lang/String;",                 NJ_ACC_PRIVATE },
+    { "teFont",       "Ljavax/microedition/lcdui/Font;",    NJ_ACC_PRIVATE },
+    { "teMaxSize",    "I",                                  NJ_ACC_PRIVATE },
+    { "teConstraints","I",                                  NJ_ACC_PRIVATE },
+    { "teRows",       "I",                                  NJ_ACC_PRIVATE },
+    { "teMultiline",  "Z",                                  NJ_ACC_PRIVATE },
+    { "teListener",   "Ljava/lang/Object;",                 NJ_ACC_PRIVATE },
+    { "teBg",         "I",                                  NJ_ACC_PRIVATE },
+    { "teFg",         "I",                                  NJ_ACC_PRIVATE },
+    { "teFocusBg",    "I",                                  NJ_ACC_PRIVATE },
+    { "teFocusFg",    "I",                                  NJ_ACC_PRIVATE },
+    { "teFocusBgSet", "Z",                                  NJ_ACC_PRIVATE },
+    { "teFocusFgSet", "Z",                                  NJ_ACC_PRIVATE },
+    { "teFocused",    "Z",                                  NJ_ACC_PRIVATE },
+    { "teCaret",      "I",                                  NJ_ACC_PRIVATE },
+    { "teSelIndex",   "I",                                  NJ_ACC_PRIVATE },
+    { "teSelLen",     "I",                                  NJ_ACC_PRIVATE },
+    { "teSubset",     "Ljava/lang/String;",                 NJ_ACC_PRIVATE }
+};
+
+static const nj_builtin_method texteditor_methods[] = {
+    M("createTextEditor", "(Ljava/lang/String;IIII)Lcom/nokia/mid/ui/TextEditor;",
+      NJ_ACC_PUBLIC | NJ_ACC_STATIC),
+    M("createTextEditor", "(IIII)Lcom/nokia/mid/ui/TextEditor;",
+      NJ_ACC_PUBLIC | NJ_ACC_STATIC),
+    M("<init>", "(Ljava/lang/String;IIIIZ)V", NJ_ACC_PRIVATE),
+    M("setFocus", "(Z)V", NJ_ACC_PUBLIC),
+    M("hasFocus", "()Z", NJ_ACC_PUBLIC),
+    M("setParent", "(Ljava/lang/Object;)V", NJ_ACC_PUBLIC),
+    M("setSize", "(II)V", NJ_ACC_PUBLIC),
+    M("setSize", "(IIII)V", NJ_ACC_PUBLIC),
+    M("setPosition", "(II)V", NJ_ACC_PUBLIC),
+    M("setVisible", "(Z)V", NJ_ACC_PUBLIC),
+    M("setZPosition", "(I)V", NJ_ACC_PUBLIC),
+    M("getZPosition", "()I", NJ_ACC_PUBLIC),
+    M("getLineMarginHeight", "()I", NJ_ACC_PUBLIC),
+    M("getContentHeight", "()I", NJ_ACC_PUBLIC),
+    M("getHeight", "()I", NJ_ACC_PUBLIC),
+    M("getWidth", "()I", NJ_ACC_PUBLIC),
+    M("setCaret", "(I)V", NJ_ACC_PUBLIC),
+    M("getCaretPosition", "()I", NJ_ACC_PUBLIC),
+    M("getVisibleContentPosition", "()I", NJ_ACC_PUBLIC),
+    M("getFont", "()Ljavax/microedition/lcdui/Font;", NJ_ACC_PUBLIC),
+    M("setFont", "(Ljavax/microedition/lcdui/Font;)V", NJ_ACC_PUBLIC),
+    M("getBackgroundColor", "()I", NJ_ACC_PUBLIC),
+    M("getForegroundColor", "()I", NJ_ACC_PUBLIC),
+    M("setBackgroundColor", "(I)V", NJ_ACC_PUBLIC),
+    M("setForegroundColor", "(I)V", NJ_ACC_PUBLIC),
+    M("setHighlightBackgroundColor", "(I)V", NJ_ACC_PUBLIC),
+    M("setHighlightForegroundColor", "(I)V", NJ_ACC_PUBLIC),
+    M("setContent", "(Ljava/lang/String;)V", NJ_ACC_PUBLIC),
+    M("getContent", "()Ljava/lang/String;", NJ_ACC_PUBLIC),
+    M("insert", "(Ljava/lang/String;I)V", NJ_ACC_PUBLIC),
+    M("delete", "(II)V", NJ_ACC_PUBLIC),
+    M("getMaxSize", "()I", NJ_ACC_PUBLIC),
+    M("setMaxSize", "(I)V", NJ_ACC_PUBLIC),
+    M("size", "()I", NJ_ACC_PUBLIC),
+    M("setConstraints", "(I)V", NJ_ACC_PUBLIC),
+    M("getConstraints", "()I", NJ_ACC_PUBLIC),
+    M("setInitialInputMode", "(Ljava/lang/String;)V", NJ_ACC_PUBLIC),
+    M("getInitialInputMode", "()Ljava/lang/String;", NJ_ACC_PUBLIC),
+    M("setSelection", "(II)V", NJ_ACC_PUBLIC),
+    M("getSelection", "()Ljava/lang/String;", NJ_ACC_PUBLIC),
+    M("setTextEditorListener", "(Lcom/nokia/mid/ui/TextEditorListener;)V", NJ_ACC_PUBLIC),
+    M("isMultiline", "()Z", NJ_ACC_PUBLIC),
+    M("setMultiline", "(Z)V", NJ_ACC_PUBLIC),
+    M("setIndicatorVisibility", "(Z)V", NJ_ACC_PUBLIC),
+    M("_invokePaint", "(Ljavax/microedition/lcdui/Graphics;)V", NJ_ACC_PUBLIC),
+    M("_contentChanged", "(Ljava/lang/String;)V", NJ_ACC_PUBLIC),
+    M("_inputAction", "(I)V", NJ_ACC_PUBLIC)
+};
+
+static const nj_builtin_field telistener_fields[] = {
+    { "ACTION_CONTENT_CHANGE",      "I", NJ_ACC_PUBLIC | NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "ACTION_OPTIONS_CHANGE",      "I", NJ_ACC_PUBLIC | NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "ACTION_CARET_MOVE",          "I", NJ_ACC_PUBLIC | NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "ACTION_TRAVERSE_PREVIOUS",   "I", NJ_ACC_PUBLIC | NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "ACTION_TRAVERSE_NEXT",       "I", NJ_ACC_PUBLIC | NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "ACTION_PAINT_REQUEST",       "I", NJ_ACC_PUBLIC | NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "ACTION_DIRECTION_CHANGE",    "I", NJ_ACC_PUBLIC | NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "ACTION_INPUT_MODE_CHANGE",   "I", NJ_ACC_PUBLIC | NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "ACTION_LANGUAGE_CHANGE",     "I", NJ_ACC_PUBLIC | NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "ACTION_TRAVERSE_OUT_SCROLL_UP",   "I", NJ_ACC_PUBLIC | NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "ACTION_TRAVERSE_OUT_SCROLL_DOWN", "I", NJ_ACC_PUBLIC | NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "ACTION_SCROLLBAR_CHANGED",   "I", NJ_ACC_PUBLIC | NJ_ACC_STATIC | NJ_ACC_FINAL }
+};
+
+static const nj_builtin_method telistener_methods[] = {
+    M("inputAction", "(Lcom/nokia/mid/ui/TextEditor;I)V",
+      NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT)
+};
+
+/* Field helpers: TextEditor keeps everything in private ints/refs. */
+static nj_field *te_field(nj_vm *vm, const char *name, const char *desc)
+{
+    return NJ_F(vm, NJ_C_TEXTEDITOR, name, desc);
+}
+
+static nj_s4 te_i(nj_vm *vm, nj_ref o, const char *name)
+{
+    nj_field *f = te_field(vm, name, "I");
+    return f ? nj_field_read_int(vm, o, f) : 0;
+}
+
+static void te_si(nj_vm *vm, nj_ref o, const char *name, nj_s4 v)
+{
+    nj_field *f = te_field(vm, name, "I");
+    if (f) {
+        nj_field_write_int(vm, o, f, v);
+    }
+}
+
+static int te_z(nj_vm *vm, nj_ref o, const char *name)
+{
+    nj_field *f = te_field(vm, name, "Z");
+    return f ? (nj_field_read_int(vm, o, f) != 0) : 0;
+}
+
+static void te_sz(nj_vm *vm, nj_ref o, const char *name, int v)
+{
+    nj_field *f = te_field(vm, name, "Z");
+    if (f) {
+        nj_field_write_int(vm, o, f, v ? 1 : 0);
+    }
+}
+
+static nj_ref te_o(nj_vm *vm, nj_ref o, const char *name, const char *desc)
+{
+    nj_field *f = te_field(vm, name, desc);
+    return f ? nj_field_read_ref(vm, o, f) : NULL;
+}
+
+static void te_so(nj_vm *vm, nj_ref o, const char *name, const char *desc,
+                  nj_ref v)
+{
+    nj_field *f = te_field(vm, name, desc);
+    if (f) {
+        nj_field_write_ref(vm, o, f, v);
+    }
+}
+
+static nj_s4 te_len(nj_vm *vm, nj_ref s)
+{
+    return s ? nj_call_int(vm, s, NJ_C_STRING, "length", "()I", NULL) : 0;
+}
+
+static nj_ref te_sub(nj_vm *vm, nj_ref s, nj_s4 from, nj_s4 to)
+{
+    nj_value a[2];
+
+    a[0].i = from;
+    a[1].i = to;
+    return nj_call_ref(vm, s, NJ_C_STRING, "substring",
+                       "(II)Ljava/lang/String;", a);
+}
+
+static nj_ref te_cat(nj_vm *vm, nj_ref a, nj_ref b)
+{
+    nj_value av[1];
+
+    av[0].r = b;
+    return nj_call_ref(vm, a, NJ_C_STRING, "concat",
+                       "(Ljava/lang/String;)Ljava/lang/String;", av);
+}
+
+static void te_repaint(nj_vm *vm, nj_ref item)
+{
+    nj_ref parent = ci_parent(vm, item);
+    if (parent && ci_visible(vm, item)) {
+        nj_midp_repaint(vm);
+    }
+}
+
+static nj_ref te_font(nj_vm *vm, nj_ref item)
+{
+    nj_ref f = te_o(vm, item, "teFont", "L" NJ_C_FONT ";");
+    if (!f) {
+        f = nj_call_ref(vm, NULL, NJ_C_FONT, "getDefaultFont",
+                        "()L" NJ_C_FONT ";", NULL);
+    }
+    return f;
+}
+
+static nj_s4 te_font_height(nj_vm *vm, nj_ref font)
+{
+    nj_s4 h = font ? nj_call_int(vm, font, NJ_C_FONT, "getHeight", "()I",
+                                 NULL) : 0;
+    return h > 0 ? h : 12;
+}
+
+static nj_s4 te_content_height(nj_vm *vm, nj_ref item)
+{
+    nj_s4 fh = te_font_height(vm, te_font(vm, item));
+    return 4 + (fh + 4);
+}
+
+static void te_set_content(nj_vm *vm, nj_ref item, nj_ref text)
+{
+    te_so(vm, item, "teContent", "Ljava/lang/String;", text);
+    te_repaint(vm, item);
+}
+
+static void te_store_size(nj_vm *vm, nj_ref item, nj_s4 w, nj_s4 h)
+{
+    te_si(vm, item, "ciW", w);
+    te_si(vm, item, "ciH", h);
+}
+
+/* ---- TextEditor natives ---- */
+
+NJFN(nokia_te_init)
+{
+    nj_ref item = NJ_THIS(args);
+    nj_ref text = NJ_ARG_REF(args, 0);
+    nj_s4 max = NJ_ARG_INT(args, 1);
+    nj_s4 cons = NJ_ARG_INT(args, 2);
+    nj_s4 w = NJ_ARG_INT(args, 3);
+    nj_s4 h = NJ_ARG_INT(args, 4);
+    int rows = NJ_ARG_INT(args, 5) != 0;
+
+    if (max < 1) {
+        ci_throw_arg(vm, "maxSize must be positive");
+        return NJ_ERR;
+    }
+    if (w < 1 || h < 1) {
+        ci_throw_arg(vm, "width and height must be positive");
+        return NJ_ERR;
+    }
+    if (!text) {
+        ci_throw_arg(vm, "text must not be null");
+        return NJ_ERR;
+    }
+    if (te_len(vm, text) > max) {
+        ci_throw_arg(vm, "text is longer than maxSize");
+        return NJ_ERR;
+    }
+    te_so(vm, item, "teContent", "Ljava/lang/String;", text);
+    te_si(vm, item, "ciW", w);
+    te_si(vm, item, "ciH", rows ? -1 : h);
+    te_si(vm, item, "teMaxSize", max);
+    te_si(vm, item, "teConstraints", cons);
+    te_si(vm, item, "teRows", rows ? h : 0);
+    te_sz(vm, item, "teMultiline", rows && h > 1);
+    te_si(vm, item, "teBg", 0);
+    te_si(vm, item, "teFg", 0);
+    te_si(vm, item, "teCaret", 0);
+    te_si(vm, item, "teSelIndex", 0);
+    te_si(vm, item, "teSelLen", 0);
+    return NJ_OK;
+}
+
+NJFN(nokia_te_create1)
+{
+    nj_ref text = NJ_ARG_REF(args, 0);
+    nj_s4 max = NJ_ARG_INT(args, 1);
+    nj_s4 cons = NJ_ARG_INT(args, 2);
+    nj_s4 w = NJ_ARG_INT(args, 3);
+    nj_s4 h = NJ_ARG_INT(args, 4);
+    nj_value a[6];
+    nj_ref inst;
+
+    inst = nj_object_new(vm, NJ_C_TEXTEDITOR);
+    if (!inst) {
+        return NJ_ERR;
+    }
+    inst = nj_root(vm, inst);
+    a[0].r = text;
+    a[1].i = max;
+    a[2].i = cons;
+    a[3].i = w;
+    a[4].i = h;
+    a[5].i = 0;
+    if (nj_call_special(vm, inst, NJ_C_TEXTEDITOR, "<init>",
+                        "(Ljava/lang/String;IIIIZ)V", a, NULL) != NJ_OK) {
+        return NJ_ERR;
+    }
+    ret->r = inst;
+    return NJ_OK;
+}
+
+NJFN(nokia_te_create2)
+{
+    nj_s4 max = NJ_ARG_INT(args, 0);
+    nj_s4 cons = NJ_ARG_INT(args, 1);
+    nj_s4 w = NJ_ARG_INT(args, 2);
+    nj_s4 rows = NJ_ARG_INT(args, 3);
+    nj_value a[6];
+    nj_ref inst;
+    nj_ref empty = nj_root(vm, nj_string_new(vm, ""));
+
+    inst = nj_object_new(vm, NJ_C_TEXTEDITOR);
+    if (!inst) {
+        return NJ_ERR;
+    }
+    inst = nj_root(vm, inst);
+    a[0].r = empty;
+    a[1].i = max;
+    a[2].i = cons;
+    a[3].i = w;
+    a[4].i = rows;
+    a[5].i = 1;
+    if (nj_call_special(vm, inst, NJ_C_TEXTEDITOR, "<init>",
+                        "(Ljava/lang/String;IIIIZ)V", a, NULL) != NJ_OK) {
+        return NJ_ERR;
+    }
+    ret->r = inst;
+    return NJ_OK;
+}
+
+NJFN(nokia_te_set_focus)
+{
+    nj_ref item = NJ_THIS(args);
+    te_sz(vm, item, "teFocused", NJ_ARG_INT(args, 0) != 0);
+    te_repaint(vm, item);
+    return NJ_OK;
+}
+
+NJFN(nokia_te_has_focus)
+{
+    ret->i = te_z(vm, NJ_THIS(args), "teFocused") ? 1 : 0;
+    return NJ_OK;
+}
+
+NJFN(nokia_te_set_size)
+{
+    nj_ref item = NJ_THIS(args);
+    nj_s4 w = NJ_ARG_INT(args, 0);
+    nj_s4 h = NJ_ARG_INT(args, 1);
+
+    if (w < 1 || h < 1) {
+        ci_throw_arg(vm, "width and height must be positive");
+        return NJ_ERR;
+    }
+    te_store_size(vm, item, w, h);
+    te_repaint(vm, item);
+    return NJ_OK;
+}
+
+NJFN(nokia_te_set_size4)
+{
+    nj_ref item = NJ_THIS(args);
+    nj_s4 w = NJ_ARG_INT(args, 2);
+    nj_s4 h = NJ_ARG_INT(args, 3);
+
+    if (w < 1 || h < 1) {
+        ci_throw_arg(vm, "width and height must be positive");
+        return NJ_ERR;
+    }
+    te_si(vm, item, "ciX", NJ_ARG_INT(args, 0));
+    te_si(vm, item, "ciY", NJ_ARG_INT(args, 1));
+    te_store_size(vm, item, w, h);
+    te_repaint(vm, item);
+    return NJ_OK;
+}
+
+NJFN(nokia_te_set_position)
+{
+    nj_ref item = NJ_THIS(args);
+
+    te_si(vm, item, "ciX", NJ_ARG_INT(args, 0));
+    te_si(vm, item, "ciY", NJ_ARG_INT(args, 1));
+    te_repaint(vm, item);
+    return NJ_OK;
+}
+
+NJFN(nokia_te_set_visible)
+{
+    nj_ref item = NJ_THIS(args);
+
+    ci_set_visible(vm, item, NJ_ARG_INT(args, 0) != 0);
+    te_repaint(vm, item);
+    return NJ_OK;
+}
+
+NJFN(nokia_te_set_z)
+{
+    nj_s4 z = NJ_ARG_INT(args, 0);
+    if (z < 0) {
+        ci_throw_arg(vm, "z position must not be negative");
+        return NJ_ERR;
+    }
+    te_si(vm, NJ_THIS(args), "ciZ", z);
+    return NJ_OK;
+}
+
+NJFN(nokia_te_get_z)
+{
+    ret->i = te_i(vm, NJ_THIS(args), "ciZ");
+    return NJ_OK;
+}
+
+NJFN(nokia_te_line_margin)
+{
+    ret->i = 0;
+    return NJ_OK;
+}
+
+NJFN(nokia_te_content_height)
+{
+    ret->i = te_content_height(vm, NJ_THIS(args));
+    return NJ_OK;
+}
+
+NJFN(nokia_te_get_height)
+{
+    nj_ref item = NJ_THIS(args);
+    nj_s4 h = te_i(vm, item, "ciH");
+
+    ret->i = h > 0 ? h : te_content_height(vm, item);
+    return NJ_OK;
+}
+
+NJFN(nokia_te_get_width)
+{
+    ret->i = te_i(vm, NJ_THIS(args), "ciW");
+    return NJ_OK;
+}
+
+NJFN(nokia_te_set_caret)
+{
+    nj_ref item = NJ_THIS(args);
+
+    te_si(vm, item, "teCaret", NJ_ARG_INT(args, 0));
+    te_repaint(vm, item);
+    return NJ_OK;
+}
+
+NJFN(nokia_te_get_caret)
+{
+    nj_ref item = NJ_THIS(args);
+    ret->i = te_z(vm, item, "teFocused") ? te_i(vm, item, "teCaret") : 0;
+    return NJ_OK;
+}
+
+NJFN(nokia_te_visible_content)
+{
+    ret->i = 0;
+    return NJ_OK;
+}
+
+NJFN(nokia_te_get_font)
+{
+    ret->r = te_font(vm, NJ_THIS(args));
+    return NJ_OK;
+}
+
+NJFN(nokia_te_set_font)
+{
+    nj_ref item = NJ_THIS(args);
+    nj_ref font = NJ_ARG_REF(args, 0);
+
+    if (!font) {
+        font = nj_call_ref(vm, NULL, NJ_C_FONT, "getDefaultFont",
+                           "()L" NJ_C_FONT ";", NULL);
+        if (!font) {
+            return NJ_ERR;
+        }
+        nj_clear_exception(vm);
+    }
+    te_so(vm, item, "teFont", "L" NJ_C_FONT ";", font);
+    te_repaint(vm, item);
+    return NJ_OK;
+}
+
+NJFN(nokia_te_get_bg) { ret->i = te_i(vm, NJ_THIS(args), "teBg"); return NJ_OK; }
+NJFN(nokia_te_get_fg) { ret->i = te_i(vm, NJ_THIS(args), "teFg"); return NJ_OK; }
+
+NJFN(nokia_te_set_bg)
+{
+    nj_ref item = NJ_THIS(args);
+    te_si(vm, item, "teBg", NJ_ARG_INT(args, 0));
+    te_repaint(vm, item);
+    return NJ_OK;
+}
+
+NJFN(nokia_te_set_fg)
+{
+    nj_ref item = NJ_THIS(args);
+    te_si(vm, item, "teFg", NJ_ARG_INT(args, 0));
+    te_repaint(vm, item);
+    return NJ_OK;
+}
+
+NJFN(nokia_te_set_focus_bg)
+{
+    nj_ref item = NJ_THIS(args);
+    te_si(vm, item, "teFocusBg", NJ_ARG_INT(args, 0));
+    te_sz(vm, item, "teFocusBgSet", 1);
+    te_repaint(vm, item);
+    return NJ_OK;
+}
+
+NJFN(nokia_te_set_focus_fg)
+{
+    nj_ref item = NJ_THIS(args);
+    te_si(vm, item, "teFocusFg", NJ_ARG_INT(args, 0));
+    te_sz(vm, item, "teFocusFgSet", 1);
+    te_repaint(vm, item);
+    return NJ_OK;
+}
+
+NJFN(nokia_te_set_content)
+{
+    nj_ref item = NJ_THIS(args);
+    nj_ref text = NJ_ARG_REF(args, 0);
+    nj_s4 max = te_i(vm, item, "teMaxSize");
+
+    if (!text) {
+        ci_throw_arg(vm, "content must not be null");
+        return NJ_ERR;
+    }
+    if (te_len(vm, text) > max) {
+        ci_throw_arg(vm, "content is longer than maxSize");
+        return NJ_ERR;
+    }
+    te_set_content(vm, item, text);
+    return NJ_OK;
+}
+
+NJFN(nokia_te_get_content)
+{
+    ret->r = te_o(vm, NJ_THIS(args), "teContent", "Ljava/lang/String;");
+    return NJ_OK;
+}
+
+NJFN(nokia_te_insert)
+{
+    nj_ref item = NJ_THIS(args);
+    nj_ref text = NJ_ARG_REF(args, 0);
+    nj_s4 pos = NJ_ARG_INT(args, 1);
+    nj_ref cur;
+    nj_s4 clen;
+    nj_s4 tlen;
+    nj_s4 max;
+    nj_u4 mark;
+    nj_ref head;
+    nj_ref mid;
+    nj_ref tail;
+    nj_ref whole;
+
+    if (!text) {
+        ci_throw_arg(vm, "text must not be null");
+        return NJ_ERR;
+    }
+    cur = te_o(vm, item, "teContent", "Ljava/lang/String;");
+    clen = te_len(vm, cur);
+    tlen = te_len(vm, text);
+    max = te_i(vm, item, "teMaxSize");
+    if (pos < 0 || pos > clen) {
+        (void)nj_throw(vm, "java/lang/StringIndexOutOfBoundsException", NULL);
+        return NJ_ERR;
+    }
+    if (clen + tlen > max) {
+        ci_throw_arg(vm, "content would exceed maxSize");
+        return NJ_ERR;
+    }
+    mark = nj_root_mark(vm);
+    head = te_sub(vm, cur, 0, pos);
+    if (vm->exception) {
+        nj_root_release(vm, mark);
+        return NJ_ERR;
+    }
+    head = nj_root(vm, head);
+    mid = te_cat(vm, head, text);
+    if (vm->exception) {
+        nj_root_release(vm, mark);
+        return NJ_ERR;
+    }
+    mid = nj_root(vm, mid);
+    tail = te_sub(vm, cur, pos, clen);
+    if (vm->exception) {
+        nj_root_release(vm, mark);
+        return NJ_ERR;
+    }
+    tail = nj_root(vm, tail);
+    whole = te_cat(vm, mid, tail);
+    if (vm->exception) {
+        nj_root_release(vm, mark);
+        return NJ_ERR;
+    }
+    te_set_content(vm, item, whole);
+    nj_root_release(vm, mark);
+    return NJ_OK;
+}
+
+NJFN(nokia_te_delete)
+{
+    nj_ref item = NJ_THIS(args);
+    nj_s4 off = NJ_ARG_INT(args, 0);
+    nj_s4 len = NJ_ARG_INT(args, 1);
+    nj_ref cur = te_o(vm, item, "teContent", "Ljava/lang/String;");
+    nj_s4 clen = te_len(vm, cur);
+    nj_u4 mark;
+    nj_ref head;
+    nj_ref tail;
+    nj_ref whole;
+
+    if (off < 0 || len < 0 || off + len > clen) {
+        (void)nj_throw(vm, "java/lang/StringIndexOutOfBoundsException", NULL);
+        return NJ_ERR;
+    }
+    if (len == 0) {
+        return NJ_OK;
+    }
+    mark = nj_root_mark(vm);
+    head = te_sub(vm, cur, 0, off);
+    if (vm->exception) {
+        nj_root_release(vm, mark);
+        return NJ_ERR;
+    }
+    head = nj_root(vm, head);
+    tail = te_sub(vm, cur, off + len, clen);
+    if (vm->exception) {
+        nj_root_release(vm, mark);
+        return NJ_ERR;
+    }
+    whole = te_cat(vm, head, tail);
+    if (vm->exception) {
+        nj_root_release(vm, mark);
+        return NJ_ERR;
+    }
+    te_set_content(vm, item, whole);
+    nj_root_release(vm, mark);
+    return NJ_OK;
+}
+
+NJFN(nokia_te_get_max_size)
+{
+    ret->i = te_i(vm, NJ_THIS(args), "teMaxSize");
+    return NJ_OK;
+}
+
+NJFN(nokia_te_set_max_size)
+{
+    nj_ref item = NJ_THIS(args);
+    nj_s4 max = NJ_ARG_INT(args, 0);
+    nj_ref cur;
+    nj_s4 clen;
+
+    if (max < 1) {
+        ci_throw_arg(vm, "maxSize must be positive");
+        return NJ_ERR;
+    }
+    cur = te_o(vm, item, "teContent", "Ljava/lang/String;");
+    clen = te_len(vm, cur);
+    te_si(vm, item, "teMaxSize", max);
+    if (clen > max) {
+        nj_ref cut = te_sub(vm, cur, 0, max);
+        if (vm->exception) {
+            return NJ_ERR;
+        }
+        te_set_content(vm, item, cut);
+    }
+    te_repaint(vm, item);
+    return NJ_OK;
+}
+
+NJFN(nokia_te_size)
+{
+    ret->i = te_len(vm, te_o(vm, NJ_THIS(args), "teContent",
+                             "Ljava/lang/String;"));
+    return NJ_OK;
+}
+
+NJFN(nokia_te_set_constraints)
+{
+    te_si(vm, NJ_THIS(args), "teConstraints", NJ_ARG_INT(args, 0));
+    return NJ_OK;
+}
+
+NJFN(nokia_te_get_constraints)
+{
+    ret->i = te_i(vm, NJ_THIS(args), "teConstraints");
+    return NJ_OK;
+}
+
+NJFN(nokia_te_set_mode)
+{
+    te_so(vm, NJ_THIS(args), "teSubset", "Ljava/lang/String;",
+          NJ_ARG_REF(args, 0));
+    return NJ_OK;
+}
+
+NJFN(nokia_te_get_mode)
+{
+    ret->r = te_o(vm, NJ_THIS(args), "teSubset", "Ljava/lang/String;");
+    return NJ_OK;
+}
+
+NJFN(nokia_te_set_selection)
+{
+    nj_ref item = NJ_THIS(args);
+    te_si(vm, item, "teSelIndex", NJ_ARG_INT(args, 0));
+    te_si(vm, item, "teSelLen", NJ_ARG_INT(args, 1));
+    te_repaint(vm, item);
+    return NJ_OK;
+}
+
+NJFN(nokia_te_get_selection)
+{
+    nj_ref item = NJ_THIS(args);
+    nj_s4 idx = te_i(vm, item, "teSelIndex");
+    nj_s4 len = te_i(vm, item, "teSelLen");
+    nj_ref cur;
+
+    if (!te_z(vm, item, "teFocused") || len <= 0 || idx < 0) {
+        ret->r = NULL;
+        return NJ_OK;
+    }
+    cur = te_o(vm, item, "teContent", "Ljava/lang/String;");
+    ret->r = te_sub(vm, cur, idx, idx + len);
+    return NJ_OK;
+}
+
+NJFN(nokia_te_set_listener)
+{
+    te_so(vm, NJ_THIS(args), "teListener", "Ljava/lang/Object;",
+          NJ_ARG_REF(args, 0));
+    return NJ_OK;
+}
+
+NJFN(nokia_te_is_multiline)
+{
+    ret->i = te_z(vm, NJ_THIS(args), "teMultiline") ? 1 : 0;
+    return NJ_OK;
+}
+
+NJFN(nokia_te_set_multiline)
+{
+    nj_ref item = NJ_THIS(args);
+    te_sz(vm, item, "teMultiline", NJ_ARG_INT(args, 0) != 0);
+    te_repaint(vm, item);
+    return NJ_OK;
+}
+
+NJFN(nokia_te_set_indicator)
+{
+    (void)args;
+    (void)ret;
+    return NJ_OK;
+}
+
+NJFN(nokia_te_invoke_paint)
+{
+    nj_ref item = NJ_THIS(args);
+    nj_ref g = NJ_ARG_REF(args, 0);
+    /* The CanvasItem painter already translated to the item's position and
+     * clipped to its rectangle, so paint in item-local coordinates. */
+    nj_s4 x = 0;
+    nj_s4 y = 0;
+    nj_s4 w = te_i(vm, item, "ciW");
+    nj_s4 h = te_i(vm, item, "ciH");
+    nj_ref content = te_o(vm, item, "teContent", "Ljava/lang/String;");
+    nj_s4 len = te_len(vm, content);
+    nj_value a[4];
+    int focused = te_z(vm, item, "teFocused");
+
+    if (!g) {
+        return NJ_OK;
+    }
+    if (h <= 0) {
+        h = te_content_height(vm, item);
+    }
+    a[0].i = (focused && te_z(vm, item, "teFocusBgSet"))
+                 ? te_i(vm, item, "teFocusBg")
+                 : te_i(vm, item, "teBg");
+    if (nj_call(vm, g, NJ_C_GRAPHICS, "setColor", "(I)V", a, NULL) != NJ_OK) {
+        nj_clear_exception(vm);
+        return NJ_OK;
+    }
+    a[0].i = x;
+    a[1].i = y;
+    a[2].i = w;
+    a[3].i = h;
+    if (nj_call(vm, g, NJ_C_GRAPHICS, "fillRect", "(IIII)V", a, NULL) != NJ_OK) {
+        nj_clear_exception(vm);
+        return NJ_OK;
+    }
+    if (len <= 0) {
+        return NJ_OK;
+    }
+    {
+        nj_ref font = te_font(vm, item);
+        if (font) {
+            nj_value fa[1];
+            fa[0].r = font;
+            if (nj_call(vm, g, NJ_C_GRAPHICS, "setFont",
+                        "(L" NJ_C_FONT ";)V", fa, NULL) != NJ_OK) {
+                nj_clear_exception(vm);
+                return NJ_OK;
+            }
+        }
+    }
+    a[0].i = (focused && te_z(vm, item, "teFocusFgSet"))
+                 ? te_i(vm, item, "teFocusFg")
+                 : te_i(vm, item, "teFg");
+    if (nj_call(vm, g, NJ_C_GRAPHICS, "setColor", "(I)V", a, NULL) != NJ_OK) {
+        nj_clear_exception(vm);
+        return NJ_OK;
+    }
+    {
+        nj_value da[4];
+        da[0].r = content;
+        da[1].i = x + 4;
+        da[2].i = y + 2;
+        da[3].i = 20;
+        if (nj_call(vm, g, NJ_C_GRAPHICS, "drawString",
+                    "(Ljava/lang/String;III)V", da, NULL) != NJ_OK) {
+            nj_clear_exception(vm);
+        }
+    }
+    return NJ_OK;
+}
+
+static void te_notify(nj_vm *vm, nj_ref item, nj_s4 action)
+{
+    nj_ref listener = te_o(vm, item, "teListener", "Ljava/lang/Object;");
+    nj_value a[2];
+
+    if (!listener) {
+        return;
+    }
+    a[0].r = item;
+    a[1].i = action;
+    if (nj_call(vm, listener, NJ_C_TELISTENER, "inputAction",
+                "(Lcom/nokia/mid/ui/TextEditor;I)V", a, NULL) != NJ_OK) {
+        nj_clear_exception(vm);
+    }
+}
+
+NJFN(nokia_te_content_changed)
+{
+    nj_ref item = NJ_THIS(args);
+
+    te_set_content(vm, item, NJ_ARG_REF(args, 0));
+    te_notify(vm, item, 0x1); /* ACTION_CONTENT_CHANGE */
+    return NJ_OK;
+}
+
+NJFN(nokia_te_input_action)
+{
+    nj_ref item = NJ_THIS(args);
+
+    te_notify(vm, item, NJ_ARG_INT(args, 0));
+    return NJ_OK;
 }
 
 const nj_builtin_class nj_lib_nokia_classes[] = {
@@ -2108,6 +2978,17 @@ const nj_builtin_class nj_lib_nokia_classes[] = {
       NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT,
       NULL, 0u, canvasgfx_methods,
       (nj_u2)(sizeof(canvasgfx_methods) / sizeof(canvasgfx_methods[0])) },
+    { NJ_C_TEXTEDITOR, NJ_C_CANVASITEM, NJ_ACC_PUBLIC,
+      texteditor_fields,
+      (nj_u4)(sizeof(texteditor_fields) / sizeof(texteditor_fields[0])),
+      texteditor_methods,
+      (nj_u4)(sizeof(texteditor_methods) / sizeof(texteditor_methods[0])) },
+    { NJ_C_TELISTENER, NULL,
+      NJ_ACC_PUBLIC | NJ_ACC_INTERFACE | NJ_ACC_ABSTRACT,
+      telistener_fields,
+      (nj_u4)(sizeof(telistener_fields) / sizeof(telistener_fields[0])),
+      telistener_methods,
+      (nj_u4)(sizeof(telistener_methods) / sizeof(telistener_methods[0])) },
     { NULL, NULL, 0u, NULL, 0u, NULL, 0u }
 };
 const int nj_lib_nokia_class_count =
@@ -2244,6 +3125,58 @@ const nj_native_entry nj_lib_nokia_table[] = {
     { NJ_C_CANVASGFXITEM, "getZPosition", "()I",  nokia_ci_get_z },
     { NJ_C_CANVASGFXITEM, "_invokePaint", "(L" NJ_C_GRAPHICS ";)V",
       nokia_cgi_invoke_paint },
+    { NJ_C_TEXTEDITOR, "createTextEditor",
+      "(Ljava/lang/String;IIII)Lcom/nokia/mid/ui/TextEditor;",
+      nokia_te_create1 },
+    { NJ_C_TEXTEDITOR, "createTextEditor", "(IIII)Lcom/nokia/mid/ui/TextEditor;",
+      nokia_te_create2 },
+    { NJ_C_TEXTEDITOR, "<init>", "(Ljava/lang/String;IIIIZ)V", nokia_te_init },
+    { NJ_C_TEXTEDITOR, "setFocus", "(Z)V", nokia_te_set_focus },
+    { NJ_C_TEXTEDITOR, "hasFocus", "()Z", nokia_te_has_focus },
+    { NJ_C_TEXTEDITOR, "setParent", "(Ljava/lang/Object;)V", nokia_cgi_set_parent },
+    { NJ_C_TEXTEDITOR, "setSize", "(II)V", nokia_te_set_size },
+    { NJ_C_TEXTEDITOR, "setSize", "(IIII)V", nokia_te_set_size4 },
+    { NJ_C_TEXTEDITOR, "setPosition", "(II)V", nokia_te_set_position },
+    { NJ_C_TEXTEDITOR, "setVisible", "(Z)V", nokia_te_set_visible },
+    { NJ_C_TEXTEDITOR, "setZPosition", "(I)V", nokia_te_set_z },
+    { NJ_C_TEXTEDITOR, "getZPosition", "()I", nokia_te_get_z },
+    { NJ_C_TEXTEDITOR, "getLineMarginHeight", "()I", nokia_te_line_margin },
+    { NJ_C_TEXTEDITOR, "getContentHeight", "()I", nokia_te_content_height },
+    { NJ_C_TEXTEDITOR, "getHeight", "()I", nokia_te_get_height },
+    { NJ_C_TEXTEDITOR, "getWidth", "()I", nokia_te_get_width },
+    { NJ_C_TEXTEDITOR, "setCaret", "(I)V", nokia_te_set_caret },
+    { NJ_C_TEXTEDITOR, "getCaretPosition", "()I", nokia_te_get_caret },
+    { NJ_C_TEXTEDITOR, "getVisibleContentPosition", "()I", nokia_te_visible_content },
+    { NJ_C_TEXTEDITOR, "getFont", "()L" NJ_C_FONT ";", nokia_te_get_font },
+    { NJ_C_TEXTEDITOR, "setFont", "(L" NJ_C_FONT ";)V", nokia_te_set_font },
+    { NJ_C_TEXTEDITOR, "getBackgroundColor", "()I", nokia_te_get_bg },
+    { NJ_C_TEXTEDITOR, "getForegroundColor", "()I", nokia_te_get_fg },
+    { NJ_C_TEXTEDITOR, "setBackgroundColor", "(I)V", nokia_te_set_bg },
+    { NJ_C_TEXTEDITOR, "setForegroundColor", "(I)V", nokia_te_set_fg },
+    { NJ_C_TEXTEDITOR, "setHighlightBackgroundColor", "(I)V", nokia_te_set_focus_bg },
+    { NJ_C_TEXTEDITOR, "setHighlightForegroundColor", "(I)V", nokia_te_set_focus_fg },
+    { NJ_C_TEXTEDITOR, "setContent", "(Ljava/lang/String;)V", nokia_te_set_content },
+    { NJ_C_TEXTEDITOR, "getContent", "()Ljava/lang/String;", nokia_te_get_content },
+    { NJ_C_TEXTEDITOR, "insert", "(Ljava/lang/String;I)V", nokia_te_insert },
+    { NJ_C_TEXTEDITOR, "delete", "(II)V", nokia_te_delete },
+    { NJ_C_TEXTEDITOR, "getMaxSize", "()I", nokia_te_get_max_size },
+    { NJ_C_TEXTEDITOR, "setMaxSize", "(I)V", nokia_te_set_max_size },
+    { NJ_C_TEXTEDITOR, "size", "()I", nokia_te_size },
+    { NJ_C_TEXTEDITOR, "setConstraints", "(I)V", nokia_te_set_constraints },
+    { NJ_C_TEXTEDITOR, "getConstraints", "()I", nokia_te_get_constraints },
+    { NJ_C_TEXTEDITOR, "setInitialInputMode", "(Ljava/lang/String;)V", nokia_te_set_mode },
+    { NJ_C_TEXTEDITOR, "getInitialInputMode", "()Ljava/lang/String;", nokia_te_get_mode },
+    { NJ_C_TEXTEDITOR, "setSelection", "(II)V", nokia_te_set_selection },
+    { NJ_C_TEXTEDITOR, "getSelection", "()Ljava/lang/String;", nokia_te_get_selection },
+    { NJ_C_TEXTEDITOR, "setTextEditorListener",
+      "(Lcom/nokia/mid/ui/TextEditorListener;)V", nokia_te_set_listener },
+    { NJ_C_TEXTEDITOR, "isMultiline", "()Z", nokia_te_is_multiline },
+    { NJ_C_TEXTEDITOR, "setMultiline", "(Z)V", nokia_te_set_multiline },
+    { NJ_C_TEXTEDITOR, "setIndicatorVisibility", "(Z)V", nokia_te_set_indicator },
+    { NJ_C_TEXTEDITOR, "_invokePaint", "(L" NJ_C_GRAPHICS ";)V", nokia_te_invoke_paint },
+    { NJ_C_TEXTEDITOR, "_contentChanged", "(Ljava/lang/String;)V", nokia_te_content_changed },
+    { NJ_C_TEXTEDITOR, "_inputAction", "(I)V", nokia_te_input_action },
+    { NJ_C_TELISTENER, "inputAction", "(Lcom/nokia/mid/ui/TextEditor;I)V", NULL },
     { NULL, NULL, NULL, NULL }
 };
 const int nj_lib_nokia_count =
