@@ -403,3 +403,20 @@ this shape of app.  `PAC-MAN (176x220)` is a different, title-side case (empty
 Sprint `Muglet` URI); the other landscape titles render fine with the round-177
 per-title screen.
 
+
+
+## Round 210: two K700 black titles from the new batch
+
+- `TheMummy_K700F.jar` (87,718 B, 9 classes, "The Mummy [terjef] 1.1.9"):
+  black through the CLI at 240x320, 176x208 and 176x220 (600-frame frame dumps
+  all zero) and black through the libretro core at 300/900 frames.  Only
+  exception in the log: `javax/microedition/rms/InvalidRecordIDException` from
+  `RecordStore.getRecord` on the fresh RMS (caught by the title).  FreeJ2ME-Plus
+  at 176x208 renders the game's splash ("PRESS START"), so this is ours.
+- `Midnight Pool2.jar` (184,586 B, 5 classes): CLI paints (300 frames, 291
+  paints, 4,453 draw calls) but every dumped frame is black at 240x320 and
+  176x208; the core matches.  FreeJ2ME-Plus shows the "DO YOU WANT SOUND?"
+  YES/NO prompt.
+- Both titles are small and use no optional APIs, so the next step is tracing
+  their first `Canvas`/`Display` setup and paint path (the same class of
+  investigation as NeonRunner's `sizeChanged` ordering).

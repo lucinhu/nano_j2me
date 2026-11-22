@@ -1824,3 +1824,40 @@ hangs too), `Asphalt4EliteRacing_1.0.0_320x240` and `杀鬼子-敌后武工队_2
 as the r53 probe, so the round-208 runtime changes introduced no visual
 regression; the only delta is `德州扑克2_3884`, whose blocking-load timing
 moved it from passed to known.
+
+## Round 210 (2026-11-23): the K700/K800 batch through the libretro core
+
+The 673-JAR Sony Ericsson batch was measured through the core for the first
+time (the r54 release probe covered the older 1036 rows).  Rows directory
+`compat-20261123-r208` (655 rows, of which 630 carry a usable JAR path), 300
+frames, 8 jobs, per-title canvas sizes:
+
+| result | count |
+| --- | --- |
+| passed | 625 |
+| failed | 5 |
+
+There are no known-limitation rows in this batch's restricted list; the five
+failures were triaged individually:
+
+- `assault.jar` - slow loader: at 900 frames it renders the full 76800-pixel
+  screen and its save round-trip passes.  The 300-frame probe budget is simply
+  shorter than its load; same class as the Doom3 slow loader.
+- `Midnight Pool.jar` - slow loader: at 900 frames it presents a static 20480
+  pixel screen; the naive probe budget reports the early black frames.
+- `MidnightPool_K700_EN.jar` - at 176x208 it renders 36608 of 36608 pixels by
+  400 frames, but `retro_serialize()` is refused (`157593664`-byte state,
+  `NJ_ERR_STATE`): the documented long-frame state-service class (the VM thread
+  is inside one frame when the frontend asks for the state), not a new defect.
+- `TheMummy_K700F.jar` and `Midnight Pool2.jar` - black through both the CLI
+  and the core at 240x320, 176x208 and 176x220, while the FreeJ2ME-Plus
+  reference renders The Mummy's "PRESS START" splash and Midnight Pool2's
+  "DO YOU WANT SOUND?" prompt.  These are genuine runtime-side black titles,
+  added to `docs/notes/2026-11-21-fetched-black-screen-titles.md` for the next
+  investigation round; TheMummy's only logged exception is a caught
+  `InvalidRecordIDException` from a fresh RMS.
+
+A retry-at-larger-budget option for the visual probe was prototyped and
+reverted: the failures that matter here either still refuse the save check at
+1200 frames or are black at every tested size, so a larger budget only doubles
+the probe time without changing the classification.
