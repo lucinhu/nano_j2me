@@ -60,6 +60,11 @@ libretro 时钟修复补成**全程单调**：load、run、teardown 三个阶段
   5 个失败**（`TheMummy_K700F`、`PAC-MAN (176x220)`、`assault`、`Skater_by_BFLM`、
   `Asphalt4EliteRacing`），失败集合与 r57 完全一致，时钟加固没有引入判定回归。
 
+- Android APK 冒烟（API 36 AVD `Medium_Phone_API_36.1`）：安装
+  `nj2me-0.5.39-x86_64.apk`（versionCode 539），媒体库显示 `1 个游戏`，
+  LoopDemo 启动后正常渲染 240x320 画布（绿色进度条 + 完整屏幕键盘），
+  截图见 `.local-tools/debug-runs/r237/`。
+
 ## 升级说明
 
 - 0.5.8 – 0.5.38 的存档会因版本 CRC 不符而被拒绝；跨版本请用本版重新保存。
