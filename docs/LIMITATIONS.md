@@ -1,0 +1,107 @@
+# Known limitations
+
+This page collects the behaviours that are still limited, on purpose or by
+open work, and points at the evidence.  It is meant to be read alongside
+[docs/COMPATIBILITY.md](COMPATIBILITY.md) (API surface) and
+[docs/CORPUS.md](CORPUS.md) (corpus results): the corpus page says *which*
+titles run, this page says *where the runtime's model differs from a handset*
+and what that means for a frontend.
+
+Nothing here is presented as working when it is not.  Status values:
+
+- **open** — reproduces, understood at least in part, no safe fix yet.
+- **workaround** — a way to get the behaviour, with its cost.
+- **by design** — a deliberate difference, documented rather than planned.
+
+## 1. Frontend and frame model
+
+### 1.1 Handset event-thread semantics is the main structural gap
+
+A handset runs `startApp()`, the loader threads and the display in a
+cooperative event model: `setCurrent()` returns, `showNotify()`/`sizeChanged()`
+arrive on the event thread, the first paint follows, and only then do
+background threads get time.  The runtime runs MIDlets on a cooperative VM
+thread with a frame pump, which is close enough for almost every corpus title
+but not identical.  Two titles still expose the difference:
+
+| Title | Symptom | State |
+|---|---|---|
+| `TheMummy_K700F` | black through every frontend; loader waits for a boot handshake (`MID.b`, `f.c[4]`/`f.c[5]`) that only a real event thread performs; `isShown()` is synchronous here, so the loader takes the wrong branch | **open** — needs an event-thread model; documented in `docs/notes/2026-11-21-fetched-black-screen-titles.md` (rounds 213-216/222) |
+| `Skater_by_BFLM` | renders in the desktop CLI, black through the libretro core; its splash paint must run before the loader thread's first timeslice, but the libretro load path pumps frames and the first-paint request is consumed by the title's own in-quantum `serviceRepaints()` before the canvas is shown | **open** — needs a load-path frame boundary or event-thread model; documented in `docs/notes/2026-11-23-first-paint-delivery.md` (rounds 227/236/238/241) |
+
+### 1.2 State requests only land between frames
+
+The libretro state service serves `retro_serialize()`/`retro_unserialize()`
+between `nj_midp_frame()` calls with a 4 s wait.  A title whose single frame
+runs longer than that (a game loop inside the MIDlet constructor, a very slow
+loader, one long paint) refuses the snapshot.  This is a limitation of the
+synchronous frame model, not of the state format; the state itself is sized
+and written correctly.
+
+| Title | What happens | Workaround |
+|---|---|---|
+| `毁灭战士3_10598` | whole game loop runs inside the MIDlet constructor | none through the frontend; the core intentionally gives it a long load |
+| `vault/Asphalt4EliteRacing_1.0.0_320x240` | renders, but one frame exceeds the service window; manual state refused | none |
+| `vault/assault.jar` | very slow loader (~250 s to first screen) | wait |
+| `TheMummy_K700F` | boot handshake never completes (see 1.1) | none |
+
+Evidence: `docs/LIBRETRO.md` save-state section (round-176 notes),
+`docs/CORPUS.md` round-233 visual probe, round-239 state probe
+(1,660/1,664 round trips; the four refusals are exactly these titles).
+
+### 1.3 Pacing
+
+The vm clock is virtual: one `retro_run()` is one 60 Hz frame.  Titles that
+pace themselves on the wall clock are fine, but probes and runners must drive
+real frames (`--fps 0` starves wall-time-driven titles, as documented in
+`docs/LIBRETRO.md`).  In the libretro core this is invisible to the user (the
+frontend paces), and the load clock is now anchored at every phase (0.5.39)
+so a first load cannot leak host uptime into the VM clock.
+
+## 2. Rendering
+
+### 2.1 Software rasteriser is the supported renderer
+
+M3G and 2D drawing run on the software rasteriser in every shipped core
+(`hw_render=false`).  Raster-micro-optimisation work has reached the point of
+diminishing returns (span fast paths, exact-parity-only changes; see
+`docs/PERFORMANCE.md` and the round notes).
+
+### 2.2 GLES2 backend is experimental and opt-in
+
+`--graphics gles2` (SDL2 host builds, `-DNJ_SDL2_GLES2=1`) is a real backend,
+but measured slower than software on the test GPU (Galaxy on Fire 2: 5.2 s vs
+3.8 s user CPU; pure-3D Doom 3: 4.3 s vs 3.0 s) because it commits each
+triangle batch through the CPU framebuffer.  It is not used by the released
+libretro cores.  The frame-resident whole-frame design is documented in
+`docs/notes/2026-11-22-gles2-whole-frame-renderer.md`; the per-transaction
+optimisations were measured and rejected
+(`docs/notes/2026-11-22-android-gles2-bottlenecks.md`).
+
+### 2.3 Title-side black screens are documented, not hidden
+
+The corpus still contains titles that render black on a handset or on the
+FreeJ2ME-Plus reference too (e.g. `PAC-MAN (176x220)` waits on an empty Sprint
+carrier URI).  They are listed with their evidence in
+`docs/notes/2026-11-21-fetched-black-screen-titles.md` and are not counted as
+runtime successes.
+
+## 3. Features and platforms
+
+| Area | Status | Notes |
+|---|---|---|
+| Netplay | **by design, not advertised** | `nano_j2me_deterministic` replays frame-driven titles identically for single-machine replay, but clock-sampling titles still vary, and frame-locked single-step execution deadlocked (documented).  The core does not claim `retro_netpacket` support. |
+| Rewind | **workaround** | rewind works at small heaps; a 128 MB auto-heap snapshot is ~1 s to save/load, so a rewind buffer at that size is not practical.  See `docs/LIBRETRO.md` and `tools/check_libretro_rewind.sh`. |
+| Cheats | **workaround** | raw arena-offset writes (`<offset>:<hex bytes>`) applied every frame, no game-genie database, offsets change with heap layout.  In-game search/editor exists on Android; core users can search SYSTEM_RAM. |
+| Android 2.x-4.4 | **workaround** | needs the legacy ARMv5 APK (`nj2me-legacy.apk`, API 5); modern APKs target API 21+. |
+| Network | **port-dependent** | `http://` uses the port hook; a hook that exposes no TLS session makes `https://` report the JSR 75 "security information unavailable" answer rather than pretending.  The desktop runner needs `--network` and a port with the hook. |
+| Determinism option | **limited** | fixed 16667 µs per frame and a VM-seeded `java.util.Random`; titles that read the wall clock outside frames still vary. |
+| Audio | **platform-dependent** | MIDI/AMR can use the platform's decoders through port hooks; the built-in path is used otherwise.  Wine audio at 120 frames is timing-sensitive (use 300). |
+
+## 4. Reporting a regression
+
+If a title worked through a released core and stopped, the fastest path is a
+row-level check: `.local-tools/debug-runs/` keeps the sweep rows, and
+`tools/check_libretro_corpus_visual.py` can replay one row at its own screen
+size.  Include the row's `jar_path`, the core hash and the probe output;
+`docs/VERIFICATION.md` records which evidence already exists for the title.

@@ -1,5 +1,7 @@
 # Running nano_j2me as a libretro core
 
+See [docs/LIMITATIONS.md](LIMITATIONS.md) for the known behavioural limits of this core (handset event-thread model, long-frame state service, GLES2 backend status).
+
 nano_j2me provides a native C99 [libretro](https://www.libretro.com/) core for
 J2ME MIDlets. The runtime is linked into the core; no external JVM or helper
 process is required. Load a local `.jar` containing a `MIDlet-1` manifest entry.

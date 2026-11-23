@@ -315,6 +315,7 @@ docs/               architecture, porting, compatibility, performance
 | [docs/WEB.md](docs/WEB.md) | the WebAssembly port: API, persistence, verification |
 | [docs/LIBRETRO.md](docs/LIBRETRO.md) | building and using the RetroArch core |
 | [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md) | what is implemented, what is not, and how titles fail |
+| [docs/LIMITATIONS.md](docs/LIMITATIONS.md) | known behavioural limits of the runtime and the libretro core, with evidence |
 | [docs/CORPUS.md](docs/CORPUS.md) | the 400-title compatibility corpus and its results |
 | [docs/PERFORMANCE.md](docs/PERFORMANCE.md) | measured performance, per platform |
 | [docs/VERIFICATION.md](docs/VERIFICATION.md) | the test ledger: what was run, on which build |
