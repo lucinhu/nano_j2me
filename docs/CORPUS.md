@@ -2168,3 +2168,23 @@ probe had nine failures; the four Midnight Pool variants (`MidnightPool1`,
 `Midnight Pool`, `Midnight Pool2`, `MidnightPool_K700_EN`) now pass, with no
 new failures.  The fix and its per-title A/B evidence are in
 `docs/notes/2026-11-21-fetched-black-screen-titles.md` (Round 232).
+
+## Round 235: r58 whole-corpus visual probe (2026-11-23)
+
+The same merged 1,664-title row set was probed through the r58 core (300 paced
+frames, 8 jobs, per-row screen profiles) after the clock-continuity hardening
+that completes the round-232 fix (load, run and teardown share one monotonic
+clock scale):
+
+| result | count |
+| --- | --- |
+| passed | 1658 |
+| known limitation | 1 (`毁灭战士3_10598`, constructor-time loading screen) |
+| failed | 5 |
+
+The failure set is identical to the r57 probe: `TheMummy_K700F`, `PAC-MAN
+(176x220)`, `assault`, `Skater_by_BFLM` and `Asphalt4EliteRacing` (each
+documented in `docs/notes/2026-11-21-fetched-black-screen-titles.md`).  No
+verdict changed, so the hardening is corpus-neutral; the targeted A/B runs
+show `MidnightPool1` and `Midnight Pool2` still render and save through the
+core, and `Skater_by_BFLM` stays a core-only limitation.

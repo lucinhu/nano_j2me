@@ -1806,3 +1806,25 @@ r55 core; results will be recorded in `docs/CORPUS.md` when it finishes.
   now pass, no regressions).
 - Validation: full serial CTest 210/210 (370.24 s), mock 20/20, real RetroArch
   LoopDemo 120 frames PASS, Wine 4/4 @300, submission bundle 32/32.
+
+## Round 235: release 0.5.39 / r58
+
+- Metadata commit `08ff811`: version 0.5.39 in CMake/nj.h/both `.info`
+  (SHA-256 `c2a4d8797c3cc5a648f3b3b5ca2c89252adf0242f292044c1ad3bca7842034cf`),
+  Windows README, upstream README/PR drafts; tracked super patch regenerated
+  against `libretro-super` master `55e50a8` as fork commit `a04d259`
+  (`git apply --check` verified on a second fresh clone).
+- r58 cores built from clean worktree `/var/tmp/nj2me-r58-tree` at `08ff811`
+  (8 targets x 16 files, 128 files) and installed as `build/libretro-dist`
+  (previous tree backed up `/var/tmp/libretro-dist-20261123-pre-r58-backup.tgz`).
+- APKs versionCode 539 (five per-ABI APKs, aapt2 verified) in
+  `/var/tmp/release-0539`; cores zip `nj2me-0.5.39-libretro-cores.zip`
+  12,176,496 B SHA-256
+  `a56e406d6e72928b9405082e84db45a93a2a4980ae0fa86caf7b48bdad8ce0f2`.
+- Validation: full serial CTest **210/210** (383.46 s), mock frontend matrix
+  **20/20**, real RetroArch LoopDemo PASS, Wine **4/4 @300**, submission bundle
+  **32/32**, r58 whole-corpus visual probe **1,658 passed / 1 known / 5 failed**
+  (identical failure set to r57 -> no regression).
+- Release docs: `docs/RELEASE_0.5.39.md`, `docs/LIBRETRO.md` r58 paragraph,
+  "0.5.39 / r58" section in `docs/LIBRETRO_SUBMISSION.md`, and the
+  `docs/CORPUS.md` round-235 probe table.

@@ -2112,6 +2112,35 @@ Super PR branch `a6d3f34`, docs PR `95a1d0a`; both OPEN/MERGEABLE, no merge
 claimed.
 
 
+### 0.5.39 / r58 (2026-11-23)
+
+Release: https://github.com/lucinhu/nano_j2me/releases/tag/v0.5.39 - tag
+`v0.5.39` (metadata commit `08ff811`), eight libretro targets plus five
+per-ABI Android APKs (versionCode 539); `.info` SHA-256
+`c2a4d8797c3cc5a648f3b3b5ca2c89252adf0242f292044c1ad3bca7842034cf`
+(`display_version = "0.5.39"`); the tracked super patch applies to
+`libretro-super` master `55e50a8` as fork commit `a04d259`; docs PR baseline
+`libretro/docs` master `96ee874e`.  r58 completes the libretro clock hardening:
+load, run and teardown share one monotonic scale (`stop_ms`/`stop_start_us` for
+teardown, a seeded `load_ms` in `lr_load()`, and the LOAD-to-RUN hand-over
+`vclock_us = (load_ms + elapsed) * 1000`), so a slow constructor or
+`destroyApp()` can no longer step the VM clock by hours.  Through the core,
+`MidnightPool1` renders up to 8,348 non-black pixels with 85 distinct frames and
+passes the full 45-check harness including save/restore
+(`serialize_size=157,593,664`); `Midnight Pool2` also passes.  `Skater_by_BFLM`
+stays black only through the core (the async load pumps frames during
+`startApp()`, so the first-paint delivery point cannot be a frame boundary;
+documented in `docs/notes/2026-11-23-first-paint-delivery.md`).
+
+Validation: full serial CTest **210/210** (383.46 s), mock frontend matrix
+**20/20**, real RetroArch LoopDemo PASS, Wine **4/4 @300**, bundle **32/32**;
+the whole-corpus libretro visual probe over the merged 1,664-title corpus
+reports **1,658 passed, 1 known limitation and 5 failed** (`TheMummy_K700F`,
+`PAC-MAN (176x220)`, `assault`, `Skater_by_BFLM`, `Asphalt4EliteRacing`) - the
+same documented failure set as r57, so the clock hardening introduced no
+verdict regression.  Super PR branch `a04d259`, docs PR `95a1d0a`; both
+OPEN/MERGEABLE, no merge claimed.
+
 ### 0.5.38 / r57 (2026-11-23)
 
 Release: https://github.com/lucinhu/nano_j2me/releases/tag/v0.5.38 - tag
