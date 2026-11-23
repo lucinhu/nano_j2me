@@ -2235,3 +2235,12 @@ packaging gap, already classified `title-exception` with the
 this batch; combined with the earlier 1,048-JAR audit (only Doom 3's unused
 JSR-226 SVG symbols remain), the collected corpus is linkage-clean apart from
 documented title-side defects.
+
+The same scan over the main batch (`compat-20261122-r176`, **1,046** available
+titles, 120 frames) found **1,045 clean and 1 with linkage hits**:
+`vault/ArcadePark2.jar` throws `NoClassDefFoundError` on
+`GlomoReg/GlomoConfig` at class initialization, and the JAR ships only
+`GlomoCountryShort` — the documented title-side Glomo packaging gap.  Every
+other title in both batches executes without a swallowed linkage error, so the
+runtime's implemented API surface matches what the collected corpus actually
+references (apart from Doom 3's unused JSR-226 SVG symbols).
