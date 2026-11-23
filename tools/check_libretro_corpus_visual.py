@@ -208,6 +208,11 @@ def main():
     random.Random(0).shuffle(rows)  # keep the order stable but not alphabetical
     out_path = Path(args.out) if args.out else \
         ROOT / ".local-tools" / "debug-runs" / "goal16-libretro-corpus" / "visual.jsonl"
+    # A directory (existing, trailing separator, or extension-less path) is a
+    # run directory: keep the per-title JSONL inside it.
+    if out_path.is_dir() or args.out and (args.out.endswith("/") or
+                                          out_path.suffix == ""):
+        out_path = out_path / "visual.jsonl"
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     passed = failed = known = 0

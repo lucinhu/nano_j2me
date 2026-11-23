@@ -1968,3 +1968,49 @@ submission bundle **32/32**, 150-title libretro visual subset **150/150 pass**,
 and the whole-corpus probe on the same libretro path reports **1,659 passed /
 1 known limitation / 4 failed** (`TheMummy_K700F`, `PAC-MAN (176x220)`,
 `assault`, `Asphalt4EliteRacing`).
+
+## Round 249: external-submission dry run on the v0.5.40 tag
+
+A clean, shallow clone of the released tag was used as the external
+reviewer's view of the submission:
+
+* Clone: `git clone --depth 1 --branch v0.5.40 https://github.com/lucinhu/nano_j2me.git`
+  → HEAD `97f5b0b`.
+* Build: `cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release` (rc=0),
+  `cmake --build build -j8` (rc=0), then
+  `cmake --build build --target nj_fixtures -j8` (rc=0; the fixtures step is
+  documented and needs a JDK plus Pillow).
+* `TMPDIR=/var/tmp/r249-tmp ctest --test-dir build -j1 --output-on-failure`
+  → **100% passed out of 166**, 4 environment-gated skips
+  (`check_sf2_loader`, `check_paint_pump`, `test_client_ui`,
+  `check_libretro_3d_keys`).
+* Self-built mock frontend matrix:
+  `CORE=build/libretro/nano_j2me_libretro.so HARNESS=build/test_libretro_frontend
+  tools/check_libretro_frontend.sh` → **20 passed, 0 failed**.
+* Self-built core through the real frontend:
+  `tools/check_libretro_retroarch.sh build/libretro/nano_j2me_libretro.so
+  tests/fixtures/loopdemo.jar 120` → **PASS** (exit 0, log markers verified).
+* Submission bundle re-run with clean baseline clones and a real `mkdocs
+  build`: `tools/check_libretro_submission_bundle.sh --dist build/libretro-dist
+  --super-clone <libretro-super @ 55e50a8> --docs-clone <libretro/docs @
+  96ee874> --apply-clones --mkdocs <venv>/bin/mkdocs` → **41 passed, 0 failed**
+  (32 default checks plus patch application to clean clones and the rendered
+  `site/library/nano_j2me/index.html`).
+* Released APK smoke on an API 36 emulator: installed
+  `nj2me-0.5.40-x86_64.apk` (`versionName=0.5.40`, versionCode 540), library
+  shows 1 game, LoopDemo launches with its 240x320 canvas, progress bar and
+  full on-screen keypad (screenshots under
+  `.local-tools/debug-runs/r237/`-style paths; this run's copies are in
+  `/tmp/r249-android/`).  This is an emulator smoke only; no on-device claim.
+
+Notes for reproducing the docs check: the `libretro/docs` clone needs
+`pip install -r docs/requirements.txt` (`mkdocs-material`,
+`mkdocs-macros-plugin`, `mkdocs-git-revision-date-localized-plugin`,
+`pygments`) in the Python environment used for `--mkdocs`; without them the
+site build fails on the `material` theme extensions even though the patch
+applies cleanly.
+
+Also fixed in this round: `tools/check_libretro_corpus_visual.py --out` now
+accepts an existing directory (or a trailing-slash/extension-less path) and
+writes `visual.jsonl` inside it instead of failing with `IsADirectoryError`
+after the whole probe has already run.
