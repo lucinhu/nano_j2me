@@ -125,3 +125,21 @@ the pump unwinds and the guard would allow a paint, the title's loader thread
 has already run - exactly the Skater case.  A correct fix therefore needs a
 paint point *between Java quanta inside the pump* with the pump suspended, not
 a relaxed frame-entry condition.
+
+Round 238: frame sequence for Skater in the core (instrumented, reverted):
+the core starts the MIDlet's `startApp()` as a scheduled VM thread inside the
+first `nj_midp_frame()`, so `Display.setCurrent()` runs *after* that frame's
+entry check but *before* the same frame's paint gate.  The scheduler then runs
+the title's loader quantum in the same frame (the loader is a thread started by
+`startApp()`), so by the time the frame paints, `Q` is already 4; the paint
+takes the title-screen branch with `new == null`, throws, and the paint gate
+consumes the pending first-paint request.  There is no moment at which the
+frame-level delivery can run between `setCurrent()` and the loader quantum with
+the current code: the request has to be served *inside* the scheduler, between
+two Java quanta, before the loader thread first runs.  That is the scheduler
+paint point this note asks for; the frame hook relaxation
+(`in_call_pump == 0 || in_frame_hook`) and the early port flag were both tested
+this round and changed nothing for Skater (still 0 content frames), while
+MidnightPool1/ChristmasMidnightPool stayed correct.  Both experiments were
+reverted (`git checkout -- src/midp/nj_lib_midlet.c src/midp/nj_lib_lcdui.c
+src/port/libretro/nj_port_libretro.c`, clean core rebuilt).
