@@ -13,6 +13,34 @@ reviews are complete, and final local combined-candidate validation passed as
 recorded below. Package the final notices/metadata and complete the external
 steps below before publication.
 
+## Final submission checklist (2026-11-23, v0.5.40)
+
+This kit is ready to submit.  The two upstream pull requests are open from the
+author's forks; no merge or acceptance is claimed.  External steps remaining:
+maintainer review, then merge.  Nothing else is required locally.
+
+| Item | State |
+| --- | --- |
+| Fork branch, `libretro-super` | `lucinhu/libretro-super:add-nano_j2me` @ `ea88342883b03cb1ec74e7d10632ed28aea0927e` (parent master `55e50a81195eaf8dd1b7720a601282459832ced1`) |
+| PR, `libretro-super` | [#2204](https://github.com/libretro/libretro-super/pull/2204) — OPEN, mergeable |
+| Fork branch, `libretro/docs` | `lucinhu/docs:add-nano_j2me` @ `8ef5c42f6272c6fea84a5643f111e685b8d1f32e` (parent master `96ee874e010a33b3fb1a79cf3cf833fc17189cfc`) |
+| PR, `libretro/docs` | [#1239](https://github.com/libretro/libretro-docs/pull/1239) — OPEN, mergeable |
+| Release | [v0.5.40](https://github.com/lucinhu/nano_j2me/releases/tag/v0.5.40), 7 assets, tag `v0.5.40` |
+| `.info` | SHA-256 `3b9f28c32b4fa61b99e0a50298963f477fb339cb9e1a600d449c7ac2564cebab`, version 0.5.40, `memory_descriptors = "true"`, `cheats = "true"`, `hw_render = "false"` |
+| Release cores archive | `nj2me-0.5.40-libretro-cores.zip`, 12,176,826 B, SHA-256 `547ee5a88c4323cc34f99bc0f4c590709b276f6848ac75652be48faf0de1b29f` (8 platforms x 16 files) |
+| Patches against upstream | clean-clone `git apply --check` passes on the two parent commits above |
+| Whole-corpus rendering probe (released core) | 1,664 titles: **1,659 passed**, 1 known limitation (`毁灭战士3_10598` game loop inside the MIDlet constructor), 4 documented failures (`TheMummy_K700F` boot handshake, `PAC-MAN (176x220)` title-side carrier/network path, `assault` slow loader + save refusal, `Asphalt4EliteRacing` long-first-frame save refusal) |
+| Clean checkout rehearsal | tag `v0.5.40` shallow clone: configure+build from scratch, `nj_fixtures`, full CTest **166/166** (4 environment-gated skips), mock frontend **20/20**, real RetroArch LoopDemo 120 frames PASS |
+| Submission bundle validator | **32/32** offline, **41/41** with clean baseline clones and a real `mkdocs build` (`pip install -r docs/requirements.txt`) |
+| CI template simulation | 3/3 build contracts (Linux `.so`, Windows `.dll`, Android template target) |
+| Known limits | documented in [LIMITATIONS.md](LIMITATIONS.md) and mirrored on the upstream library-page draft |
+
+License scope is unchanged: runtime code MIT, built-in AMR numeric data
+Apache-2.0 with the recorded OpenCORE provenance, bundled font data SIL OFL
+1.1; the notice set lives in [licenses/](licenses/) and
+[AMR_DATA_LICENSES.md](AMR_DATA_LICENSES.md).  The version line in the next
+paragraph predates the final release and is kept for history.
+
 ## Local materials
 
 | Material | Local source | Intended upstream destination |

@@ -2014,3 +2014,23 @@ Also fixed in this round: `tools/check_libretro_corpus_visual.py --out` now
 accepts an existing directory (or a trailing-slash/extension-less path) and
 writes `visual.jsonl` inside it instead of failing with `IsADirectoryError`
 after the whole probe has already run.
+
+## Round 250: final submission kit status (2026-11-23)
+
+Added a **Final submission checklist (2026-11-23, v0.5.40)** table at the top of
+[LIBRETRO_SUBMISSION.md](../LIBRETRO_SUBMISSION.md).  It pins the two open PRs
+(`libretro-super#2204` head `ea88342`, `libretro/docs#1239` head `8ef5c42`,
+both mergeable), the released `v0.5.40` artifacts (`.info` SHA-256
+`3b9f28c3…`, cores archive SHA-256 `547ee5a8…`), the clean-checkout rehearsal
+(166/166 CTest with four environment-gated skips, 20/20 mock matrix, real
+RetroArch pass), the bundle validator results (32/32 offline, 41/41 with clean
+clones and a real `mkdocs build`) and the released-core corpus probe
+(1,659/1,664 with the four documented failures).  Remaining external steps:
+maintainer review and merge — nothing else is required locally.
+
+Also recorded (negative result) the round-250 attempt to tie `isShown()` to the
+`showNotify()` delivery for TheMummy in
+[the black-screen note](2026-11-21-fetched-black-screen-titles.md): the loader
+then takes its world-init branch, but without an event-thread model the loader
+still starves frame completion, so the title remains a documented open case and
+the experiment was reverted.

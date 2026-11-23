@@ -998,3 +998,26 @@ and r57, and `serialize_size`, `serialize_size_stable` and the undersized-buffer
 checks all pass.  Raising the service timeout would block the frontend thread
 for longer without fixing the ordering; the honest state of the title is
 "renders, cannot snapshot through the core between frames".
+
+## Round 250: tying isShown() to showNotify() does not fix TheMummy
+
+The remaining handset semantic gap for TheMummy is that `isShown()` becomes
+true with `Display.setCurrent()` identity, so the loader's `if (!isShown())`
+world-init branch never runs.  A one-line experiment made a Canvas count as
+shown only once the frame that presents it has delivered `showNotify()`
+(`d_isShown` now requires `F_C_VISIBLE` for Canvas, identity for other
+Displayables).
+
+Result: the loader takes its `!isShown()` branch, but the title is still not
+playable — a 600-frame paced CLI run (176x208, `--fps 30`) timed out after
+100 s with only the usual RMS `InvalidRecordIDException` in the log and no
+completed frame, and the mock libretro frontend stayed at `0/36608` non-black
+pixels, one distinct frame hash, with the save request refused.  The loader
+runs synchronously inside the 250 ms timer task's nested C-call pump; without
+an event-thread model that lets the loader return to the frame loop between
+stages, it still starves the frame that would set the shown flag.  The
+`isShown()` predicate alone is therefore not the fix; the experiment was
+reverted and no code change was kept.
+
+The final submission checklist added to [LIBRETRO_SUBMISSION.md](../LIBRETRO_SUBMISSION.md)
+records what remains external (maintainer review only).
