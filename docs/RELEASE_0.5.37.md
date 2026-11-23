@@ -30,24 +30,24 @@ evidence, and a hardening of the sweep tool.
   `errors="replace"`: a title logging raw non-UTF-8 bytes no longer aborts a
   sweep, and the tool resumes from an existing `rows.jsonl`.
 
-## Core packages (r56)
+## Core packages (r56, build revision `31610d4`)
 
 | target | size (bytes) | SHA-256 |
 |---|---|---|
-| linux-x86_64 | 4,048,832 | `d41b8b485656e9098797a29e624fd6f7bfac8dde07c6bffd5851d65ac1cb2631` |
-| linux-aarch64 | 3,522,680 | `658f9b3ed9f96584d17a5698ea32ec5ed0f8f0bdb894ea6fc13a69f2a9f78d16` |
-| linux-armv7 | 3,175,400 | `13b578ef671959103bb1d98f63266dc08365c101f0a9a292f5d51f850d8764f5` |
-| android-arm64 | 3,768,328 | `0af93932ca1180524315452f4d961848f640f8b9dc764a640a53e7b42d43c4ce` |
-| android-armv7 | 2,864,588 | `7d43db15d3c09b58ace2efa48a728b93b9d1a0ffffb362fe56c16ae13811fec1` |
-| android-x86_64 | 3,794,240 | `8567d52d33f5c1eee4f8cca365c84f9952bcbffce58c811176bcc3715a16c52f` |
-| windows-i686 | 3,600,896 | `309ea435381499ca5e2736754eed44ac5938d8b3332dafc42545c5628f42a22b` |
-| windows-x86_64 | 3,371,008 | `5397796b354571efd4ef4e1291b786c111a1f9b4926330181549204b68fc1164` |
+| linux-x86_64 | 4,048,832 | `86dca38c47711ae94d3a2997e230c49dd480d38510bae9d26cfa4edcc67e28d8` |
+| linux-aarch64 | 3,522,664 | `45e73a9a9760a2975b442e6cf96d334c51a7d870db967a597b24e287b369f631` |
+| linux-armv7 | 3,175,416 | `c6b382b599b6a7fa30d0237046e120753fada9d6690749df8c2dd75d0200ff07` |
+| android-arm64 | 3,768,312 | `a2df8aebfe72573fbbb49fb327b69ed8b8e2727f3a424b7c983aaf6ef919e2bf` |
+| android-armv7 | 2,864,604 | `8716c04863f533e86943e1d7d03aa4cb2dbb894ab73dab51c28513df783a5258` |
+| android-x86_64 | 3,794,256 | `cbeb6e316501ff7a8d3b16312d265c43da48975033e42c0e9fe111e915845353` |
+| windows-i686 | 3,600,896 | `5ed5332ba95f001ad95cb3d1c44ed8ee908ad6db49f22ec6fde24f6ed0060037` |
+| windows-x86_64 | 3,370,496 | `756e2c976f939d2b7d1fdd85ef7115b20bc6316e83d199ec10543d0c39268718` |
 
 `.info` SHA-256: `71af9f4689705a59fd817a2e4549c7d9f340d7ea5a8f426a04766d30e66780c2`
 (display_version `0.5.37`, same file in every target).
 
-Core archive: `nj2me-0.5.37-libretro-cores.zip`, 12,174,659 bytes,
-SHA-256 `79340948ca3569b623ef5a681fca55561e0a9795c99f4c08d5597be2c8435548`
+Core archive: `nj2me-0.5.37-libretro-cores.zip`, 12,174,904 bytes,
+SHA-256 `5d5314833f770525aeb708d91e8ba5e51c3abb0edc3b181c4d275d3997701394`
 (128 entries under `nano_j2me-0.5.37-libretro/`).
 
 ## Android APKs
@@ -57,11 +57,11 @@ Per-ABI packages, `versionCode 537`, `versionName 0.5.37`, minSdk 21
 
 | package | size (bytes) | SHA-256 |
 |---|---|---|
-| `nj2me-0.5.37-arm64-v8a.apk` | 1,058,972 | `d3e3604c7b93a8fc9ec77734df45b9584f04bf9aca531b6aadeb31ea86ce4109` |
-| `nj2me-0.5.37-armeabi-v7a.apk` | 1,067,166 | `947edb0f9644697426d79ebbcc58a5e4cdd57fc7874b5e5dc879b8f1a6e2b4e7` |
-| `nj2me-0.5.37-x86.apk` | 1,046,678 | `0efcc3e85e8823e4aa008bd16acde7f7248a17019726b535a89d704674324900` |
-| `nj2me-0.5.37-x86_64.apk` | 1,058,969 | `c3fe1b4183323b38a9e1d9f7c5cd23c2036e1332f6ff73744302113b9a6466cd` |
-| `nj2me-0.5.37-legacy.apk` | 741,381 | `54d1a088e5d6c083a39891c1dec11081e648c1715f523ff64f18bf266952d5b3` |
+| `nj2me-0.5.37-arm64-v8a.apk` | 1,058,972 | `b5c8dfa29f424f3b696b9215a842f634b6222dd18cc5f31dccb45fa42eabb5af` |
+| `nj2me-0.5.37-armeabi-v7a.apk` | 1,067,166 | `f673448e1fcef564985425c2f1b35d645c8632454ecc9359295fdfb6310dce3b` |
+| `nj2me-0.5.37-x86.apk` | 1,046,678 | `5992e847705dbe43aaf61581e7f1f8728dfa87497a38c9f72be4536c614c565d` |
+| `nj2me-0.5.37-x86_64.apk` | 1,058,969 | `4a8713befa1fd6d8eb003a22e14a6679f73f12907c4ee0fbe5d13cddc8ef96c7` |
+| `nj2me-0.5.37-legacy.apk` | 741,354 | `92b076ff11c7cecb1b64c331f6c44610254bc1b303c3449511607f6c48bcfd8c` |
 
 ## Verification
 
@@ -70,9 +70,8 @@ Per-ABI packages, `versionCode 537`, `versionName 0.5.37`, minSdk 21
 - Real RetroArch 1.22.2 LoopDemo, 120 frames: **PASS**.
 - Windows x86_64 core under Wine, 300 frames: **4 passed, 0 failed**.
 - Submission bundle validator: **32 passed, 0 failed**.
-- Whole-corpus libretro visual probe on r56: **__PROBE_RESULT__** (the run
-  before the port gate had two extra Midnight Pool Christmas failures; both
-  were re-verified PASS after the gate).
+- Whole-corpus libretro visual probe on r56: **1664 titles → 1654 passed, 1 known limitation (`毁灭战士3_10598` slow constructor), 9 failed — the same documented set as r55 (`MidnightPool1`, `Midnight Pool`, `Midnight Pool2`, `MidnightPool_K700_EN`, `TheMummy_K700F`, `PAC-MAN (176x220)`, `assault`, `Skater_by_BFLM`, `Asphalt4EliteRacing`)** (the pre-gate build failed two additional Midnight Pool
+  Christmas variants; both pass after the gate, confirmed by this probe).
 
 ## Upgrading
 

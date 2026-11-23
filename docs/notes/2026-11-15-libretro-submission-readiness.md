@@ -1761,3 +1761,26 @@ Re-validated the submission materials without changing the release:
 In parallel a whole-corpus libretro visual probe over the expanded corpus
 (1,705 unique rows: round-176 set + the K700/K800 batch) was started on the
 r55 core; results will be recorded in `docs/CORPUS.md` when it finishes.
+
+## Round 229: release 0.5.37 / r56
+
+- Metadata commit `7f42171` (`0.5.37`), `.info` SHA-256
+  `71af9f4689705a59fd817a2e4549c7d9f340d7ea5a8f426a04766d30e66780c2`, super
+  patch regenerated against `libretro-super` master `55e50a8` as fork commit
+  `f83ca18` (verified with `git apply --check` on a fresh clone).
+- r56 cores built from clean worktree `/var/tmp/nj2me-r56-tree` at `7f42171`
+  (`tools/build_libretro_cores.sh --jobs 12 --out
+  /var/tmp/nj2me-submission-dist-r56 all`, 8 targets x 16 files = 128 files);
+  installed as `build/libretro-dist` after backing up the r55 tree.
+- Five per-ABI APKs built with versionCode 537; the libretro core archive
+  `nj2me-0.5.37-libretro-cores.zip` is 12,174,659 bytes, SHA-256
+  `79340948ca3569b623ef5a681fca55561e0a9795c99f4c08d5597be2c8435548`
+  (128 entries).
+- The release runtime change is the round-227 first paint delivery, gated to
+  ports that run `startApp()` synchronously (`nj_port.first_paint_early`, set
+  by the headless/CLI port).  The full-corpus r56 probe initially caught two
+  Midnight Pool Christmas variants going black through the core because the
+  libretro async load pumped frames while the MIDlet was still being built;
+  commit `31610d4` gates the delivery, both titles pass again, and the r56
+  artifacts are built at that revision.  The core-side scheduler-level first
+  paint (Skater) remains an open limitation.

@@ -2112,6 +2112,32 @@ Super PR branch `a6d3f34`, docs PR `95a1d0a`; both OPEN/MERGEABLE, no merge
 claimed.
 
 
+### 0.5.37 / r56 (2026-11-23)
+
+Release: https://github.com/lucinhu/nano_j2me/releases/tag/v0.5.37 - tag
+`v0.5.37` (metadata commit `7f42171`, cores built at `31610d4` with the
+port gate), eight libretro targets plus five
+per-ABI Android APKs (versionCode 537); `.info` SHA-256
+`71af9f4689705a59fd817a2e4549c7d9f340d7ea5a8f426a04766d30e66780c2`
+(`display_version = "0.5.37"`); the tracked super patch applies to
+`libretro-super` master `55e50a8` as fork commit `f83ca18`.  r56 ships the
+first-paint delivery fix: `Display.setCurrent()` records a one-shot request
+that the frame pump serves after input and before the first background
+timeslice, so a canvas's initial `paint()` runs before a just-started loader
+thread mutates its state (`Skater_by_BFLM` splash now renders in the
+CLI/headless runner; the libretro core cannot serve the request at a scheduler
+switch, documented as an open limitation in
+`docs/notes/2026-11-23-first-paint-delivery.md`).  The release also carries the
+full 0.5.36 corpus evidence: 1720-row sweep -> 1684 ok with six improvements
+and no regressions, compatibility matrix refreshed to 2478 titles (2438 ok),
+and the sweep tool now survives non-UTF-8 game output.
+
+Validation: full serial CTest **210/210** (383.55 s), mock frontend
+matrix **20/20**, real RetroArch LoopDemo 120 frames PASS, Wine x86-64
+**4/4 @300**, submission bundle **32/32**; whole-corpus libretro visual probe
+on r56: 1664 titles → 1654 passed, 1 known limitation (`毁灭战士3_10598` slow constructor), 9 failed — the same documented set as r55 (`MidnightPool1`, `Midnight Pool`, `Midnight Pool2`, `MidnightPool_K700_EN`, `TheMummy_K700F`, `PAC-MAN (176x220)`, `assault`, `Skater_by_BFLM`, `Asphalt4EliteRacing`).  Super PR branch `f83ca18`, docs PR head
+`95a1d0a` (baseline `96ee874`); both OPEN/MERGEABLE, no merge claimed.
+
 ### 0.5.36 / r55 (2026-11-23)
 
 Release: https://github.com/lucinhu/nano_j2me/releases/tag/v0.5.36 - tag

@@ -84,8 +84,15 @@ Outputs go to `build/libretro-dist/<target>/`, with a library and its metadata.
 Use `--no-strip` to retain symbols. `all` selects the script's supported targets
 and requires all of their toolchains.
 
-The eight candidates currently in `build/libretro-dist/` are the r55 package
-(the 0.5.36 release) built on 2026-11-23 from revision `5af2e3b`.  r55 carries
+The eight candidates currently in `build/libretro-dist/` are the r56 package
+(the 0.5.37 release) built on 2026-11-23 from revision `31610d4`
+(metadata `7f42171` plus the port gate for the early first paint).  r56 carries
+the first-paint delivery fix (the newly current Displayable is painted after
+input and before the first background timeslice, so `Skater_by_BFLM` renders
+its splash in the CLI/headless runner; the core's async load keeps that title
+black there, documented in `docs/notes/2026-11-23-first-paint-delivery.md`) and
+the sweep-tool hardening from the same round; the whole-corpus probe on this
+package passes 1654 of 1664 titles with only the documented failure set.  On top of it, r55 carries
 the 0.5.36 runtime fixes: MIDP 2.0 `Choice.POPUP` support (a `ChoiceGroup`
 built with `Choice.POPUP = 4` now works and selects exclusively; `BT INFOx`
 boots its menu) and the blocked-call pump `in_c_call` leak fix (a thread parked

@@ -2133,3 +2133,17 @@ written), so the rerun only measured the remaining 375 rows.
 4 failure, 3 no-frame, 3 title-exit).  Regenerating twice gives identical
 bytes.  Provenance: the 2026-11-23 full 0.5.36 sweep overlaid on the
 2026-11-23 0.5.35 matrix; re-measured rows keep the newer numbers.
+
+## Round 229: release 0.5.37 corpus probe (2026-11-23)
+
+The whole expanded corpus (1,664 JAR rows from the merged round-176/K700-K800
+row set) was probed through the r56 libretro core at 300 paced frames:
+**1,654 passed, 1 known limitation, 9 failed**.  The nine failures are the
+documented set (`MidnightPool1`, `Midnight Pool`, `Midnight Pool2`,
+`MidnightPool_K700_EN`, `TheMummy_K700F`, `PAC-MAN (176x220)`, `assault`,
+`Skater_by_BFLM`, `Asphalt4EliteRacing`); the known limitation is
+`毁灭战士3_10598` (constructor-time loading screen).  The pre-gate build had two
+extra failures in the Midnight Pool Christmas variants
+(`午夜台球圣诞中文版_8677.jar`, `ChristmasMidnightPool_1.0.8_320x240.jar`); after
+gating the early first paint to synchronous-frame ports both pass, so the
+release core matches the r55 failure set exactly.
