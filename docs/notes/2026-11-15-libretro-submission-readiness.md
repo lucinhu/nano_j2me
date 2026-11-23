@@ -1907,3 +1907,35 @@ core only as a positional argument and fell back to the stale
 unpublished memory maps.  It now honours `CORE`/`HARNESS` environment variables
 too (verified by running it with env only against the r58 dist core:
 PASS).
+
+### Round 247: clean-clone rehearsal (2026-11-23)
+
+A fresh clone of `origin/main` at `5467471` (plus the test-skip patch committed
+as `9545036`) was configured and built from scratch
+(`cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release`) and the full serial
+suite was run with `TMPDIR=/var/tmp/r247-tmp`:
+
+| step | result |
+|---|---|
+| `cmake --build build` | rc=0 |
+| `cmake --build build --target nj_fixtures` | FIXTURES_OK (separate documented step; needs JDK + Pillow) |
+| `ctest --test-dir build -j1 --output-on-failure` | **rc=0, no failures**; 5 documented skips |
+| `CORE=build/libretro/nano_j2me_libretro.so HARNESS=build/test_libretro_frontend tools/check_libretro_frontend.sh` | **20 passed, 0 failed** |
+| `tools/check_libretro_retroarch.sh build/libretro/nano_j2me_libretro.so tests/fixtures/loopdemo.jar 120` | **PASS** (exit 0, core log markers verified) |
+
+The five skips are environment-gated, not failures: `check_sf2_loader`,
+`check_paint_pump`, `check_sdl2_client` (no SDL2 client build in the minimal
+clone), `check_libretro_3d_keys` (needs the Galaxy on Fire 2 corpus title) and
+`test_client_ui` (needs the corpus CJK row `tests/games/1942空战_10403.jar`;
+it now returns the CTest skip code 77 instead of failing — commit `9545036`).
+
+Two clean-clone caveats worth knowing for CI:
+
+* **Build the fixtures first.** `ctest` before `nj_fixtures` reports ~30
+  fixture-missing failures; the build system documents the separate fixture
+  target, so this is expected and not a product defect.
+* **Watch `/tmp` quota on tmpfs hosts.** A `test_m3g_parallel` failure
+  (`fwrite` in `tests/test_m3g_targets.c:167`) was `errno=122` (EDQUOT): the
+  host `/tmp` tmpfs was at 80% of its 16G user quota. With ~3.5G of stale
+  scratch removed and `TMPDIR=/var/tmp/r247-tmp`, the test passes
+  (234 forks, 117,504,000 bytes).
