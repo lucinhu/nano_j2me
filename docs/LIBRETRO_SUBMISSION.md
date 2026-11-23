@@ -2120,7 +2120,7 @@ port gate), eight libretro targets plus five
 per-ABI Android APKs (versionCode 537); `.info` SHA-256
 `71af9f4689705a59fd817a2e4549c7d9f340d7ea5a8f426a04766d30e66780c2`
 (`display_version = "0.5.37"`); the tracked super patch applies to
-`libretro-super` master `55e50a8` as fork commit `f83ca18`.  r56 ships the
+`libretro-super` master `55e50a8` as fork commit `b1436c4`.  r56 ships the
 first-paint delivery fix: `Display.setCurrent()` records a one-shot request
 that the frame pump serves after input and before the first background
 timeslice, so a canvas's initial `paint()` runs before a just-started loader
