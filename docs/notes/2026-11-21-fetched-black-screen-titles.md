@@ -766,3 +766,35 @@ progress past stage 3 - the run still hung.  So the missing handshake is at
 most one prerequisite of several; the next probe should first count
 `TheMummyMidlet.a(I)`/`c()` calls and observe the `f` world state after each,
 instead of inferring it from the loader flags.
+
+## Round 223: Skater_by_BFLM is a first-paint timing class
+
+`Skater_by_BFLM.jar` renders its title screen in FreeJ2ME-Plus but is black
+through nano_j2me (CLI prints one
+`NullPointerException at javax/microedition/lcdui/Graphics.drawImage(...)` per
+paint, core fails `visual_nonblack`).
+
+Structure: `Skater.startApp()` creates the `FullCanvas` subclass `b`, calls
+`Display.setCurrent(b)` and only then starts thread `Skater$a`; that thread
+calls `b.int()`, which loads `/res/img/sence.png`, `/res/img/trush.png`,
+`/res/img/sewer.png`, `/res/img/car.png`, sets static `Q=4` and repaints.
+`b.paint()` loads its cover image `/res/img/cover.png` **only** inside the
+`Q==0` loading branch (`pc 13-19`, guarded by a catch that swallows the
+exception) and draws it from the `Q==4` branch (`pc 450-465`).
+
+On our runtime the first frame boundary comes after the loader thread has
+already advanced `Q` to 4, so the cover load is never executed and every paint
+hits `drawImage(null, ...)` at pc 468 (verified with temporary
+`NJ_IMGDBG`/`NJ_DRAWDBG` instrumentation: loader images created, no
+`cover.png` attempt; the null image is `new`).
+
+Candidate fix and rejection: painting the newly current Canvas synchronously
+inside `Display.setCurrent()` (mirroring a handset where the event thread may
+paint before the app thread continues) fixed the title - `cover.png` loaded,
+8,064 non-black pixels, 2,406 gfx calls vs 600, zero null-image NPEs - but a
+150-title A/B sweep found `Vans_Skate_And_Slam.jar` hanging (ok -> timeout)
+and several paint-pacing changes, because some titles' `paint()` expects the
+MIDlet thread to still own the stack.  The experiment was reverted; the
+change would need a delivery point that cannot nest the painter (for example
+a queued first-paint request served at the next frame boundary before the
+next timeslice), which remains open work.

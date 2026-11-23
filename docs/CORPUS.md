@@ -1936,3 +1936,62 @@ look for regressions the libretro visual probe would not catch:
 
 Both probes are sampled from the rows file and replay each row's heap/device
 and canvas size through the shared helpers.
+
+## Round 223: expanded corpus probe, Skater_by_BFLM triage (2026-11-23)
+
+### Whole expanded-corpus libretro visual probe
+
+Merged the round-176 rows and the K700/K800 batch by `jar_path`
+(`.local-tools/debug-runs/rows-merged-r223/rows.jsonl`, **1,705 unique
+rows**) and probed the whole set through the r55 core (300 frames, 8 jobs,
+`.local-tools/debug-runs/r223-visual`, log `/tmp/r223-visual.log`):
+
+| metric | value |
+| --- | --- |
+| titles probed | **1,664** |
+| passed | **1,654** |
+| known limitations | **1** (`毁灭战士3_10598.jar`, game loop inside the MIDlet constructor) |
+| failed | **9** |
+
+Failures: `MidnightPool1_1.0.0_320x240` (black + state refused),
+`Midnight Pool2` (black + state refused), `TheMummy_K700F` (black + state
+refused), `Midnight Pool` (state refused, slow loader), `PAC-MAN (176x220)`
+(black, title-side), `MidnightPool_K700_EN` (state refused), `assault` (state
+refused, slow loader), `Skater_by_BFLM` (black, new), and
+`Asphalt4EliteRacing_1.0.0_320x240` (state refused, long-frame class).  Eight
+of the nine are documented in `docs/notes/2026-11-21-fetched-black-screen-titles.md`
+or the state-service note; `Skater_by_BFLM` was triaged this round (below).
+The verdict set is a strict superset of the round-55 probe evidence - no
+regression, and this is the strongest whole-corpus libretro rendering run so
+far.
+
+### Submission re-check
+
+`tools/check_libretro_submission_bundle.sh` 32/32, `tools/simulate_ci_builds.sh`
+3/3 contracts, upstream masters unchanged (`libretro-super` `55e50a8`,
+`libretro/docs` `96ee874`), PR #2204 OPEN/MERGEABLE head `efebb07` with no
+comments/reviews, PR #1239 OPEN/MERGEABLE head `95a1d0a`.  Recorded in
+`docs/notes/2026-11-15-libretro-submission-readiness.md`.
+
+### Skater_by_BFLM: timing-dependent first paint, not a renderer bug
+
+`Skater_by_BFLM.jar` (83,417 B, Magus Soft 2002) fails `visual_nonblack`
+through the core and the CLI logs one
+`NullPointerException at Graphics.drawImage(...): image is null` per paint.
+The title's `b.paint()` draws its cover image only from the `Q==0` loading
+branch; the loader thread (`Skater$a` -> `b.int()`) then loads
+`/res/img/sence.png`/`trush`/`sewer`/`car` and moves `Q` to 4.  On our
+runtime the first paint happens one frame boundary later, when the loader has
+already advanced to `Q==4`, so `new` was never loaded and every paint throws
+(debug evidence: `IMGDBG` showed the four loader images created and no
+`cover.png` attempt; `DRAWDBG` located the null at `b.paint` pc 468, the
+`Q==4` title screen).
+
+A candidate runtime change - paint the newly current Canvas synchronously in
+`Display.setCurrent()` - makes the title render (cover loaded, 8,064
+non-black px, zero null-image NPEs, 2,406 gfx calls vs 600), but it regressed
+`Vans_Skate_And_Slam.jar` (ok -> hang, timeout at 600 frames) and changed
+paint pacing on a 150-title A/B sweep (1 verdict change, several large
+gfx-per-paint shifts).  The change was reverted: the title lives with the
+documented "first paint is one frame later than the handset" class.  Details
+and the rejected experiment are in the black-screen note (Round 223).
