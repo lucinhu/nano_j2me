@@ -153,3 +153,17 @@ ChristmasMidnightPool correct, i.e. the guard conditions are never met while
 `startApp()` is running - the construction path owns a call pump for its whole
 duration, which is why "paint from the app thread" is not a safe substitute for
 the scheduler-level point.  Reverted.
+
+A fourth variant (round 238) put the paint between Java quanta: a
+`nj_midp_serve_fresh_paint(vm)` exported from the MIDP layer and called from
+`nj_scheduler_frame()` before each `nj_scheduler_step`, env-gated
+(`NJ_FP_SCHED`).  It also leaves Skater_by_BFLM black (0/317 content frames,
+same null-image NPE) while MidnightPool1 and ChristmasMidnightPool stay
+correct.  Combined with the earlier traces this shows the request is not
+pending at any scheduler-frame boundary the current load path exposes: the
+`setCurrent()` that installs the canvas happens inside the asynchronous
+`startApp()` execution, and by the time control returns to the frame loop the
+title's loader has already advanced its state.  Fixing this needs the load
+path itself to expose a frame boundary *inside* `startApp()` (or an event-thread
+model), which is a larger change than a local paint hook.  Reverted; the
+core-side limitation stands documented.
