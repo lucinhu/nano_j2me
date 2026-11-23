@@ -1883,3 +1883,27 @@ r55 core; results will be recorded in `docs/CORPUS.md` when it finishes.
   --apply-clones --super-clone /tmp/lr-super-r58 --docs-clone /tmp/r243-docs`
   -> **39 passed, 0 failed** (patches applied to clean clones at the recorded
   baselines and the upstream site rebuilt with mkdocs).
+
+## Round 245: feature-gate certification on the released r58 core
+
+All libretro feature gates were re-run against the published
+`build/libretro-dist/linux-x86_64/nano_j2me_libretro.so` (r58, the 0.5.39
+release build) and the `/var/tmp/nj2me-lrstate-build` harness:
+
+| gate | result |
+|---|---|
+| mock frontend matrix (`check_libretro_frontend.sh`) | 36 checks, 0 failed (20/20 profiles) |
+| determinism (`check_libretro_determinism.sh`) | PASS, byte-identical 61-frame replays |
+| fonts (`check_libretro_fonts.sh`) | PASS external/builtin/missing/invalid/auto + manual states; rendered text changes with the external font |
+| 3D input (`check_libretro_3d_keys.sh`) | PASS, 47 checks / 917 frames of Galaxy on Fire 2 |
+| rewind (`check_libretro_rewind.sh`) | PASS, buffer initialized and snapshots fit; 2,227 ms for 300 stored snapshots (~7.4 ms/frame) |
+| state cost (`check_libretro_state_cost.sh`) | auto heap 157,593,664 B; save median 916.41 ms, load median 931.49 ms |
+| frontend state round-trip (`check_libretro_retroarch_state.sh`) | PASS, RetroArch saved and restored on the next launch |
+| real RetroArch (`check_libretro_retroarch.sh`) | PASS, 600 frames, exit 0 |
+
+Tooling fix found while running them: `tools/check_libretro_fonts.sh` took its
+core only as a positional argument and fell back to the stale
+`build/libretro/nano_j2me_libretro.so`, which reports six false failures about
+unpublished memory maps.  It now honours `CORE`/`HARNESS` environment variables
+too (verified by running it with env only against the r58 dist core:
+PASS).

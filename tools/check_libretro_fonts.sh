@@ -2,8 +2,8 @@
 # External-font selection and manual-state regression using a generated font.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-CORE="${1:-$ROOT/build/libretro/nano_j2me_libretro.so}"
-FRONTEND="${FRONTEND:-$ROOT/build/test_libretro_frontend}"
+CORE="${1:-${CORE:-$ROOT/build/libretro/nano_j2me_libretro.so}}"
+FRONTEND="${FRONTEND:-${HARNESS:-$ROOT/build/test_libretro_frontend}}"
 FONT="$ROOT/tests/fixtures/ttf/nj_fixture.ttf"
 JAR="$ROOT/tests/fixtures/loopdemo.jar"
 TEXT_JAR="$ROOT/tests/fixtures/textdemo.jar"
