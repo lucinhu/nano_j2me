@@ -5953,6 +5953,14 @@ nj_status nj_midp_paint(nj_vm *vm)
     st = nj_midp_paint_body(vm);
     vm->paint_active = prev;
     vm->paint_owner = prev_owner;
+    if (st == NJ_OK && vm->fresh_paint &&
+        vm->fresh_paint_ref == nj_midp_current(vm)) {
+        /* An explicit paint of the newly current Displayable (a title's own
+         * serviceRepaints() right after setCurrent, or a caller that paints
+         * once for itself) satisfies the pending first-paint request. */
+        vm->fresh_paint = 0u;
+        vm->fresh_paint_ref = 0;
+    }
     if (prev == 0u) {
         /* A serviceRepaints() caller on another thread was waiting for this
          * paint; it may continue after the attempt - including a failed one,
@@ -6228,6 +6236,8 @@ nj_status nj_midp_set_current(nj_vm *vm, nj_ref d)
     }
     rput(vm, disp, NJ_C_DISPLAY, F_DISP_CUR, D_DISPLAY, d);
     vm->current_displayable = d;
+    vm->fresh_paint = 1u;
+    vm->fresh_paint_ref = d;
     /*
      * Deliver the first sizeChanged() while the MIDlet thread that called
      * setCurrent() still owns the stack.  This is what a handset does: the

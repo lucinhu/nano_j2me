@@ -574,6 +574,33 @@ nj_status nj_midp_frame(nj_vm *vm)
         return frame_return(vm, NJ_OK);
     }
 
+    /*
+     * Deliver the first paint of a newly current Displayable before the first
+     * background timeslice.  A handset processes Display.setCurrent() as a
+     * show request on its event thread: the initial paint() runs while a
+     * just-started game thread has not yet advanced its loader state.  Here
+     * the frame pump is the display, and painting at the end of the frame let
+     * a loader thread mutate its state first - Skater_by_BFLM skips creating
+     * its cover image once its loader sets the title-screen mode, then every
+     * paint() threw NullPointerException on a null image.  Nested pumps (a
+     * startApp() parked in a blocking call) keep the request pending so the
+     * own frame delivers it, never in the middle of application code.
+     */
+    if (vm->fresh_paint && vm->in_call_pump == 0 && vm->in_paint == 0 &&
+        !vm->paint_active) {
+        nj_ref fresh = vm->fresh_paint_ref;
+        vm->fresh_paint = 0u;
+        vm->fresh_paint_ref = 0;
+        if (fresh && fresh == nj_midp_current(vm)) {
+            (void)nj_midp_paint(vm);
+            if (nj_has_exception(vm)) {
+                nj_logf(vm, 1, "exception while painting the first frame: %s",
+                        nj_exception_describe(vm));
+                nj_clear_exception(vm);
+            }
+        }
+    }
+
     /* ---- background threads ---- */
     {
         nj_status st = nj_scheduler_frame(vm, 8u);

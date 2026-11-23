@@ -816,6 +816,15 @@ struct nj_vm {
     nj_u1         app_paint_period;
     /* Frames since the application last painted one of its own. */
     nj_u1         app_paint_idle;
+    /* A Display.setCurrent() installed a Displayable that has never painted.
+     * The next frame delivers that first paint() before the first background
+     * timeslice: a title whose asset loader runs on another thread (and whose
+     * paint() depends on the loader not having advanced yet) then sees the
+     * same ordering as a handset, where setCurrent's show request is processed
+     * before the game's own thread gets to run.  Cleared after delivery; the
+     * reference keeps the target Displayable. */
+    nj_u1         fresh_paint;
+    nj_ref        fresh_paint_ref;
     /* Set while a paint is being delivered.  serviceRepaints() paints
      * synchronously, and a callSerially() runnable drained at the top of a
      * paint may itself ask for a repaint; without this the second one would
