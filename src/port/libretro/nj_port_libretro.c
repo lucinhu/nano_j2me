@@ -3516,6 +3516,13 @@ static bool lr_load(const struct retro_game_info *info, int resetting)
 
     s->phase = LR_PHASE_LOAD;
     s->stop = 0;
+    /* The load clock is anchored per load.  lr_unload() resets it too, but the
+     * first load never goes through unload, so without this anchor the
+     * LOAD-phase clock (load_ms + wall elapsed) returned the host's uptime and
+     * pushed nj_now_ms() across a 2^32 fold - which then made the scheduler's
+     * frame budget and wake deadlines take multi-second jumps. */
+    s->load_ms = 0;
+    s->load_start_us = lr_real_us();
 
 #if NJ_LIBRETRO_HW
     /* Reset rebuilds Java state without replacing the frontend's context.

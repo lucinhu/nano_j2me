@@ -871,9 +871,14 @@ CLI's `--dump-frames` output.  `tools/check_libretro_corpus_visual.py` now
 replays each row's own canvas size (`screen` recorded by
 `tools/sweep_compat.py`) through the `nano_j2me_screen` core option and passes
 `--expect-screen` so the AV geometry check expects the configured canvas.
-Known limitation: some titles keep their game thread inside a repaint loop so
-the synchronous libretro frame model never completes a frame (measured round
-230 on `MidnightPool1`: the virtual clock advances normally, but the core
-presents only the first frame).  They render in the CLI but stay blank through
-the core, and their state requests time out.
+Fixed in 0.5.38 (round 232): the first load never anchored the LOAD-phase
+clock (`lr_load()` relied on `lr_unload()` to set `load_start_us`), so its
+`System.currentTimeMillis()` returned the host's uptime; `nj_now_ms()` folded
+that across a 2^32 epoch and the scheduler's frame budget and wake deadlines
+then jumped by seconds.  `MidnightPool1` spent ~9 s inside one frame pass,
+presented only its first (black) frame and refused saves through the core.
+Anchoring the clock in `lr_load()` makes it render (up to 8,348 non-black
+pixels, 85 distinct frames) and save/restore round-trip through the core;
+`Midnight Pool2` is fixed too.  `Asphalt4EliteRacing` still renders but its
+serialize request is refused - it remains one of the long-first-frame titles.
 

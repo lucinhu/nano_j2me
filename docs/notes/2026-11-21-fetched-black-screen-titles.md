@@ -905,3 +905,50 @@ clock-domain mix is the strongest candidate for why the pass takes that long;
 next steps are to log `s->phase` together with every `lr_port_millis()` call
 (or clamp the VM clock to RUN-phase readings only) and re-run this title plus
 the CLI/harness regression set.
+
+### Round 232: the core-only black class was an unanchored load clock
+
+Round 231 left the MidnightPool1 core path with a VM clock that mixed the
+virtual and real time domains (`nj_now_ms()` values `2^32+33` then
+`2^32 | 145765682`, i.e. the host's ~40 h uptime in the low bits).
+
+Root cause: `lr_load()` sets `s->phase = LR_PHASE_LOAD` but only `lr_unload()`
+set `load_ms = 0; load_start_us = lr_real_us();`.  On the **first** load
+`lr_unload()` never runs, so `load_start_us` was still 0 and the LOAD-phase
+clock - `load_ms + (lr_real_us() - load_start_us) / 1000` - returned the host
+uptime (~146,331,262 ms) instead of the milliseconds since the load began.
+`nj_now_ms()` then treated that as a 32-bit wrap (`scheduler_ticks +=
+0x100000000`), and the next small virtual reading folded another epoch in.  The
+scheduler's frame budget (`nj_now_ms(vm) - start >= budget_ms`), sleep/wake
+deadlines and `port_sleep()` deltas all use that clock, so one frame pass could
+run for seconds; the frontend then only ever saw the initial black frame, and
+`serialize_writes_state` was refused because the VM thread never reached a
+frame boundary.
+
+Fix: anchor the load clock in `lr_load()` itself, right after
+`s->phase = LR_PHASE_LOAD`:
+
+    s->load_ms = 0;
+    s->load_start_us = lr_real_us();
+
+Evidence (mock frontend, 300 frames, `--pace-us 16667`, 320x240):
+
+- r56 dist core: `non-black pixels 0/76800`, `distinct hashes 1`,
+  `FAIL serialize_writes_state` (core log `save-state request refused (-8)`).
+- fixed core: `non-black pixels up to 8,348 of 76,800`, `frames_with_content
+  308/317`, `distinct hashes 85/317`, all 45 harness checks pass, saved state
+  round-trips (`serialize_size=157,593,664`).
+- `Midnight Pool2.jar`: dist core FAIL (black + refused save) -> fixed core
+  PASS with the same 300-frame setup.
+- `Asphalt4EliteRacing_1.0.0_320x240`: still renders and still fails only
+  `serialize_writes_state` - that title remains in the long-first-frame class
+  for another reason.
+- `杀鬼子-敌后武工队_2185`: PASS on both cores (the earlier failure was the
+  known 8-job probe flake).
+- Mock frontend matrix on the fixed core: 20 passed / 0 failed.
+
+The `nj_now_ms()` clock-domain mixing stays a robustness gap: a stray real-time
+reading from any non-RUN phase can still bend the VM clock.  A follow-up could
+make `lr_port_millis()` return the virtual clock for every phase (or have
+`nj_now_ms()` clamp implausible jumps) but the load anchor is the concrete bug
+that affected the corpus.
