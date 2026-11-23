@@ -439,6 +439,8 @@ typedef struct nj_lr {
     unsigned long long prof_last_ms; /* profiling log cadence            */
     unsigned long long load_ms;       /* virtual ms while loading        */
     unsigned long long load_start_us; /* wall clock when the load began  */
+    unsigned long long stop_ms;       /* virtual ms when teardown began  */
+    unsigned long long stop_start_us; /* wall clock when teardown began  */
     const char *midlet_class;         /* MIDlet-1 class, built on the VM thread */
     int         load_ready;           /* construction finished (success or not)  */
     unsigned long long posted;        /* frames produced by the VM       */
@@ -2602,7 +2604,15 @@ static nj_u4 lr_port_millis(void *ud)
          * fast-forwarded sleeps so such a wait makes progress at real speed. */
         now = s->load_ms + (lr_real_us() - s->load_start_us) / 1000ull;
         break;
-    default:            now = lr_real_ms();     break;
+    default:
+        /* Teardown: keep the value on the same monotonic scale as the run
+         * clock instead of returning host uptime.  The VM folds a 32-bit port
+         * clock into an epoch, so a real-time reading here used to jump the VM
+         * clock by hours if a thread polled the clock while the core unloaded.
+         * Elapsed wall time since teardown still lets destroyApp() make
+         * progress. */
+        now = s->stop_ms + (lr_real_us() - s->stop_start_us) / 1000ull;
+        break;
     }
     lr_mutex_unlock(&s->lock);
     return (nj_u4)now;
@@ -3291,6 +3301,16 @@ static void *lr_vm_thread(void *arg)
         }
     }
     lr_mutex_lock(&s->lock);
+    /*
+     * Hand the load clock over to the run clock.  The constructor ran under
+     * LR_PHASE_LOAD (possibly for seconds on a loading-screen MIDlet); RUN
+     * phase starts from the virtual clock, so without this hand-over the VM
+     * clock would step backwards at the transition and nj_now_ms() would fold
+     * another epoch.
+     */
+    s->vclock_us = (s->load_ms +
+                    (lr_real_us() - s->load_start_us) / 1000ull) * 1000ull;
+    s->vclock_frames = s->vclock_us / 16667ull;
     s->phase = LR_PHASE_RUN;
     lr_cond_broadcast(&s->cond);
     lr_mutex_unlock(&s->lock);
@@ -3402,6 +3422,8 @@ static void lr_unload(nj_lr *s)
     if (s->sync_ready) {
         lr_mutex_lock(&s->lock);
         s->phase = LR_PHASE_STOP;
+        s->stop_ms = s->vclock_us / 1000ull;
+        s->stop_start_us = lr_real_us();
         s->stop = 1;
 #if NJ_LIBRETRO_HW
         lr_hw_close_gate(s);
@@ -3516,12 +3538,18 @@ static bool lr_load(const struct retro_game_info *info, int resetting)
 
     s->phase = LR_PHASE_LOAD;
     s->stop = 0;
-    /* The load clock is anchored per load.  lr_unload() resets it too, but the
-     * first load never goes through unload, so without this anchor the
-     * LOAD-phase clock (load_ms + wall elapsed) returned the host's uptime and
-     * pushed nj_now_ms() across a 2^32 fold - which then made the scheduler's
-     * frame budget and wake deadlines take multi-second jumps. */
-    s->load_ms = 0;
+    /*
+     * The load clock is anchored per load and continues on the current
+     * virtual-clock scale.  The first load starts at zero; a reset unloads
+     * first (which zeroes the run clock) and then reloads, so this seeding is
+     * identity there too, and any future reload path stays monotonic.
+     *
+     * The anchor matters: without it the LOAD-phase clock
+     * (load_ms + wall elapsed) returned the host's uptime and pushed
+     * nj_now_ms() across a 2^32 fold - which then made the scheduler's frame
+     * budget and wake deadlines take multi-second jumps.
+     */
+    s->load_ms = s->vclock_us / 1000ull;
     s->load_start_us = lr_real_us();
 
 #if NJ_LIBRETRO_HW

@@ -947,8 +947,39 @@ Evidence (mock frontend, 300 frames, `--pace-us 16667`, 320x240):
   known 8-job probe flake).
 - Mock frontend matrix on the fixed core: 20 passed / 0 failed.
 
-The `nj_now_ms()` clock-domain mixing stays a robustness gap: a stray real-time
-reading from any non-RUN phase can still bend the VM clock.  A follow-up could
-make `lr_port_millis()` return the virtual clock for every phase (or have
-`nj_now_ms()` clamp implausible jumps) but the load anchor is the concrete bug
-that affected the corpus.
+The `nj_now_ms()` clock-domain mixing was hardened in round 234: every port
+phase now reports a value on the same monotonic scale as the run clock (load
+anchored in `lr_load()`, teardown anchored at `vclock_us/1000` when the phase
+switches to STOP, and the LOAD clock handed over to `vclock_us` when RUN
+starts), so no phase can hand the VM a real-time reading.
+
+## Round 234: clock continuity across load, run and teardown (0.5.38 follow-up)
+
+The round-232 load anchor fixed the concrete corpus bug, but three seams could
+still mix clock domains:
+
+1. the first LOAD clock started at zero while the RUN clock restarted from
+   `vclock_us`, so the LOAD -> RUN transition stepped backwards and
+   `nj_now_ms()` folded another epoch (harmless once, but fragile);
+2. a reset unloads first, so a reload re-entered LOAD at zero and stepped
+   backwards again;
+3. the `STOP` phase (teardown) returned `lr_real_ms()` - host uptime - so a
+   `destroyApp()` that polled `System.currentTimeMillis()` during unload could
+   still throw the VM clock forward by hours.
+
+Fix in `src/port/libretro/nj_port_libretro.c`:
+
+- new `stop_ms` / `stop_start_us` fields; the STOP transition records
+  `stop_ms = vclock_us / 1000` and the millis callback returns
+  `stop_ms + elapsed` during teardown (destroyApp still sees time pass);
+- `lr_load()` seeds `load_ms = vclock_us / 1000` before anchoring
+  `load_start_us`, so a reset reload continues on the same scale;
+- the LOAD -> RUN transition sets
+  `vclock_us = (load_ms + elapsed) * 1000` and `vclock_frames` accordingly, so
+  the VM clock is monotonic across the phase change.
+
+Evidence (hardened core): `MidnightPool1_1.0.0_320x240` PASS (45/45 checks,
+8,348 non-black px, 85 distinct frames), `Midnight Pool2.jar` PASS (7,427 px,
+20 distinct frames), `Skater_by_BFLM` unchanged (core-side black limitation),
+`家园5汉化版` unchanged (72,592-76,800 px), mock matrix 20/20, 96-title
+whole-corpus visual sample 94 pass / 1 known / 1 expected failure (TheMummy).
