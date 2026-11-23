@@ -114,3 +114,14 @@ clean core rebuilt); the gate stays until a real scheduler-level paint point
 exists.  Recorded as a negative result rather than enabling the flag, because
 it buys nothing for `Skater_by_BFLM` and other asynchronous-load titles can
 still depend on loader state before their first paint.
+
+Why the obvious guard cannot simply be relaxed (round 237): in the core the
+whole MIDlet construction (constructor plus `startApp()`) runs on the VM
+thread inside the nested C-call pump, so `vm->in_call_pump != 0` for the entire
+load sequence.  The frame-entry first-paint block requires
+`in_call_pump == 0`, because painting from inside an active pump is not a safe
+point (a synchronous paint there re-enters the frame machinery).  By the time
+the pump unwinds and the guard would allow a paint, the title's loader thread
+has already run - exactly the Skater case.  A correct fix therefore needs a
+paint point *between Java quanta inside the pump* with the pump suspended, not
+a relaxed frame-entry condition.
