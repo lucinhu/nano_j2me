@@ -86,14 +86,21 @@ Outputs go to `build/libretro-dist/<target>/`, with a library and its metadata.
 Use `--no-strip` to retain symbols. `all` selects the script's supported targets
 and requires all of their toolchains.
 
-The eight candidates currently in `build/libretro-dist/` are the r59 package
-(the 0.5.40 release) built on 2026-11-23 from revision `4c43dd0` (fix commit
-`8193743`).  r59 services a pending show request between bytecode quanta, so a
-newly current screen is painted before background threads (a loader started by
-`startApp()`) get their next quantum; `Skater_by_BFLM` now renders through the
-libretro core as well as the CLI, and the whole-corpus probe passes 1,659 of
-1,664 titles with only the documented failure set.  The previous package was
-r58 (the 0.5.39 release) built on 2026-11-23 from revision `08ff811`.  r58 completes
+The eight candidates currently in `build/libretro-dist/` are the r60 package
+(the 0.5.41 release) built on 2026-11-23 from revision `6390bfb` (fix commit
+`af81df1`).  r60 executes `java.util.TimerTask` bodies as Java bytecode
+(`nj2me.util.TimerThread`), so a timer-hosted game loop is preempted at
+quantum boundaries instead of running to completion inside one C→Java call;
+`TheMummy_K700F` now renders and saves through the core, and the whole-corpus
+probe passes 1,031 of the 1,034 on-disk titles with only the documented
+failure set.  The previous package was r59 (the 0.5.40 release) built on
+2026-11-23 from revision `4c43dd0` (fix commit `8193743`).  r59 services a
+pending show request between bytecode quanta, so a newly current screen is
+painted before background threads (a loader started by `startApp()`) get their
+next quantum; `Skater_by_BFLM` now renders through the libretro core as well
+as the CLI, and the whole-corpus probe passes 1,659 of 1,664 titles with only
+the documented failure set.  The package before r59 was r58 (the 0.5.39
+release) built on 2026-11-23 from revision `08ff811`.  r58 completes
 the libretro clock hardening started in r57: load, run and teardown now share one
 monotonic scale (`stop_ms`/`stop_start_us` for teardown, a seeded `load_ms` in
 `lr_load()`, and the LOAD-to-RUN hand-over `vclock_us = (load_ms + elapsed) * 1000`),

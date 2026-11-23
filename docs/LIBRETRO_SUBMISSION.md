@@ -2294,3 +2294,28 @@ Validation: full serial CTest **210/210** (377.06 s), mock frontend matrix
 **20/20**, real RetroArch LoopDemo 120 frames PASS, Wine x86-64 **4/4 @300**,
 submission bundle **32/32**.  Super PR branch `a198cc8`, docs PR head
 `95a1d0a` (baseline `96ee874`); both OPEN/MERGEABLE, no merge claimed.
+
+
+## 0.5.41 / r60
+
+Released 2026-11-23.  The package carries the timer-task change: `java.util.Timer`
+used to run each due `TimerTask.run()` to completion inside one C→Java call, so
+a title whose task hosts its game loop (TheMummy) starved the frame pump and the
+boot-handshake timer.  The helper is now a Java loop over `pump()`/`afterRun()`,
+so tasks are preempted at quantum boundaries (details and evidence in
+`docs/notes/2026-11-23-timer-tasks-as-java-threads.md`).
+
+- `.info` SHA-256 `43aaeda8357b8bdaf11f0769d31c48603426894bd0b4d179cc9f3543d49ad0e8`,
+  `display_version = "0.5.41"`.
+- Fork branch `lucinhu/libretro-super:add-nano_j2me` at
+  `a807173da913eb7b20a48d80742e7674969380a7`, parent
+  `55e50a81195eaf8dd1b7720a601282459832ced1`; tracked patch regenerated.
+- Cores archive 12,181,765 B, 128 entries, SHA-256
+  `cd4aa8f0c2c7933846a854d2c81b68805b80e8ccd45286970d662652392ea005`.
+- APKs versionCode 541 (per-ABI, minSdk 21) and legacy ARMv5 build.
+- Verification: serial CTest 210/210, mock matrix 20/20, real RetroArch
+  LoopDemo PASS, Wine 4/4 at 300 frames, bundle validator 32/32, whole-corpus
+  probe 1,031 passed / 1 known / 2 failed over 1,034 on-disk titles (TheMummy
+  no longer fails; PAC-MAN and Asphalt4 remain documented).
+- PR libretro-super#2204 body/head updated to 0.5.41; libretro/docs#1239 stays
+  open and mergeable (page content unchanged).

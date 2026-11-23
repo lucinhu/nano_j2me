@@ -2095,3 +2095,24 @@ docs with a known-limitations page, and the verification evidence above. No
 run-time or documentation work remains on this side; the only remaining steps
 are maintainer review and merge in the two upstream repositories, which this
 session does not perform without explicit authorization.
+
+## Round 4 (goal 2b58266d): timer tasks as Java — TheMummy fixed
+
+The libretro package r60 (release 0.5.41) carries the timer-task change:
+`java.util.Timer` no longer executes a due `TimerTask.run()` to completion
+inside one C→Java call; the helper class (`nj2me.util.TimerThread`) loops over
+`pump()`/`afterRun()` in Java, so a timer-hosted game loop is preempted by the
+scheduler at quantum boundaries.  This fixed `TheMummy_K700F` (previously the
+only corpus title black through every frontend); it now renders and saves
+through the CLI and the core and the whole-corpus probe lists it as passing
+(1,031 / 1 known / 2 failed of the 1,034 on-disk titles).  Evidence:
+`docs/notes/2026-11-23-timer-tasks-as-java-threads.md`, `docs/RELEASE_0.5.41.md`.
+
+Submission state after this round: `.info` SHA-256
+`43aaeda8357b8bdaf11f0769d31c48603426894bd0b4d179cc9f3543d49ad0e8` (0.5.41),
+fork branch `lucinhu/libretro-super:add-nano_j2me` at
+`a807173da913eb7b20a48d80742e7674969380a7` on upstream
+`55e50a81195eaf8dd1b7720a601282459832ced1`; CTest 210/210, mock matrix 20/20,
+real RetroArch PASS, Wine 4/4 at 300 frames, bundle 32/32, clean-clone bundle
+41/41 from the previous round still applies.  libretro/docs#1239 remains open
+and mergeable; nothing is pushed upstream without explicit authorization.

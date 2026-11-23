@@ -2346,3 +2346,19 @@ the scheduler preempts at quantum boundaries.  Details and evidence:
 | libretro core (mock frontend, 300 frames) | PASS 47/0; content 297/317 frames, 3 distinct hashes; serialize/save checks pass |
 | full serial CTest | 210/210 in 366.07 s |
 | 100-title CLI A/B | 0 verdict differences |
+
+
+### Round 4 libretro probe on the r60 core
+
+The fixed core (timer tasks as Java) was probed across every title whose JAR is
+still on disk (1,034 of the 1,664 merged rows; fetched vaults are partly gone):
+**1,031 passed, 1 known limitation, 2 failed**.
+
+- Known: `毁灭战士3_10598.jar` (whole game loop inside the constructor; loads
+  and renders, saves refused).
+- Failed: `PAC-MAN (176x220) (1.0.0).jar` (title-side: empty Sprint Muglet URI
+  → `String.substring(8, 0)`; the JAR needs a carrier service), and
+  `Asphalt4EliteRacing_1.0.0_320x240.jar` (renders, but one frame exceeds the
+  4 s state-service window, so `retro_serialize` is refused).
+- `TheMummy_K700F.jar` **passes** now (47/47 checks, 297/317 content frames),
+  the first probe where it is not in the failure list.
