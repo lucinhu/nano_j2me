@@ -4160,7 +4160,17 @@ NJFN(c_getKeyName)
  */
 static void c_paint_now(nj_vm *vm)
 {
-    if (vm->in_callback == 0u || vm->in_paint != 0u || !vm->repaint_pending) {
+    /*
+     * TimerTask.run() is a UI callback for painting purposes even though it
+     * now executes as ordinary Java on the timer helper thread: titles such
+     * as TombRaiderMIDlet repaint() from a task and then spin until paint()
+     * publishes a field, so the frame has to be delivered inline here.  The
+     * per-thread flag keeps that behaviour scoped to the executing callback
+     * without making every thread's repaint() paint synchronously.
+     */
+    int in_cb = (vm->in_callback != 0u) ||
+                (vm->cur != NULL && vm->cur->in_timer_cb != 0u);
+    if (!in_cb || vm->in_paint != 0u || !vm->repaint_pending) {
         return;
     }
     vm->in_paint = 1u;
@@ -4347,7 +4357,8 @@ NJFN(c_serviceRepaints)
      */
     if (vm->in_frame != 0u && th != nj_thread_main(vm) &&
         vm->in_callback == 0u && vm->in_paint == 0u &&
-        (th->repaint_paced || vm->repaint_pending != 0u) &&
+        (th->repaint_paced || th->in_timer_cb != 0u ||
+         vm->repaint_pending != 0u) &&
         vm->npace_waiters < 4u && nj_vm_thread_wait_frame(vm, th)) {
         return NJ_ERR_TIMEOUT;
     }

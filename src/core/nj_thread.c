@@ -266,6 +266,7 @@ nj_thread *nj_thread_create(nj_vm *vm, nj_ref thread_obj, int is_main)
     t->wait_ready = 0u;
     t->wait_depth = 0u;
     t->repaint_paced = 0u;
+    t->in_timer_cb = 0u;
     {
         unsigned mi;
         for (mi = 0u; mi < (unsigned)NJ_MAX_MONITORS; mi++) {

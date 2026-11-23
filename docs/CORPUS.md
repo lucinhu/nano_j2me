@@ -2325,3 +2325,24 @@ LoopDemo; the submission-bundle validator with clean baseline clones plus a
 real `mkdocs build` reports **41/41**.  The 0.5.40 x86_64 APK was installed on
 an API 36 emulator: library lists the game, LoopDemo renders its canvas and
 on-screen keypad (`versionName=0.5.40`).
+
+
+## Round 4: TheMummy renders — timer tasks run as Java
+
+`TheMummy_K700F` was the last corpus title documented as black through every
+frontend: its MIDlet runs the entire game loop inside a 250 ms
+`java.util.TimerTask`, and the runtime's timer helper executed the task to
+completion inside one C→Java call, so the frame pump never got the VM back
+and the 20 ms handshake timer was starved (frame counter froze at 8).
+
+Round 4 moved timer dispatch into Java (`nj2me.util.TimerThread.run()` loops
+over `pump()`/`afterRun()`), so `TimerTask.run()` is ordinary bytecode that
+the scheduler preempts at quantum boundaries.  Details and evidence:
+`docs/notes/2026-11-23-timer-tasks-as-java-threads.md`.
+
+| Check | Result |
+|---|---|
+| CLI (176x208, heap 16, 30 fps, 600 frames) | `frames=600 paints=609 gfx=11,610` rc=0; frame 150 14,970/36,608 non-black, frames 300-600 34,897/36,608 |
+| libretro core (mock frontend, 300 frames) | PASS 47/0; content 297/317 frames, 3 distinct hashes; serialize/save checks pass |
+| full serial CTest | 210/210 in 366.07 s |
+| 100-title CLI A/B | 0 verdict differences |

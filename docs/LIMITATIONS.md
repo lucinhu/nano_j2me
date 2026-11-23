@@ -28,11 +28,17 @@ current, the scheduler pass stops and the frame pump paints that screen before
 any background thread (a loader started by `startApp()`) gets its next
 timeslice.  This is the opt-in `show_before_background` port capability; the
 CLI/headless runner keeps its historical interleaving.  `Skater_by_BFLM` therefore renders through the libretro
-core as well as the CLI.  One title still exposes the difference:
+core as well as the CLI.  `TheMummy_K700F` used to expose the same difference
+from the other direction: its whole game loop runs inside a `TimerTask`, and
+the timer helper executed the task to completion in one C→Java call.  Round 4
+moved timer-task dispatch into Java (`nj2me.util.TimerThread.run()`) so the
+scheduler preempts it at quantum boundaries; the title now renders through the
+CLI and the core and its state requests succeed.  No corpus title currently
+depends on full handset event-thread ordering:
 
 | Title | Symptom | State |
 |---|---|---|
-| `TheMummy_K700F` | black through every frontend; loader waits for a boot handshake (`MID.b`, `f.c[4]`/`f.c[5]`) that only a real event thread performs; `isShown()` is synchronous here, so the loader takes the wrong branch | **open** — needs an event-thread model; documented in `docs/notes/2026-11-21-fetched-black-screen-titles.md` (rounds 213-216/222) |
+| `TheMummy_K700F` | was black through every frontend because its TimerTask-hosted game loop never returned and starved the boot-handshake timer | **fixed** (round 4) — timer tasks now run as Java and are preempted; documented in `docs/notes/2026-11-23-timer-tasks-as-java-threads.md` |
 | `Skater_by_BFLM` | previously black through the libretro core because the loader's first timeslice ran before the first paint; now renders (7480-8004 non-black px) after the round-248 show-request break | **fixed** — documented in `docs/notes/2026-11-23-first-paint-delivery.md` (round 248) |
 
 ### 1.2 State requests only land between frames
@@ -49,7 +55,10 @@ and written correctly.
 | `毁灭战士3_10598` | whole game loop runs inside the MIDlet constructor | none through the frontend; the core intentionally gives it a long load |
 | `vault/Asphalt4EliteRacing_1.0.0_320x240` | renders, but one frame exceeds the service window; manual state refused | none |
 | `vault/assault.jar` | very slow loader (~250 s to first screen) | wait |
-| `TheMummy_K700F` | boot handshake never completes (see 1.1) | none |
+
+`TheMummy_K700F`, which previously sat in this table because its boot
+handshake never completed, now renders and saves through the core after the
+round-4 timer-task change (see 1.1).
 
 Evidence: `docs/LIBRETRO.md` save-state section (round-176 notes),
 `docs/CORPUS.md` round-233 visual probe, round-239 state probe

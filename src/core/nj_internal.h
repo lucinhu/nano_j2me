@@ -266,6 +266,16 @@ struct nj_thread {
      * handset gave it.  Sticky because the loop keeps that shape for life.
      */
     nj_u1      repaint_paced;
+    /*
+     * Set while this timer-helper thread is executing a TimerTask.run()
+     * through the Java helper loop.  repaint() inside a timer callback is a
+     * UI callback as far as painting is concerned (c_paint_now() paints the
+     * frame inline, exactly as it did when the pump called run() from C), but
+     * the task itself now runs as ordinary Java so the scheduler can preempt
+     * it - that is what lets a TimerTask hosting an endless game loop share
+     * the VM with the frame loop (TheMummy_K700F).
+     */
+    nj_u1      in_timer_cb;
     nj_s4      priority;
     nj_s4      exit_value;
     nj_value   ret_value;   /* result of a C-initiated call */
