@@ -29,12 +29,12 @@ git push <fork> add-nano_j2me
 
 Adds `dist/info/nano_j2me_libretro.info` for the nano_j2me core, a J2ME (MIDP/CLDC) runtime for RetroArch.
 
-- Upstream source: https://github.com/lucinhu/nano_j2me (release v0.5.36)
+- Upstream source: https://github.com/lucinhu/nano_j2me (release v0.5.37)
 - Library page PR: libretro/libretro-docs#1239
 - Platform database entry already exists upstream: `libretro-database` `dat/Mobile - J2ME.dat`; the `.info` uses `database = "Mobile - J2ME"`.
 - License: MIT for the core, OFL-1.1 for embedded fallback font data, Apache-2.0 for AMR decoder data; the full notices ship with the core. `.info` field: `license = "MIT|OFL-1.1|Apache-2.0"`.
 - Builds with the standard libretro CI templates: the repository's root `.gitlab-ci.yml` extends the `libretro-infrastructure/ci-templates` `linux-cmake.yml`, `windows-cmake-mingw.yml` and `android-cmake.yml` with `CORENAME=nano_j2me`, `EXTRA_PATH=libretro`.
-- Current version 0.5.36; `savestate = "true"` (`basic`), `core_options` v2, `is_experimental = "true"`.
+- Current version 0.5.37; `savestate = "true"` (`basic`), `core_options` v2, `is_experimental = "true"`.
 
 Validation (offline, on the candidate tree):
 
