@@ -2188,3 +2188,30 @@ documented in `docs/notes/2026-11-21-fetched-black-screen-titles.md`).  No
 verdict changed, so the hardening is corpus-neutral; the targeted A/B runs
 show `MidnightPool1` and `Midnight Pool2` still render and save through the
 core, and `Skater_by_BFLM` stays a core-only limitation.
+
+## Round 239: full-corpus libretro state probe on r58 (2026-11-23)
+
+Ran `tools/check_libretro_states.py` over the whole merged row set
+(`.local-tools/debug-runs/rows-merged-r223`, 1,664 usable titles) with the
+0.5.39/r58 core, 300 frames at 60 Hz pacing, 16 jobs:
+
+| result | titles |
+|---|---|
+| state round trip passed | 1,660 |
+| failed | 4 |
+
+The four failures are the documented long-first-frame / boot-handshake class,
+all with `missing=serialize_writes_state,unserialize_restores_state`:
+`vault/assault.jar`, `毁灭战士3_10598.jar`,
+`vault/Asphalt4EliteRacing_1.0.0_320x240.jar`,
+`vault/TheMummy_K700F.jar`. Every other title passed
+`serialize_size_stable`, `serialize_writes_state` and
+`unserialize_restores_state` through the real core, with the per-title
+serialize size reported (157,593,664 bytes for most 128 MB auto-heap titles).
+This is the strongest whole-corpus save-state evidence to date and matches the
+documented limitation list exactly.
+
+Submission materials were re-checked at the same revision:
+`tools/check_libretro_submission_bundle.sh` -> 32 passed, 0 failed; upstream
+masters unchanged (`libretro-super` `55e50a8`, `libretro/docs` `96ee874e`), so
+the open PR branches remain valid.
