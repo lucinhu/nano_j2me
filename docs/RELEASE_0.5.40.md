@@ -69,7 +69,7 @@ versionCode 540, versionName 0.5.40, minSdk 21.  Five split APKs:
 - Real RetroArch 1.22.2: LoopDemo 120 frames PASS (exit 0, log markers verified).
 - Windows x86_64 under Wine: 4 passed, 0 failed at 300 frames.
 - Submission bundle validator: 32 passed, 0 failed.
-- Whole-corpus visual probe: see above (1,659 / 1 / 4).
+- Whole-corpus visual probe: **1,659 passed / 1 known / 4 failed** (see Highlights).  The probe runs the libretro core, which opts into the new ordering; the gate only changes the other ports, so the released core produces the same frames.
 
 ## Upgrade notes
 
