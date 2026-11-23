@@ -2296,3 +2296,32 @@ interleaving, so CLI corpus verdicts and paint cadence are unchanged by
 construction.  (The ungated prototype of the same change was also A/B-tested
 over 150 CLI titles: 0 verdict changes.)  Full CTest is green (210/210) and the
 libretro mock matrix is 20/20.
+
+## Round 249: full probe on the released v0.5.40 / r59 core (2026-11-23)
+
+The released `build/libretro-dist/linux-x86_64/nano_j2me_libretro.so`
+(0.5.40, tag `v0.5.40`) was probed over the merged 1,664-title corpus with the
+mock frontend (300 frames, 8 jobs; results
+`.local-tools/debug-runs/r249-visual/visual.jsonl`):
+
+| result | titles |
+|---|---|
+| passed | **1,659** |
+| known limitation | 1 (`毁灭战士3_10598`, game loop inside the constructor) |
+| failed | 4 |
+
+The four failures are exactly the documented set — `TheMummy_K700F` (boot
+handshake), `PAC-MAN (176x220)` (title-side Sprint/network path), `assault`
+(slow loader, serialize refusal) and `Asphalt4EliteRacing_1.0.0_320x240`
+(long-first-frame serialize refusal).  This matches the round-248 measurement
+on the pre-gating build, which is expected: `Skater_by_BFLM` passes (the
+libretro port opts into the show-request ordering, so the gated capability
+does not change its frames).
+
+External-reviewer dry run on the same tag: a shallow clone of `v0.5.40`
+builds from scratch (`nj_fixtures` included) and passes **166/166 CTest**
+(4 environment-gated skips), **20/20** mock matrix and real RetroArch
+LoopDemo; the submission-bundle validator with clean baseline clones plus a
+real `mkdocs build` reports **41/41**.  The 0.5.40 x86_64 APK was installed on
+an API 36 emulator: library lists the game, LoopDemo renders its canvas and
+on-screen keypad (`versionName=0.5.40`).
