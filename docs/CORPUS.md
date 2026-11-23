@@ -2266,3 +2266,32 @@ Compatibility matrix refreshed by overlaying these rows: **2,484 titles,
 3 no-frame, 3 title-exit); regeneration is byte-deterministic.  The six item
 identifiers were added to `tools/corpus_items.txt` so a corpus rebuild
 reproduces them.
+
+## Round 248: whole-corpus libretro probe after the show-request ordering fix (2026-11-23)
+
+The runtime change of this round services a pending show request between
+bytecode quanta (`src/core/nj_thread.c`), so the first paint of a newly
+current screen happens before background threads get their next timeslice.
+The whole-corpus visual probe on the fixed core over the merged 1,664-title
+set (300 frames, 8 jobs) reports:
+
+| result | titles |
+|---|---|
+| passed | **1,659** |
+| known limitation | 1 (`毁灭战士3_10598`, game loop inside the constructor) |
+| failed | 4 |
+
+The four failures are the documented set — `TheMummy_K700F` (boot handshake),
+`PAC-MAN (176x220)` (title-side network/Sprint URI), `assault` (slow loader,
+serialize refusal) and `Asphalt4EliteRacing_1.0.0_320x240` (long-first-frame
+serialize refusal).  `Skater_by_BFLM` is no longer among them: it passes with
+7,480-8,004 non-black pixels and 47/47 content frames (previously 0/76,800).
+Note: the probe's `--out` option expects a file path, not an existing
+directory; passing the directory produced an `IsADirectoryError` when writing
+the summary, so the counts above come from the probe log.
+
+CLI cross-check of the same change: a 150-title A/B sweep (600 frames,
+18 jobs) shows **0 verdict changes** and identical frame counts, with 48
+titles showing small paint-count shifts (a paint-loop title that previously
+painted ~94 times per frame now paints fewer).  Full CTest is green
+(210/210) and the LIBRETRO mock matrix is 20/20.

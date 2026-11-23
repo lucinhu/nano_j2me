@@ -193,3 +193,43 @@ an uninitialised image -> the NPE.  So the remaining gap is visibility
 semantics for the synchronous first paint, not request delivery; forcing that
 paint to run is a wider change than the paint hooks tried so far and was left
 open.  Experiment reverted; no code change kept this round.
+
+## Round 248: the show request is serviced between bytecode quanta (all ports)
+
+The libretro-only gap is closed without a port flag.  Instrumentation of the
+core load path showed the real ordering: `startApp()` calls
+`Display.setCurrent()`, which posts the first-paint request, and the **same
+scheduler pass** then runs the loader thread that `startApp()` started.  The
+loader advanced `Q` to its title-screen mode before the frame paint gate ran,
+so `Skater_by_BFLM` never created its splash cover image and every paint threw
+`NullPointerException` on a null `Image`.  Every earlier attempt (frame-entry
+delivery, `setCurrent()`-time synchronous paint, scheduler-entry hook, an
+early flag for the libretro port) looked at a point either before the request
+existed or after the loader had already run.
+
+The fix makes the show request an ordering boundary in the scheduler:
+
+* `src/core/nj_thread.c`, `scheduler_step()`: after a thread's quantum, if
+  `vm->fresh_paint` is pending, no nested C pump is active
+  (`in_call_pump == 0`) and no paint is in flight, the pass stops.  This runs
+  the splash `paint()` before the loader thread's next quantum, like a
+  handset's event thread servicing the show request before cooperative
+  threads continue.
+* `src/core/nj_thread.c`, `nj_scheduler_frame()`: the frame loop also leaves
+  as soon as the request is pending, so the frame paint gate runs in the same
+  frame.
+
+Evidence:
+
+| Check | Result |
+|---|---|
+| `Skater_by_BFLM` through the mock libretro frontend (300 frames) | **PASS**, 47/47 checks, 7,480-8,004 non-black px, 47/47 content frames (was 0/76,800 and `FAIL visual_nonblack`) |
+| targeted A/B (10 titles, old dist core vs fixed core) | same PASS verdicts (TheMummy still the documented black/handshake case); NeonRunner shows a transient black first frame (313/317 content vs 317/317) and otherwise identical |
+| 150-title CLI A/B (`tools/sweep_compat.py`, 600 frames, 18 jobs) | **0 verdict changes**, identical frame counts; 48 titles with small paint-count shifts (a title that painted ~94 times per frame now paints fewer) |
+| full serial CTest | **210/210 passed** |
+| libretro mock matrix | **20 passed, 0 failed** |
+| whole-corpus visual probe | see the round-248 result; the expected set is the documented 4 failures with `Skater_by_BFLM` removed |
+
+`TheMummy_K700F` is not fixed by this: it needs the opposite observation
+(`isShown()` must still be false after `setCurrent()` until an event-thread
+show), which is a real event loop rather than an ordering boundary.

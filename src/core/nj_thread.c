@@ -1149,6 +1149,18 @@ static nj_status scheduler_step(nj_vm *vm, int *out_real_work)
         } else if (st != NJ_OK && st != NJ_ERR_YIELD && st != NJ_ERR_TIMEOUT) {
             return st;
         }
+        if (vm->fresh_paint && vm->in_call_pump == 0u && !vm->paint_active) {
+            /*
+             * A screen just became current.  Stop the pass so the frame pump
+             * paints it before any background thread (a loader started by
+             * startApp()) advances the state paint() decides on.  A handset
+             * services the show request on its event thread before the new
+             * thread runs; without this, Skater_by_BFLM's loader switched to
+             * its title screen first, the splash paint never created the
+             * cover image, and every paint threw NPE on a null Image.
+             */
+            break;
+        }
     }
 
     if (out_real_work != NULL) {
@@ -1243,7 +1255,8 @@ nj_status nj_scheduler_frame(nj_vm *vm, nj_u4 budget_ms)
         st = nj_scheduler_step(vm);
         if (st != NJ_OK || !vm->running || vm->painted_in_frame ||
             ++rounds >= 256u ||
-            nj_now_ms(vm) - start >= (nj_s8)budget_ms) {
+            nj_now_ms(vm) - start >= (nj_s8)budget_ms ||
+            (vm->fresh_paint && vm->in_call_pump == 0 && !vm->paint_active)) {
             break;
         }
         for (i = 0; i < vm->nthreads; ++i) {

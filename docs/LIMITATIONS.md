@@ -22,12 +22,17 @@ cooperative event model: `setCurrent()` returns, `showNotify()`/`sizeChanged()`
 arrive on the event thread, the first paint follows, and only then do
 background threads get time.  The runtime runs MIDlets on a cooperative VM
 thread with a frame pump, which is close enough for almost every corpus title
-but not identical.  Two titles still expose the difference:
+but not identical.  The runtime now services a show request between
+bytecode quanta (round 248): when `Display.setCurrent()` makes a screen
+current, the current scheduler pass stops and the frame pump paints that
+screen before any background thread (a loader started by `startApp()`) gets
+its next timeslice.  `Skater_by_BFLM` therefore renders through the libretro
+core as well as the CLI.  One title still exposes the difference:
 
 | Title | Symptom | State |
 |---|---|---|
 | `TheMummy_K700F` | black through every frontend; loader waits for a boot handshake (`MID.b`, `f.c[4]`/`f.c[5]`) that only a real event thread performs; `isShown()` is synchronous here, so the loader takes the wrong branch | **open** — needs an event-thread model; documented in `docs/notes/2026-11-21-fetched-black-screen-titles.md` (rounds 213-216/222) |
-| `Skater_by_BFLM` | renders in the desktop CLI, black through the libretro core; its splash paint must run before the loader thread's first timeslice, but the libretro load path pumps frames and the first-paint request is consumed by the title's own in-quantum `serviceRepaints()` before the canvas is shown | **open** — needs a load-path frame boundary or event-thread model; documented in `docs/notes/2026-11-23-first-paint-delivery.md` (rounds 227/236/238/241) |
+| `Skater_by_BFLM` | previously black through the libretro core because the loader's first timeslice ran before the first paint; now renders (7480-8004 non-black px) after the round-248 show-request break | **fixed** — documented in `docs/notes/2026-11-23-first-paint-delivery.md` (round 248) |
 
 ### 1.2 State requests only land between frames
 
