@@ -1862,3 +1862,20 @@ r55 core; results will be recorded in `docs/CORPUS.md` when it finishes.
   in place; the remaining known limitations are runtime behaviours (TheMummy
   boot handshake, Skater core first paint, long-first-frame save service,
   title-side black titles) and are documented rather than hidden.
+
+## Round 243: docs page gains a known-limitations section
+
+- `docs/libretro/upstream/nano_j2me.md` now has a **Known runtime limitations**
+  section (handset event-thread ordering for `TheMummy_K700F` and
+  `Skater_by_BFLM`, long-frame save-request refusals, virtual-clock pacing,
+  software-only rendering, rewind/netplay/runahead/determinism scope) with a
+  link to `docs/LIMITATIONS.md`, so reviewers see the documented gaps.
+- `docs/libretro/upstream/libretro-docs-nano_j2me.patch` regenerated against
+  `libretro/docs` master `96ee874e010a33b3fb1a79cf3cf833fc17189cfc`: 5 files,
+  306 insertions; applied on a fresh clone and verified with `git apply
+  --check`.
+- Fork branch `lucinhu/docs:add-nano_j2me` force-pushed to
+  `8ef5c42f6272c6fea84a5643f111e685b8d1f32e`; PR libretro/docs#1239 remains
+  OPEN/**MERGEABLE** at that head with the body rewritten to mention the
+  section.  `tools/check_libretro_submission_bundle.sh` -> 32 passed,
+  0 failed.

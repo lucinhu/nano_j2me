@@ -1,7 +1,7 @@
 # Ready-to-post PR: libretro/docs (library page)
 
 Post this as a pull request against **`libretro/docs`** (branch `master`,
-baseline `9399ee32829094ab6f2ea51add4bb1562312412e`, 2026-11-19; refreshed 2026-11-22 against `96ee874`). Nothing has
+baseline `9399ee32829094ab6f2ea51add4bb1562312412e`, 2026-11-19; refreshed 2026-11-23 against `96ee874`, adds the known-limitations section). Nothing has
 been pushed upstream; this file exists so the submission can be opened without
 rewriting text.
 
@@ -31,9 +31,9 @@ git push <fork> add-nano_j2me
 
 Adds a library page for the **nano_j2me** core (a J2ME/MIDP-CLDC runtime for RetroArch) and lists it next to the existing J2ME cores.
 
-Files changed (5 files, +261 lines):
+Files changed (5 files, +306 lines):
 
-- `docs/library/nano_j2me.md` — new page with `title`/`description` front matter, features, core options, save states, limitations and build notes.
+- `docs/library/nano_j2me.md` — new page with `title`/`description` front matter, features, core options, save states, a **known runtime limitations** section (handset event-thread ordering for a few titles, long-frame save-request refusals, virtual-clock pacing, software-only rendering) and build notes.
 - `mkdocs.yml` — `'Mobile - J2ME (nano_j2me)': 'library/nano_j2me.md'` in the `Mobile Emulation` nav group, after FreeJ2ME-Plus.
 - `docs/guides/core-list.md` — row for the J2ME row group.
 - `docs/development/licenses.md` — MIT / OFL-1.1 / Apache-2.0 split, matching the core's shipped notices.

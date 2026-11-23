@@ -58,6 +58,34 @@ runtime compatibility is not established by those checks. macOS is unverified.
 | libretro save RAM / exposed memory | No SAVE_RAM; SYSTEM_RAM exposes the JVM arena as a memory map |
 | Network / Bluetooth / sensors / rumble | Not provided by this adapter |
 
+### Known runtime limitations
+
+The runtime is a native MIDP implementation with a cooperative frame model, not
+a handset. Most titles are unaffected, but the following behaviours are
+documented rather than hidden; the full list lives in
+[the project's limitations page](https://github.com/lucinhu/nano_j2me/blob/main/docs/LIMITATIONS.md):
+
+- **Handset event-thread ordering.** `startApp()`, the loader threads and the
+  first paint run cooperatively rather than on a handset event thread. A few
+  titles depend on the exact ordering: `TheMummy_K700F` waits for a
+  `showNotify()`-style boot handshake that never arrives and stays black;
+  `Skater_by_BFLM` renders in the desktop runner but stays black in this core
+  because its splash paint must run before the loader thread's first
+  timeslice. Both are documented title-level gaps, not general failures.
+- **Long frames and save requests.** Save/load requests are served between
+  frames; a title whose single frame runs longer than a few seconds (a game loop
+  inside the MIDlet constructor, a very slow loader, one long paint) can refuse
+  a manual state. The state itself is written correctly in those cases.
+- **Virtual clock.** One `retro_run()` advances one 60 Hz frame; titles that
+  pace themselves on the wall clock are fine, but tools that drive frames
+  without pacing can starve them.
+- **Rendering.** All shipped cores use the software rasteriser
+  (`hw_render = false`). An optional GLES2 backend exists for SDL2 host builds
+  and is experimental; it was measured slower than software on the test GPU and
+  is not part of the released cores.
+- Rewind, netplay, runahead and determinism have no claim beyond what the
+  Features table and the save-state section state.
+
 ### Save-state limitations
 
 The VM worker services save/load requests at a safe boundary. Java execution
