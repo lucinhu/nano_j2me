@@ -824,3 +824,34 @@ and because it is the shape that breaks the startup wrappers above.
 Status: documented limitation of the synchronous display model; the title is
 black only through this startup path (it renders in FreeJ2ME-Plus).  A faithful
 fix is a structural event-thread model, tracked here as open work.
+
+### Round 230: MidnightPool1 through the core — the clock is fine, the frame pump stalls
+
+The round-176/178 note attributed `MidnightPool1` to its paint loop
+busy-waiting on `System.currentTimeMillis()`.  Round 230 re-measured that with
+instrumentation in `lr_port_millis` (env `NJ_MPDBG`, reverted afterwards).
+
+`b.class` `c()` is the per-paint limiter:
+
+    p++;
+    a = b; b = System.currentTimeMillis(); G = (int)(b - a);
+    while (G < 50 && !bl) { Thread.yield(); b = System.currentTimeMillis(); G = (int)(b - a); }
+
+During a 120-frame core run the virtual clock advanced at the frontend pace
+(`calls=200000 now=50 vclock=50`, later `calls=4000000 now=373`), i.e. the
+50 ms delta is observed and the limiter exits normally.  So the loop is *not*
+starved of wall time.
+
+What does not happen is presentation: an env-gated trace in
+`lr_display_present` showed **exactly one present for the whole run** —
+`MPPRES posted=1 rect=0,0 320x240 cur=b` — while the harness frame dumps at
+frames 50/100/150/200 were all zero non-black pixels.  The VM frame counter
+also stays at 1: the title's own repaint loop keeps the MIDlet frame open, so
+`nj_midp_present()` is never reached again and the frontend keeps sampling the
+initial black buffer.
+
+Consequence for the limitation note: the correct description is "the game
+thread stays in its repaint loop and the core cannot complete a frame; the
+clock itself advances normally", not "the paint busy-waits on a frozen clock".
+The next diagnostic step (round 231) is to instrument the frame pump and
+`serviceRepaints()` interaction to find why the frame never completes.

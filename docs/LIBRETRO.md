@@ -871,8 +871,9 @@ CLI's `--dump-frames` output.  `tools/check_libretro_corpus_visual.py` now
 replays each row's own canvas size (`screen` recorded by
 `tools/sweep_compat.py`) through the `nano_j2me_screen` core option and passes
 `--expect-screen` so the AV geometry check expects the configured canvas.
-Known limitation: titles whose own `paint()` busy-waits on
-`System.currentTimeMillis()` for wall time (e.g. `MidnightPool1`) cannot
-complete a frame under the synchronous libretro frame model; they render in
-the CLI but stay blank through the core, and their state requests time out.
+Known limitation: some titles keep their game thread inside a repaint loop so
+the synchronous libretro frame model never completes a frame (measured round
+230 on `MidnightPool1`: the virtual clock advances normally, but the core
+presents only the first frame).  They render in the CLI but stay blank through
+the core, and their state requests time out.
 
