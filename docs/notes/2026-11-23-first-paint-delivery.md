@@ -167,3 +167,29 @@ title's loader has already advanced its state.  Fixing this needs the load
 path itself to expose a frame boundary *inside* `startApp()` (or an event-thread
 model), which is a larger change than a local paint hook.  Reverted; the
 core-side limitation stands documented.
+
+## Round 241: where the pending request actually goes
+
+A fifth approach (post-`startApp` paint from the libretro port) exposed why
+none of the local hooks can work: `nj_vm_start_app_async()` only *prepares*
+the `startApp()` frame - it does not run it.  By the time the port's load
+path continues, no Displayable exists yet (`fresh_paint = 0`).  `startApp()`
+itself runs later, inside the first frame's scheduler quantum.
+
+Tracing `fresh_paint` writes inside that quantum showed the whole sequence in
+one step: `Display.setCurrent()` sets `fresh_paint = 1`; its synchronous
+`sizeChanged()` delivery makes the title call `repaint(); serviceRepaints();`,
+and that in-quantum paint consumes the request *before* the scheduler quantum
+ends, so neither a frame-entry hook nor a `nj_scheduler_frame()`-entry hook
+ever observes it pending.
+
+That in-quantum paint is also the splash paint: it runs before the loader
+thread's first quantum, when Skater's `Q` is still 0, which is exactly the
+moment the title's `/res/img/cover.png` branch expects.  Instrumenting
+`Image.createImage(String)` showed the cover is never requested, i.e. the
+paint returns without running the Canvas `paint()` body (the canvas is not
+considered shown yet).  Every later paint is the `Q == 4` title branch drawing
+an uninitialised image -> the NPE.  So the remaining gap is visibility
+semantics for the synchronous first paint, not request delivery; forcing that
+paint to run is a wider change than the paint hooks tried so far and was left
+open.  Experiment reverted; no code change kept this round.
