@@ -143,3 +143,13 @@ this round and changed nothing for Skater (still 0 content frames), while
 MidnightPool1/ChristmasMidnightPool stayed correct.  Both experiments were
 reverted (`git checkout -- src/midp/nj_lib_midlet.c src/midp/nj_lib_lcdui.c
 src/port/libretro/nj_port_libretro.c`, clean core rebuilt).
+
+A third variant was tried in round 238 and also rejected: paint the new
+Displayable synchronously at the end of `Display.setCurrent()` when
+`in_frame && in_paint == 0 && !paint_active && in_callback == 0 && in_call_pump == 0`,
+gated by an env switch for the async ports.  It changes nothing for
+Skater_by_BFLM (still 0 content frames) and leaves MidnightPool1 /
+ChristmasMidnightPool correct, i.e. the guard conditions are never met while
+`startApp()` is running - the construction path owns a call pump for its whole
+duration, which is why "paint from the app thread" is not a safe substitute for
+the scheduler-level point.  Reverted.
