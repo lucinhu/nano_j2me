@@ -798,3 +798,29 @@ MIDlet thread to still own the stack.  The experiment was reverted; the
 change would need a delivery point that cannot nest the painter (for example
 a queued first-paint request served at the next frame boundary before the
 next timeslice), which remains open work.
+
+### Round 225 addendum: why TheMummy's `!isShown()` branch cannot run in this runtime
+
+Re-read `NJFN(d_isShown)` in `src/midp/nj_lib_lcdui.c`: it returns `cur == self`
+directly, with the comment recording that keying it on `F_C_VISIBLE` (the
+"showNotify delivered" flag) made a startup wrapper resume its application a
+second time immediately after `setCurrent()`, before its loader finished.
+So `isShown()` is deliberately identity-based: after `Display.setCurrent()`
+returns, the canvas reports shown even though no paint or `showNotify` has
+been delivered yet.
+
+`TheMummyMidlet.a()` runs from the 250 ms `TimerTask` immediately after
+`setCurrent()` and only calls `TheMummyMidlet.a(1)` (which sets `MID.d`/`MID.b`
+and kicks the world init) from its `if (!isShown())` branch.  In this runtime
+that branch is unreachable by construction; on a handset `setCurrent()` posts
+the show request to the event thread, so a freshly started background thread
+can observe `isShown() == false` until the event thread shows the Displayable.
+Making that observation possible here would require modelling the event-thread
+ordering of `setCurrent`/show/paint (the round-170 `sizeChanged` delivery was
+the first piece of that model), not a local tweak in `isShown()`: the F_C_VISIBLE
+variant was tried in round 222 and rejected both because `MID.b` still stayed 0
+and because it is the shape that breaks the startup wrappers above.
+
+Status: documented limitation of the synchronous display model; the title is
+black only through this startup path (it renders in FreeJ2ME-Plus).  A faithful
+fix is a structural event-thread model, tracked here as open work.
