@@ -2043,3 +2043,19 @@ OPEN/mergeable head `ea88342`; PR #1239 OPEN/mergeable head `8ef5c42`;
 upstream `libretro-super` master still `55e50a81…`.  The final checklist in
 LIBRETRO_SUBMISSION.md now carries these as the submission-ready evidence;
 only maintainer review/merge remains.
+
+## Round 251: mid-frame state service experiment (negative, reverted)
+
+Tried to close the long-first-frame state refusals by serving a SAVE request
+from the libretro frame hook (inner frame boundary pumped while the title
+sleeps).  Two pieces were prototyped: a boundary in-memory save API
+(`nj_vm_save_mem_boundary`, boundary semantics of the existing file variant)
+and a frame-hook save service in the port, plus the corresponding
+`nj_vm_can_save()` relaxations (boundary save may ignore temporary C roots
+and tolerate `native_depth == 1`).  The blocker is structural: while a title
+sleeps inside a timer task, the parked thread's stack contains *nested* native
+pump frames (the timer pump invoked the task through `nj_call`), and the
+boundary rules only drop one native dispatch frame, so the state cannot be
+represented.  All prototype edits were reverted; clean core rebuilt and
+`test_save` passes (2641 checks).  The 4 s refusal is recorded as documented
+behaviour in LIMITATIONS.md §1.2 instead of a promised fix.

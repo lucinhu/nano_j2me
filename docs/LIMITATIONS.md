@@ -55,6 +55,15 @@ Evidence: `docs/LIBRETRO.md` save-state section (round-176 notes),
 `docs/CORPUS.md` round-233 visual probe, round-239 state probe
 (1,660/1,664 round trips; the four refusals are exactly these titles).
 
+A round-251 attempt to serve the request from the frame hook, i.e. at an
+inner frame boundary pumped while the title sleeps, was rejected by the
+save-state safety rules rather than by the clock: a parked stack can contain
+nested native pump frames (timer task running inside `timer_pump`), and the
+boundary rules can only drop one native dispatch frame, so the snapshot is
+not representable and a load would not have a stack to resume.  Serving stays
+at outer frame boundaries only, so the 4 s refusal remains documented
+behaviour rather than a fixable timing artefact for this title class.
+
 ### 1.3 Pacing
 
 The vm clock is virtual: one `retro_run()` is one 60 Hz frame.  Titles that
