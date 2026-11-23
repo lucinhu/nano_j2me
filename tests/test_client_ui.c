@@ -493,6 +493,15 @@ int main(void)
         return failures ? 1 : 0;
     }
 
+    if (!env.have_cjk) {
+        /* The launcher checks below are written against a second, CJK-named
+         * valid row.  That row is a corpus game (tests/games is not part of
+         * the repository), so a clean checkout skips this test instead of
+         * failing on a missing fixture. */
+        printf("  skip: client UI checks need tests/games/1942\u7a7a\u6218_10403.jar\n");
+        return 77;
+    }
+
     printf("  -- setup --\n");
     printf("  tree: %s\n", env.root);
     printf("  dump: %s\n", env.out);

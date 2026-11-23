@@ -1876,6 +1876,9 @@ nj_add_test(test_clip tests/test_clip.c)
   endif()
   if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_client_ui.c)
     nj_add_test(test_client_ui tests/test_client_ui.c)
+    # The launcher model checks use a corpus CJK row; tests/games is not part
+    # of the repository, so return 77 (skip) in a clean checkout.
+    set_tests_properties(test_client_ui PROPERTIES SKIP_RETURN_CODE 77)
   endif()
   # A drop is only accepted when the file is a JAR with a MIDlet in it; the
   # port validates it so a stray file can never end a running game.
