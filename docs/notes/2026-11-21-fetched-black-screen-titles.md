@@ -855,3 +855,53 @@ thread stays in its repaint loop and the core cannot complete a frame; the
 clock itself advances normally", not "the paint busy-waits on a frozen clock".
 The next diagnostic step (round 231) is to instrument the frame pump and
 `serviceRepaints()` interaction to find why the frame never completes.
+
+### Round 231: MidnightPool1 — one frame takes seconds and the VM clock mixes domains
+
+Instrumented the libretro core path (temporary `STG`/`SFDBG`/`FP`/`SIGALRM` dumps in
+`src/core/nj_thread.c` and `src/midp/nj_lib_midlet.c`, all reverted afterwards;
+the clean core was rebuilt afterwards and the worktree is clean).
+
+Setup: `test_libretro_frontend --core nano_j2me_libretro.so --jar
+MidnightPool1_1.0.0_320x240.jar --frames 300 --pace-us 16667 --set
+nano_j2me_screen=320x240`.  The session reports `frames=301 video_calls=301`,
+non-black pixels 0/301, distinct hashes 1, audio nonzero 0, and only the two
+serialize checks fail - i.e. the frontend runs 301 frames while the core keeps
+re-sampling one black buffer.
+
+Thread dump during the stall (SIGALRM, `nj_vm_describe_threads`):
+
+    thread 1 running depth=0 (current)
+    thread 2 running depth=4
+      java/lang/System.currentTimeMillis()J pc=0
+      b.c()V pc=50
+      b.paint(Ljavax/microedition/lcdui/Graphics;)V pc=280
+      javax/microedition/lcdui/Canvas.serviceRepaints()V pc=0
+      b.run()V pc=92
+
+Stage markers showed normal progress for VM frame 1 (start through
+`frame_pace`).  Frame 2 enters `nj_scheduler_frame()` at t=1 ms and leaves it
+at **t=9108 ms** (process CPU clock).  The pass ran one scheduler round and
+then broke because `vm->painted_in_frame` became 1: the round executed the
+application's own `paint()` through the C-to-Java call bridge, and that call
+consumed ~9 s.
+
+The same trace exposed a clock-domain anomaly in `nj_now_ms()`: the frame-start
+value was `4294967329` (= 2^32 + 33) and the round-0 value was `4440732978`
+(= 2^32 | 145,765,682, and 145,765,682 ms is ~40.5 h, i.e. host uptime).
+`lr_port_millis()` returns `lr_real_ms()` (monotonic since boot) for phases
+other than `LR_PHASE_RUN`/`LR_PHASE_LOAD`, and `nj_now_ms()` folds 32-bit port
+values into a monotonic epoch (`+= 0x100000000` on a backwards step, then
+`ticks = (ticks & ~0xFFFFFFFF) | ms`), so a stray real-time reading from a
+non-RUN phase is enough to push the VM clock forward by ~40 hours (or an
+epoch).  `nj_scheduler_frame()`'s budget check (`nj_now_ms(vm) - start >=
+budget_ms`), sleep/wake deadlines and `port_sleep()` deltas all run on that
+clock, so a mixed reading also makes one pass look arbitrarily long.
+
+Consequence for the limitation: the core-only black frame is not a paint bug -
+the VM spends seconds inside a single frame pass and completes only 2 VM frames
+for 301 frontend calls, so the frontend only ever sees the initial frame.  The
+clock-domain mix is the strongest candidate for why the pass takes that long;
+next steps are to log `s->phase` together with every `lr_port_millis()` call
+(or clamp the VM clock to RUN-phase readings only) and re-run this title plus
+the CLI/harness regression set.
