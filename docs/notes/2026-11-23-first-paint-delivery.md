@@ -88,3 +88,29 @@ asynchronous loader leave it zero and keep the frame-boundary paint.  After the
 gate the two Midnight Pool variants pass through the core again, `Skater_by_BFLM`
 still renders in the CLI, and the core's Skater behaviour is unchanged (black;
 the scheduler-level first-paint point remains open).
+
+## Round 236: the libretro port gate is still required
+
+The 0.5.39 clock work changed the failure modes enough to retest the gate:
+temporarily setting `port.first_paint_early = 1` in `lr_port_init()` and
+running the mock frontend on a 300-frame session gives:
+
+- `Skater_by_BFLM`: still black (`non-black 0/76800`, one hash) and still logs
+  `NullPointerException at Graphics.drawImage(...): image is null` on every
+  paint.  The early paint does not land before the loader: by the time the
+  core serves the first frame, the loader thread has already set `Q=4` and
+  `b.paint()` takes the title-screen branch whose images are not ready.  The
+  round-223 fix therefore cannot be enabled through the port flag alone; the
+  core needs a paint point between Java quanta *during* the load sequence,
+  which the async load pump does not provide.
+- `午夜台球圣诞中文版` and `ChristmasMidnightPool`: render normally
+  (`non-black` up to 7,682 px, 309/317 content frames, 20 hashes) and pass all
+  45 checks - the round-229 regression was collateral damage from the
+  load-clock epoch bug, not from the early paint itself.
+- `MidnightPool1`: unchanged (`non-black` up to 8,348 px, 85 hashes, PASS).
+
+The experiment was reverted (`git checkout -- src/port/libretro/nj_port_libretro.c`,
+clean core rebuilt); the gate stays until a real scheduler-level paint point
+exists.  Recorded as a negative result rather than enabling the flag, because
+it buys nothing for `Skater_by_BFLM` and other asynchronous-load titles can
+still depend on loader state before their first paint.

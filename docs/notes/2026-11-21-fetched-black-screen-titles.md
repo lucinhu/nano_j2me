@@ -983,3 +983,18 @@ Evidence (hardened core): `MidnightPool1_1.0.0_320x240` PASS (45/45 checks,
 20 distinct frames), `Skater_by_BFLM` unchanged (core-side black limitation),
 `家园5汉化版` unchanged (72,592-76,800 px), mock matrix 20/20, 96-title
 whole-corpus visual sample 94 pass / 1 known / 1 expected failure (TheMummy).
+
+## Round 236: Asphalt4 keeps painting but still refuses serialize
+
+`Asphalt4EliteRacing_1.0.0_320x240` with the 0.5.39 core (300/600/900 paced
+frames, `--set nano_j2me_screen=320x240 --expect-screen 320x240`): it renders
+consistently (`non-black` up to 76,800 px; 275/301, 587/617 and 875/901 content
+frames; 2-4 distinct hashes) and passes every rendering/audio check, but
+`serialize_writes_state` still fails: `retro_serialize(157,593,664)` returns 0
+after the 4 s service window.  This is the documented long-first-frame class
+(the VM thread is inside one `nj_midp_frame()` when the request arrives), not a
+regression from the clock hardening: the same title refused serialize on r53
+and r57, and `serialize_size`, `serialize_size_stable` and the undersized-buffer
+checks all pass.  Raising the service timeout would block the frontend thread
+for longer without fixing the ordering; the honest state of the title is
+"renders, cannot snapshot through the core between frames".
