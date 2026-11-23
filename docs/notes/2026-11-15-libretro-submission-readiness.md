@@ -2059,3 +2059,39 @@ boundary rules only drop one native dispatch frame, so the state cannot be
 represented.  All prototype edits were reverted; clean core rebuilt and
 `test_save` passes (2641 checks).  The 4 s refusal is recorded as documented
 behaviour in LIMITATIONS.md §1.2 instead of a promised fix.
+
+## Round 252: final validation and submission status (2026-11-23)
+
+Final state: HEAD `3770452` (code identical to the released tag `v0.5.40` /
+`97f5b0b`; everything after is documentation), worktree clean, tag `v0.5.40`
+and GitHub release <https://github.com/lucinhu/nano_j2me/releases/tag/v0.5.40>
+with 7 assets (draft=false, pre=false).
+
+| Check | Result |
+|---|---|
+| Full serial CTest (210 tests) on the release tree | **210/210 passed, 377.35 s** |
+| Submission bundle, clean baseline clones + real `mkdocs build` | **41 passed, 0 failed** |
+| Submission bundle, offline default | **32/32** |
+| Clean-checkout rehearsal of tag `v0.5.40` | build + fixtures rc=0, CTest **166/166**, 4 environment-gated skips |
+| Mock frontend matrix (released r59 core) | **20/20** |
+| Real RetroArch 1.22.2 LoopDemo 120 frames | **PASS** |
+| Windows x86_64 (Wine) 4 cases @300 frames | **PASS** |
+| Whole-corpus libretro visual probe (1,664 titles) | **1,659 passed / 1 known / 4 failed** (documented set) |
+| Whole-corpus state probe | **1,660/1,664 round trips**, 4 documented refusals |
+| CI template simulation | **3/3 contracts** |
+
+Upstream state at the same moment: `libretro-super` master
+`55e50a81195eaf8dd1b7720a601282459832ced1`, `libretro/docs` master
+`96ee874e010a33b3fb1a79cf3cf833fc17189cfc`; PR libretro/libretro-super#2204
+OPEN/MERGEABLE head `ea88342883b03cb1ec74e7d10632ed28aea0927e` (0 comments/0
+reviews, body matches v0.5.40); PR libretro/docs#1239 OPEN/MERGEABLE head
+`8ef5c42f6272c6fea84a5643f111e685b8d1f32e` (0 comments/0 reviews, body matches
+v0.5.40).
+
+The prepared kit is complete and validated offline: `.info` metadata, tracked
+super patch, docs page and patch, `.gitlab-ci.yml` build templates, license
+and notice files, release builds for eight targets plus five APKs, README /
+docs with a known-limitations page, and the verification evidence above. No
+run-time or documentation work remains on this side; the only remaining steps
+are maintainer review and merge in the two upstream repositories, which this
+session does not perform without explicit authorization.
