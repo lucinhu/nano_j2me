@@ -1939,3 +1939,32 @@ Two clean-clone caveats worth knowing for CI:
   host `/tmp` tmpfs was at 80% of its 16G user quota. With ~3.5G of stale
   scratch removed and `TMPDIR=/var/tmp/r247-tmp`, the test passes
   (234 forks, 117,504,000 bytes).
+
+## Round 248/249: 0.5.40 / r59 release with the show-request ordering
+
+The libretro port now opts into servicing a pending show request between
+bytecode quanta (`show_before_background` port capability; `scheduler_step()`
+and `nj_scheduler_frame()` in `src/core/nj_thread.c`).  A screen made current
+by `Display.setCurrent()` is painted before a loader started by `startApp()`
+gets its next quantum, so `Skater_by_BFLM` renders through the core as well as
+the CLI (7,480-8,004 non-black pixels, 47/47 content frames, 45/45 harness
+checks).  The capability is opt-in: the CLI/headless runner keeps its previous
+interleaving because its timer-fairness and Street Fighter loader fixtures
+depend on it (`test_timer_fairness`, `check_sf2_loader` failed under a global
+prototype of the change and pass again with the gate).
+
+Release 0.5.40/r59 was built from clean worktree at `2c1bb05` (version 0.5.40,
+metadata commit `4c43dd0`): `.info` SHA-256
+`3b9f28c32b4fa61b99e0a50298963f477fb339cb9e1a600d449c7ac2564cebab`, eight
+targets in `build/libretro-dist`, five split APKs (versionCode 540), cores
+archive 12,176,826 B SHA-256
+`547ee5a88c4323cc34f99bc0f4c590709b276f6848ac75652be48faf0de1b29f`.  Super
+patch applies to `libretro-super` master `55e50a8` as fork commit
+`ea88342883b03cb1ec74e7d10632ed28aea0927e`.
+
+Validation on the release tree: full serial CTest **210/210** (383.88 s),
+mock frontend matrix **20/20**, real RetroArch LoopDemo PASS, Wine **4/4 @300**,
+submission bundle **32/32**, 150-title libretro visual subset **150/150 pass**,
+and the whole-corpus probe on the same libretro path reports **1,659 passed /
+1 known limitation / 4 failed** (`TheMummy_K700F`, `PAC-MAN (176x220)`,
+`assault`, `Asphalt4EliteRacing`).

@@ -9,10 +9,13 @@ request.
 
 ## Highlights
 
-- **Show requests are ordered before background threads** (`src/core/nj_thread.c`).
-  The scheduler stops a pass when `fresh_paint` is pending and no nested C
-  pump is active, and the frame loop leaves as soon as the request is pending,
-  so the frame paint gate services it in the same frame.  `Skater_by_BFLM`
+- **Show requests are ordered before background threads (libretro)**
+  (`src/core/nj_thread.c`, `include/nj2me/nj_port.h`).  The libretro port sets
+  the new `show_before_background` capability; when `fresh_paint` is pending
+  and no nested C pump is active the scheduler stops the pass and the frame
+  loop leaves, so the frame paint gate services the show request before the
+  loader thread continues.  The CLI/headless runner keeps its historical
+  interleaving (its timer-fairness and loader fixtures assume it).  `Skater_by_BFLM`
   (previously black through the libretro core, correct in the desktop CLI) now
   renders through every frontend: 7,480-8,004 non-black pixels, 47/47 content
   frames, 47/47 harness checks.
@@ -33,19 +36,19 @@ request.
 
 | target | size (B) | SHA-256 |
 |---|---|---|
-| linux-x86_64 | 4,048,832 | `6685baa6c2112f58b69f52a9d66db990787e6dd47c9f1dc01efdf49bdb231ef8` |
-| linux-aarch64 | 3,523,352 | `bff2084c6ba7fb623da5eec6f1721ba8b336aca35744d88f5fe536334fd4be0a` |
-| linux-armv7 | 3,176,104 | `9183759c43d66342d8ddc1d5cb8a31395fe31a2a270a3af20fd466a26a158f57` |
-| android-arm64 | 3,769,000 | `1394bb8a4cc4d1ac82c1e25cc230d28440efe52f51ee850c3e475f13fac39736` |
-| android-armv7 | 2,865,164 | `c39b729725fe8b53427a6878938f5240d5e4fab6146781084078105bf61cff46` |
-| android-x86_64 | 3,794,912 | `88797322e10fa8c2afb38a19e6d9601f38edaf705cc5025dc11c0a04181c6d2e` |
-| windows-i686 | 3,601,408 | `218c4af94dc2aadaee0a1df520de271d93f3d76851a9b34eed9c28f943be0ed8` |
-| windows-x86_64 | 3,371,008 | `200e8958584df4734a51c99e2adc147241a4379d691bbce55139fe32da35b944` |
+| linux-x86_64 | 4,048,832 | `0d33d24b9b3a2e5c22cacdd926c25842d3bd72fdfbf1c93d000f84c57afd7ff1` |
+| linux-aarch64 | 3,523,384 | `8ed4be8af20d6845fac29aa27f032dc1b7e9737c541db52cef66a1493bec7dd7` |
+| linux-armv7 | 3,176,312 | `e69ada88ab0465841d35991b286c2ba412873436ba83d93a4bee88eb9631f338` |
+| android-arm64 | 3,769,048 | `8b299cc8c9911b522607a6e920c2acf97779dc3b14be3defce36a0271d1d2365` |
+| android-armv7 | 2,865,308 | `493a13c6a4150798e9c76e2f58151918f7382033272922fff25d5bdc9ec11fed` |
+| android-x86_64 | 3,795,024 | `c2480eb09ec8d3c6e1cae18da13cf09baad3e891c0fd96d89e78c0ac52262eca` |
+| windows-i686 | 3,601,408 | `539eaaba4a7d3f104873b58fe8bfa2b85e95b2eaacdf1bf80e21afbd46ba4353` |
+| windows-x86_64 | 3,371,008 | `cd7403b697e7799fe5f18ac3b5a36b83478359daf7cba602700a6d219cda5c96` |
 
 `.info` SHA-256 `3b9f28c32b4fa61b99e0a50298963f477fb339cb9e1a600d449c7ac2564cebab`
 (identical in both copies).  Cores archive
-`nj2me-0.5.40-libretro-cores.zip`: 12,176,722 B, 128 entries,
-SHA-256 `73211989a818c18a7b9400080ee3100c93216e30413c8e993d109e81673e2182`.
+`nj2me-0.5.40-libretro-cores.zip`: 12,176,826 B, 128 entries,
+SHA-256 `547ee5a88c4323cc34f99bc0f4c590709b276f6848ac75652be48faf0de1b29f`.
 
 ## Android package
 
@@ -53,11 +56,11 @@ versionCode 540, versionName 0.5.40, minSdk 21.  Five split APKs:
 
 | ABI | size (B) | SHA-256 |
 |---|---|---|
-| arm64-v8a | 1,058,972 | `a907af1953c2b6d111b32a37b5940846d68a6fba2cd80095514fbef56d82f7cb` |
-| armeabi-v7a | 1,067,166 | `2f3c048973c4134cd594e19549cb4ead673da168fe0275972cfe124a0eb30ef7` |
-| x86 | 1,046,678 | `497fcb07084f467e261786ea776ddae6854d0bc22e6c8d59c5995059ad82d214` |
-| x86_64 | 1,058,969 | `37b27f2b6a6738465b8f8dbc653a2ae91c4b7377f4745436314c4b1b09ac0f5e` |
-| legacy (ARMv5, API 5) | 741,472 | `7b7727160e3fe9fe9cb29bf4bfc929fa0a3d42956480fc49300687a774fe2acb` |
+| arm64-v8a | 1,058,972 | `be20ef13da50d20dd8e0b5da20fffcc0f9a8e5fb85674c933e616086cf19c59e` |
+| armeabi-v7a | 1,067,166 | `a94289d1df427216dd8dcaf27de2ab469946f1907863253dc5ca1538a40ecf84` |
+| x86 | 1,046,678 | `c6bf4740e749fa5cbfe4cb5ea803c9d0680816f074aa31c60f301655a036fb0e` |
+| x86_64 | 1,058,969 | `70bf1ae13fed96460158fe6ef68078dbeec7ecbd975ecd4c79f81f1372c38d6e` |
+| legacy (ARMv5, API 5) | 741,420 | `bd9dd4d7f7359683efaabbc2018ac240d744a02589cedb943fe6aadaae94fe5c` |
 
 ## Verification
 
