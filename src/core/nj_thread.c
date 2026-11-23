@@ -1149,7 +1149,9 @@ static nj_status scheduler_step(nj_vm *vm, int *out_real_work)
         } else if (st != NJ_OK && st != NJ_ERR_YIELD && st != NJ_ERR_TIMEOUT) {
             return st;
         }
-        if (vm->fresh_paint && vm->in_call_pump == 0u && !vm->paint_active) {
+        if (vm->fresh_paint && vm->port != NULL &&
+            vm->port->show_before_background &&
+            vm->in_call_pump == 0u && !vm->paint_active) {
             /*
              * A screen just became current.  Stop the pass so the frame pump
              * paints it before any background thread (a loader started by
@@ -1256,7 +1258,9 @@ nj_status nj_scheduler_frame(nj_vm *vm, nj_u4 budget_ms)
         if (st != NJ_OK || !vm->running || vm->painted_in_frame ||
             ++rounds >= 256u ||
             nj_now_ms(vm) - start >= (nj_s8)budget_ms ||
-            (vm->fresh_paint && vm->in_call_pump == 0 && !vm->paint_active)) {
+            (vm->fresh_paint && vm->port != NULL &&
+             vm->port->show_before_background &&
+             vm->in_call_pump == 0 && !vm->paint_active)) {
             break;
         }
         for (i = 0; i < vm->nthreads; ++i) {

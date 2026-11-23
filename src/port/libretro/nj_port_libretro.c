@@ -2808,6 +2808,9 @@ static void lr_port_init(nj_lr *s)
 #endif
 
     s->port.millis = lr_port_millis;
+    /* The core loads MIDlets inside its own frame pump, so a pending show
+     * request must be painted before the loader thread continues. */
+    s->port.show_before_background = 1;
     s->port.display_init = lr_display_init;
     s->port.display_present = lr_display_present;
     s->port.input_poll = lr_input_poll;

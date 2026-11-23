@@ -2112,6 +2112,31 @@ Super PR branch `a6d3f34`, docs PR `95a1d0a`; both OPEN/MERGEABLE, no merge
 claimed.
 
 
+### 0.5.40 / r59 (2026-11-23)
+
+Release: https://github.com/lucinhu/nano_j2me/releases/tag/v0.5.40 - tag
+`v0.5.40` (metadata commit `4c43dd0`), eight libretro targets plus five
+per-ABI Android APKs (versionCode 540); `.info` SHA-256
+`3b9f28c32b4fa61b99e0a50298963f477fb339cb9e1a600d449c7ac2564cebab`
+(`display_version = "0.5.40"`); the tracked super patch applies to
+`libretro-super` master `55e50a8` as fork commit
+`ea88342883b03cb1ec74e7d10632ed28aea0927e`; docs PR baseline
+`libretro/docs` master `96ee874e`.  r59 fixes the last runtime ordering gap
+behind a core-only black title: a screen made current by
+`Display.setCurrent()` is now painted before background threads get their next
+bytecode quantum (`src/core/nj_thread.c` stops a scheduler pass while
+`fresh_paint` is pending and leaves the frame loop immediately), so
+`Skater_by_BFLM` renders through every frontend - 7,480-8,004 non-black pixels,
+47/47 content frames, full 45-check harness including save/restore.  The
+whole-corpus visual probe on this package reports **1,659 passed, 1 known
+limitation and 4 failed** (`TheMummy_K700F`, `PAC-MAN (176x220)`, `assault`,
+`Asphalt4EliteRacing`) and a 150-title CLI A/B sweep shows **0 verdict
+changes**.
+
+Validation: full serial CTest **210/210**, mock frontend matrix **20/20**,
+real RetroArch LoopDemo PASS, Wine **4/4 @300**, bundle **32/32**.  Super PR
+branch `ea88342`, docs PR `95a1d0a`; both OPEN/MERGEABLE, no merge claimed.
+
 ### 0.5.39 / r58 (2026-11-23)
 
 Release: https://github.com/lucinhu/nano_j2me/releases/tag/v0.5.39 - tag

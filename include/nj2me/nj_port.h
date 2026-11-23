@@ -820,6 +820,17 @@ typedef struct nj_port {
      * paint() instead of showing their splash. */
     int first_paint_early;
 
+    /* Stop the scheduler pass and the frame loop when a show request is
+     * pending, so the frame pump paints the newly current screen before
+     * background threads (a loader started by startApp()) get their next
+     * quantum.  Handsets service the show request on their event thread;
+     * hosts whose asynchronous loader already runs MIDlet code between
+     * scheduled passes (the libretro core) set this to 1 so the splash paint
+     * wins the race with the title's own loader.  The CLI/headless runner
+     * keeps its historical scheduling (0): its tests measure timer fairness
+     * per frame and some loaders assume the older interleaving. */
+    int show_before_background;
+
     /* Optional 2D accelerator. Opt in with NJ_ENABLE_GFX_ACCEL=1; NULL keeps
      * software drawing. The port owns this table/context until VM teardown.
      * Uses gfx_accel_ud (which may intentionally be NULL), not port.ud.

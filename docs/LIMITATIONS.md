@@ -22,11 +22,12 @@ cooperative event model: `setCurrent()` returns, `showNotify()`/`sizeChanged()`
 arrive on the event thread, the first paint follows, and only then do
 background threads get time.  The runtime runs MIDlets on a cooperative VM
 thread with a frame pump, which is close enough for almost every corpus title
-but not identical.  The runtime now services a show request between
+but not identical.  The libretro port now services a show request between
 bytecode quanta (round 248): when `Display.setCurrent()` makes a screen
-current, the current scheduler pass stops and the frame pump paints that
-screen before any background thread (a loader started by `startApp()`) gets
-its next timeslice.  `Skater_by_BFLM` therefore renders through the libretro
+current, the scheduler pass stops and the frame pump paints that screen before
+any background thread (a loader started by `startApp()`) gets its next
+timeslice.  This is the opt-in `show_before_background` port capability; the
+CLI/headless runner keeps its historical interleaving.  `Skater_by_BFLM` therefore renders through the libretro
 core as well as the CLI.  One title still exposes the difference:
 
 | Title | Symptom | State |

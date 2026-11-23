@@ -2290,8 +2290,9 @@ Note: the probe's `--out` option expects a file path, not an existing
 directory; passing the directory produced an `IsADirectoryError` when writing
 the summary, so the counts above come from the probe log.
 
-CLI cross-check of the same change: a 150-title A/B sweep (600 frames,
-18 jobs) shows **0 verdict changes** and identical frame counts, with 48
-titles showing small paint-count shifts (a paint-loop title that previously
-painted ~94 times per frame now paints fewer).  Full CTest is green
-(210/210) and the LIBRETRO mock matrix is 20/20.
+Scope: the ordering is the opt-in `show_before_background` port capability,
+enabled only by the libretro port; the CLI/headless runner keeps its previous
+interleaving, so CLI corpus verdicts and paint cadence are unchanged by
+construction.  (The ungated prototype of the same change was also A/B-tested
+over 150 CLI titles: 0 verdict changes.)  Full CTest is green (210/210) and the
+libretro mock matrix is 20/20.

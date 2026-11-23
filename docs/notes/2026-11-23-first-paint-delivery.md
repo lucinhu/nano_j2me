@@ -194,7 +194,7 @@ semantics for the synchronous first paint, not request delivery; forcing that
 paint to run is a wider change than the paint hooks tried so far and was left
 open.  Experiment reverted; no code change kept this round.
 
-## Round 248: the show request is serviced between bytecode quanta (all ports)
+## Round 248: the show request is serviced between bytecode quanta (async-load ports opt in)
 
 The libretro-only gap is closed without a port flag.  Instrumentation of the
 core load path showed the real ordering: `startApp()` calls
@@ -207,17 +207,22 @@ delivery, `setCurrent()`-time synchronous paint, scheduler-entry hook, an
 early flag for the libretro port) looked at a point either before the request
 existed or after the loader had already run.
 
-The fix makes the show request an ordering boundary in the scheduler:
+The fix is a port capability, because only hosts that load MIDlets inside
+their own frame pump (the libretro core) need this ordering; the CLI/headless
+runner keeps its historical interleaving:
 
-* `src/core/nj_thread.c`, `scheduler_step()`: after a thread's quantum, if
-  `vm->fresh_paint` is pending, no nested C pump is active
-  (`in_call_pump == 0`) and no paint is in flight, the pass stops.  This runs
-  the splash `paint()` before the loader thread's next quantum, like a
-  handset's event thread servicing the show request before cooperative
-  threads continue.
+* `include/nj2me/nj_port.h`: new `show_before_background` flag; the libretro
+  port sets it in `lr_port_init()` (`src/port/libretro/nj_port_libretro.c`),
+  the headless runner leaves it zero.
+* `src/core/nj_thread.c`, `scheduler_step()`: when the flag is set, a pass
+  stops after the current thread's quantum if `vm->fresh_paint` is pending, no
+  nested C pump is active and no paint is in flight, so the splash `paint()`
+  runs before the loader thread's next quantum.
 * `src/core/nj_thread.c`, `nj_scheduler_frame()`: the frame loop also leaves
-  as soon as the request is pending, so the frame paint gate runs in the same
-  frame.
+  when the request is pending, so the frame paint gate runs in the same frame.
+* The gate keeps the CLI contract unchanged: without it, the timer-fairness
+  test and the Street Fighter loader fixture observed the new interleaving and
+  failed, which is why the capability is opt-in rather than global.
 
 Evidence:
 
@@ -225,10 +230,10 @@ Evidence:
 |---|---|
 | `Skater_by_BFLM` through the mock libretro frontend (300 frames) | **PASS**, 47/47 checks, 7,480-8,004 non-black px, 47/47 content frames (was 0/76,800 and `FAIL visual_nonblack`) |
 | targeted A/B (10 titles, old dist core vs fixed core) | same PASS verdicts (TheMummy still the documented black/handshake case); NeonRunner shows a transient black first frame (313/317 content vs 317/317) and otherwise identical |
-| 150-title CLI A/B (`tools/sweep_compat.py`, 600 frames, 18 jobs) | **0 verdict changes**, identical frame counts; 48 titles with small paint-count shifts (a title that painted ~94 times per frame now paints fewer) |
+| 150-title CLI A/B (ungated experiment, `tools/sweep_compat.py`, 600 frames, 18 jobs) | 0 verdict changes, identical frame counts; the shipped gated build leaves CLI scheduling unchanged, so the CLI A/B is baseline-identical by construction |
 | full serial CTest | **210/210 passed** |
 | libretro mock matrix | **20 passed, 0 failed** |
-| whole-corpus visual probe | see the round-248 result; the expected set is the documented 4 failures with `Skater_by_BFLM` removed |
+| whole-corpus visual probe (1,664 titles) | **1,659 passed / 1 known limitation / 4 failed** (`TheMummy_K700F`, `PAC-MAN (176x220)`, `assault`, `Asphalt4EliteRacing`); `Skater_by_BFLM` is in the passing set |
 
 `TheMummy_K700F` is not fixed by this: it needs the opposite observation
 (`isShown()` must still be false after `setCurrent()` until an event-thread
