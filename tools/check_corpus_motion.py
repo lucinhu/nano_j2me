@@ -109,8 +109,13 @@ def _dump_every(frames):
     return every
 
 
-def probe(path, frames, keys, heap=16, device=None):
-    """Run one title and return (unique_dumps, non_black_ratio)."""
+def probe(path, frames, keys, heap=16, device=None, timeout=180):
+    """Run one title and return (unique_dumps, non_black_ratio).
+
+    A timeout returns ``(-1, 0.0)`` so one hung title cannot abort the whole
+    probe (round 224: TheMummy_K700F hung for 180 s and raised out of the
+    ThreadPoolExecutor).
+    """
     with tempfile.TemporaryDirectory() as out:
         size = resolve_screen(os.path.basename(str(path)), "240x320")
         cmd = [BIN, "--port", "headless",
@@ -121,7 +126,10 @@ def probe(path, frames, keys, heap=16, device=None):
                "--stats", path]
         if device:
             cmd[cmd.index("--stats"):cmd.index("--stats")] = ["--device", device]
-        subprocess.run(cmd, capture_output=True, timeout=180)
+        try:
+            subprocess.run(cmd, capture_output=True, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            return -1, 0.0
         digests = set()
         coverage = 0.0
         for name in sorted(os.listdir(out)):
@@ -145,6 +153,9 @@ def main():
                     help="key script (default: <rows>/keys.txt)")
     ap.add_argument("--jobs", type=int, default=1,
                     help="run this many titles in parallel (default 1)")
+    ap.add_argument("--timeout", type=int, default=180,
+                    help="seconds per title before it counts as a timeout "
+                         "(default 180)")
     args = ap.parse_args()
 
     rows = [json.loads(l) for l in open(os.path.join(args.rows, "rows.jsonl"))]
@@ -183,14 +194,21 @@ def main():
     results = []
     if args.jobs <= 1:
         for spec in specs:
-            results.append(probe(spec[0], args.frames, spec[3], spec[1], spec[2]))
+            results.append(probe(spec[0], args.frames, spec[3], spec[1],
+                                 spec[2], args.timeout))
     else:
         with ThreadPoolExecutor(max_workers=args.jobs) as pool:
             results = list(pool.map(
-                lambda spec: probe(spec[0], args.frames, spec[3], spec[1], spec[2]),
+                lambda spec: probe(spec[0], args.frames, spec[3], spec[1],
+                                   spec[2], args.timeout),
                 specs))
+    timeouts = 0
     for path, (unique, coverage) in zip(paths, results):
         seen += 1
+        if unique < 0:
+            timeouts += 1
+            print("%-52s timeout" % os.path.basename(path)[:52])
+            continue
         if unique > 1:
             moving += 1
         else:
@@ -199,7 +217,8 @@ def main():
         print("%-52s unique_frames=%d non_black=%3.0f%% %s"
               % (os.path.basename(path)[:52], unique, coverage * 100.0, black))
 
-    print("\n%d titles: %d change frames, %d paint one frame" % (seen, moving, static))
+    print("\n%d titles: %d change frames, %d paint one frame, %d timeout"
+          % (seen, moving, static, timeouts))
     return 0
 
 

@@ -1995,3 +1995,31 @@ paint pacing on a 150-title A/B sweep (1 verdict change, several large
 gfx-per-paint shifts).  The change was reverted: the title lives with the
 documented "first paint is one frame later than the handset" class.  Details
 and the rejected experiment are in the black-screen note (Round 223).
+
+## Round 224: expanded-corpus state, motion and deep probes (2026-11-23)
+
+Three corpus-wide probes on the merged expanded set
+(`.local-tools/debug-runs/rows-merged-r223`, 1,705 unique rows), all with
+per-row JAR paths, heap and device replay:
+
+- **Libretro save states** (`tools/check_libretro_states.py`, 600-title
+  sample seeded 224, 16 jobs, 300 paced frames): **598 state round trips,
+  2 failed**.  The two failures are the documented long-first-frame class:
+  `毁灭战士3_10598.jar` (game loop inside the constructor) and
+  `MidnightPool1_1.0.0_320x240` (paint busy-waits on `currentTimeMillis`).
+  Every other sampled title wrote and restored a state
+  (`serialize_size=157593664` on the auto heap).
+- **Motion** (`tools/check_corpus_motion.py`, 600-title sample, 300 frames,
+  16 jobs, early-frame dumps every 100 frames): **353 change frames,
+  246 paint-one-frame, 1 timeout**.  The timeout is the known `TheMummy_K700F`
+  boot-handshake stall; the tool now reports it instead of aborting the whole
+  probe (see tooling fix below).
+- **Deep probe** (`tools/check_corpus_deep.py`, 300-title sample, 900 frames,
+  16 jobs): **300 passed, 0 early exit, 0 failed** - with the fixed
+  `--heap`/`--device` replay from round 125 the sampled titles stay healthy at
+  three times the standard sweep depth.
+
+Tooling: `tools/check_corpus_motion.py` gained `--timeout` (default 180 s) and
+catches `subprocess.TimeoutExpired` as a per-title `timeout` result;
+previously one hung title raised out of the worker pool and killed the entire
+probe run (first attempt this round died on `TheMummy_K700F`).
