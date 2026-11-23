@@ -2034,3 +2034,12 @@ Also recorded (negative result) the round-250 attempt to tie `isShown()` to the
 then takes its world-init branch, but without an event-thread model the loader
 still starves frame completion, so the title remains a documented open case and
 the experiment was reverted.
+
+Round-250 re-checks at HEAD `da1ee9d`: `tools/check_libretro_submission_bundle.sh`
+**32/32 passed**; `tools/simulate_ci_builds.sh` **3/3 contracts** (linux
+4,218,408 B, windows 3,726,640 B, android template target 12,512,968 B);
+`gh release view v0.5.40` -> draft=false, pre=false, 7 assets; PR #2204
+OPEN/mergeable head `ea88342`; PR #1239 OPEN/mergeable head `8ef5c42`;
+upstream `libretro-super` master still `55e50a81…`.  The final checklist in
+LIBRETRO_SUBMISSION.md now carries these as the submission-ready evidence;
+only maintainer review/merge remains.
