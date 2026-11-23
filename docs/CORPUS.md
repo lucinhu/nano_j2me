@@ -2042,3 +2042,42 @@ RMS directory per title) and was run over the merged expanded rows
   they were previously characterised in the round-118/219 samples.
 - This completes the standard probe quartet on the expanded corpus (round 223
   visual, round 224 save-state/motion/deep, this round audio).
+
+## Round 226: codec-family sampling on the expanded corpus (2026-11-23)
+
+Two probes were extended to sample by media family, so decoder coverage is
+measured instead of inferred from the sweep:
+
+- `tools/check_corpus_media.py` gained `--jobs` (parallel workers) and now
+  replays each row's own key script (or no input when the sweep had to drop
+  it) instead of always using the generic one; previous parallel runs also
+  used the generic script, which under-reported titles whose sound starts only
+  after a gameplay key.
+- `tools/check_corpus_audio.py` already had `--jobs` from round 225.
+
+**Decoder decisions** (`check_corpus_media.py`, 240 paced frames, 16 jobs;
+"none" = the title never created a `Player` in the sampled window, not a
+decoder failure):
+
+| sample | titles | runtime `media:` lines |
+|---|---|---|
+| all media assets | 400 | 118 AMR decodes, 1 MP3, 1 ADPCM, 378 none |
+| `.mid` required | 120 | 8 AMR, 116 none |
+| `.mp3` required | 11 | 4 MP3, 7 none |
+| `.amr` required | 74 | 216 AMR, 40 none |
+| `.3gp` required | 2 | 4 AMR, 1 none |
+| `.wav` required | 120 | 21 AMR, 2 MP3, 1 ADPCM, 114 none |
+
+**Delivered audio** (`check_corpus_audio.py`, same rows, 240 frames, 16 jobs):
+
+| sample | titles | delivered | silent | `silent-started` |
+|---|---|---|---|---|
+| `.mid` required | 120 | 31 (30 PCM, 1 tone) | 89 | 0 |
+| `.mp3` required | 11 | 1 (PCM) | 10 | 0 |
+| `.amr` required | 74 | 14 (13 PCM, 1 tone) | 60 | 0 |
+
+The `silent-started` invariant holds in every family: nothing starts a media
+`Player` without the mixer receiving PCM or tone data.  The low decode counts
+for `.mid`/`.mp3`/`.3gp` families are sampling-window effects (sound starts
+after the 240-frame menu), not decoder breakage - the full-corpus audio sample
+(round 225) and each format's own rows confirm the decoders run when reached.

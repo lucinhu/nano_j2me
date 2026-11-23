@@ -26,6 +26,7 @@ import subprocess
 import sys
 import tempfile
 import zipfile
+from concurrent.futures import ThreadPoolExecutor
 
 ROOT = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "tools"))
@@ -89,6 +90,8 @@ def main():
                     help="key script (default: <rows>/keys.txt)")
     ap.add_argument("--require", action="append", default=None,
                     help="only titles whose assets include this extension")
+    ap.add_argument("--jobs", type=int, default=1,
+                    help="run this many titles in parallel (default 1)")
     args = ap.parse_args()
 
     rows = [json.loads(l) for l in open(os.path.join(args.rows, "rows.jsonl"))]
@@ -96,9 +99,9 @@ def main():
     random.Random(args.seed).shuffle(ok)
     keys = args.keys or os.path.join(args.rows, "keys.txt")
 
-    seen = 0
+    picked = []
     for row in ok:
-        if seen >= args.count:
+        if len(picked) >= args.count:
             break
         path = row.get("jar_path")
         if not path or not os.path.exists(path):
@@ -112,15 +115,36 @@ def main():
                 any(a.lower().endswith(x) for a in assets)
                 for x in args.require):
             continue
-        seen += 1
+        picked.append((row, path, len(assets)))
+
+    none_keys = os.path.join(args.rows, "keys-none.txt")
+
+    def keys_for(row):
+        if row.get("keys") == "none":
+            if not os.path.exists(none_keys):
+                with open(none_keys, "w", encoding="utf-8") as fh:
+                    fh.write("# deliberately empty: run without input\n")
+            return none_keys
+        if row.get("keys"):
+            return os.path.join(ROOT, "tools", "corpus_keys", row["keys"])
+        return keys
+
+    def work(item):
+        row, path, nassets = item
+        row_keys = keys_for(row)
         with tempfile.TemporaryDirectory() as rms:
             size = resolve_screen(os.path.basename(str(path)), "240x320")
-            cp = subprocess.run(
-                [BIN, "--port", "headless", "--size", size, "--heap", "16",
-                 "--fps", "30", "--run-frames", str(args.frames),
-                 "--keys", "@" + keys, "--rms-dir", rms, "--verbose", "3",
-                 "--stats", path],
-                capture_output=True, text=True, timeout=180)
+            cmd = [BIN, "--port", "headless", "--size", size, "--heap", "16",
+                   "--fps", "30", "--run-frames", str(args.frames),
+                   "--rms-dir", rms, "--verbose", "3", "--stats"]
+            if row_keys:
+                cmd += ["--keys", "@" + row_keys]
+            cmd.append(path)
+            try:
+                cp = subprocess.run(cmd, capture_output=True, text=True,
+                                    timeout=180)
+            except subprocess.TimeoutExpired:
+                return (path, nassets, ["timeout"])
         out = (cp.stderr or "") + (cp.stdout or "")
         lines = [ln for ln in out.splitlines() if "media:" in ln]
         kinds = []
@@ -134,8 +158,17 @@ def main():
                     break
         if not kinds:
             kinds = ["none"]
+        return (path, nassets, kinds)
+
+    if args.jobs <= 1:
+        results = [work(item) for item in picked]
+    else:
+        with ThreadPoolExecutor(max_workers=args.jobs) as pool:
+            results = list(pool.map(work, picked))
+    for path, nassets, kinds in results:
         print("%-46s assets=%-3d %s"
-              % (os.path.basename(path)[:46], len(assets), " ".join(kinds)))
+              % (os.path.basename(path)[:46], nassets, " ".join(kinds)))
+    seen = len(results)
     print("\n%d titles sampled" % seen)
     return 0
 
