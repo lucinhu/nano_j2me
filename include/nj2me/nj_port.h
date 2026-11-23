@@ -810,6 +810,16 @@ typedef struct nj_port {
      * NULL retains the existing per-frame display_present behavior. */
     void (*display_idle)(void *ud);
 
+    /* Non-zero when this port runs the MIDlet's startApp() to completion
+     * before it pumps the first frame (the CLI/headless runner does).  The
+     * runtime then delivers the first paint of a newly current Displayable
+     * before the first background timeslice.  Frontends that pump frames
+     * while the MIDlet is still being constructed (the libretro core, hosts
+     * with an asynchronous loader) must leave this zero: painting that early
+     * races the title's own loader threads and some titles throw from
+     * paint() instead of showing their splash. */
+    int first_paint_early;
+
     /* Optional 2D accelerator. Opt in with NJ_ENABLE_GFX_ACCEL=1; NULL keeps
      * software drawing. The port owns this table/context until VM teardown.
      * Uses gfx_accel_ud (which may intentionally be NULL), not port.ud.

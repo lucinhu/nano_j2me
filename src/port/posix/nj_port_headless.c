@@ -1227,6 +1227,7 @@ nj_status nj_port_headless_ex(nj_port *out, int width, int height,
 
     memset(out, 0, sizeof(*out));
     out->name = "headless";
+    out->first_paint_early = 1;
     out->ud = s;
     out->millis = hl_millis;
     out->now = nj_posix_now;

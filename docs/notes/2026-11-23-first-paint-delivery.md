@@ -67,3 +67,24 @@ quanta) rather than at a frame boundary, which the cooperative scheduler does
 not currently expose as a safe paint point.  Documented as an open core-side
 limitation; the title renders through the CLI/headless runner and in
 FreeJ2ME-Plus.
+
+
+## Port gate: synchronous-frame hosts only (0.5.37)
+
+The whole-corpus libretro probe on the r56 build exposed a regression that the
+CLI A/B sweep could not see: through the core, two Midnight Pool variants
+(`午夜台球圣诞中文版_8677.jar`, `ChristmasMidnightPool_1.0.8_320x240.jar`)
+turned black and refused serialization, while the r55 core passed and the CLI
+rendered both.  The cause is the libretro load path itself: it pumps frames
+while the MIDlet is still being constructed, so a first paint delivered at
+frame entry can run before the title's own loader thread has initialized the
+images its `paint()` uses (the same class of race the fix was meant to remove,
+in the opposite direction).
+
+The delivery is therefore gated on a new port capability,
+`nj_port.first_paint_early`, set only by the headless/CLI port (a host that
+runs `startApp()` to completion before it pumps frames).  Frontends with an
+asynchronous loader leave it zero and keep the frame-boundary paint.  After the
+gate the two Midnight Pool variants pass through the core again, `Skater_by_BFLM`
+still renders in the CLI, and the core's Skater behaviour is unchanged (black;
+the scheduler-level first-paint point remains open).

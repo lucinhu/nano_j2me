@@ -586,7 +586,8 @@ nj_status nj_midp_frame(nj_vm *vm)
      * startApp() parked in a blocking call) keep the request pending so the
      * own frame delivers it, never in the middle of application code.
      */
-    if (vm->fresh_paint && vm->in_call_pump == 0 && vm->in_paint == 0 &&
+    if (vm->fresh_paint && vm->port != NULL && vm->port->first_paint_early &&
+        vm->in_call_pump == 0 && vm->in_paint == 0 &&
         !vm->paint_active) {
         nj_ref fresh = vm->fresh_paint_ref;
         vm->fresh_paint = 0u;
