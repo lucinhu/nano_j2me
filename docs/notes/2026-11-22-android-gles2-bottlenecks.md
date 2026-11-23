@@ -489,3 +489,50 @@ import/upload, readback, commit), not the fixed setup/driver overhead.  A real
 win still requires the whole-frame design (no per-transaction readback and no
 CPU commit except when an observer asks), which is the next multi-round step.
 The prototype, the hook and the SDL2 wiring were reverted in full.
+
+## Round 5: the 2D accel transaction cost (2026-11-23)
+
+The prior phases measured the triangle path; this round measured the **2D
+accelerator path**, because with `NJ_SDL2_GLES2_2D=1` the same per-operation
+transaction (import, upload, draw, `glReadPixels`, CPU commit) serves every
+`fillRect`/`drawImage`.  Method: host SDL2/GLES2 CLI built with
+`-DNJ_GLES2_PROFILE=1`; a temporary `commit()` timer accumulated call count,
+pixels and nanoseconds (env `NJ_2D_PROF`); Galaxy on Fire 2, 560 frames @ 30 fps,
+heap 24, deep keys, `NJ_M3G_FORCE_ACCEL=1 --graphics gles2`.
+
+Triangle path (Doom3, 600 frames, forced GL): 966 flush transactions,
+413,799 triangles, `read_c` 501.2 ms, `read_d` 79.3 ms, `commit` 129.5 ms,
+`seed` 165.9 ms, `prep` 35.0 ms, `setup` 29.8 ms.
+
+Galaxy with 2D GL enabled: `gfx=223,518`; completed `fills=1,223`,
+`blits=153,165`, `declines=21,433`, `triangles=1,030,315`, `batches=2,446`;
+2D commits **154,388**, readback **436,319,549 px**, **4,543.0 ms** in 2D
+commit alone (29.4 µs/op average, ≈8.1 ms/frame).  That is about 2.8× the 3D
+colour readback volume on the same run and roughly a quarter of the 18.8 s
+wall time at 30 fps.
+
+Conclusion: on a 2D-heavy 3D title the dominant structural cost is the
+per-operation 2D readback, not the 3D transaction count.  A frame-resident 2D
+layer with a single readback per presented frame would remove close to 4 s of
+the 4.5 s measured here, which is what turns the forced-GL total (≈6.05 s user
+CPU) past software (3.83 s).  Deferring only the triangle readback (the
+`NJ_GLES2_UB` benchmark switch) was neutral-to-worse: total CPU 7.0–7.3 s
+baseline vs 7.1–8.8 s with readback+commit skipped, and Doom3 GL user 2.69 s vs
+software 2.10 s (UB 2.81 s) — the bytes move from user to sys time, the
+synchronous readback remains the serialization point.
+
+Planned implementation order (Stage B):
+1. **B1, screen-canvas 2D deferral**: on the first 2D screen-target operation
+   after a 3D commit, upload the current CPU surface as an RGBA frame texture;
+   subsequent fills/blits draw into the frame FBO with a tracked dirty union;
+   read back once at present (and on observers such as `getRGB`, save state or
+   screenshot, and before a declined op falls back to software).  Mutable Image
+   targets keep the synchronous path.  Expected: ~4 s saved on Galaxy.
+2. **B2, triangles into the frame FBO** with resident colour+depth, so the 3D
+   commit and the 2D layer share one surface (removes the remaining per-flush
+   readbacks and the seed upload).
+3. **B3, EGL presentation** (Android first) to drop the frame-end readback for
+   display; SDL keeps the readback fallback.
+
+All instrumentation and the UB benchmark switch were reverted; the worktree is
+clean at `2e6524a`.

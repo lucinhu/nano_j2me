@@ -48,7 +48,12 @@ M3G scene --resident FBO, resident textures--> composite (GL) --> present (EGL w
    frame-resident FBO, keep the current readback at frame end, so only one
    transaction per frame instead of two.  Expected: remove ~50% of `read_c`,
    `prep`/`setup`, seed and upload costs; measure against software on Galaxy
-   and the m3gtarget fixture.
+   and the m3gtarget fixture.  **Round-5 measurement changed the priority:**
+   the 2D accelerator's per-operation transaction readback is the dominant
+   cost on Galaxy (154,388 commits, 436M px, 4.54 s in one 560-frame run; see
+   `2026-11-22-android-gles2-bottlenecks.md`), so implement **B1 screen-canvas
+   2D deferral** before/with the triangle frame FBO -- the two must share one
+   frame surface (B2) to matter.
 2. **Resident textures**: version-stamp M3G textures, upload only on change;
    remove per-transaction `up_c`/`up_d`/`import_c`.
 3. **GL presentation**: render the final frame into the platform GL surface
