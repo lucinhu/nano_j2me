@@ -2023,3 +2023,22 @@ Tooling: `tools/check_corpus_motion.py` gained `--timeout` (default 180 s) and
 catches `subprocess.TimeoutExpired` as a per-title `timeout` result;
 previously one hung title raised out of the worker pool and killed the entire
 probe run (first attempt this round died on `TheMummy_K700F`).
+
+## Round 225: expanded-corpus audio probe (600 titles) (2026-11-23)
+
+`tools/check_corpus_audio.py` gained `--jobs` (parallel workers, one private
+RMS directory per title) and was run over the merged expanded rows
+(`.local-tools/debug-runs/rows-merged-r223`, 1,705 rows, 240 paced frames,
+16 jobs, seed 5), sampling the titles that actually carry
+`.mid/.mp3/.amr/.wav/.imy/.mld` assets:
+
+- **600 titles sampled: 107 delivered audio (tones or PCM), 493 silent,
+  0 `silent-started`, 0 timeouts.**
+- The `silent-started` invariant holds: every sampled title that started a
+  media `Player` also delivered PCM - there is no case of "the Player started
+  but the mixer got nothing" (that shape would be a runtime regression).
+  The remaining silent titles are menus/loading phases that wait for input,
+  or titles whose sound assets are containers rather than decoded streams;
+  they were previously characterised in the round-118/219 samples.
+- This completes the standard probe quartet on the expanded corpus (round 223
+  visual, round 224 save-state/motion/deep, this round audio).
