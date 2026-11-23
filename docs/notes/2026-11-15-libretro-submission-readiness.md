@@ -1879,3 +1879,7 @@ r55 core; results will be recorded in `docs/CORPUS.md` when it finishes.
   OPEN/**MERGEABLE** at that head with the body rewritten to mention the
   section.  `tools/check_libretro_submission_bundle.sh` -> 32 passed,
   0 failed.
+- Stronger evidence: `tools/check_libretro_submission_bundle.sh
+  --apply-clones --super-clone /tmp/lr-super-r58 --docs-clone /tmp/r243-docs`
+  -> **39 passed, 0 failed** (patches applied to clean clones at the recorded
+  baselines and the upstream site rebuilt with mkdocs).
