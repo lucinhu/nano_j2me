@@ -93,3 +93,10 @@ j2me-game-digital-chocolate-party-night-casanova
 j2me-game-chucknorris
 j2me-game-tetrisrevolution
 sony-ericsson-k-7-and-k-8
+# single-item retail/3D titles added in round 246 (each item holds one jar)
+medal-of-honor-j2me
+tank-raid-v-1-0-0-n-70-ru
+fmx-33-d-se-k-800-en-fr-it-de-es-gen-0-8-3
+4-wheel-x-3-d-nokia-6280-en-fr-it-de-es-gen-0-5-15
+mdoom
+spyro-mobile-games-espc

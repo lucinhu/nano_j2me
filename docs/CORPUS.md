@@ -2244,3 +2244,25 @@ titles, 120 frames) found **1,045 clean and 1 with linkage hits**:
 other title in both batches executes without a swallowed linkage error, so the
 runtime's implemented API surface matches what the collected corpus actually
 references (apart from Doom 3's unused JSR-226 SVG symbols).
+
+## Round 246: six more retail titles from single-item archive.org collections (2026-11-23)
+
+archive.org's `j2me-game-*` single-item collections and a few retail uploads
+were used to extend the corpus beyond the two big bundles. The fetcher's
+loose-JAR ingestion added six new titles (the rest deduplicated against the
+K700/K800 batch), all measured with the 0.5.39 CLI:
+
+| title | result | notes |
+|---|---|---|
+| `4WheelX3D_Nokia6280_EN-FR-IT-DE-ES_GEN_0-5-15.jar` | ok, 600 frames / 41,890 gfx | motion probe: 3 unique frames, 97% non-black |
+| `FMX33D_SE_K800_EN-FR-IT-DE-ES_GEN_0-8-3.jar` | ok, 600 / 50,137 gfx | 3 frames, 100% |
+| `FMX33D_SE_W508_EN-FR-IT-DE-ES_GEN_1-2-7.jar` | ok, 600 / 66,108 gfx | 3 frames, 100% |
+| `MDoom_Optimized.jar` | ok, 600 / 29,706 gfx | 1 frame, 97% (static menu/loading screen) |
+| `Medal_of_Honor.jar` | ok, 600 / 27,615 gfx | 3 frames, 72% |
+| `Tank_Raid_v1_0_0_ N70_Ru.jar` | ok, 600 / 242,463 gfx | 3 frames, 99% |
+
+Compatibility matrix refreshed by overlaying these rows: **2,484 titles,
+2,444 `运行正常`** (15 bad-jar, 9 title-exception, 6 timeout, 4 failure,
+3 no-frame, 3 title-exit); regeneration is byte-deterministic.  The six item
+identifiers were added to `tools/corpus_items.txt` so a corpus rebuild
+reproduces them.

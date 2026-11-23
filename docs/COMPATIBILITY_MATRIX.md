@@ -1,6 +1,6 @@
 # Compatibility matrix
 
-One row per JAR from the compatibility corpus (2478 titles): fresh rows from the 2026-11-23 full 0.5.36 sweep on ec5617e (1,720 rows: tests/games plus the 1,316-file fetched cache), overlaid on the 2026-11-23 0.5.35 matrix; rows re-measured after the Choice.POPUP and first-paint fixes.
+One row per JAR from the compatibility corpus (2484 titles): fresh rows from the 2026-11-23 full 0.5.36 sweep on ec5617e (1,720 rows: tests/games plus the 1,316-file fetched cache), overlaid on the 2026-11-23 0.5.35 matrix; rows re-measured after the Choice.POPUP and first-paint fixes.; six additional archive.org retail titles (Medal of Honor, MDoom, Tank Raid, 4 Wheel Xtreme 3D, FMX III 3D K800/W508 builds) added 2026-11-23 from single-item archive.org collections and swept ok on the 0.5.39 CLI.
 
 Rows that were re-measured keep the newer numbers; the remaining
 historical rows keep the numbers their original sweep recorded, so
@@ -16,11 +16,11 @@ compare rows within one measurement batch, not across the whole table.
 Corpus provenance and size are in `docs/CORPUS.md`; regenerate this table
 with `tools/make_compat_matrix.py <rows dir>` after a new sweep.
 
-Built from `ec5617e`, 2026-11-23 (recorded by `tools/sweep_compat.py`).
+Built from `HEAD`, 2026-11-23 (recorded by `tools/sweep_compat.py`).
 
 | verdict | titles |
 | --- | --- |
-| 运行正常 | 2438 |
+| 运行正常 | 2444 |
 | 非可用包 | 15 |
 | 标题自身异常 | 9 |
 | 超时 | 6 |
@@ -30,11 +30,11 @@ Built from `ec5617e`, 2026-11-23 (recorded by `tools/sweep_compat.py`).
 
 | 3D API used | titles |
 | --- | --- |
-| - | 1747 |
+| - | 1749 |
 | nokia-ui | 607 |
-| m3g | 68 |
+| m3g | 70 |
 | m3g,nokia-ui | 30 |
-| mascot | 22 |
+| mascot | 24 |
 | mascot,nokia-ui | 2 |
 | m3g,mascot,nokia-ui | 1 |
 | m3g,mascot | 1 |
@@ -314,6 +314,7 @@ Built from `ec5617e`, 2026-11-23 (recorded by `tools/sweep_compat.py`).
 | vault/3zs6gamworms2008 240x320.jar | 567 | Worms 2008 | - | 1.3.11 | MIDP-2.0 | - | 20 | 16 | 600 | 227668287 | 0 | java/lang/ArrayIndexOutOfBoundsE | 运行正常 |  |
 | vault/4 Wheel Xtreme 3D.jar | 312 | 4 Wheel Xtreme 3D | - | 0.5.29 | MIDP-2.0 | m3g | 57 | 16 | 600 | 54387654 | 0 | java/io/IOException,java/lang/Cl | 运行正常 |  |
 | vault/4 Wheel Xtreme.jar | 237 | 4 Wheel Xtreme | - | 0.7.0 | MIDP-2.0 | - | 19 | 16 | 600 | 1441541 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| vault/4WheelX3D_Nokia6280_EN-FR-IT-DE-ES_GEN_0-5-15.jar | 313 | 4 Wheel Xtreme 3D | - | 0.5.15 | MIDP-2.0 | m3g | 56 | 16 | 600 | 126752445 | 0 | java/io/IOException,java/lang/Cl | 运行正常 |  |
 | vault/4in1 Memory.jar | 213 | 4 in 1 | - | 1.0 | MIDP-2.0 | - | 6 | 16 | 600 | 845144 | 1 | java/io/EOFException,java/lang/N | 标题自身异常 | game code threw java.lang.NullPointerExcepti |
 | vault/4x4 Extreme Offroad-Lite.jar | 214 | 4x4 Extreme OffRoad | - | 1.0.0 | MIDP-2.0 | - | 80 | 16 | 600 | 2268086761 | 0 | java/io/IOException,java/lang/Nu | 运行正常 |  |
 | vault/4x4 Extreme Rally - World Tour.jar | 378 | 4x4 Extreme Rally World Tour | - | 1.0.2 | MIDP-2.0 | - | 9 | 16 | 600 | 614280 | 0 | java/io/IOException,java/lang/Nu | 运行正常 |  |
@@ -775,6 +776,8 @@ Built from `ec5617e`, 2026-11-23 (recorded by `tools/sweep_compat.py`).
 | vault/FIFA_2003_by_BFLM.jar | 97 | FIFA 2003 | - | 0.6.2 | MIDP-1.0 | nokia-ui | 5 | 16 | 600 | 1019514 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
 | vault/FIFA_2005_vXXX.jar | 118 | FIFA 2005 | - | 0.4.6 | MIDP-1.0 | - | 3 | 16 | 600 | 241434 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
 | vault/FIFA_Football_2004_by_BFLM.jar | 113 | EA Sports FIFA Football 2004 | - | 0.5.1 | MIDP-1.0 | nokia-ui | 3 | 16 | 600 | 4102415 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| vault/FMX33D_SE_K800_EN-FR-IT-DE-ES_GEN_0-8-3.jar | 342 | FMXIII 3D | - | 0.8.3 | MIDP-2.0 | mascot | 23 | 16 | 600 | 79190335 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| vault/FMX33D_SE_W508_EN-FR-IT-DE-ES_GEN_1-2-7.jar | 311 | FMX III | - | 1.2.7 | MIDP-2.0 | mascot | 22 | 16 | 600 | 96819858 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
 | vault/Family Guy - Uncensored.jar | 471 | Family Guy Uncensored | - | 1.0.4 | MIDP-2.0 | - | 10 | 16 | 600 | 7200005 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
 | vault/Family Guy 2.jar | 808 | Family Guy 2 | - | 1.0.0 | MIDP-2.0 | - | 25 | 16 | 600 | 15171259 | 0 | java/lang/ArrayIndexOutOfBoundsE | 运行正常 |  |
 | vault/FarCry 2.jar | 626 | Far Cry 2 | - | 1.0.8 | MIDP-2.0 | - | 17 | 16 | 600 | 126040750 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
@@ -938,6 +941,7 @@ Built from `ec5617e`, 2026-11-23 (recorded by `tools/sweep_compat.py`).
 | vault/Luxor2_Nokia_ N95.jar | 802 | LUXOR 2 | - | 1.0.11 | MIDP-2.0 | - | 5 | 16 | 600 | 268658386 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
 | vault/LuxorQuest.jar | 755 | Luxor Quest_freemobilejavaga | - | 1.1.1 | MIDP-2.0 | - | 22 | 16 | 600 | 3867194 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
 | vault/M.A.C.H_Air_Combat.jar | 136 | MACH | - | 0.4.5 | MIDP-2.0 | - | 3 | 16 | 600 | 3950539755 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| vault/MDoom_Optimized.jar | 19 | MDoom | - | 1.0 | MIDP-1.0 | - | 5 | 16 | 600 | 4187425 | 0 | - | 运行正常 |  |
 | vault/MacrospaceDrakengard.jar | 172 | Drakengard | - | 1.0.2 | MIDP-1.0 | nokia-ui | 6 | 16 | 600 | 837757 | 0 | java/io/IOException,javax/microe | 运行正常 |  |
 | vault/Madagascar 2 Escape to Africa (176x208 176x220 and 240x320).jar | 577 | Madagascar Escape 2 Africa | - | 1.1.1 | MIDP-2.0 | nokia-ui | 10 | 16 | 600 | 5311552831 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
 | vault/Mafia.Wars.Yakuza.jar | 222 | Mafia Wars 3 | - | 1.2.09 | MIDP-2.0 | - | 8 | 16 | 600 | 1406059 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
@@ -960,6 +964,7 @@ Built from `ec5617e`, 2026-11-23 (recorded by `tools/sweep_compat.py`).
 | vault/Medal of Honor - Airborne.jar | 547 | Medal Of Honor Airborne | - | 4.5.25 | MIDP-2.0 | - | 32 | 16 | 600 | 10342281 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
 | vault/Medal of Honor 2010.jar | 1118 | Medal of Honor 2010 | - | 4.4.47 | MIDP-2.0 | - | 33 | 16 | 600 | 1531108 | 0 | - | 运行正常 |  |
 | vault/Medal of Honor.jar | 418 | Medal of Honor | - | 1.12.73 | MIDP-2.0 | - | 41 | 16 | 600 | 618759417 | 0 | - | 运行正常 |  |
+| vault/Medal_of_Honor.jar | 104 | Medal of Honor | - | 1.18.28 | MIDP-2.0 | - | 9 | 16 | 600 | 3267110132 | 0 | - | 运行正常 |  |
 | vault/Medieval Combat - Age of Glory.jar | 267 | Medieval Combat - Age of Glo | - | 1.0.4 | MIDP-2.0 | - | 6 | 16 | 600 | 162138922 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/Mega Tower Assault.jar | 848 | Mega Tower Assault | - | 1.2.6 | MIDP-2.0 | - | 16 | 16 | 600 | 5583007 | 0 | - | 运行正常 |  |
 | vault/MegaMan 3_320x240.jar | 210 | Mega Man III | - | 1.0.0 | MIDP-2.0 | - | 14 | 16 | 600 | 2796671 | 0 | java/io/EOFException,java/lang/A | 运行正常 |  |
@@ -1562,6 +1567,7 @@ Built from `ec5617e`, 2026-11-23 (recorded by `tools/sweep_compat.py`).
 | vault/TRANSFORMERS_ REVENGE OF THE FALLEN (320x240) 1.0.0 Multi3 [PHONEKY].jar | 597 | TRANSFORMERS: ROTF | - | 1.0.0 | MIDP-2.0 | - | 31 | 16 | 600 | 51754483 | 0 | java/lang/ArrayIndexOutOfBoundsE | 运行正常 |  |
 | vault/TRANSFORMERS_ REVENGE OF THE FALLEN (360x640) 1.0.0 [Glu Mobile Ltd].jar | 731 | TRANSFORMERS Revenge of the  | - | 1.0.0 | MIDP-2.0 | - | 36 | 16 | 600 | 34461216 | 0 | java/lang/ArrayIndexOutOfBoundsE | 运行正常 |  |
 | vault/Taiko_no_Tatsujin_Japanese128x128-40143-mobiles24.jar | 214 | Taiko no Tatsujin | - | 1.0.0 | MIDP-2.0 | - | 10 | 16 | 600 | 92031311 | 0 | java/lang/NullPointerException | 运行正常 |  |
+| vault/Tank_Raid_v1_0_0_ N70_Ru.jar | 369 | TankRaid | - | 1.0 | MIDP-2.0 | m3g | 156 | 16 | 600 | 60713750 | 0 | javax/microedition/rms/InvalidRe | 运行正常 |  |
 | vault/Taxi_In_City.jar | 79 | XiMPDA- Taxi In City | - | 1.10 | MIDP-1.0 | nokia-ui | 2 | 16 | 600 | 1154524 | 0 | java/io/IOException | 运行正常 |  |
 | vault/Team Monster Us vs Them_320x240.jar | 526 | Team Monster | - | 0.9.15 | MIDP-2.0 | - | 5 | 16 | 600 | 16981052 | 0 | java/io/IOException,javax/microe | 运行正常 |  |
 | vault/Teamcsctourcycling_sek700.wz.cz.jar | 131 | Team CSC Tour Cycling | - | 1.0 | MIDP-1.0 | nokia-ui | 11 | 16 | 601 | 3037445 | 0 | - | 运行正常 |  |
