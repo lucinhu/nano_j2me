@@ -2215,3 +2215,23 @@ Submission materials were re-checked at the same revision:
 `tools/check_libretro_submission_bundle.sh` -> 32 passed, 0 failed; upstream
 masters unchanged (`libretro-super` `55e50a8`, `libretro/docs` `96ee874e`), so
 the open PR branches remain valid.
+
+## Round 244: linkage-gap scan over the K700/K800 batch (2026-11-23)
+
+`tools/check_corpus_linkage.py` replayed all 644 available titles of the
+Sony Ericsson batch with the 0.5.39 CLI for 120 frames and reported every
+linkage-class error, including ones a title catches and survives:
+
+| result | titles |
+|---|---|
+| clean | 643 |
+| with linkage hits | 1 |
+
+The single hit is `vault/ac.jar` (`CopterGame.initSound()` references
+`com/symbian/midp/compatibility/runtime/MIDletExecutor`), and the JAR does not
+bundle that class or any `com/symbian` compatibility package — a title-side
+packaging gap, already classified `title-exception` with the
+"references a class it does not bundle" note.  No runtime API gap was found on
+this batch; combined with the earlier 1,048-JAR audit (only Doom 3's unused
+JSR-226 SVG symbols remain), the collected corpus is linkage-clean apart from
+documented title-side defects.
