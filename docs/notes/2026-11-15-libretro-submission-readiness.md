@@ -1828,3 +1828,37 @@ r55 core; results will be recorded in `docs/CORPUS.md` when it finishes.
 - Release docs: `docs/RELEASE_0.5.39.md`, `docs/LIBRETRO.md` r58 paragraph,
   "0.5.39 / r58" section in `docs/LIBRETRO_SUBMISSION.md`, and the
   `docs/CORPUS.md` round-235 probe table.
+
+## Round 239: whole-corpus save-state probe on r58
+
+- `tools/check_libretro_states.py` over the full merged row set
+  (`.local-tools/debug-runs/rows-merged-r223`, 1,664 titles, 300 frames at
+  60 Hz pacing, 16 jobs) with the r58 core: **1,660 state round trips, 4
+  failures**.  The four are the documented long-first-frame / boot-handshake
+  class (`assault`, `毁灭战士3_10598`, `Asphalt4EliteRacing_1.0.0_320x240`,
+  `TheMummy_K700F`), all failing only
+  `serialize_writes_state`/`unserialize_restores_state`; every other title
+  passes the three serialize assertions through the real core.
+- This completes the standard probe quartet on the whole corpus: visual
+  (1,658/1,664), save states (1,660/1,664), plus motion/deep/audio samples.
+
+## Round 240: submission re-check at release r58
+
+- HEAD `d580f8f`, worktree clean, release v0.5.39/r58 live (7 GitHub assets).
+- `tools/check_libretro_submission_bundle.sh` -> **32 passed, 0 failed**
+  (default baselines).
+- `tools/simulate_ci_builds.sh` -> **all 3 CI contracts satisfied** at this
+  revision: linux `.so` 4,218,408 B, windows `.dll` 3,726,640 B, android
+  target 12,511,760 B (template rename).  `.gitlab-ci.yml` still extends the
+  upstream `libretro-infrastructure/ci-templates` windows/linux/android CMake
+  templates and was not changed.
+- `tools/check_libretro_option_docs.py` -> **all 19 core options documented**
+  on the upstream libretro/docs page.
+- Upstream masters unchanged (`libretro-super` `55e50a8`,
+  `libretro/docs` `96ee874e`), so PR #2204 (head `a04d259`) and PR #1239
+  (head `95a1d0a`) remain OPEN/MERGEABLE and apply cleanly.  No merge claimed.
+- Submission state: metadata, tracked super patch, docs page/patches, CI
+  config, licenses/notices, release archives and all validation evidence are
+  in place; the remaining known limitations are runtime behaviours (TheMummy
+  boot handshake, Skater core first paint, long-first-frame save service,
+  title-side black titles) and are documented rather than hidden.
