@@ -2147,3 +2147,24 @@ extra failures in the Midnight Pool Christmas variants
 (`午夜台球圣诞中文版_8677.jar`, `ChristmasMidnightPool_1.0.8_320x240.jar`); after
 gating the early first paint to synchronous-frame ports both pass, so the
 release core matches the r55 failure set exactly.
+
+## Round 233: r57 whole-corpus visual probe (2026-11-23)
+
+The merged 1,664-title row set was probed through the r57 core (300 paced
+frames, 8 jobs, per-row screen profiles) after the round-232 load-clock fix:
+
+| result | count |
+| --- | --- |
+| passed | 1658 |
+| known limitation | 1 (`毁灭战士3_10598`, constructor-time loading screen) |
+| failed | 5 |
+
+The five failures are `TheMummy_K700F` (boot-handshake black + refused
+serialize), `PAC-MAN (176x220)` (title-side empty Sprint Muglet URI),
+`assault` (slow loader, serialize refused), `Skater_by_BFLM` (black only
+through the core; needs a scheduler-level first paint) and
+`Asphalt4EliteRacing` (renders; long-first-frame serialize refusal).  The r56
+probe had nine failures; the four Midnight Pool variants (`MidnightPool1`,
+`Midnight Pool`, `Midnight Pool2`, `MidnightPool_K700_EN`) now pass, with no
+new failures.  The fix and its per-title A/B evidence are in
+`docs/notes/2026-11-21-fetched-black-screen-titles.md` (Round 232).

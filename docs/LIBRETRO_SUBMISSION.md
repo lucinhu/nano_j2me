@@ -2112,6 +2112,37 @@ Super PR branch `a6d3f34`, docs PR `95a1d0a`; both OPEN/MERGEABLE, no merge
 claimed.
 
 
+### 0.5.38 / r57 (2026-11-23)
+
+Release: https://github.com/lucinhu/nano_j2me/releases/tag/v0.5.38 - tag
+`v0.5.38` (metadata commit `84875d6`), eight libretro targets plus five
+per-ABI Android APKs (versionCode 538); `.info` SHA-256
+`c3455a6c5cfa3998d0aaba5c0e5372367ba966dc0c5e76c7a4f9de4145cd88d2`
+(`display_version = "0.5.38"`); the tracked super patch applies to
+`libretro-super` master `55e50a8` as fork commit `b1436c4`.  r57 ships the
+round-232 load-clock fix: `lr_load()` anchors its virtual load clock
+(`load_ms = 0; load_start_us = lr_real_us()`), so the first load no longer
+reports host uptime through the LOAD-phase `System.currentTimeMillis()`.  That
+unanchored reading made `nj_now_ms()` fold a 2^32 epoch into the VM clock and
+one scheduler frame pass took ~9 s, which is why `MidnightPool1`,
+`Midnight Pool2`, `Midnight Pool` and `MidnightPool_K700_EN` stayed black and
+refused `retro_serialize()` through the core while rendering in the CLI.
+MidnightPool1 now renders up to 8,348 non-black pixels with 85 distinct frames
+and passes the full 45-check harness including save/restore
+(`serialize_size=157,593,664`); Midnight Pool2 passes as well.  The wider
+`nj_now_ms()` clock-domain mixing remains a robustness follow-up (documented
+in `docs/notes/2026-11-21-fetched-black-screen-titles.md`).
+
+Validation: full serial CTest **210/210** (370.24 s), mock frontend matrix
+**20/20**, real RetroArch LoopDemo 120 frames PASS, Wine x86-64 **4/4 @300**,
+submission bundle **32/32**; whole-corpus libretro visual probe on r57:
+1664 titles → 1658 passed, 1 known limitation (`毁灭战士3_10598` slow
+constructor), 5 failed (`TheMummy_K700F`, `PAC-MAN (176x220)`, `assault`,
+`Skater_by_BFLM`, `Asphalt4EliteRacing`) — four fewer failures than r56 with
+no regressions, the four Midnight Pool variants now passing.  Super PR branch
+`b1436c4`, docs PR head `95a1d0a` (baseline `96ee874`); both
+OPEN/MERGEABLE, no merge claimed.
+
 ### 0.5.37 / r56 (2026-11-23)
 
 Release: https://github.com/lucinhu/nano_j2me/releases/tag/v0.5.37 - tag
@@ -2120,7 +2151,7 @@ port gate), eight libretro targets plus five
 per-ABI Android APKs (versionCode 537); `.info` SHA-256
 `71af9f4689705a59fd817a2e4549c7d9f340d7ea5a8f426a04766d30e66780c2`
 (`display_version = "0.5.37"`); the tracked super patch applies to
-`libretro-super` master `55e50a8` as fork commit `b1436c4`.  r56 ships the
+`libretro-super` master `55e50a8` as fork commit `f83ca18`.  r56 ships the
 first-paint delivery fix: `Display.setCurrent()` records a one-shot request
 that the frame pump serves after input and before the first background
 timeslice, so a canvas's initial `paint()` runs before a just-started loader

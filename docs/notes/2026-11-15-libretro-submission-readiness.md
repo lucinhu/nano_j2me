@@ -1784,3 +1784,25 @@ r55 core; results will be recorded in `docs/CORPUS.md` when it finishes.
   commit `31610d4` gates the delivery, both titles pass again, and the r56
   artifacts are built at that revision.  The core-side scheduler-level first
   paint (Skater) remains an open limitation.
+
+## Round 233: release 0.5.38 / r57
+
+- Metadata commit `84875d6` (`0.5.38`), `.info` SHA-256
+  `c3455a6c5cfa3998d0aaba5c0e5372367ba966dc0c5e76c7a4f9de4145cd88d2`, super
+  patch regenerated against `libretro-super` master `55e50a8` as fork commit
+  `b1436c4` (verified with `git apply --check` on a fresh clone).
+- r57 cores built from clean worktree `/var/tmp/nj2me-r57-tree` at `84875d6`
+  (`tools/build_libretro_cores.sh --jobs 12 --out
+  /var/tmp/nj2me-submission-dist-r57 all`, 8 targets x 16 files = 128 files);
+  installed as `build/libretro-dist` after backing up the r56 tree.
+- Five per-ABI APKs built with versionCode 538; the libretro core archive
+  `nj2me-0.5.38-libretro-cores.zip` is 12,174,950 bytes, SHA-256
+  `f7b1b69f4cc563e66fb3395d2a8fc204ca636de1dcc00b488f0aa57063d2c1a9`
+  (128 entries).
+- The runtime change is the round-232 load-clock anchor (first load no longer
+  reports host uptime to the VM clock; no 2^32 epoch fold, no multi-second
+  frame passes).  Whole-corpus probe on r57: 1664 titles -> 1658 passed,
+  1 known limitation, 5 failed (r56: 1654/1/9; the four Midnight Pool variants
+  now pass, no regressions).
+- Validation: full serial CTest 210/210 (370.24 s), mock 20/20, real RetroArch
+  LoopDemo 120 frames PASS, Wine 4/4 @300, submission bundle 32/32.

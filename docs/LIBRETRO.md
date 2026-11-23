@@ -84,7 +84,17 @@ Outputs go to `build/libretro-dist/<target>/`, with a library and its metadata.
 Use `--no-strip` to retain symbols. `all` selects the script's supported targets
 and requires all of their toolchains.
 
-The eight candidates currently in `build/libretro-dist/` are the r56 package
+The eight candidates currently in `build/libretro-dist/` are the r57 package
+(the 0.5.38 release) built on 2026-11-23 from revision `84875d6`.  r57 carries
+the round-232 load-clock fix: `lr_load()` now anchors its virtual load clock
+(`load_ms = 0; load_start_us = lr_real_us()`), so the first load no longer
+reports the host uptime through the LOAD-phase `System.currentTimeMillis()`.
+The unanchored reading made `nj_now_ms()` fold a 2^32 epoch into the VM clock
+and one scheduler frame pass took about 9 seconds; `MidnightPool1` and
+`Midnight Pool2` now render (up to 8,348 non-black pixels and 85 distinct
+frames) and save/restore through the core, and the whole-corpus probe on this
+package passes 1658 of 1664 titles with only five documented failures.  The
+previous package was r56 (the 0.5.37 release) built on 2026-11-23 from revision `31610d4`
 (the 0.5.37 release) built on 2026-11-23 from revision `31610d4`
 (metadata `7f42171` plus the port gate for the early first paint).  r56 carries
 the first-paint delivery fix (the newly current Displayable is painted after
