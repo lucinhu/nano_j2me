@@ -130,7 +130,8 @@ def one(job):
                "--heap", str(heap), "--fps", "30", "--run-frames", str(RUN),
                "--keys", "@" + keys, "--rms-dir", rms, "--stats", path]
         try:
-            p = subprocess.run(cmd, capture_output=True, text=True, timeout=90)
+            p = subprocess.run(cmd, capture_output=True, text=True,
+                              errors="replace", timeout=90)
             err, rc = p.stderr, p.returncode
         except subprocess.TimeoutExpired:
             row.update({"rc": 124, "heap": heap, "verdict": "timeout"})
@@ -234,7 +235,8 @@ def one(job):
         if row.get("device"):
             cmd[cmd.index("--stats"):cmd.index("--stats")] = ["--device", row["device"]]
         try:
-            p = subprocess.run(cmd, capture_output=True, text=True, timeout=90)
+            p = subprocess.run(cmd, capture_output=True, text=True,
+                              errors="replace", timeout=90)
             m = re.search(r"stats:.*", p.stderr)
             stats = dict(re.findall(r"(\w+)=(\d+)", m[0])) if m else {}
             frames = int(stats.get("frames", 0))
@@ -265,7 +267,8 @@ def one(job):
                "--rms-dir", os.path.join(OUT, "rms", base.replace(".jar", "") + "-nokeys-te"),
                "--stats", path]
         try:
-            p = subprocess.run(cmd, capture_output=True, text=True, timeout=90)
+            p = subprocess.run(cmd, capture_output=True, text=True,
+                              errors="replace", timeout=90)
             m = re.search(r"stats:.*", p.stderr)
             stats = dict(re.findall(r"(\w+)=(\d+)", m[0])) if m else {}
             frames = int(stats.get("frames", 0))
@@ -298,7 +301,8 @@ def one(job):
                "--rms-dir", os.path.join(OUT, "rms", base.replace(".jar", "") + "-nokeys-timeout"),
                "--stats", path]
         try:
-            p = subprocess.run(cmd, capture_output=True, text=True, timeout=90)
+            p = subprocess.run(cmd, capture_output=True, text=True,
+                              errors="replace", timeout=90)
             stats = dict(re.findall(r"(\w+)=(\d+)", (re.search(r"stats:.*", p.stderr) or [""])[0])) if "stats:" in p.stderr else {}
             frames = int(stats.get("frames", 0))
             uncaught = len(re.findall(r"uncaught exception in thread \d+:", p.stderr))
@@ -324,7 +328,8 @@ def one(job):
                "--rms-dir", os.path.join(OUT, "rms", base.replace(".jar", "") + "-unpaced"),
                "--stats", path]
         try:
-            p = subprocess.run(cmd, capture_output=True, text=True, timeout=90)
+            p = subprocess.run(cmd, capture_output=True, text=True,
+                              errors="replace", timeout=90)
             m = re.search(r"stats:.*", p.stderr)
             stats = dict(re.findall(r"(\w+)=(\d+)", m[0])) if m else {}
             frames = int(stats.get("frames", 0))
@@ -351,7 +356,8 @@ def one(job):
                "--rms-dir", os.path.join(OUT, "rms", base.replace(".jar", "") + "-dev"),
                "--stats", path]
         try:
-            p = subprocess.run(cmd, capture_output=True, text=True, timeout=90)
+            p = subprocess.run(cmd, capture_output=True, text=True,
+                              errors="replace", timeout=90)
             stats = dict(re.findall(r"(\w+)=(\d+)", (re.search(r"stats:.*", p.stderr) or [""])[0])) if "stats:" in p.stderr else {}
             frames = int(stats.get("frames", 0))
             if p.returncode == 0 and frames >= RUN // 2:
@@ -433,7 +439,8 @@ def main():
                 print("done", done, flush=True)
     try:
         head = subprocess.run(["git", "-C", ROOT, "rev-parse", "--short", "HEAD"],
-                              capture_output=True, text=True).stdout.strip()
+                              capture_output=True, text=True,
+                              errors="replace").stdout.strip()
     except OSError:
         head = ""
     with open(os.path.join(OUT, "meta.json"), "w", encoding="utf-8") as fh:

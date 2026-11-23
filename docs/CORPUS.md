@@ -2081,3 +2081,55 @@ The `silent-started` invariant holds in every family: nothing starts a media
 for `.mid`/`.mp3`/`.3gp` families are sampling-window effects (sound starts
 after the 240-frame menu), not decoder breakage - the full-corpus audio sample
 (round 225) and each format's own rows confirm the decoders run when reached.
+
+## Round 228: full 0.5.36 corpus sweep after the first-paint fix (2026-11-23)
+
+The whole expanded corpus was re-swept on the `ec5617e` CLI (the round-227
+first-paint delivery) instead of only the 150-title A/B sample:
+
+| verdict | titles |
+|---|---|
+| `ok` | 1684 |
+| `title-exception` | 9 |
+| `bad-jar` | 15 |
+| `timeout` | 5 |
+| `failure` | 2 |
+| `no-frame` | 3 |
+| `title-exit` | 2 |
+| **total** | 1720 |
+
+The rows file is `.local-tools/debug-runs/compat-20261123-r227/rows.jsonl`.
+Sixteen JARs had entered the persistent cache since the round-223 merged row
+set, hence 1,720 rows against the previous 1,705.
+
+Compared with the merged round-176 + K700/K800 rows (same corpus, earlier
+binaries), there are **six verdict changes, all improvements and no
+regressions**:
+
+| title | before | after | cause |
+|---|---|---|---|
+| `3D_Tetris.jar` | failure | ok | same-package `Class.newInstance()` (round 208) |
+| `BT_Info.jar` | failure | ok | `Choice.POPUP` support (round 217) |
+| `Gangstar2KingsOfLA_1.1.2_320x240.jar` | timeout | ok | self-paced rule (runs 600 frames unpaced) |
+| `Tetris_1.0.0_320x240.jar` | timeout | ok | self-paced rule |
+| `Slide a Lama.jar` | title-exception | ok | game now completes its boot |
+| `epub_reader_albite_136959_great.jar` | failure | title-exception | classified as spec-mandated `setTitle(null)` NPE |
+
+No title regressed, so the round-227 first-paint delivery is verdict-neutral
+across the full corpus.
+
+**Tooling bug found while collecting this evidence:** the sweep process died
+at 1,345 of 1,720 rows with
+`UnicodeDecodeError: 'utf-8' codec can't decode byte 0xe6 in position 18:
+invalid continuation byte` - one game logs raw non-UTF-8 bytes to the console
+and `subprocess.run(..., text=True)` decodes the whole capture strictly.
+`tools/sweep_compat.py` now passes `errors="replace"` on all seven
+`subprocess.run` calls, so a title's byte soup cannot kill a sweep.  The tool
+already resumes from an existing `rows.jsonl` (it skips file names already
+written), so the rerun only measured the remaining 375 rows.
+
+`docs/COMPATIBILITY_MATRIX.md` was refreshed from the same measurements:
+**2,478 titles, 2,438 `运行正常`** (15 bad-jar, 9 title-exception, 6 timeout,
+4 failure, 3 no-frame, 3 title-exit).  Regenerating twice gives identical
+bytes.  Provenance: the 2026-11-23 full 0.5.36 sweep overlaid on the
+2026-11-23 0.5.35 matrix; re-measured rows keep the newer numbers.
