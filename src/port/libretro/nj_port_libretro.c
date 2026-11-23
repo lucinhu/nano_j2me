@@ -2811,6 +2811,11 @@ static void lr_port_init(nj_lr *s)
     /* The core loads MIDlets inside its own frame pump, so a pending show
      * request must be painted before the loader thread continues. */
     s->port.show_before_background = 1;
+    /* Handset-like show-event delivery is opt-in while the event-thread model
+     * is being validated (NJ_ASYNC_SHOW=1). */
+    if (getenv("NJ_ASYNC_SHOW")) {
+        s->port.async_show = 1;
+    }
     s->port.display_init = lr_display_init;
     s->port.display_present = lr_display_present;
     s->port.input_poll = lr_input_poll;

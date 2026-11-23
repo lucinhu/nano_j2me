@@ -1228,6 +1228,13 @@ nj_status nj_port_headless_ex(nj_port *out, int width, int height,
     memset(out, 0, sizeof(*out));
     out->name = "headless";
     out->first_paint_early = 1;
+    /* Handset-like show events are opt-in while the event-thread model is
+     * being validated: a Canvas is "shown" only after showNotify() is
+     * delivered at a yield point, not the instant setCurrent() returns.
+     * NJ_ASYNC_SHOW=1 enables the model on this port. */
+    if (getenv("NJ_ASYNC_SHOW")) {
+        out->async_show = 1;
+    }
     out->ud = s;
     out->millis = hl_millis;
     out->now = nj_posix_now;

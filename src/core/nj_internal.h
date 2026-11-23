@@ -825,6 +825,12 @@ struct nj_vm {
      * reference keeps the target Displayable. */
     nj_u1         fresh_paint;
     nj_ref        fresh_paint_ref;
+    /* An asynchronous show request queued by setCurrent() when the port asks
+     * for handset-like show-event delivery (port->async_show).  Only the
+     * current Displayable is ever shown; a new setCurrent() replaces the
+     * request.  See nj_midp_deliver_show(). */
+    nj_u1         show_pending;
+    nj_ref        show_ref;
     /* Set while a paint is being delivered.  serviceRepaints() paints
      * synchronously, and a callSerially() runnable drained at the top of a
      * paint may itself ask for a repaint; without this the second one would

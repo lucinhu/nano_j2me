@@ -2608,6 +2608,8 @@ static int nj_load_blob(nj_vm *vm, const nj_u1 *blob, nj_size buffer_len,
     vm->app_painted_frame = 0u;
     vm->fresh_paint = 0u;
     vm->fresh_paint_ref = 0;
+    vm->show_pending = 0u;
+    vm->show_ref = 0;
     vm->app_paint_idle = 0u;
     vm->app_paint_period = 0u;
     return NJ_OK;

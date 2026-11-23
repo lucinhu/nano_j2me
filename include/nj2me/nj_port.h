@@ -831,6 +831,16 @@ typedef struct nj_port {
      * per frame and some loaders assume the older interleaving. */
     int show_before_background;
 
+    /* Deliver showNotify()/the "shown" state asynchronously, like a handset
+     * event thread, instead of treating a current Displayable as shown the
+     * moment setCurrent() returns.  With this set, setCurrent() queues a show
+     * request; the request is delivered from the next yield point a title can
+     * reach without returning to the frame loop (serviceRepaints()/repaint(),
+     * a frame entry, or the first paint), so a loader that loops until
+     * isShown() observes the event in due course - TheMummy_K700F needs
+     * exactly that handshake before it initialises its world. */
+    int async_show;
+
     /* Optional 2D accelerator. Opt in with NJ_ENABLE_GFX_ACCEL=1; NULL keeps
      * software drawing. The port owns this table/context until VM teardown.
      * Uses gfx_accel_ud (which may intentionally be NULL), not port.ud.

@@ -3577,6 +3577,9 @@ nj_status nj_port_sdl2_ex(nj_port *out, const char *title, int graphics_mode)
     memset(out, 0, sizeof(*out));
     s->port = out;
     out->name = "sdl2";
+    if (getenv("NJ_ASYNC_SHOW")) {   /* opt-in event-thread show model */
+        out->async_show = 1;
+    }
     out->ud = s;
 #if NJ_SDL2_GLES2
     {

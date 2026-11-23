@@ -3802,6 +3802,19 @@ NJFN(d_isShown)
         ret->i = 0;
         return NJ_OK;
     }
+    if (vm->port != NULL && vm->port->async_show && isa(vm, self, NJ_C_CANVAS)) {
+        /*
+         * Handset event-thread semantics: a Canvas is shown only after the
+         * show event has been delivered, not the instant setCurrent() returns.
+         * Loading code commonly polls isShown() and takes a different startup
+         * branch until it flips (TheMummy_K700F initialises its world from
+         * there).  The queue is delivered at the title's next yield point by
+         * nj_midp_deliver_show(): serviceRepaints()/repaint() inside a loader
+         * loop, a frame entry, or the first paint.
+         */
+        ret->i = fget(vm, self, NJ_C_CANVAS, F_C_VISIBLE, D_BOOL) ? 1 : 0;
+        return NJ_OK;
+    }
     /* This runtime has one foreground Display and no obscuring system screen.
      * Current-screen identity therefore determines isShown(), including before
      * the first paint delivers showNotify(). F_C_VISIBLE tracks that callback
@@ -4186,7 +4199,16 @@ NJFN(c_repaint)
         return NJ_OK;
     }
     nj_midp_repaint(vm);
-    c_paint_now(vm);
+    /*
+     * With async show semantics the first paint must not run inside
+     * setCurrent(): it would deliver showNotify() before the title ever got a
+     * chance to observe "not shown", which is the state its loader handshake
+     * is written against.  The frame pump paints from the queued request
+     * instead.  Synchronous hosts keep the historical immediate paint.
+     */
+    if (vm->port == NULL || !vm->port->async_show) {
+        c_paint_now(vm);
+    }
     return NJ_OK;
 }
 
@@ -4231,6 +4253,12 @@ NJFN(c_repaint_all)
 
 NJFN(c_serviceRepaints)
 {
+    /*
+     * A loader loop that yields through repaint()/serviceRepaints() is the
+     * handset event-thread yield point: deliver a queued show event here, so
+     * the loop observes isShown() flip without needing the frame pump.
+     */
+    nj_midp_deliver_show(vm);
 
     /*
      * MIDP: "serviceRepaints() forces any pending repaints to be serviced ...
@@ -5494,6 +5522,35 @@ static int canvas_visible(nj_vm *vm, nj_ref canvas)
     return 1;
 }
 
+void nj_midp_deliver_show(nj_vm *vm)
+{
+    nj_ref d;
+
+    if (!vm || !vm->show_pending) {
+        return;
+    }
+    d = nj_midp_current(vm);
+    vm->show_pending = 0u;
+    vm->show_ref = 0;
+    if (!d) {
+        return;
+    }
+    /*
+     * Deliver the event now, from whatever yield point noticed it.  A handset
+     * event thread does this between two bytecode quanta of the MIDlet: the
+     * loader loop sees isShown() false for its first iterations and true once
+     * it yields through repaint()/serviceRepaints().  A Canvas gets the full
+     * showNotify()/drawNotify() pair (canvas_visible() also delivers a pending
+     * sizeChanged()); other Displayables have no show callbacks in MIDP and
+     * only their shown state changes, so nothing else is needed.
+     */
+    if (isa(vm, d, NJ_C_CANVAS)) {
+        if (!canvas_visible(vm, d) && vm->exception) {
+            nj_clear_exception(vm);
+        }
+    }
+}
+
 /*
  * Keep the sticky key bitmap in step: GameCanvas.getKeyStates() reads it.
  *
@@ -6238,6 +6295,12 @@ nj_status nj_midp_set_current(nj_vm *vm, nj_ref d)
     vm->current_displayable = d;
     vm->fresh_paint = 1u;
     vm->fresh_paint_ref = d;
+    if (vm->port != NULL && vm->port->async_show) {
+        /* Queue a handset-style show event.  d is rooted through
+         * vm->current_displayable until delivery (or replacement). */
+        vm->show_pending = 1u;
+        vm->show_ref = d;
+    }
     /*
      * Deliver the first sizeChanged() while the MIDlet thread that called
      * setCurrent() still owns the stack.  This is what a handset does: the

@@ -672,6 +672,16 @@ nj_status nj_midp_frame(nj_vm *vm)
      * the only thing that draws it at all (炸弹人_10311 never calls repaint()
      * from its loop).
      */
+    /*
+     * Deliver a queued show event before the frame paints.  A handset shows a
+     * newly current screen on its event thread between MIDlet quanta; here the
+     * frame boundary is the same yield point for titles that never call
+     * serviceRepaints() from their loader.  The paint path also delivers it
+     * through canvas_visible(), whichever comes first.
+     */
+    if (vm->port != NULL && vm->port->async_show) {
+        nj_midp_deliver_show(vm);
+    }
     /* Freeze the eligible callback prefix before paint: a callback queued
      * inside paint() must wait for its own pending repaint cycle. */
     serially_pending = nj_midp_serially_pending(vm);

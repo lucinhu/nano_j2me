@@ -235,6 +235,11 @@ nj_ref nj_midp_display(nj_vm *vm);
 /* The Displayable currently shown, or NULL. */
 nj_ref nj_midp_current(nj_vm *vm);
 
+/* Deliver a queued show request (port->async_show): set the shown state and
+ * call showNotify()/drawNotify() as a handset event thread would.  Safe to
+ * call from any yield point; returns quickly when nothing is pending. */
+void nj_midp_deliver_show(nj_vm *vm);
+
 /* Make `d` the current Displayable (delivers showNotify, triggers a repaint). */
 nj_status nj_midp_set_current(nj_vm *vm, nj_ref d);
 
