@@ -560,6 +560,9 @@ static int triangles_run(nj_gles2 *s,const nj_gfx_triangles *const *packets,
 #define TRI_MARK(f) do{double _n=tri_now();tri_prof.f+=_n-_tp;_tp=_n;}while(0)
 #endif
     if(!current(s))return decline(s);
+    if(s->frame_enabled) {
+        if(!frame_flush_all(s)) { s->frame_enabled=0; return decline(s); }
+    }
     for(p=0;p<npackets;++p) {
         const nj_gfx_triangles *r=packets[p];
         int rx0,ry0,rx1,ry1;
@@ -731,6 +734,7 @@ static int triangles_run(nj_gles2 *s,const nj_gfx_triangles *const *packets,
                 (nj_s4)unpack_key(s->depth_readback+((size_t)i*(size_t)(x1-x0)+(size_t)j)*4u);
         }
     }
+    if(s->frame_enabled&&npackets>0)frame_mark_stale(s,packets[0]->surface);
     *submitted=total;s->stats.triangles+=total;++s->stats.batches;ok=1;
 #if NJ_GLES2_PROFILE
     TRI_MARK(commit);
@@ -920,6 +924,7 @@ int nj_gles2_triangles_begin(void *ud,const nj_gfx_triangles_session *session)
        session->y+session->height>session->surface->height)
         return decline(s);
     if(!current(s)||s->tri_session)return decline(s);
+    if(s->frame_enabled&&!frame_flush_all(s)) { s->frame_enabled=0; return decline(s); }
     SESS_START();
     if(!clean_errors(s)||!triangles_init(s))return decline(s);
     t=s->geometry;
@@ -1034,6 +1039,7 @@ int nj_gles2_triangles_end(void *ud,nj_u4 *submitted)
                         ((size_t)(ry+i)*(size_t)w+(size_t)(rx+j))*4u);
         }
     }
+    if(s->frame_enabled)frame_mark_stale(s,surf);
     SESS_MARK(commit);
 #if NJ_GLES2_PROFILE
     ++tri_prof.flushes;

@@ -67,6 +67,18 @@ int nj_gles2_triangles_begin(void *ud,
                              const nj_gfx_triangles_session *session);
 int nj_gles2_triangles_end(void *ud, nj_u4 *submitted);
 void nj_gles2_triangles_abort(void *ud);
+/* Frame-resident 2D layer (Stage B1, experimental). While enabled, fills and
+ * blits that target a CPU surface are accumulated in a GL texture per surface
+ * and committed back once with nj_gles2_frame_flush(); observers call flush
+ * before reading pixels. Up to NJ_GLES2_FRAME_SURFACES surfaces are tracked.
+ * Disabling flushes everything first. Returns 0 if the context is not current. */
+int nj_gles2_frame_enable(void *ud, int on);
+/* Commit the dirty rectangles of one surface (NULL: all tracked surfaces) back
+ * to CPU pixels. Returns 1 on success, 0 on decline (layer disabled). */
+int nj_gles2_frame_flush(void *ud, nj_surface *surface);
+/* Non-zero when the layer is enabled (ops may be deferred). */
+int nj_gles2_frame_active(const void *ud);
+
 void nj_gles2_get_stats(const nj_gles2 *state, nj_gles2_stats *out);
 
 /* Detach from all ports/contexts and finish drawing first. Returns 0 without

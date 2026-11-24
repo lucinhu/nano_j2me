@@ -34,6 +34,12 @@ struct nj_gles2 {
     GLint raster_keys, raster_old, raster_test, raster_write, raster_pass, raster_color;
     nj_u1 *depth_readback;
     size_t depth_readback_size;
+    /* Frame-resident 2D layer (Stage B1): one GL texture per tracked CPU
+     * surface; fills/blits accumulate in GL and are committed once. */
+    int frame_enabled;
+    struct frame_slot { nj_surface *surface; GLuint fbo, tex; int w, h, stride;
+                        int format, bpp, dirty, x0, y0, x1, y1, stale;
+                        texture_storage storage; } frame[4];
     /* Persistent triangle session (see nj_gles2_triangles_begin). While
      * tri_session is non-zero the CPU colour/depth buffers are stale and the
      * private framebuffer owns the result; the caller must not observe them. */
@@ -168,10 +174,328 @@ static int commit(nj_gles2 *s, const nj_gfx *g, int x, int y, int w, int h)
     }
     return 1;
 }
+/* Frame-resident 2D layer (Stage B1): fills and blits targeting a CPU surface
+ * are accumulated in one GL texture per surface and committed back once, with
+ * a readback of only the dirty union. Observers flush before reading pixels. */
+#define NJ_GLES2_FRAME_MAX 4
+
+static nj_u4 read_color(const nj_u1 *p, int format);
+static struct frame_slot *frame_find(nj_gles2 *s, const nj_surface *surface);
+static void frame_reset(nj_gles2 *s, struct frame_slot *f);
+static void frame_dirties(struct frame_slot *f, int x, int y, int w, int h);
+static int frame_activate(nj_gles2 *s, struct frame_slot *f);
+static int frame_commit(nj_gles2 *s, struct frame_slot *f);
+static void frame_draw(nj_gles2 *s, struct frame_slot *dst, int x, int y, int w, int h,
+                       GLuint src, int src_w, int src_h, int sx, int sy,
+                       int sw, int sh, int force_opaque);
+static void frame_neutral(nj_gles2 *s);
+static int frame_fill(nj_gles2 *s, const nj_gfx *g, int x, int y, int w, int h);
+static int frame_blit(nj_gles2 *s, const nj_gfx *g, const nj_gfx_blit *b);
+static void frame_cpu_write(nj_gles2 *s, const nj_surface *surface);
+static void frame_cpu_read(nj_gles2 *s);
+static void frame_mark_stale(nj_gles2 *s, const nj_surface *surface);
+static int frame_flush_all(nj_gles2 *s);
+
+static int frame_bytes(const struct frame_slot *f)
+{
+    return f && f->bpp > 0 && f->w > 0 && f->h > 0 &&
+           (nj_s8)f->stride >= (nj_s8)f->w*(nj_s8)f->bpp;
+}
+
+static struct frame_slot *frame_find(nj_gles2 *s, const nj_surface *surface)
+{
+    int i;
+    for (i = 0; i < NJ_GLES2_FRAME_MAX; ++i)
+        if (s->frame[i].surface == surface) return &s->frame[i];
+    return NULL;
+}
+
+static void frame_reset(nj_gles2 *s, struct frame_slot *f)
+{
+    if (f->fbo) s->gl.DeleteFramebuffers(1, &f->fbo);
+    if (f->tex) s->gl.DeleteTextures(1, &f->tex);
+    memset(f, 0, sizeof *f);
+}
+
+static struct frame_slot *frame_get(nj_gles2 *s, const nj_surface *surface)
+{
+    int i;
+    struct frame_slot *f = frame_find(s, surface);
+    if (f) return f;
+    for (i = 0; i < NJ_GLES2_FRAME_MAX; ++i)
+        if (!s->frame[i].surface) { f = &s->frame[i]; break; }
+    if (!f || !current(s)) return NULL;
+    memset(f, 0, sizeof *f);
+    f->surface = (nj_surface *)surface;
+    f->w = surface->width; f->h = surface->height; f->stride = surface->stride;
+    f->format = surface->format; f->bpp = bytes_per_pixel(surface->format);
+    if (!frame_bytes(f) || !dimensions(s, f->w, f->h) ||
+        f->w > s->max_viewport[0] || f->h > s->max_viewport[1]) {
+        memset(f, 0, sizeof *f);
+        return NULL;
+    }
+    s->gl.GenFramebuffers(1, &f->fbo);
+    s->gl.GenTextures(1, &f->tex);
+    if (!f->fbo || !f->tex || !clean_errors(s)) {
+        frame_reset(s, f);
+        return NULL;
+    }
+    f->stale = 1;
+    return f;
+}
+
+static void frame_dirties(struct frame_slot *f, int x, int y, int w, int h)
+{
+    if (x < 0) { w += x; x = 0; }
+    if (y < 0) { h += y; y = 0; }
+    if (x + w > f->w) w = f->w - x;
+    if (y + h > f->h) h = f->h - y;
+    if (w <= 0 || h <= 0) return;
+    if (!f->dirty) { f->x0 = x; f->y0 = y; f->x1 = x+w; f->y1 = y+h; f->dirty = 1; }
+    else {
+        if (x < f->x0) f->x0 = x;
+        if (y < f->y0) f->y0 = y;
+        if (x+w > f->x1) f->x1 = x+w;
+        if (y+h > f->y1) f->y1 = y+h;
+    }
+}
+
+static int frame_bind(nj_gles2 *s, struct frame_slot *f)
+{
+    s->gl.ActiveTexture(GL_TEXTURE0);
+    texture(s, f->tex);
+    s->gl.BindFramebuffer(GL_FRAMEBUFFER, f->fbo);
+    s->gl.FramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, f->tex, 0);
+    s->gl.FramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, 0);
+    s->gl.FramebufferRenderbuffer(GL_FRAMEBUFFER, GL_STENCIL_ATTACHMENT, GL_RENDERBUFFER, 0);
+    if (s->gl.CheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) return 0;
+    s->gl.Viewport(0, 0, f->w, f->h);
+    return 1;
+}
+
+static int frame_activate(nj_gles2 *s, struct frame_slot *f)
+{
+    size_t bytes = (size_t)f->w*(size_t)f->h*4u;
+    if (!reserve(&s->upload, &s->upload_size, bytes)) return 0;
+    if (!clean_errors(s) || !frame_bind(s, f)) return 0;
+    if (f->stale) {
+        int x, y;
+        for (y = 0; y < f->h; ++y) for (x = 0; x < f->w; ++x) {
+            nj_u4 c = nj_surface_get((const nj_surface *)f->surface, x, y);
+            nj_u1 *q = s->upload + ((size_t)y*(size_t)f->w+(size_t)x)*4u;
+            q[0] = (nj_u1)(c>>16); q[1] = (nj_u1)(c>>8); q[2] = (nj_u1)c;
+            q[3] = (nj_u1)((f->format == NJ_PIXFMT_ARGB8888) ? (c>>24) : 255u);
+        }
+        s->gl.ActiveTexture(GL_TEXTURE0);
+        texture(s, f->tex);
+        if (!texture_upload(s, &f->storage, f->w, f->h, GL_RGBA, s->upload)) return 0;
+        f->stale = 0;
+    }
+    return 1;
+}
+
+static int frame_commit(nj_gles2 *s, struct frame_slot *f)
+{
+    int x, y, w, h;
+    if (!f->dirty) return 1;
+    if (f->stale) { f->dirty = 0; return 1; }
+    if (!current(s) || !frame_bind(s, f)) return 0;
+    w = f->x1 - f->x0; h = f->y1 - f->y0;
+    if (!reserve(&s->readback, &s->readback_size, (size_t)w*(size_t)h*4u)) return 0;
+    s->gl.PixelStorei(GL_PACK_ALIGNMENT, 1);
+    s->gl.ReadPixels(f->x0, f->y0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, s->readback);
+    if (!clean_errors(s) || !current(s)) return 0;
+    for (y = 0; y < h; ++y) for (x = 0; x < w; ++x) {
+        const nj_u1 *q = s->readback + ((size_t)y*(size_t)w+(size_t)x)*4u;
+        nj_u4 c = ((nj_u4)q[3]<<24)|((nj_u4)q[0]<<16)|((nj_u4)q[1]<<8)|q[2];
+        nj_surface_set(f->surface, f->x0+x, f->y0+y, c);
+    }
+    f->dirty = 0;
+    return 1;
+}
+
+static int frame_flush_all(nj_gles2 *s)
+{
+    int i, ok = 1;
+    if (!s->frame_enabled) return 1;
+    for (i = 0; i < NJ_GLES2_FRAME_MAX; ++i)
+        if (s->frame[i].surface && s->frame[i].dirty) ok &= frame_commit(s, &s->frame[i]);
+    return ok;
+}
+
+static void frame_mark_stale(nj_gles2 *s, const nj_surface *surface)
+{
+    struct frame_slot *f;
+    if (!s->frame_enabled) return;
+    f = frame_find(s, surface);
+    if (f) f->stale = 1;
+}
+
+static void frame_cpu_write(nj_gles2 *s, const nj_surface *surface)
+{
+    struct frame_slot *f;
+    if (!s->frame_enabled) return;
+    f = frame_find(s, surface);
+    if (!f) return;
+    (void)frame_commit(s, f);
+    f->stale = 1;
+}
+
+static void frame_cpu_read(nj_gles2 *s)
+{
+    if (s->frame_enabled) (void)frame_flush_all(s);
+}
+
+static void frame_draw(nj_gles2 *s, struct frame_slot *dst, int x, int y, int w, int h,
+                       GLuint src, int src_w, int src_h, int sx, int sy,
+                       int sw, int sh, int force_opaque)
+{
+    GLfloat pos[8], uv[8];
+    float x0 = 2.0f*(float)x/(float)dst->w - 1.0f;
+    float x1 = 2.0f*(float)(x+w)/(float)dst->w - 1.0f;
+    float y0 = 2.0f*(float)y/(float)dst->h - 1.0f;
+    float y1 = 2.0f*(float)(y+h)/(float)dst->h - 1.0f;
+    pos[0] = x0; pos[1] = y0; pos[2] = x1; pos[3] = y0;
+    pos[4] = x0; pos[5] = y1; pos[6] = x1; pos[7] = y1;
+    uv[0] = (float)sx/(float)src_w;       uv[1] = (float)sy/(float)src_h;
+    uv[2] = (float)(sx+sw)/(float)src_w;  uv[3] = (float)sy/(float)src_h;
+    uv[4] = (float)sx/(float)src_w;       uv[5] = (float)(sy+sh)/(float)src_h;
+    uv[6] = (float)(sx+sw)/(float)src_w;  uv[7] = (float)(sy+sh)/(float)src_h;
+    s->gl.ActiveTexture(GL_TEXTURE0);
+    texture(s, src);
+    s->gl.UseProgram(s->program);
+    s->gl.Uniform1i(s->sampler, 0);
+    s->gl.Uniform1f(s->force_opaque, force_opaque ? 1.0f : 0.0f);
+    s->gl.BindBuffer(GL_ARRAY_BUFFER, 0);
+    s->gl.EnableVertexAttribArray(0); s->gl.EnableVertexAttribArray(1);
+    s->gl.VertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, pos);
+    s->gl.VertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 0, uv);
+    s->gl.DrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    s->gl.DisableVertexAttribArray(0); s->gl.DisableVertexAttribArray(1);
+    s->gl.VertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, NULL);
+    s->gl.VertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 0, NULL);
+}
+
+static void frame_neutral(nj_gles2 *s)
+{
+    s->gl.ActiveTexture(GL_TEXTURE0);
+    s->gl.Disable(GL_BLEND); s->gl.Disable(GL_DITHER); s->gl.Disable(GL_SCISSOR_TEST);
+    s->gl.Disable(GL_DEPTH_TEST); s->gl.Disable(GL_STENCIL_TEST); s->gl.Disable(GL_CULL_FACE);
+    s->gl.ColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    s->gl.PixelStorei(GL_PACK_ALIGNMENT, 1);
+    s->gl.PixelStorei(GL_UNPACK_ALIGNMENT, 1);
+}
+
+static int frame_fill(nj_gles2 *s, const nj_gfx *g, int x, int y, int w, int h)
+{
+    struct frame_slot *f;
+    nj_u4 c;
+    if (!target_ok(g, x, y, w, h) || g->use_xor) return 0;
+    if (g->blend != NJ_BLEND_NONE && g->blend != NJ_BLEND_SRC_OVER) return 0;
+    if (g->blend == NJ_BLEND_SRC_OVER && (g->color>>24) != 255u) return 0;
+    f = frame_get(s, g->surf);
+    if (!f) return 0;
+    if (!frame_activate(s, f)) return 2;
+    c = g->color;
+    frame_neutral(s);
+    s->gl.Enable(GL_SCISSOR_TEST);
+    s->gl.Scissor(x, y, w, h);
+    s->gl.ClearColor((GLfloat)((c>>16)&255u)/255.0f, (GLfloat)((c>>8)&255u)/255.0f,
+                     (GLfloat)(c&255u)/255.0f, (GLfloat)((c>>24)&255u)/255.0f);
+    s->gl.Clear(GL_COLOR_BUFFER_BIT);
+    s->gl.Disable(GL_SCISSOR_TEST);
+    if (!clean_errors(s) || !current(s)) return 2;
+    frame_dirties(f, x, y, w, h);
+    return 1;
+}
+
+static struct frame_slot *frame_source(nj_gles2 *s, const nj_gfx_blit *b)
+{
+    int i;
+    const nj_u1 *base, *pix = (const nj_u1 *)b->pixels;
+    size_t off, span;
+    for (i = 0; i < NJ_GLES2_FRAME_MAX; ++i) {
+        struct frame_slot *f = &s->frame[i];
+        if (!f->surface || !f->surface->pixels) continue;
+        if (f->format != b->format || f->stride != b->stride) continue;
+        base = (const nj_u1 *)f->surface->pixels;
+        if (pix < base) continue;
+        off = (size_t)(pix - base);
+        span = (size_t)((unsigned)b->height > 0u ? (unsigned)b->height - 1u : 0u)*(size_t)f->stride +
+               (size_t)((unsigned)b->sx + (unsigned)b->width)*(size_t)f->bpp;
+        if (off > (size_t)f->h*(size_t)f->stride || span > (size_t)f->h*(size_t)f->stride - off)
+            continue;
+        return f;
+    }
+    return NULL;
+}
+
+static int frame_blit(nj_gles2 *s, const nj_gfx *g, const nj_gfx_blit *b)
+{
+    struct frame_slot *dst, *srcf = NULL;
+    GLuint src = 0;
+    int src_w, src_h, sx, sy;
+    size_t bytes;
+    int x, y;
+    if (!current(s) || !b || !target_ok(g, b->clip_x, b->clip_y, b->clip_w, b->clip_h) ||
+        !b->pixels || b->mask || b->xor_enabled || b->transform != 0 ||
+        b->sx < 0 || b->sy < 0 || bytes_per_pixel(b->format) == 0 ||
+        b->stride < ((nj_s8)b->sx+b->width)*bytes_per_pixel(b->format) ||
+        (b->rop != NJ_ROP_SET && b->rop != NJ_ROP_OPAQUE) || b->alpha != 255) return 0;
+    dst = frame_get(s, g->surf);
+    if (!dst) return 0;
+    srcf = frame_source(s, b);
+    if (srcf == dst) {
+        /* Same surface: the CPU bytes must be current to be uploaded as source. */
+        if (!frame_commit(s, dst)) return 2;
+        srcf = NULL;
+    }
+    if (srcf) {
+        if (!frame_activate(s, srcf)) return 2;
+        src = srcf->tex; src_w = srcf->w; src_h = srcf->h;
+        sx = (int)(((const nj_u1 *)b->pixels - (const nj_u1 *)srcf->surface->pixels) % (size_t)srcf->stride / (size_t)srcf->bpp);
+        sy = (int)(((const nj_u1 *)b->pixels - (const nj_u1 *)srcf->surface->pixels) / (size_t)srcf->stride);
+    } else {
+        bytes = (size_t)b->width*(size_t)b->height*4u;
+        if (!reserve(&s->upload, &s->upload_size, bytes)) return 2;
+        for (y = 0; y < b->height; ++y) for (x = 0; x < b->width; ++x) {
+            const nj_u1 *q = (const nj_u1 *)b->pixels + ((nj_s8)b->sy+y)*b->stride +
+                             ((nj_s8)b->sx+x)*bytes_per_pixel(b->format);
+            nj_u4 c = read_color(q, b->format);
+            nj_u1 *o = s->upload + ((size_t)y*(size_t)b->width+(size_t)x)*4u;
+            o[0]=(nj_u1)(c>>16); o[1]=(nj_u1)(c>>8); o[2]=(nj_u1)c; o[3]=(nj_u1)(c>>24);
+        }
+        s->gl.ActiveTexture(GL_TEXTURE0);
+        texture(s, s->source);
+        if (!texture_upload(s, &s->source_storage, b->width, b->height, GL_RGBA, s->upload))
+            return 2;
+        src = s->source; src_w = b->width; src_h = b->height;
+        sx = 0; sy = 0;
+    }
+    if (!frame_activate(s, dst)) return 2;
+    frame_neutral(s);
+    if (srcf && !frame_bind(s, dst)) return 2;
+    frame_draw(s, dst, b->clip_x, b->clip_y, b->clip_w, b->clip_h,
+               src, src_w, src_h,
+               srcf ? sx + (b->clip_x - b->dx - g->translate_x) : (b->clip_x - b->dx - g->translate_x),
+               srcf ? sy + (b->clip_y - b->dy - g->translate_y) : (b->clip_y - b->dy - g->translate_y),
+               b->clip_w, b->clip_h, b->rop == NJ_ROP_OPAQUE);
+    if (!clean_errors(s) || !current(s)) return 2;
+    frame_dirties(dst, b->clip_x, b->clip_y, b->clip_w, b->clip_h);
+    return 1;
+}
+
 static int fill_rect(void *ud, const nj_gfx *g, int x, int y, int w, int h)
 {
     nj_gles2 *s = (nj_gles2 *)ud;
     nj_u4 c;
+    if (s->frame_enabled && s->tri_session) frame_cpu_read(s);
+    if (s->frame_enabled && !s->tri_session) {
+        int fr = frame_fill(s, g, x, y, w, h);
+        if (fr == 1) return NJ_GFX_ACCEL_DONE;
+        if (fr == 2) return decline(s);
+        frame_cpu_write(s, g->surf);
+    }
     if (!current(s) || !target_ok(g, x, y, w, h) || g->use_xor ||
         (g->blend != NJ_BLEND_NONE && g->blend != NJ_BLEND_SRC_OVER) ||
         (g->blend == NJ_BLEND_SRC_OVER && (g->color>>24) != 255u)) return decline(s);
@@ -238,6 +562,14 @@ static int blit(void *ud, const nj_gfx *g, const nj_gfx_blit *b)
     nj_s8 left, top;
     size_t bytes;
     int x, y, bpp;
+    if (s->frame_enabled && s->tri_session) frame_cpu_read(s);
+    if (s->frame_enabled && !s->tri_session) {
+        int fr = frame_blit(s, g, b);
+        if (fr == 1) return NJ_GFX_ACCEL_DONE;
+        if (fr == 2) return decline(s);
+        frame_cpu_write(s, g->surf);
+        frame_cpu_read(s);
+    }
     if (!current(s) || !b || !target_ok(g, b->clip_x, b->clip_y, b->clip_w, b->clip_h) ||
         !b->pixels || b->mask || b->xor_enabled || b->transform < 0 || b->transform > 7 ||
         b->sx < 0 || b->sy < 0 || !(bpp = bytes_per_pixel(b->format)) ||
@@ -427,6 +759,10 @@ int nj_gles2_raster(void *ud, const nj_gfx_raster *r, nj_u4 *drawn)
     if (!current(s) || !r || !drawn || !dimensions(s, r->width, r->height) ||
         r->width > s->max_viewport[0] || r->height > s->max_viewport[1] ||
         !nj_gfx_raster_validate(r) || !raster_result_ok(r, drawn)) return decline(s);
+    if (s->frame_enabled) {
+        /* The CPU transaction below writes the surface; commit deferred 2D first. */
+        if (!frame_flush_all(s)) { s->frame_enabled = 0; return decline(s); }
+    }
     bytes = (size_t)r->width*(size_t)r->height*4u;
     if (!reserve(&s->upload, &s->upload_size, bytes) ||
         (r->depth_write && !reserve(&s->depth_readback, &s->depth_readback_size, bytes)) ||
@@ -493,11 +829,40 @@ int nj_gles2_raster(void *ud, const nj_gfx_raster *r, nj_u4 *drawn)
                                        ((size_t)y*(size_t)r->width+(size_t)x)*4u);
         }
     }
+    if (s->frame_enabled) frame_mark_stale(s, r->surface);
     *drawn = touched;
     ++s->stats.rasters;
     return NJ_GFX_ACCEL_DONE;
 }
 #include "nj_gfx_triangles_gles2.inc"
+
+int nj_gles2_frame_enable(void *ud, int on)
+{
+    nj_gles2 *s = (nj_gles2 *)ud;
+    if (!s || !current(s)) return 0;
+    if (on) { s->frame_enabled = 1; return 1; }
+    if (s->frame_enabled) {
+        int ok = frame_flush_all(s);
+        s->frame_enabled = 0;
+        return ok;
+    }
+    return 1;
+}
+int nj_gles2_frame_flush(void *ud, nj_surface *surface)
+{
+    nj_gles2 *s = (nj_gles2 *)ud;
+    struct frame_slot *f;
+    if (!s || !current(s)) return 0;
+    if (!s->frame_enabled) return 1;
+    if (!surface) return frame_flush_all(s);
+    f = frame_find(s, surface);
+    return f ? frame_commit(s, f) : 1;
+}
+int nj_gles2_frame_active(const void *ud)
+{
+    const nj_gles2 *s = (const nj_gles2 *)ud;
+    return s ? s->frame_enabled : 0;
+}
 
 void nj_gles2_abandon(nj_gles2 *s)
 {
@@ -507,6 +872,12 @@ int nj_gles2_destroy(nj_gles2 *s)
 {
     if (!s) return 1;
     if (!current(s)) return 0;
+    {
+        int i;
+        (void)frame_flush_all(s);
+        s->frame_enabled = 0;
+        for (i = 0; i < NJ_GLES2_FRAME_MAX; ++i) frame_reset(s, &s->frame[i]);
+    }
     s->gl.UseProgram(0); /* A bound program otherwise remains pending deletion. */
     if (s->shader_orphan) s->gl.DeleteShader(s->shader_orphan);
     s->gl.DeleteProgram(s->program);

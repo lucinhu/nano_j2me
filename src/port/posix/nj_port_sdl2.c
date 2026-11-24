@@ -165,6 +165,7 @@ typedef struct sdl2_gles2 {
     GLuint sentinel;
     sdl2_gl_reset_fn reset_status;
     int requested, active;
+    int frame_on;       /* NJ_SDL2_GLES2_FRAME: 2D ops deferred to one GL layer */
     /* Deep context probes are driver calls; the cheap identity checks run every
      * packet, the GL queries only periodically while nothing changed. */
     unsigned int deep_probes;
@@ -249,6 +250,17 @@ static int sdl2_gles2_enter(sdl2_gles2 *s, sdl2_gl_binding *previous)
         return 0;
     }
     return 1;
+}
+
+static void sdl2_gles2_leave(sdl2_gles2 *s, sdl2_gl_binding previous);
+
+static void sdl2_gles2_flush_frame(sdl2_gles2 *s)
+{
+    sdl2_gl_binding previous;
+    if (!s || !s->active || !s->frame_on || !s->backend) return;
+    if (!sdl2_gles2_enter(s, &previous)) return;
+    (void)nj_gles2_frame_flush(s->backend, NULL);
+    sdl2_gles2_leave(s, previous);
 }
 
 static void sdl2_gles2_leave(sdl2_gles2 *s, sdl2_gl_binding previous)
@@ -403,6 +415,10 @@ static void sdl2_gles2_close(sdl2_gles2 *s)
     s->active = 0;
     if (owned && SDL_ThreadID() == s->thread &&
         SDL_GL_MakeCurrent(s->window, owned) == 0 && sdl2_gles2_current(s)) {
+        if (s->frame_on) {
+            (void)nj_gles2_frame_flush(s->backend, NULL);
+            s->frame_on = 0;
+        }
         if (nj_gles2_destroy(s->backend)) s->backend = NULL;
         if (s->sentinel) s->gl.DeleteTextures(1, &s->sentinel);
     }
@@ -533,6 +549,12 @@ static void sdl2_gles2_open(sdl2_gles2 *s)
     s->active = 1;
     s->deep_ok = 0;
     s->deep_probes = 0;
+    if (getenv("NJ_SDL2_GLES2_FRAME") && s->backend &&
+        nj_gles2_frame_enable(s->backend, 1)) {
+        s->frame_on = 1;
+        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                    "gfx: frame-resident 2D layer enabled (experimental)");
+    }
 done:
     while (changed) {
         --changed;
@@ -599,6 +621,8 @@ typedef struct sdl_state {
     const char *capture;   /* NJ_SDL2_CAPTURE: proof-of-presentation dump */
     int  capture_n;
     int  capture_every;
+    int  capture_left;     /* NJ_SDL2_CAPTURE_COUNT: number of dumps (default 1) */
+    int  capture_tick;     /* frames still to skip before the next dump */
 
     /*
      * On-screen keys.
@@ -2828,6 +2852,9 @@ static void sdl_display_present(void *ud, int x, int y, int w, int h)
     if (r.w <= 0 || r.h <= 0) {
         r.x = 0; r.y = 0; r.w = s->width; r.h = s->height;
     }
+#if NJ_SDL2_GLES2
+    sdl2_gles2_flush_frame(&s->gfx);
+#endif
     SDL_UpdateTexture(s->texture, &r,
                       (const nj_u1 *)s->pixels + (size_t)r.y * (size_t)s->stride
                           + (size_t)r.x * (size_t)sdl_bytes_per_pixel(s->format),
@@ -2851,8 +2878,12 @@ static void sdl_display_present(void *ud, int x, int y, int w, int h)
      * It is a debugging and test facility, so it costs one getenv at startup
      * and nothing at all when unset.
      */
-    if (s->capture && s->capture[0]) {
+    if (s->capture && s->capture[0] && s->capture_left > 0) {
         int cw = 0, ch = 0;
+        if (s->capture_tick > 0) {
+            s->capture_tick--;
+            goto capture_done;
+        }
         SDL_GetRendererOutputSize(s->renderer, &cw, &ch);
         if (cw > 0 && ch > 0) {
             nj_u1 *shot = (nj_u1 *)SDL_malloc((size_t)cw * (size_t)ch * 3u);
@@ -2883,11 +2914,13 @@ static void sdl_display_present(void *ud, int x, int y, int w, int h)
                 SDL_free(shot);
             }
         }
-        s->capture_every--;
-        if (s->capture_every <= 0) {
-            s->capture = NULL;   /* one frame is the proof; stop paying for it */
+        s->capture_left--;
+        s->capture_tick = s->capture_every;
+        if (s->capture_left <= 0) {
+            s->capture = NULL;   /* the requested proof is complete */
         }
     }
+capture_done: ;
 
     SDL_RenderPresent(s->renderer);
 }
@@ -3541,12 +3574,23 @@ nj_status nj_port_sdl2_ex(nj_port *out, const char *title, int graphics_mode)
     s->capture = SDL_getenv("NJ_SDL2_CAPTURE");
     s->capture_n = 0;
     s->capture_every = 1;
+    s->capture_left = 1;
+    s->capture_tick = 0;
     if (s->capture && *s->capture) {
         const char *every = SDL_getenv("NJ_SDL2_CAPTURE_AT");
         if (every && *every) {
             s->capture_every = SDL_atoi(every);
             if (s->capture_every < 1) {
                 s->capture_every = 1;
+            }
+        }
+        {
+            const char *count = SDL_getenv("NJ_SDL2_CAPTURE_COUNT");
+            if (count && *count) {
+                s->capture_left = SDL_atoi(count);
+                if (s->capture_left < 1) {
+                    s->capture_left = 1;
+                }
             }
         }
     }

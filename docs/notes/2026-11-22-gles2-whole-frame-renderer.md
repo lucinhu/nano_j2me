@@ -70,3 +70,12 @@ M3G scene --resident FBO, resident textures--> composite (GL) --> present (EGL w
 - Whole-corpus libretro/CLI probes unchanged for software-mode titles.
 - Save states, cheats, screenshots and 2D-only titles keep working through the
   CPU observer path.
+
+## Progress
+
+- 2026-11-24: phase-1 B1 (frame-resident 2D layer) implemented and validated
+  for pixel parity, but measured only ≈2.5% user-CPU gain because the
+  per-operation private-context switch dominates; see
+  `2026-11-24-gles2-frame-resident-2d-layer.md`. B1.5 (hold the GL context for
+  a whole frame, batch submissions, widen blit coverage) is the next milestone
+  before B2.
