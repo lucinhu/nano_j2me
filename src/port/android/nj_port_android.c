@@ -402,6 +402,24 @@ typedef struct android_state {
      * frame, so saves, screenshots and the libretro core are unaffected.
      */
     int   present_filter;
+    /*
+     * Optional in-memory rewind ring (same design as the SDL2 port): full
+     * snapshots every rewind_interval frames while enabled, bounded by slot
+     * count and a byte cap.  The UI sets it through JNI from another thread;
+     * the snapshot and the load always happen here on the run thread, at a
+     * frame boundary.  Off by default because a snapshot copies the whole
+     * arena (see docs/REWIND.md).
+     */
+    int      rewind_interval;
+    int      rewind_slots;
+    size_t   rewind_cap;
+    nj_u1  **rewind_blobs;
+    nj_size *rewind_sizes;
+    int      rewind_len;
+    size_t   rewind_bytes;
+    int      rewind_frames;
+    int      rewind_cooldown;
+    volatile int rewind_req;
     int   det_raw_same;
 
     /*
@@ -1307,6 +1325,151 @@ static void android_present_filter(android_state *s, ANativeWindow_Buffer *buf)
 
 #endif  /* !NJ_ANDROID_LEGACY */
 
+
+/*
+ * Rewind ring, same design as the SDL2 port (docs/REWIND.md): full snapshots
+ * every rewind_interval frames, bounded by slot count and a byte cap, and the
+ * newest one is loaded back on request.  Capture and load run here, on the run
+ * thread, at a frame boundary: the UI only writes rewind_req.
+ */
+static void android_rewind_reset(android_state *s)
+{
+    int i;
+    if (s->rewind_blobs != NULL) {
+        for (i = 0; i < s->rewind_len; i++) {
+            free(s->rewind_blobs[i]);
+        }
+        free(s->rewind_blobs);
+        s->rewind_blobs = NULL;
+    }
+    free(s->rewind_sizes);
+    s->rewind_sizes = NULL;
+    s->rewind_len = 0;
+    s->rewind_bytes = 0;
+    s->rewind_req = 0;
+}
+
+static void android_rewind_capture(android_state *s)
+{
+    nj_u1 *blob = NULL;
+    nj_size size = 0;
+    int rc;
+
+    if (s->vm == NULL || s->rewind_blobs == NULL) {
+        return;
+    }
+    rc = nj_vm_save_mem_boundary(s->vm, &blob, &size);
+    if (rc != NJ_OK || blob == NULL) {
+        return;
+    }
+    while (s->rewind_len > 0 &&
+           (s->rewind_len >= s->rewind_slots ||
+            s->rewind_bytes + (size_t)size - (size_t)s->rewind_sizes[0] >
+                s->rewind_cap)) {
+        free(s->rewind_blobs[0]);
+        s->rewind_bytes -= (size_t)s->rewind_sizes[0];
+        memmove(s->rewind_blobs, s->rewind_blobs + 1,
+                (size_t)(s->rewind_len - 1) * sizeof s->rewind_blobs[0]);
+        memmove(s->rewind_sizes, s->rewind_sizes + 1,
+                (size_t)(s->rewind_len - 1) * sizeof s->rewind_sizes[0]);
+        s->rewind_len--;
+    }
+    if (s->rewind_bytes + (size_t)size > s->rewind_cap) {
+        free(blob);
+        return;
+    }
+    s->rewind_blobs[s->rewind_len] = blob;
+    s->rewind_sizes[s->rewind_len] = size;
+    s->rewind_len++;
+    s->rewind_bytes += (size_t)size;
+}
+
+static void android_rewind_serve(android_state *s)
+{
+    nj_u1 *blob;
+    nj_size size;
+    int rc;
+
+    if (!s->rewind_req) {
+        return;
+    }
+    s->rewind_req = 0;
+    if (s->vm == NULL || s->rewind_blobs == NULL) {
+        return;
+    }
+    if (s->rewind_len <= 0) {
+        __android_log_print(ANDROID_LOG_INFO, "nj2me",
+                            "rewind: no snapshot left in the ring");
+        return;
+    }
+    s->rewind_len--;
+    blob = s->rewind_blobs[s->rewind_len];
+    size = s->rewind_sizes[s->rewind_len];
+    rc = nj_vm_load_mem(s->vm, blob, size);
+    free(blob);
+    s->rewind_blobs[s->rewind_len] = NULL;
+    s->rewind_bytes -= (size_t)size;
+    s->rewind_cooldown = s->rewind_interval > 0 ? s->rewind_interval : 1;
+    __android_log_print(rc == NJ_OK ? ANDROID_LOG_INFO : ANDROID_LOG_WARN,
+                        "nj2me",
+                        "rewind: restored a snapshot -> %d (%d left, %u bytes)",
+                        rc, s->rewind_len, (unsigned)s->rewind_bytes);
+}
+
+static void android_rewind_tick(android_state *s)
+{
+    if (s->rewind_interval <= 0 || s->rewind_blobs == NULL) {
+        return;
+    }
+    android_rewind_serve(s);
+    if (s->rewind_cooldown > 0) {
+        s->rewind_cooldown--;
+        return;
+    }
+    s->rewind_frames++;
+    if (s->rewind_frames % s->rewind_interval == 0) {
+        android_rewind_capture(s);
+    }
+}
+
+static void android_rewind_configure(android_state *s, int interval_frames,
+                                     int slots)
+{
+    android_rewind_reset(s);
+    s->rewind_interval = 0;
+    s->rewind_slots = 0;
+    if (interval_frames <= 0) {
+        return;
+    }
+    if (interval_frames > 600) {
+        interval_frames = 600;
+    }
+    if (slots < 2) {
+        slots = 2;
+    }
+    if (slots > 64) {
+        slots = 64;
+    }
+    s->rewind_blobs = (nj_u1 **)calloc((size_t)slots, sizeof *s->rewind_blobs);
+    s->rewind_sizes = (nj_size *)calloc((size_t)slots, sizeof *s->rewind_sizes);
+    if (s->rewind_blobs == NULL || s->rewind_sizes == NULL) {
+        free(s->rewind_blobs);
+        free(s->rewind_sizes);
+        s->rewind_blobs = NULL;
+        s->rewind_sizes = NULL;
+        return;
+    }
+    s->rewind_slots = slots;
+    s->rewind_cap = (size_t)256u * 1024u * 1024u;
+    s->rewind_interval = interval_frames;
+    s->rewind_frames = 0;
+    s->rewind_cooldown = 0;
+    s->rewind_bytes = 0;
+    __android_log_print(ANDROID_LOG_INFO, "nj2me",
+                        "rewind: on (every %d frames, %d slots, 256 MiB cap)",
+                        s->rewind_interval, s->rewind_slots);
+}
+
 static void android_display_present(void *ud, int x, int y, int w, int h)
 {
     android_state *s = AS(ud);
@@ -1326,6 +1489,8 @@ static void android_display_present(void *ud, int x, int y, int w, int h)
         s->glyph_flush = 0;
         android_glyph_cache_flush(s);
     }
+
+    android_rewind_tick(s);
 
 #if NJ_ANDROID_LEGACY
     if (!android_legacy_present(s)) {
@@ -3471,6 +3636,7 @@ static void android_shutdown(void *ud)
         return;
     }
     android_audio_close(s);
+    android_rewind_reset(s);
 #if NJ_ANDROID_GLES2 && !NJ_ANDROID_LEGACY
     /* nativeDestroy joins the run thread first. No EGL calls belong here on
      * the UI thread; do not free callback userdata if teardown was skipped. */
@@ -6578,6 +6744,43 @@ Java_com_lucinhu_nj2me_GameActivity_nativeSetPresentFilter(JNIEnv *env,
                 mode = 0;   /* linear is the existing picture anti-alias switch */
             }
             s->present_filter = (int)mode;
+        }
+    }
+}
+
+
+/*
+ * Rewind switch and parameters from the settings dialog: interval_frames <= 0
+ * turns the ring off (and frees it); slots bounds the snapshot count.  Only numbers
+ * are written here; android_display_present ticks the ring on the run thread.
+ */
+JNIEXPORT void JNICALL
+Java_com_lucinhu_nj2me_GameActivity_nativeSetRewind(JNIEnv *env, jobject thiz,
+                                                    jlong handle,
+                                                    jint interval_frames,
+                                                    jint slots)
+{
+    android_app *a = (android_app *)(intptr_t)handle;
+    (void)env; (void)thiz;
+    if (a) {
+        android_state *s = AS(a->port.ud);
+        if (s) {
+            android_rewind_configure(s, (int)interval_frames, (int)slots);
+        }
+    }
+}
+
+/* Ask for one step back; the present path serves it at the next frame. */
+JNIEXPORT void JNICALL
+Java_com_lucinhu_nj2me_GameActivity_nativeRewindStep(JNIEnv *env, jobject thiz,
+                                                     jlong handle)
+{
+    android_app *a = (android_app *)(intptr_t)handle;
+    (void)env; (void)thiz;
+    if (a) {
+        android_state *s = AS(a->port.ud);
+        if (s && s->rewind_interval > 0) {
+            s->rewind_req = 1;
         }
     }
 }

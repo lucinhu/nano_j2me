@@ -148,6 +148,7 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
     private int speed = 100;      /* game speed, percent of real time */
     private int pictureAA;        /* 0 nearest, 1 bilinear: 画面反锯齿 */
     private int presentFilter;    /* 0 off, 2 scanline, 3 LCD, 4 CRT: 画面滤镜 */
+    private int rewindSeconds;    /* 0 off, 1/2/5: in-memory rewind window */
     private int insetL, insetT, insetR, insetB;
 
     /*
@@ -279,6 +280,9 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
      * 呈现循环下一帧应用；只作用于窗口缓冲，不影响模拟器帧/存档/截图。
      */
     private static native void nativeSetPresentFilter(long handle, int mode);
+    private static native void nativeSetRewind(long handle, int intervalFrames,
+                                               int slots);
+    private static native void nativeRewindStep(long handle);
 
     /**
      * Frames per second to aim for: 30 or 60, 0 for uncapped, -1 for the
@@ -836,6 +840,7 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
                 nativeSetSpeed(handle, speed);
                 nativeSetFilter(handle, pictureAA);
                 nativeSetPresentFilter(handle, presentFilter);
+                applyRewindSetting();
                 nativeSetFrameCap(handle, Settings.frameCap(this));
                 /* A new MIDlet: its own vocabulary is what the subset row will
                  * keep, so the previous game's stops being recorded here. */
@@ -1328,10 +1333,12 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
         if (presentFilter == 1 || presentFilter < 0 || presentFilter > 4) {
             presentFilter = 0;
         }
+        rewindSeconds = Settings.rewindSeconds(this);
         synchronized (lock) {
             if (handle != 0) {
                 nativeSetFilter(handle, pictureAA);
                 nativeSetPresentFilter(handle, presentFilter);
+                applyRewindSetting();
                 nativeSetFrameCap(handle, Settings.frameCap(this));
                 nativeGlyphReset(handle);
             }
@@ -1433,6 +1440,10 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
                 "画面滤镜：" + filterNames[filterIdx],
                 "只作用于窗口显示，不改模拟器画面；存档/截图保持原样",
                 presentFilter > 0, null);
+        LinearLayout rewindRow = Md3.row(this, Md3.IC_PLAY,
+                "倒带：" + Settings.rewindText(rewindSeconds),
+                "把最近几秒的完整状态存在内存里，随时回退；大堆游戏开销明显，默认关闭",
+                rewindSeconds > 0, null);
         final boolean graphicsAvailable = graphicsSupported();
         final boolean gles2 = graphicsAvailable && Settings.gles2Experimental(this);
         LinearLayout graphicsRow = Md3.row(this, Md3.IC_SCREEN,
@@ -1482,6 +1493,7 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
         box.addView(picAaRow);
         box.addView(Md3.divider(this));
         box.addView(filterRow);
+        box.addView(rewindRow);
         box.addView(Md3.divider(this));
         box.addView(fpsRow);
         box.addView(Md3.divider(this));
@@ -1628,6 +1640,13 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
             public void onClick(View v) {
                 dlg.dismiss();
                 filterDialog();
+            }
+        });
+        rewindRow.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                dlg.dismiss();
+                rewindDialog();
             }
         });
         fpsRow.setOnClickListener(new View.OnClickListener() {
@@ -2318,6 +2337,63 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
                             JarStore.write(GameActivity.this, e);
                         }
                         toast("游戏速度 " + speedText());
+                    }
+                });
+    }
+
+    /** Tell the port which rewind window this install wants (0 = off). */
+    private void applyRewindSetting() {
+        if (handle == 0) {
+            return;
+        }
+        /* One snapshot every 0.5 s; slots follow the requested window so the
+         * ring covers it before the 256 MiB cap steps in. */
+        nativeSetRewind(handle, rewindSeconds > 0 ? 30 : 0,
+                        rewindSeconds > 0 ? rewindSeconds * 2 : 0);
+    }
+
+    /*
+     * Rewind chooser: an in-memory ring of full state snapshots kept by the
+     * native present loop (docs/REWIND.md).  Off by default because a snapshot
+     * copies the whole arena; 1/2/5 s pick the window, and the last entry
+     * steps back immediately.
+     */
+    private void rewindDialog() {
+        final int[] values = { 0, 1, 2, 5 };
+        final String[] labels = { "关闭（不占内存）", "1 秒", "2 秒", "5 秒", "倒带一步（立刻回退）" };
+        final String[] hints = {
+                "不保留任何快照，默认",
+                "每 0.5 秒一张快照，可回退 1 秒",
+                "可回退 2 秒",
+                "可回退 5 秒；大堆游戏可能先触到 256 MiB 上限",
+                "立即载入最近一张快照"
+        };
+        int checked = 0;
+        for (int i = 0; i < values.length; i++) {
+            if (values[i] == rewindSeconds) {
+                checked = i;
+            }
+        }
+        Md3.chooser(this, Md3.IC_PLAY, "倒带", "当前 " + Settings.rewindText(rewindSeconds),
+                labels, hints, checked, new Md3.Choice() {
+                    @Override
+                    public void picked(int which, AlertDialog d) {
+                        if (which == 4) {
+                            synchronized (lock) {
+                                if (handle != 0) {
+                                    nativeRewindStep(handle);
+                                }
+                            }
+                            toast("倒带一步");
+                            return;
+                        }
+                        rewindSeconds = values[which];
+                        Settings.setRewindSeconds(GameActivity.this, rewindSeconds);
+                        synchronized (lock) {
+                            applyRewindSetting();
+                        }
+                        Log.i(TAG, "rewind: window " + rewindSeconds + " s");
+                        toast("倒带 " + Settings.rewindText(rewindSeconds));
                     }
                 });
     }

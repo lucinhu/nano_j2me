@@ -101,6 +101,19 @@ final class Settings {
         return cap == 0 ? "不限制" : cap + " 帧";
     }
 
+    /** Rewind window in seconds: 0 off, otherwise 1/2/5 (0.5 s granularity). */
+    static int rewindSeconds(Context ctx) {
+        return prefs(ctx).getInt("rewind_seconds", 0);
+    }
+
+    static void setRewindSeconds(Context ctx, int seconds) {
+        prefs(ctx).edit().putInt("rewind_seconds", seconds).apply();
+    }
+
+    static String rewindText(int seconds) {
+        return seconds <= 0 ? "关闭" : seconds + " 秒";
+    }
+
     /** The next value in the cycle: default -> 60 -> 30 -> default. */
     static int nextFrameCap(int cap) {
         if (cap < 0) {
