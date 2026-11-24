@@ -99,3 +99,33 @@ by NJ_M3G_FORCE_ACCEL`），确认走的是 GL 路径。`[gfx2d]` 结果：
 
 （方法教训更新：确认 `triangles>0` 后重测是必要的——第一次数据只覆盖软件
 路径，两次结论方向一致但交错模型完全不同。）
+
+## 第三次测量：批次来源（`-DNJ_M3G_PROFILE=1`）
+
+用同一 Galaxy 560 帧运行加入 M3G profiler（`-DCMAKE_C_FLAGS="-DNJ_M3G_PROFILE=1
+-DNJ_GFX_2D_STATS=1"`），结束时计数：
+
+```
+M3GPROF walks=66091 walk=367.5ms appends=46200 append=46.5ms
+        pumps=1427 pump=0.1ms commits=725505 commit=3913.0ms
+gles2 completed triangles=1250191 batches=2888
+```
+
+解读：
+
+* 每帧约 **82.5 次 append**（46,200/560），最终合并成 **5.16 次事务**
+  （2,888/560）。这与 `journals pending=0 @ gfx_load` 一致：journal 在帧内被
+  多次排空，每次排空再触发一次 GL 事务与读回。
+* `commits=725,505` 是 `nj_m3g_flush()` 调用次数（≈2D 操作数）。绝大多数是
+  空 journal 的空操作（commit 时间主要来自真正有批次的少数次），这也是现有
+  路径每帧 CPU 开销的一个来源：**每次 2D 调用都尝试冲刷一次**。
+* M2 的明确目标因此变成：把帧内 **≈5.2 次排空合并为 1 次**（present 处提交），
+  同时把 725k 次空冲刷降为 O(1) 判断。前者去掉约 5 份重复的 readback/commit，
+  后者用 `nj_m3g_pending()` 做早退即可（当前 `nj_m3g_flush` 已经会空转，但
+  仍在热路径上）。
+* 待办：确认这 5.2 次排空的触发来源（target 切换 / journal 上限 / M3G
+  clear / 显式 flush 调用点），如果是 target 切换导致，则 M2 需要按 target
+  分组持有多张 frame FBO，而不是只持有一张屏幕 FBO。
+
+（注：profiler 计数在进程退出时打印，`commits` 是累计值；时间字段为 profiler
+自身累计，不代表真实开销。）
