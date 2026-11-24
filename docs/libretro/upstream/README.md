@@ -4,7 +4,7 @@ The project author authorized libretro upstream submission on 2026-11-16, and
 the prepared bundles were opened as pull requests from forks:
 
 * `libretro/libretro-super#2204` — `info: add nano_j2me (Mobile - J2ME)`
-  (branch `add-nano_j2me` in `lucinhu/libretro-super`, commit `a807173da913eb7b20a48d80742e7674969380a7`; rebuilt for 0.5.41 on 2026-11-23)
+  (branch `add-nano_j2me` in `lucinhu/libretro-super`, commit `5496b68f80ee40ee0040a88d514045ef07dc20f5`; rebuilt for 0.5.42 on 2026-11-23)
 * `libretro/docs#1239` — `docs: add nano_j2me (Mobile - J2ME)`
   (branch `add-nano_j2me` in `lucinhu/docs`, commit `3316299`)
 
@@ -15,7 +15,7 @@ update the fork branch and regenerate the patch from it.
 Prepared 2026-11-15. The exact-index patches below were generated against and
 verified to apply cleanly to `libretro/docs` master
 `96ee874` (refreshed 2026-11-22 because libretro/docs moved; the previous baseline was `9399ee32829094ab6f2ea51add4bb1562312412e`) and `libretro-super` master
-`55e50a81195eaf8dd1b7720a601282459832ced1` (rebased 2026-11-19 and reused for the 0.5.20/0.5.21 metadata commits on 2026-11-21; the patch also applied to the earlier `fb15e63`).
+`c3c55c2280a0eac7e8343a7f15e3c2e35f9a69e6` (rebased 2026-11-19 and reused for the 0.5.20/0.5.21 metadata commits on 2026-11-21; the patch also applied to the earlier `fb15e63`).
 
 Re-check the whole bundle offline (including clean-clone apply and a docs
 site build when you point it at scratch clones):
@@ -41,7 +41,7 @@ nano_j2me_libretro.info  ->  dist/info/nano_j2me_libretro.info
 
 The copy in this directory is byte-identical to
 `src/port/libretro/nano_j2me_libretro.info`
-(SHA-256 `43aaeda8357b8bdaf11f0769d31c48603426894bd0b4d179cc9f3543d49ad0e8`, version 0.5.41).
+(SHA-256 `a7daee3147a084320b0fc8273c260ec0dd832f7dacaa5483f27cbc7c25f059a1`, version 0.5.42).
 Suggested PR title: `Add nano_j2me core information for J2ME MIDlets`.
 The ready-to-post title, patch commands, body text and checklist are in
 [`PR-libretro-super.md`](PR-libretro-super.md).
