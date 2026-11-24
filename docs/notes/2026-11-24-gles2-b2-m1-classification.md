@@ -66,3 +66,36 @@ NJ_GFX_2D_STATS=1 DISPLAY=:1 /tmp/r14-stats/nj2me --port sdl2 --graphics gles2 \
   的更保守方案（不跨 2D 保留场景）。
 * 这次测量本身也说明：**测量脚本要显式校验 3D 加速真的被使用**（`triangles`
   计数），否则会把软件路径的数据当成 GL 路径的证据——记录为方法论教训。
+
+## 第二次测量（GL 活跃，560 帧）
+
+第一次运行没有确认 3D 加速路径，于是用同一二进制跑满 560 帧并检查 GLES2
+统计：`triangles=1164290 batches=2988`（≈5.3 批/帧，`INFO: m3g: accel forced
+by NJ_M3G_FORCE_ACCEL`），确认走的是 GL 路径。`[gfx2d]` 结果：
+
+```
+[gfx2d] intervals pending=0 empty=715148 ops_after_pending=0
+        first_fallback=0 intervals_with_fallback=0 max_ops=0
+[gfx2d] all-ops: line=16636(cap=16636,uncap=0)
+                  rect=4907(cap=4907,uncap=0)
+                  fill=1494(cap=1494,uncap=0)
+                  image_rop=663670(cap=662951,uncap=719)
+```
+
+结论：
+
+1. **99.89% 的 2D 操作是 opaque-safe**（663,670 个 image_rop 中仅 719 个
+   non-capturable，约 1.3 个/帧；其余类型全部 capturable）。B2 的覆盖层合成
+   路线成立：绝大多数 2D 可先画在 CPU 覆盖层，只有极少数操作需要"先提交场景
+   再画"的保守回退。
+2. **`journal_pending` 在全部 715,148 次 `gfx_load()` 中都是 0**，而 GL 侧
+   确实有 ≈5.3 批/帧。这说明 "2D 调用触发了 3D flush" 的旧假设不成立：这些
+   批次提交发生在 M3G 渲染过程本身（多个 session begin/end），与 gfx_load 的
+   2D 操作没有交错。于是 M2 的关键约束简化为：**每帧在 present 处提交一次
+   场景**，少数 non-capturable 操作做有序回退即可，不需要为每个 2D 操作维持
+   复杂的分层合成器。
+3. 下一步：给 session begin/end 加来源计数（确认 5.3 批/帧来自哪些 M3G 调用
+   边界），然后落 M1 的运行时 damage 跟踪与 M2 的持久 FBO 提交点。
+
+（方法教训更新：确认 `triangles>0` 后重测是必要的——第一次数据只覆盖软件
+路径，两次结论方向一致但交错模型完全不同。）
