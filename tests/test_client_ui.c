@@ -49,10 +49,10 @@ static int failures;
     } while (0)
 
 /* Palette facts the layout contract fixes; used to prove pixels landed. */
-#define COL_BG      0xFF191C22u
-#define COL_CHROME  0xFF232733u
+#define COL_BG      0xFF0F1219u
+#define COL_CHROME  0xFF171A22u
 #define COL_PATHBAR 0xFF20242Du
-#define COL_SEL     0xFF2E6EA6u
+#define COL_SEL     0xFF2F5FA8u
 #define COL_PANEL   0xFF252B36u
 
 #define TEST_W 720
