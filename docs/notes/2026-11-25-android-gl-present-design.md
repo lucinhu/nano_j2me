@@ -275,3 +275,17 @@ LCD / CRT / FSR1 呈现效果。约束：
   `present: GL first frame buf=1080x2400 surface=1080x2400 vp=60,88 960x1280 view=0 zoom=1.000`，
   无需重启游戏；切到「扫描线（GL）」后窗口画面出现扫描线（截图对比明显变化），
   设置重启后仍保留。
+
+## Round 33：Android 端 FSR1（EASU → RCAS）接入
+
+- `src/port/gles2/nj_gfx_present.inc` 新增 `present_fsr_screen()`：EASU 先渲染到
+  离屏 stage 纹理（尺寸=目标视口），RCAS 再以垂直翻转直接画进当前 framebuffer
+  （窗口或诊断 FBO），全程无回读；窗口路径的视口按 `vp_x/vp_y` 正确恢复，
+  修复了首版把画面画到左下角并拉伸的问题。
+- `nj_gles2_present_onscreen*` 不再拒绝 mode 5，并分支到 `present_fsr_screen`；
+  桌面离屏路径的 `present_fsr`（带 ReadPixels）保持不变。
+- Android 设置「GL 呈现（实验）」新增 **FSR1（GL）** 选项；模式校验放宽到 0..5
+  （JNI、系统属性、SharedPreferences 三处一致）。
+- 模拟器验证（Medium_Phone_API_36.1，StaticDemo）：选 FSR1（GL）后 logcat 出现
+  `present: GL first frame ...`，截图 `/tmp/r33-fsr2.png` 画面正向、红块居中、
+  文字清晰、边缘锐化正常；nearest/scanline/LCD/CRT 仍可用，legacy APK 构建通过。

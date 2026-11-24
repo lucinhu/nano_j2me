@@ -639,6 +639,9 @@ static int present_draw_quad(nj_gles2 *s, int mode, int src_w, int src_h,
  * readback this works on drivers that cannot read the window surface before
  * the swap; it answers "is the picture we draw correct?" independently of the
  * system compositor. */
+static int present_fsr_screen(nj_gles2 *s, int in_w, int in_h, int vp_x, int vp_y,
+                              int vp_w, int vp_h);
+
 int nj_gles2_present_onscreen_capture(void *ud, const nj_surface *src, int mode,
                                       int vp_x, int vp_y, int vp_w, int vp_h,
                                       int out_w, int out_h, nj_u1 *out_rgba)
@@ -648,7 +651,7 @@ int nj_gles2_present_onscreen_capture(void *ud, const nj_surface *src, int mode,
     int w, h, ok = 0;
 
     if (!s || !src || !src->pixels || !out_rgba) return 0;
-    if (mode < 0 || mode >= NJ_GL_PRESENT_MODES || mode == 5) return 0;
+    if (mode < 0 || mode >= NJ_GL_PRESENT_MODES) return 0;
     if (!current(s) || !present_init(s)) return 0;
     if (out_w <= 0 || out_h <= 0) return 0;
     if (vp_w <= 0 || vp_h <= 0 || vp_x < 0 || vp_y < 0) return 0;
@@ -675,7 +678,8 @@ int nj_gles2_present_onscreen_capture(void *ud, const nj_surface *src, int mode,
         s->gl.ClearColor(0.0f, 0.0f, 0.0f, 1.0f);
         s->gl.Clear(GL_COLOR_BUFFER_BIT);
         s->gl.Viewport(vp_x, vp_y, vp_w, vp_h);
-        if (present_draw_quad(s, mode, src->width, src->height, vp_w, vp_h, 2)) {
+        if (mode == 5 ? present_fsr_screen(s, src->width, src->height, vp_x, vp_y, vp_w, vp_h)
+                      : present_draw_quad(s, mode, src->width, src->height, vp_w, vp_h, 2)) {
             s->gl.ReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, out_rgba);
             ok = 1;
         }
@@ -699,13 +703,76 @@ int nj_gles2_present_readback(void *ud, int w, int h, nj_u1 *out_rgba)
     return 1;
 }
 
+/* Two-pass FSR1 (EASU -> RCAS) straight into the current framebuffer.  The
+ * EASU stage is an offscreen texture the size of the destination viewport;
+ * RCAS then draws it into the bound framebuffer (window or capture FBO) with
+ * the vertical flip the window path needs.  No readback happens here. */
+static int present_fsr_screen(nj_gles2 *s, int in_w, int in_h, int vp_x, int vp_y,
+                              int vp_w, int vp_h)
+{
+    static const GLfloat quad[8] = {-1, -1, 1, -1, -1, 1, 1, 1};
+    static const GLfloat uvs[8] = {0, 0, 1, 0, 0, 1, 1, 1};
+    static const GLfloat uvs_vflip[8] = {0, 1, 1, 1, 0, 0, 1, 0};
+    GLint binding = 0;
+    GLfloat iw = (GLfloat)in_w, ih = (GLfloat)in_h;
+    GLfloat ow = (GLfloat)vp_w, oh = (GLfloat)vp_h;
+    GLfloat sx = iw / ow, sy = ih / oh;
+    GLfloat con0[4] = {sx, sy, 0.5f * sx - 0.5f, 0.5f * sy - 0.5f};
+    GLfloat con1[4] = {1.0f / iw, 1.0f / ih, 1.0f / iw, -1.0f / ih};
+    GLfloat con2[4] = {-1.0f / iw, 2.0f / ih, 1.0f / iw, 2.0f / ih};
+    GLfloat con3[4] = {0.0f, 4.0f / ih, 0.0f, 0.0f};
+
+    s->gl.GetIntegerv(GL_FRAMEBUFFER_BINDING, &binding);
+    texture(s, s->present_stage_tex);
+    if (!texture_upload(s, &s->present_stage_storage, vp_w, vp_h, GL_RGBA, NULL))
+        return 0;
+    s->gl.BindFramebuffer(GL_FRAMEBUFFER, s->present_stage_fbo);
+    s->gl.FramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
+                               s->present_stage_tex, 0);
+    if (s->gl.CheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+        return 0;
+    s->gl.Viewport(0, 0, vp_w, vp_h);
+    s->gl.UseProgram(s->present_fsr_easu);
+    s->gl.ActiveTexture(GL_TEXTURE0);
+    s->gl.BindTexture(GL_TEXTURE_2D, s->present_input);
+    s->gl.Uniform1i(s->present_fsr_easu_sampler, 0);
+    s->gl.Uniform2f(s->present_fsr_easu_insize, iw, ih);
+    s->gl.Uniform2f(s->present_fsr_easu_outsize, ow, oh);
+    s->gl.Uniform4f(s->present_fsr_easu_con[0], con0[0], con0[1], con0[2], con0[3]);
+    s->gl.Uniform4f(s->present_fsr_easu_con[1], con1[0], con1[1], con1[2], con1[3]);
+    s->gl.Uniform4f(s->present_fsr_easu_con[2], con2[0], con2[1], con2[2], con2[3]);
+    s->gl.Uniform4f(s->present_fsr_easu_con[3], con3[0], con3[1], con3[2], con3[3]);
+    s->gl.EnableVertexAttribArray(0); s->gl.EnableVertexAttribArray(1);
+    s->gl.VertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, quad);
+    s->gl.VertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 0, uvs);
+    s->gl.DrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    s->gl.DisableVertexAttribArray(0); s->gl.DisableVertexAttribArray(1);
+
+    s->gl.BindFramebuffer(GL_FRAMEBUFFER, (GLuint)binding);
+    s->gl.Viewport(vp_x, vp_y, vp_w, vp_h);
+    s->gl.UseProgram(s->present_fsr_rcas);
+    s->gl.ActiveTexture(GL_TEXTURE0);
+    s->gl.BindTexture(GL_TEXTURE_2D, s->present_stage_tex);
+    s->gl.Uniform1i(s->present_fsr_rcas_sampler, 0);
+    s->gl.Uniform2f(s->present_fsr_rcas_texel, 1.0f / ow, 1.0f / oh);
+    s->gl.Uniform1f(s->present_fsr_rcas_sharp, 0.87055056f);
+    s->gl.EnableVertexAttribArray(0); s->gl.EnableVertexAttribArray(1);
+    s->gl.VertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, quad);
+    s->gl.VertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 0, uvs_vflip);
+    s->gl.DrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    s->gl.DisableVertexAttribArray(0); s->gl.DisableVertexAttribArray(1);
+    s->gl.VertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, NULL);
+    s->gl.VertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 0, NULL);
+    return clean_errors(s);
+}
+
 int nj_gles2_present_onscreen(void *ud, const nj_surface *src, int mode,
                               int vp_x, int vp_y, int vp_w, int vp_h)
 {
     nj_gles2 *s = (nj_gles2 *)ud;
 
     if (!s || !src || !src->pixels) return 0;
-    if (mode < 0 || mode >= NJ_GL_PRESENT_MODES || mode == 5) return 0;
+    if (mode < 0 || mode >= NJ_GL_PRESENT_MODES) return 0;
     if (!current(s) || !present_init(s)) return 0;
     if (vp_w <= 0 || vp_h <= 0 || vp_x < 0 || vp_y < 0) return 0;
     if (vp_x + vp_w > s->max_viewport[0] || vp_y + vp_h > s->max_viewport[1])
@@ -720,6 +787,8 @@ int nj_gles2_present_onscreen(void *ud, const nj_surface *src, int mode,
     s->gl.ClearColor(0.0f, 0.0f, 0.0f, 1.0f);
     s->gl.Clear(GL_COLOR_BUFFER_BIT);
     s->gl.Viewport(vp_x, vp_y, vp_w, vp_h);
+    if (mode == 5)
+        return present_fsr_screen(s, src->width, src->height, vp_x, vp_y, vp_w, vp_h);
     /* A window framebuffer's row 0 is the bottom of the visible window, so the
      * texture needs its vertical axis flipped; horizontal orientation matches
      * the CPU framebuffer. */

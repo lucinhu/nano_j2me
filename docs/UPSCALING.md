@@ -125,4 +125,4 @@ CPU 记录（同机 RTX 5080，Linux）：
 Android 游戏内设置 →「GL 呈现（实验）」可选择 **最近邻 / 扫描线 / LCD 网格 / CRT**：
 画面由私有 GLES2 上下文的着色器呈现（与 SDL2 的 `--upscale` 同一套 shader），
 默认仍是软件呈现；GL 不可用或任何一步失败会自动回退，不影响模拟器帧、存档与截图。
-（FSR1 的 Android 接入仍在进行中。）
+包含 **FSR1（EASU+RCAS）**：EASU 离屏放大到视口尺寸，RCAS 再直接呈现，无回读。
