@@ -146,6 +146,7 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
     private boolean immersive;
     private int speed = 100;      /* game speed, percent of real time */
     private int pictureAA;        /* 0 nearest, 1 bilinear: 画面反锯齿 */
+    private int presentFilter;    /* 0 off, 2 scanline, 3 LCD, 4 CRT: 画面滤镜 */
     private int insetL, insetT, insetR, insetB;
 
     /*
@@ -271,6 +272,12 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
      * present loop on its next frame.
      */
     private static native void nativeSetFilter(long handle, int linear);
+
+    /**
+     * 呈现滤镜：0 关闭，2 扫描线，3 LCD 网格，4 CRT。设置界面写入，
+     * 呈现循环下一帧应用；只作用于窗口缓冲，不影响模拟器帧/存档/截图。
+     */
+    private static native void nativeSetPresentFilter(long handle, int mode);
 
     /**
      * Frames per second to aim for: 30 or 60, 0 for uncapped, -1 for the
@@ -827,6 +834,7 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
                         graphicsSupported() && Settings.gles2Experimental(this) ? 1 : 0);
                 nativeSetSpeed(handle, speed);
                 nativeSetFilter(handle, pictureAA);
+                nativeSetPresentFilter(handle, presentFilter);
                 nativeSetFrameCap(handle, Settings.frameCap(this));
                 /* A new MIDlet: its own vocabulary is what the subset row will
                  * keep, so the previous game's stops being recorded here. */
@@ -1314,9 +1322,15 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
         GlyphSource.setAntiAlias(Settings.fontAntiAlias(this));
         GlyphSource.setFontFile(Settings.fontFile(this));
         pictureAA = Settings.pictureAntiAlias(this) ? 1 : 0;
+        presentFilter = getSharedPreferences("nano_j2me", MODE_PRIVATE)
+                .getInt("present_filter", 0);
+        if (presentFilter == 1 || presentFilter < 0 || presentFilter > 4) {
+            presentFilter = 0;
+        }
         synchronized (lock) {
             if (handle != 0) {
                 nativeSetFilter(handle, pictureAA);
+                nativeSetPresentFilter(handle, presentFilter);
                 nativeSetFrameCap(handle, Settings.frameCap(this));
                 nativeGlyphReset(handle);
             }
@@ -1407,6 +1421,17 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
                 picAA ? "画面现在会做平滑；关掉是原来的方块像素"
                       : "画面缩放时是方块锯齿；铺满和自定义时打开更平滑",
                 picAA, null);
+        final String[] filterNames = { "关闭", "扫描线", "LCD 网格", "CRT" };
+        int filterIdx = 0;
+        for (int i = 1; i < filterNames.length; i++) {
+            if (presentFilter == i + 1) {
+                filterIdx = i;
+            }
+        }
+        LinearLayout filterRow = Md3.row(this, Md3.IC_SCREEN,
+                "画面滤镜：" + filterNames[filterIdx],
+                "只作用于窗口显示，不改模拟器画面；存档/截图保持原样",
+                presentFilter > 0, null);
         final boolean graphicsAvailable = graphicsSupported();
         final boolean gles2 = graphicsAvailable && Settings.gles2Experimental(this);
         LinearLayout graphicsRow = Md3.row(this, Md3.IC_SCREEN,
@@ -1454,6 +1479,8 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
         box.addView(subsetRow);
         box.addView(Md3.divider(this));
         box.addView(picAaRow);
+        box.addView(Md3.divider(this));
+        box.addView(filterRow);
         box.addView(Md3.divider(this));
         box.addView(fpsRow);
         box.addView(Md3.divider(this));
@@ -1593,6 +1620,13 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
                 Log.i(TAG, "picture: anti-alias " + (picAA ? "off" : "on"));
                 dlg.dismiss();
                 toast(!picAA ? "画面反锯齿已打开" : "画面反锯齿已关闭");
+            }
+        });
+        filterRow.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                dlg.dismiss();
+                filterDialog();
             }
         });
         fpsRow.setOnClickListener(new View.OnClickListener() {
@@ -2241,6 +2275,44 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
                             JarStore.write(GameActivity.this, e);
                         }
                         toast("游戏速度 " + speedText());
+                    }
+                });
+    }
+
+    /*
+     * Picture filter: display effects on the window buffer only.  The game
+     * framebuffer, save states, screenshots and the libretro core never see
+     * them, which is why this is a present-path setting and not a Graphics
+     * one.  Stored per install, applied on the next frame.
+     */
+    private void filterDialog() {
+        final String[] labels = { "关闭（像素原样）", "扫描线", "LCD 网格", "CRT" };
+        final int[] modes = { 0, 2, 3, 4 };
+        final String[] hints = {
+                "窗口原样显示，默认",
+                "每隔一行压暗，模拟老电视扫描线",
+                "每隔三行/列画暗线，模拟 LCD 像素栅格",
+                "更重的扫描线 + 栅格，接近 CRT 观感"
+        };
+        int checked = 0;
+        for (int i = 0; i < modes.length; i++) {
+            if (presentFilter == modes[i]) {
+                checked = i;
+            }
+        }
+        Md3.chooser(this, Md3.IC_SCREEN, "画面滤镜", "当前 " + labels[checked],
+                labels, hints, checked, new Md3.Choice() {
+                    @Override
+                    public void picked(int which, AlertDialog d) {
+                        presentFilter = modes[which];
+                        getSharedPreferences("nano_j2me", MODE_PRIVATE).edit()
+                                .putInt("present_filter", presentFilter).apply();
+                        synchronized (lock) {
+                            if (handle != 0) {
+                                nativeSetPresentFilter(handle, presentFilter);
+                            }
+                        }
+                        toast("画面滤镜 " + labels[which]);
                     }
                 });
     }

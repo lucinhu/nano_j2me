@@ -76,3 +76,12 @@ FSR1（EASU+RCAS）与 sharp-bilinear 需要把原生帧作为纹理经 shader �
 
 M3G 以 2× 分辨率光栅化后缩小，画质提升但 CPU 约 4×，对 240p 手游收益有限，
 仅作为未来实验选项记录。
+
+### Android 版：软件呈现滤镜（已实现，0.5.43+）
+
+设置 →「画面滤镜」提供：关闭（默认）/ 扫描线 / LCD 网格 / CRT。滤镜在原生
+`android_display_present()` 锁定窗口缓冲后应用，只改变窗口显示；模拟器帧缓冲、
+存档、截图、帧转储与 libretro 核心均不受影响。选择保存在应用私有
+SharedPreferences（`present_filter`），通过 `nativeSetPresentFilter(mode)` 传给原生层，
+下一帧生效；旧版「画面反锯齿」开关保持不变。GL/FSR 呈现路径就绪后，同一设置行会
+增加 FSR 选项。

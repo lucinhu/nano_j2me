@@ -395,6 +395,13 @@ typedef struct android_state {
     nj_vm *vm;
     int   speed_percent;
     int   speed_applied;
+    /*
+     * Presentation filter: 0 off (nearest), 2 scanline, 3 LCD grid, 4 CRT.
+     * Written by the settings UI only; the present path reads it once per
+     * frame.  A display effect on the window buffer, never on the emulated
+     * frame, so saves, screenshots and the libretro core are unaffected.
+     */
+    int   present_filter;
     int   det_raw_same;
 
     /*
@@ -1240,6 +1247,66 @@ static int android_legacy_present(android_state *s)
 }
 #endif
 
+#if !NJ_ANDROID_LEGACY
+/*
+ * Picture filters applied to the locked window buffer after the frame is
+ * drawn: scanline (darken every other row), LCD grid (every third row and
+ * column) and CRT (stronger scanline plus a grid).  These are display effects
+ * only - the emulated framebuffer, save states, screenshots, the frame dumps
+ * and the libretro core are all untouched.  Off by default.
+ */
+static void android_present_filter(android_state *s, ANativeWindow_Buffer *buf)
+{
+    int mode = s->present_filter;
+    int wide = (buf->format == WINDOW_FORMAT_RGBA_8888
+                || buf->format == WINDOW_FORMAT_RGBX_8888);
+    int rows = buf->height, cols = buf->width, stride = buf->stride;
+    int r, c;
+    if (mode < 2 || rows <= 0 || cols <= 0 || stride < cols || !buf->bits) {
+        return;
+    }
+    for (r = 0; r < rows; r++) {
+        int row_cut, col_cut;
+        if (mode == 2) {
+            row_cut = (r & 1) ? 0 : 55;      /* ~22% dark every other row */
+            col_cut = 0;
+        } else if (mode == 3) {
+            row_cut = (r % 3 == 0) ? 55 : 0; /* grid every 3rd row/column */
+            col_cut = 55;
+        } else {
+            row_cut = (r & 1) ? 0 : 90;      /* CRT: stronger scanline */
+            col_cut = 35;
+        }
+        if (row_cut == 0 && col_cut == 0) {
+            continue;
+        }
+        if (wide) {
+            nj_u4 *row = (nj_u4 *)buf->bits + (size_t)r * (size_t)stride;
+            for (c = 0; c < cols; c++) {
+                nj_u4 v = row[c];
+                int scale = 256 - row_cut - ((c % 3 == 0) ? col_cut : 0);
+                nj_u4 a = v & 0xFF000000u;
+                nj_u4 rd = (((v >> 16) & 0xFFu) * (nj_u4)scale) >> 8;
+                nj_u4 gn = (((v >> 8) & 0xFFu) * (nj_u4)scale) >> 8;
+                nj_u4 bl = ((v & 0xFFu) * (nj_u4)scale) >> 8;
+                row[c] = a | (rd << 16) | (gn << 8) | bl;
+            }
+        } else {
+            nj_u2 *row = (nj_u2 *)buf->bits + (size_t)r * (size_t)stride;
+            for (c = 0; c < cols; c++) {
+                unsigned v = row[c];
+                int scale = 256 - row_cut - ((c % 3 == 0) ? col_cut : 0);
+                unsigned rr = ((v >> 11) & 0x1Fu) * (unsigned)scale >> 8;
+                unsigned gg = ((v >> 5) & 0x3Fu) * (unsigned)scale >> 8;
+                unsigned bb = (v & 0x1Fu) * (unsigned)scale >> 8;
+                row[c] = (nj_u2)((rr << 11) | (gg << 5) | bb);
+            }
+        }
+    }
+}
+
+#endif  /* !NJ_ANDROID_LEGACY */
+
 static void android_display_present(void *ud, int x, int y, int w, int h)
 {
     android_state *s = AS(ud);
@@ -1550,6 +1617,9 @@ static void android_display_present(void *ud, int x, int y, int w, int h)
                 }
             }
         }
+    }
+    if (s->present_filter >= 2) {
+        android_present_filter(s, &buf);
     }
     ANativeWindow_unlockAndPost(win);
     ANativeWindow_release(win);
@@ -6481,6 +6551,33 @@ Java_com_lucinhu_nj2me_GameActivity_nativeSetSpeed(JNIEnv *env, jobject thiz,
         android_state *s = AS(a->port.ud);
         if (s) {
             s->speed_percent = (int)percent;
+        }
+    }
+}
+
+/*
+ * Presentation filter picked in the settings dialog: 0 off, 2 scanline,
+ * 3 LCD grid, 4 CRT.  Only remembered here; the present path applies it to the
+ * window buffer on the next frame, never to the emulated framebuffer.
+ */
+JNIEXPORT void JNICALL
+Java_com_lucinhu_nj2me_GameActivity_nativeSetPresentFilter(JNIEnv *env,
+                                                           jobject thiz,
+                                                           jlong handle,
+                                                           jint mode)
+{
+    android_app *a = (android_app *)(intptr_t)handle;
+    (void)env; (void)thiz;
+    if (a) {
+        android_state *s = AS(a->port.ud);
+        if (s) {
+            if (mode < 0 || mode > 4) {
+                mode = 0;
+            }
+            if (mode == 1) {
+                mode = 0;   /* linear is the existing picture anti-alias switch */
+            }
+            s->present_filter = (int)mode;
         }
     }
 }
