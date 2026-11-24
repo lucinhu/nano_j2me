@@ -181,3 +181,52 @@ Next implementation steps:
 3. One colour readback per frame for the SDL2 software presentation path
    (≈0.24 s per 560 frames) — Android gets the EGL window path later and skips
    it entirely.
+
+## Round 10: the readback upper bound is still above software
+
+To decide whether the frame-resident work can ever meet the acceptance line,
+the transaction readback/commit was switched off entirely (benchmark-only
+build, reverted) and the rest of the pipeline left untouched. That is the
+best case a perfect frame-resident backend could reach for the GL side while
+software 2D stays as it is:
+
+| workload (560/600 frames, same session) | software everything | 3D GL + software 2D | + no readback/commit |
+| --- | --- | --- | --- |
+| Galaxy on Fire 2 | 5.01 s user | 6.01 s | **5.55 s** |
+| Doom3 (600 frames) | 2.10 s | 2.69 s | **2.81 s** |
+
+Both workloads stay above the software baseline even with **zero** colour and
+depth readback and zero CPU commit: the remaining GL cost is the per-transaction
+CPU work that the frame-resident design cannot remove without also eliminating
+the two-pass depth-key machinery (`prep`, `setup`, colour import, colour/depth
+uploads, seed, draw) and the observer-driven commits.
+
+Two structural facts bound the design:
+
+1. **Observers force commits.** The 2.956 Galaxy flushes come from M3G's own
+   flush points, and every one of them is immediately followed by CPU
+   observation (a 2D Graphics call or `present`): the CPU canvas must contain
+   the 3D result before the 2D draw that follows. Removing those readbacks
+   requires an ordered 3D/2D compositor (2D into an overlay surface, composite
+   into the 3D FBO per observer, one final readback/present), which is a much
+   larger change than deferring the existing commit.
+2. **Tiny triangles are cheap on the CPU.** ~1.35M triangles per 560 frames
+   cost the GL path ~1.84 s in submission/setup/upload before any readback;
+   the same triangles rasterise in the software pipeline at a comparable cost.
+   A GL path can only win if its per-triangle submission cost drops well below
+   the software rasteriser, which needs resident vertex/index buffers and a
+   real depth buffer — not just a frame FBO.
+
+**Conclusion for the acceptance criteria:** with this backend (GLES2-level
+API: no depth-texture readback, per-transaction depth keys, CPU-authoritative
+canvas) the GLES2 path cannot meet `GL < software` on either measured
+workload, and the <3.5 s target is unreachable. Software rendering therefore
+stays the default. The B1/B1.5 layers remain opt-in experimental code and are
+not shipped on any default.
+
+Remaining GL work, if pursued, must attack per-triangle submission cost
+(persistent buffers, real depth buffer, EGL presentation) and add the ordered
+compositor; that is a multi-round project with a realistic outcome of parity
+rather than a win on these workloads. The next round should either prototype
+the ordered compositor or formally close the GLES2 performance track with this
+evidence, keeping the software path as the product path.
