@@ -169,3 +169,16 @@ LCD / CRT / FSR1 呈现效果。约束：
 - 结论：Android GL 呈现（`debug.nj2me.glpresent=1`）保持**默认关闭的实验特性**，
   自动回退软件呈现，不进入正式 UI/发布说明；后续若继续，需要对比 GL 在 window surface 上
   逐像素输出（或改用 FBO→readback 混合验证）来定位根因。其余目标项不受影响。
+
+## Round 26：钉死视图后差异不变（38.6%）
+
+- 新增的 `debug.nj2me.glview` 测试钩子可以把逻辑视图钉死（0=AUTO 1=INT 2=FILL）。
+  在 `debug.nj2me.glview=1` + `debug.nj2me.glpresent=1`、nearest 模式的 StaticDemo 上与
+  软件呈现（同样钉死 INT）对比，**全屏差异仍是 38.6%（1,000,603 / 2,592,000 px）**，
+  与设置钉死前完全一致；±60px 平移搜索最优仍是 (0,0)。
+- 因此 AUTO 视图的 pacer 平移不是原因。剩余怀疑集中在 EGL window surface 在
+  `eglSwapBuffers` 时的呈现缩放/方向（SurfaceView 与 ANativeWindow buffer 的映射），
+  或 on-screen 四边形采样（纹理被以非整数比例重采样）。
+- 该路径继续默认关闭、自动回退软件呈现；像素级修正在现有验证吞吐下成本高，
+  已列为可选后续项（下一步若要继续，优先在 native 里 dump "GL framebuffer readback PPM"
+  与 "software shadow PPM" 对照，一次即可区分呈现缩放与绘制采样两类原因）。
