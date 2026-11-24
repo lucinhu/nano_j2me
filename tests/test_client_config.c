@@ -81,7 +81,7 @@ static void test_defaults(const char *data_home)
     CHECK(s.game_scale == 0, "scale defaults to fit-the-window");
     CHECK(s.keys_visible == 1, "the on-screen keypad starts visible");
     CHECK(s.fps_cap == 0, "frames default to uncapped");
-    CHECK(s.filter_linear == 0, "the filter defaults to nearest-neighbour");
+    CHECK(s.filter_mode == 0, "the filter defaults to nearest-neighbour");
     CHECK(s.fullscreen == 0, "games start in a window");
     CHECK(s.accel == 0, "the software renderer is the default");
     CHECK(s.heap_mb == 0, "the heap defaults to the runtime size");
@@ -171,7 +171,7 @@ static void test_round_trip(const char *config_home)
     a.ui_scale = 175;
     a.keys_visible = 0;
     a.fps_cap = 60;
-    a.filter_linear = 1;
+    a.filter_mode = 3;
     a.fullscreen = 1;
     a.accel = 1;
     a.heap_mb = 32;
@@ -196,7 +196,7 @@ static void test_round_trip(const char *config_home)
     CHECK(b.ui_scale == 175, "fractional interface scaling survives");
     CHECK(b.keys_visible == 0, "keys_visible survives");
     CHECK(b.fps_cap == 60, "fps cap survives");
-    CHECK(b.filter_linear == 1, "the linear filter survives");
+    CHECK(b.filter_mode == 3, "the presentation filter survives");
     CHECK(b.fullscreen == 1, "fullscreen survives");
     CHECK(b.accel == 1, "the accelerated renderer survives");
     CHECK(b.heap_mb == 32, "the heap size survives");
@@ -230,8 +230,8 @@ static void test_round_trip(const char *config_home)
               "the clear rebind is in the file");
         CHECK(strstr(text, "map_down") == NULL,
               "a default slot is not written");
-        CHECK(strstr(text, "filter_linear = 1") != NULL,
-              "the filter switch is in the file");
+        CHECK(strstr(text, "filter_mode = 3") != NULL,
+              "the presentation filter is in the file");
         CHECK(strstr(text, "gamepad = 0") != NULL,
               "the gamepad switch is in the file");
         CHECK(strstr(text, "window = 900x700") != NULL,
@@ -246,7 +246,7 @@ static void test_round_trip(const char *config_home)
         CHECK(nj_client_settings_load(&c, missing) == 0, "missing file loads as 0");
         CHECK(c.game_scale == 0 && c.keys_visible == 1 && c.fps_cap == 0,
               "missing file keeps the defaults");
-        CHECK(c.filter_linear == 0 && c.fullscreen == 0 && c.network == 1 &&
+        CHECK(c.filter_mode == 0 && c.fullscreen == 0 && c.network == 1 &&
               c.binds[NJ_PORT_BIND_UP][0] == '\0',
               "missing file keeps the new defaults too");
         CHECK(c.gamepad == 1 && c.launcher_w == 0 && c.launcher_h == 0,
@@ -288,7 +288,7 @@ static void test_bad_files(const char *config_home)
     CHECK(strcmp(s.last_dir, "/tmp") == 0, "known keys after unknown ones stick");
     CHECK(strstr(s.games_dir, "definitely-not-here") == NULL,
           "a games dir that does not exist falls back to the default");
-    CHECK(s.filter_linear == 0, "a switch value other than 0/1 is ignored");
+    CHECK(s.filter_mode == 0, "a switch value other than 0/1 is ignored");
     CHECK(s.heap_mb == 64, "an oversized heap request clamps to 64 MB");
     CHECK(s.mute == 0, "a negative switch is ignored");
     CHECK(s.gamepad == 1, "a switch value other than 0/1 leaves it on");

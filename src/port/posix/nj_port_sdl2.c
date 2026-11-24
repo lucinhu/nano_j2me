@@ -642,6 +642,8 @@ typedef struct sdl_state {
     nj_u1 ime_keys[SDL_NUM_SCANCODES]; /* swallow matching key-up after focus moves */
 
     int  quit;
+    /* NJ_SDL2_FILTER: 0 nearest, 1 linear, 2 scanline, 3 lcd, 4 crt. */
+    int  filter_mode;
     int  have_scale_arg;
     const nj_port *port;   /* the caller's struct: we read width/height from it */
     /*
@@ -1030,11 +1032,31 @@ static int sdl_display_init(void *ud, int *w, int *h, int *stride, void **px)
      * hint is read when the texture is created (and again by the renderer).
      */
     {
-        const char *filter = SDL_getenv("NJ_SDL2_FILTER");
+        const char *filter = getenv("NJ_SDL2_FILTER");
 
-        linear_filter = (filter && strcmp(filter, "linear") == 0) ? 1 : 0;
+        s->filter_mode = 0;
+        if (filter && filter[0]) {
+            if (strcmp(filter, "linear") == 0)       s->filter_mode = 1;
+            else if (strcmp(filter, "scanline") == 0) s->filter_mode = 2;
+            else if (strcmp(filter, "lcd") == 0)      s->filter_mode = 3;
+            else if (strcmp(filter, "crt") == 0)      s->filter_mode = 4;
+            else if (strcmp(filter, "nearest") != 0) {
+                sdl_log(s, 1, "display: unknown NJ_SDL2_FILTER value, using nearest");
+            }
+        }
+        linear_filter = (s->filter_mode == 1) ? 1 : 0;
         SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY,
                     linear_filter ? "linear" : "nearest");
+        {
+            static const char *const names[5] = {
+                "nearest", "linear", "scanline", "lcd", "crt"
+            };
+            char msg[96];
+            SDL_snprintf(msg, sizeof(msg),
+                         "display: %s filter (NJ_SDL2_FILTER)",
+                         names[s->filter_mode]);
+            sdl_log(s, 2, msg);
+        }
     }
 
     /*
@@ -1113,9 +1135,6 @@ static int sdl_display_init(void *ud, int *w, int *h, int *stride, void **px)
      * starts fullscreen, looks blurry or is silent is otherwise a bug report;
      * with these lines it is a settings file the player can see.
      */
-    if (linear_filter) {
-        sdl_log(NULL, 2, "display: linear scaling (NJ_SDL2_FILTER=linear)");
-    }
     if (s->fullscreen) {
         sdl_log(NULL, 2, "display: fullscreen (F11 toggles; "
                          "NJ_SDL2_FULLSCREEN=1 started it)");
@@ -2420,6 +2439,56 @@ static void sdl_text_input(void *ud, const nj_text_input_state *state)
     }
 }
 
+/*
+ * Presentation filters.
+ *
+ * These are software overlays: they attenuate the presented image after the
+ * game texture is stretched, so they cost nothing when disabled and never
+ * touch the emulated framebuffer.  NJ_SDL2_FILTER selects them:
+ *   nearest (default) / linear - the existing scaling quality
+ *   scanline                   - darken every second device row
+ *   lcd                        - scanline plus RGB stripe gaps
+ *   crt                        - stronger scanline and stripe shadow mask
+ * The GLES2 shader pipeline (FSR1 EASU/RCAS) arrives with the EGL
+ * presentation path; until then these cover the "filters" half of the
+ * presentation goal without changing the default look.
+ */
+static void sdl_draw_filter(sdl_state *s)
+{
+    SDL_Rect d;
+    int y;
+
+    if (!s->renderer || s->filter_mode < 2) {
+        return;
+    }
+    d = s->game_dst;
+    if (d.w <= 0 || d.h <= 0) {
+        return;
+    }
+    if (SDL_SetRenderDrawBlendMode(s->renderer, SDL_BLENDMODE_BLEND) != 0) {
+        return;
+    }
+    if (s->filter_mode == 2 || s->filter_mode == 4) {
+        SDL_SetRenderDrawColor(s->renderer, 0, 0, 0,
+                               (s->filter_mode == 4) ? 110 : 64);
+        for (y = d.y + 1; y < d.y + d.h; y += 2) {
+            SDL_RenderDrawLine(s->renderer, d.x, y, d.x + d.w - 1, y);
+        }
+    }
+    if (s->filter_mode == 3 || s->filter_mode == 4) {
+        int x;
+        SDL_SetRenderDrawColor(s->renderer, 0, 0, 0,
+                               (s->filter_mode == 4) ? 52 : 72);
+        for (x = d.x + 1; x < d.x + d.w; x += 3) {
+            SDL_RenderDrawLine(s->renderer, x, d.y, x, d.y + d.h - 1);
+        }
+        for (y = d.y + 1; y < d.y + d.h; y += 3) {
+            SDL_RenderDrawLine(s->renderer, d.x, y, d.x + d.w - 1, y);
+        }
+    }
+    (void)SDL_SetRenderDrawBlendMode(s->renderer, SDL_BLENDMODE_NONE);
+}
+
 static void sdl_display_present(void *ud, int x, int y, int w, int h)
 {
     sdl_state *s = SS(ud);
@@ -2900,6 +2969,7 @@ static void sdl_display_present(void *ud, int x, int y, int w, int h)
     sdl_layout(s);
     SDL_RenderClear(s->renderer);
     SDL_RenderCopy(s->renderer, s->texture, NULL, &s->game_dst);
+    sdl_draw_filter(s);
     sdl_draw_keys(s);
     sdl_draw_speed(s);
 

@@ -1221,9 +1221,9 @@ int main(void)
     /* 缩放滤镜 */
     key(ui, NJ_CLIENT_KEY_DOWN);
     key(ui, NJ_CLIENT_KEY_RIGHT);
-    CHECK(settings.filter_linear == 1, "filter row switches to linear");
+    CHECK(settings.filter_mode == 1, "filter row switches to linear");
     key(ui, NJ_CLIENT_KEY_RIGHT);
-    CHECK(settings.filter_linear == 0, "filter row wraps to nearest");
+    CHECK(settings.filter_mode == 2, "filter row steps to scanline");
 
     /* 全屏 */
     key(ui, NJ_CLIENT_KEY_DOWN);
@@ -1479,8 +1479,8 @@ int main(void)
         CHECK(loaded.keys_visible == settings.keys_visible,
               "load kept keys visibility");
         CHECK(loaded.fps_cap == settings.fps_cap, "load kept fps cap");
-        CHECK(loaded.filter_linear == settings.filter_linear,
-              "load kept the filter");
+        CHECK(loaded.filter_mode == settings.filter_mode,
+              "load kept the presentation filter");
         CHECK(loaded.fullscreen == settings.fullscreen,
               "load kept fullscreen");
         CHECK(loaded.accel == settings.accel, "load kept accel");
@@ -1573,7 +1573,7 @@ int main(void)
     CHECK(settings.keys_visible == 1, "reset restores on-screen keys");
     CHECK(settings.gamepad == 1, "reset restores the gamepad default");
     CHECK(settings.fps_cap == 0, "reset restores uncapped fps");
-    CHECK(settings.filter_linear == 0 && settings.fullscreen == 0 &&
+    CHECK(settings.filter_mode == 0 && settings.fullscreen == 0 &&
               settings.accel == 0 && settings.heap_mb == 0 &&
               settings.mute == 0 && settings.network == 1,
           "reset restores the new settings");

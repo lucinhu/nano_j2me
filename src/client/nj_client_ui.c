@@ -1368,7 +1368,14 @@ static void ui_settings_value(const nj_client_ui *ui, int row, char *out,
         }
         break;
     case UI_SET_ROW_FILTER:
-        snprintf(out, (size_t)cap, "%s", s->filter_linear ? "线性" : "最近邻");
+        {
+            static const char *const names[5] = {
+                "最近邻", "线性", "扫描线", "LCD 网格", "CRT"
+            };
+            int m = s->filter_mode;
+            if (m < 0 || m > 4) m = 0;
+            snprintf(out, (size_t)cap, "%s", names[m]);
+        }
         break;
     case UI_SET_ROW_FULLSCREEN:
         snprintf(out, (size_t)cap, "%s", s->fullscreen ? "开" : "关");
@@ -1459,7 +1466,7 @@ static void ui_settings_cycle(nj_client_ui *ui, int dir)
         if (s->game_scale > 4) s->game_scale = 0;
         break;
     case UI_SET_ROW_FILTER:
-        s->filter_linear = s->filter_linear ? 0 : 1;
+        s->filter_mode = (s->filter_mode + dir + 5) % 5;
         break;
     case UI_SET_ROW_FULLSCREEN:
         s->fullscreen = s->fullscreen ? 0 : 1;

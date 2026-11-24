@@ -497,8 +497,14 @@ nj_size nj_client_apply_game_settings(nj_port *port,
      */
     SDL_setenv("NJ_SDL2_KEYS", settings->keys_visible ? "1" : "0", 1);
     SDL_setenv("NJ_SDL2_ACCEL", settings->accel ? "1" : "0", 1);
-    SDL_setenv("NJ_SDL2_FILTER", settings->filter_linear ? "linear" : "nearest",
-               1);
+    {
+        static const char *const filters[5] = {
+            "nearest", "linear", "scanline", "lcd", "crt"
+        };
+        int m = settings->filter_mode;
+        if (m < 0 || m > 4) m = 0;
+        SDL_setenv("NJ_SDL2_FILTER", filters[m], 1);
+    }
     SDL_setenv("NJ_SDL2_FULLSCREEN", settings->fullscreen ? "1" : "0", 1);
     SDL_setenv("NJ_SDL2_MUTE", settings->mute ? "1" : "0", 1);
     SDL_setenv("NJ_SDL2_NO_NETWORK", settings->network ? "0" : "1", 1);

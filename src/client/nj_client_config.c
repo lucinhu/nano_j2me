@@ -207,7 +207,7 @@ void nj_client_settings_default(nj_client_settings *s)
     s->ui_scale = 0;     /* follow desktop DPI / compositor scaling */
     s->keys_visible = 1; /* the SDL2 port shows them by default */
     s->fps_cap = 0;      /* uncapped: the VM paces itself by the MIDP timer */
-    s->filter_linear = 0; /* nearest: pixels stay pixels */
+    s->filter_mode = 0;   /* nearest: pixels stay pixels */
     s->fullscreen = 0;    /* a window, first */
     s->accel = 0;         /* software renderer: the one that always works */
     s->heap_mb = 0;       /* runtime default */
@@ -439,8 +439,11 @@ int nj_client_settings_load(nj_client_settings *s, const char *path)
         } else if (strcmp(key, "fps_cap") == 0) {
             int v = cfg_int(val, s->fps_cap);
             if (v == 0 || v == 30 || v == 60 || v == 120) s->fps_cap = v;
+        } else if (strcmp(key, "filter_mode") == 0) {
+            s->filter_mode = cfg_int(val, s->filter_mode);
+            if (s->filter_mode < 0 || s->filter_mode > 4) s->filter_mode = 0;
         } else if (strcmp(key, "filter_linear") == 0) {
-            s->filter_linear = cfg_bool(val, s->filter_linear);
+            s->filter_mode = cfg_bool(val, s->filter_mode != 0) ? 1 : 0;
         } else if (strcmp(key, "fullscreen") == 0) {
             s->fullscreen = cfg_bool(val, s->fullscreen);
         } else if (strcmp(key, "accel") == 0) {
@@ -536,7 +539,8 @@ int nj_client_settings_save(const nj_client_settings *s, const char *path)
     fprintf(f, "ui_scale = %d\n", s->ui_scale);
     fprintf(f, "keys_visible = %d\n", s->keys_visible ? 1 : 0);
     fprintf(f, "fps_cap = %d\n", s->fps_cap);
-    fprintf(f, "filter_linear = %d\n", s->filter_linear ? 1 : 0);
+    fprintf(f, "filter_linear = %d\n", s->filter_mode == 1 ? 1 : 0);
+    fprintf(f, "filter_mode = %d\n", s->filter_mode);
     fprintf(f, "fullscreen = %d\n", s->fullscreen ? 1 : 0);
     fprintf(f, "accel = %d\n", s->accel ? 1 : 0);
     fprintf(f, "heap_mb = %d\n", s->heap_mb);

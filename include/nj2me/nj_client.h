@@ -58,7 +58,9 @@ typedef struct nj_client_settings {
     int  ui_scale;                      /* 0 = desktop DPI, 100..300 percent */
     int  keys_visible;                  /* on-screen keypad in games, 0/1    */
     int  fps_cap;                       /* 0 = uncapped, else 30/60/120      */
-    int  filter_linear;                 /* scale filter 0=nearest 1=linear   */
+    int  filter_mode;                   /* presentation filter:
+                                           0=nearest 1=linear 2=scanline
+                                           3=lcd 4=crt                         */
     int  fullscreen;                    /* games start fullscreen, 0/1       */
     int  accel;                         /* 0=software renderer, 1=GPU+vsync  */
     int  heap_mb;                       /* 0 = runtime default, else MB      */
