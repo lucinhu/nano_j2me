@@ -5,7 +5,7 @@ Android 多存档位与倒带 UI、GL 呈现诊断与像素级校验（0.249% �
 
 ## 验证
 - CTest 211/211（安装 r65 核心后全绿；唯一失败的原因为旧 dist 缓存已更新）
-- libretro mock 20/20（见构建日志）、真实 RetroArch LoopDemo PASS
+- libretro mock 前端矩阵 **20/20**（r65 linux-x86_64 核心）、真实 RetroArch LoopDemo PASS
 - Android APK x86_64 模拟器：各呈现模式截图与 logcat 证据在 docs/notes 中
 
 ## 资产
