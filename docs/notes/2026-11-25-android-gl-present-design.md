@@ -98,3 +98,19 @@ LCD / CRT / FSR1 呈现效果。约束：
 - 未完成/已知问题：GL 与软件呈现的“逐像素一致”验证不成立——LoopDemo 是动画，两次运行的动画相位不同，
   截图对比必然大量差异（实测 48%–68% 随相位波动）；需要静态画面 fixture 才能做 PPM 对比。下一轮：加
   `tests/staticdemo`（固定画面）+ 同相位截图对比，再决定是否增加用户可见开关；当前保持默认关闭。
+
+## Round 18：静态 fixture 与一致性测试（GL 窗口路径已知差异）
+
+- 新增 `tests/staticdemo/StaticDemo.java` + `tools/make_staticdemo_jar.sh`（固定网格 + 文字 + 角块，
+  不 repaint、无 timer），并接入 `nj_fixtures`。用途：Android GL 呈现与软件呈现可以在**同一画面相位**
+  下截图对比；动画 fixture（LoopDemo）两次运行相位不同，截图差异 48%–68% 全是相位噪声，不能作为验收。
+- 模拟器（Medium_Phone_API_36.1，x86_64 APK）用 StaticDemo 对比 `debug.nj2me.glpresent=1`（nearest）
+  与 `=0`（软件）截图：**2,086,304 / 2,592,000 像素（80.5%）不同**，GL 画面上下颠倒、位置与尺寸也
+  与软件不一致（软件呈现画面从窗口顶部开始 4 倍整数放大、按键区在其下方；GL 画面出现在窗口下半部）。
+- 结论：Android 窗口路径的 EGL surface 方向（V/U）与几何来源（ANSI window buffer vs EGL surface、
+  SurfaceView/pad 区域）还没对齐；本轮试验的 4 种 V/U 翻转组合差异均在 80% 左右，说明主要误差来自
+  几何/绘制区域而非单纯方向。默认仍为软件呈现；GL 窗口路径保持 `debug.nj2me.glpresent` 实验开关。
+- 下一轮方案：在 Android 端复用已知正确的路径——先 `nj_gles2_present()` 离屏渲染 + 回读 RGBA（与
+  SDL2 桌面 PPM 对比一致的那条路径），再用一次全屏纹理 blit 到窗口，方向由 `eglQuerySurface` 与
+  `ANativeWindow_getWidth/Height` 的差值决定；以 StaticDemo nearest 0 像素差异为验收，再开放 scanline/
+  LCD/CRT 与 FSR1。

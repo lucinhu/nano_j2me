@@ -838,6 +838,7 @@ if(NJ_BUILD_TESTS)
     add_custom_command(TARGET nj_fixtures POST_BUILD
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_keys_jar.sh
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_blockdemo_jar.sh
+      COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_staticdemo_jar.sh
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_loopdemo_jar.sh
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_latedemo_jar.sh
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_fsorder_jar.sh
