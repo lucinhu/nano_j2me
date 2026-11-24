@@ -5575,6 +5575,7 @@ nj_status nj_port_android_ex(nj_port *out, int screen_w, int screen_h)
 #endif
     out->shutdown = android_shutdown;
     out->fps_cap = android_fps_cap();
+#if NJ_ANDROID_GLES2 && !NJ_ANDROID_LEGACY
     {
         char prop[PROP_VALUE_MAX];
         prop[0] = '\0';
@@ -5612,6 +5613,7 @@ nj_status nj_port_android_ex(nj_port *out, int screen_w, int screen_h)
             }
         }
     }
+#endif /* NJ_ANDROID_GLES2 && !NJ_ANDROID_LEGACY */
     {
         char prop[PROP_VALUE_MAX];
         prop[0] = '\0';
