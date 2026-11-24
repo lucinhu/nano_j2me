@@ -85,3 +85,9 @@ M3G 以 2× 分辨率光栅化后缩小，画质提升但 CPU 约 4×，对 240p
 SharedPreferences（`present_filter`），通过 `nativeSetPresentFilter(mode)` 传给原生层，
 下一帧生效；旧版「画面反锯齿」开关保持不变。GL/FSR 呈现路径就绪后，同一设置行会
 增加 FSR 选项。
+
+**模拟器验证（2026-11-25，API 36 AVD，x86_64 APK）**：LoopDemo 游戏画面在
+关闭滤镜时为基准；切换「扫描线」后画面区域 614,784 / 2,592,000 像素变化
+（23.7%，隔行压暗）；「CRT」后 819,712 像素变化（31.6%，扫描线+栅格）；
+按键/状态栏 UI 不在滤镜区域。`am force-stop` 后重新启动并进入游戏，设置面板仍显示
+「画面滤镜：CRT」，SharedPreferences 持久化验证通过。
