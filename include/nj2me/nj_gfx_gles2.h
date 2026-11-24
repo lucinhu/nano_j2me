@@ -92,6 +92,11 @@ int nj_gles2_present(void *ud, const nj_surface *src, int mode, int out_w, int o
 /* Debug aid: read the currently bound window framebuffer back into out_rgba
  * (w*h RGBA8888, bottom-up GL row order). Returns 1 on success, 0 on failure. */
 int nj_gles2_present_readback(void *ud, int w, int h, nj_u1 *out_rgba);
+/* Debug aid: render the on-screen quad into a temporary offscreen framebuffer
+ * sized like the drawable and read it back (w*h RGBA8888, bottom-up). */
+int nj_gles2_present_onscreen_capture(void *ud, const nj_surface *src, int mode,
+                                      int vp_x, int vp_y, int vp_w, int vp_h,
+                                      int out_w, int out_h, nj_u1 *out_rgba);
 
 /* Render the presentation shader into the current draw framebuffer (0),
  * inside the given viewport, clearing the rest of the drawable to black.

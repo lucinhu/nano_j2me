@@ -198,3 +198,21 @@ LCD / CRT / FSR1 呈现效果。约束：
   用于确认采样是否与 CPU 期望一致（不依赖 window 回读）；(2) 若采样一致，则差异在
   EGL swap 后被系统合成环节引入，改为在 SurfaceView 尺寸/密度上排查；(3) 该路径继续
   默认关闭、失败自动回落软件呈现。
+
+## Round 28：FBO 回读确认绘制几何正确，差异在采样/合成
+
+- window surface 回读在 SwiftShader 上全黑（round 27），改为把同一段 on-screen 绘制
+  重定向到 `1080x2400` 临时 FBO 再回读（`nj_gles2_present_onscreen_capture()`），
+  结果：**非黑像素 1,228,065 / 2,592,000 = 47.38%**，与 letterbox 画面面积
+  （960x1280 / 1080x2400 = 47.4%）完全一致；内容 bbox 与软件路径逐像素一致
+  (60,88)-(1019,1367)，因此“绘制位置/大小”正确，不是 EGL swap 后的合成问题。
+- 但把 FBO 回读与 CPU 期望（CLI `--dump-frames` 的 240x320 逻辑帧，nearest 4x 放到
+  1080x2400 黑底）对比，仍有 **38.45% 全屏差异（约 81% 画面区域）**，且不是简单的
+  平移/翻转：网格线相位在细节上差 1–2 个输出像素，颜色也存在 565→888 展开差异。
+- 结论：问题锁定在 **on-screen 采样路径**（present_upload 的 RGB565→RGBA 展开 +
+  present_draw_quad 的 UV/翻转组合），而非 EGL 呈现或系统合成。下一步：
+  (1) 在宿主 GLES2 上用同一组函数以 4x nearest 做离屏渲染与 CPU 期望逐像素对比，
+  复现并修正采样（预期可做到 0/960x1280 差异，桌面 offscreen 1x 已是 0）；
+  (2) 修正后回到模拟器验证 38.6% 应降为 0（nearest），再测滤镜/FSR。
+- 调试通道保持默认关闭（`debug.nj2me.glpresent` + `debug.nj2me.gldump`），
+  FBO 回读函数仅用于诊断，不影响正常呈现路径。

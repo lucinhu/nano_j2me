@@ -603,8 +603,13 @@ int nj_android_gles2_present(nj_android_gles2 *s, const nj_surface *src,
                     if (px != NULL) {
                         int y;
                         FILE *fp;
-                        (void)nj_gles2_present_readback(s->backend, s->surface_w,
-                                                        s->surface_h, px);
+                        int gw = (s->surface_w > 0) ? s->surface_w : (vp_x + vp_w);
+                        int gh = (s->surface_h > 0) ? s->surface_h : (vp_y + vp_h);
+                        int gy = gh - (vp_y + vp_h);
+                        if (gy < 0) gy = 0;
+                        (void)nj_gles2_present_onscreen_capture(
+                            s->backend, src, mode, vp_x, gy, vp_w, vp_h,
+                            gw, gh, px);
                         fp = fopen(prop, "wb");
                         if (fp != NULL) {
                             fprintf(fp, "P6\n%d %d\n255\n", s->surface_w, s->surface_h);

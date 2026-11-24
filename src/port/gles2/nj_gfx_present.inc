@@ -618,6 +618,59 @@ static int present_draw_quad(nj_gles2 *s, int mode, int src_w, int src_h,
  * port of the on-screen FSR chain is a separate step.  Returns 0 (caller
  * falls back to software presentation) for unsupported modes.
  */
+/* Debug aid: draw the same on-screen quad into a temporary offscreen
+ * framebuffer of the full drawable and read it back.  Unlike a window-surface
+ * readback this works on drivers that cannot read the window surface before
+ * the swap; it answers "is the picture we draw correct?" independently of the
+ * system compositor. */
+int nj_gles2_present_onscreen_capture(void *ud, const nj_surface *src, int mode,
+                                      int vp_x, int vp_y, int vp_w, int vp_h,
+                                      int out_w, int out_h, nj_u1 *out_rgba)
+{
+    nj_gles2 *s = (nj_gles2 *)ud;
+    GLuint tex = 0, fbo = 0;
+    int w, h, ok = 0;
+
+    if (!s || !src || !src->pixels || !out_rgba) return 0;
+    if (mode < 0 || mode >= NJ_GL_PRESENT_MODES || mode == 5) return 0;
+    if (!current(s) || !present_init(s)) return 0;
+    if (out_w <= 0 || out_h <= 0) return 0;
+    if (vp_w <= 0 || vp_h <= 0 || vp_x < 0 || vp_y < 0) return 0;
+    if (vp_x + vp_w > out_w || vp_y + vp_h > out_h) return 0;
+    w = out_w;
+    h = out_h;
+    if (!present_upload(s, src)) return 0;
+
+    s->gl.GenTextures(1, &tex);
+    s->gl.BindTexture(GL_TEXTURE_2D, tex);
+    s->gl.TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA,
+                     GL_UNSIGNED_BYTE, NULL);
+    s->gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    s->gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    s->gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    s->gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    s->gl.GenFramebuffers(1, &fbo);
+    s->gl.BindFramebuffer(GL_FRAMEBUFFER, fbo);
+    s->gl.FramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                               GL_TEXTURE_2D, tex, 0);
+    if (s->gl.CheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE) {
+        s->gl.Disable(GL_SCISSOR_TEST);
+        s->gl.Viewport(0, 0, w, h);
+        s->gl.ClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+        s->gl.Clear(GL_COLOR_BUFFER_BIT);
+        s->gl.Viewport(vp_x, vp_y, vp_w, vp_h);
+        if (present_draw_quad(s, mode, src->width, src->height, vp_w, vp_h, 1)) {
+            s->gl.ReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, out_rgba);
+            ok = 1;
+        }
+    }
+    s->gl.BindFramebuffer(GL_FRAMEBUFFER, 0);
+    s->gl.DeleteFramebuffers(1, &fbo);
+    s->gl.DeleteTextures(1, &tex);
+    (void)clean_errors(s);
+    return ok;
+}
+
 int nj_gles2_present_readback(void *ud, int w, int h, nj_u1 *out_rgba)
 {
     nj_gles2 *s = (nj_gles2 *)ud;
