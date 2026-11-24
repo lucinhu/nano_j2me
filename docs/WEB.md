@@ -852,3 +852,9 @@ The check starts a throw-away static server over `build/web/`, opens the shell
 with Playwright/Firefox in both `color_scheme="dark"` and `color_scheme="light"`,
 asserts that the computed `background-color` and `color-scheme` actually change,
 and fails on any console/page error.
+
+It is wired into the web verification script as a first-class suite:
+
+```
+tools/check_web.sh --theme          # also runs as part of --all
+```

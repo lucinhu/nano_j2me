@@ -6,6 +6,7 @@
 #   tools/check_web.sh --node               JS <-> C API contract test only
 #   tools/check_web.sh --corpus             deterministic 42-title JAR smoke test only
 #   tools/check_web.sh --browser            browser page test (Playwright Firefox)
+#   tools/check_web.sh --theme              dark/light colour-scheme render check
 #   tools/check_web.sh --sweep              slow full-corpus audit over tests/games/
 #   tools/check_web.sh --perf               wasm throughput smoke test (4 light titles)
 #   tools/check_web.sh --smoke              minimal post-build module smoke test
@@ -14,7 +15,7 @@
 #   tools/check_web.sh --build --node --corpus   rebuild first, then test
 #
 # Suites (default when no suite flag is given: --node --corpus; --all means
-# --node --corpus --browser, without the slow --sweep audit):
+# --node --corpus --browser --theme, without the slow --sweep audit):
 #   --node      node tools/web_test/web_api_test.mjs
 #               Header/baseline contract: API/runtime version identity, JAR
 #               probing + icons, start error paths, hello.jar 240-frame
@@ -102,6 +103,7 @@ evidence=""
 run_node=0
 run_corpus=0
 run_browser=0
+run_theme=0
 run_sweep=0
 run_perf=0
 run_smoke=0
@@ -129,12 +131,13 @@ while [ $# -gt 0 ]; do
     --node)    run_node=1 ;;
     --corpus)  run_corpus=1 ;;
     --browser) run_browser=1 ;;
+    --theme)   run_theme=1 ;;
     --sweep)   run_sweep=1 ;;
     --perf)    run_perf=1 ;;
     --smoke)   run_smoke=1 ;;
     --live)    run_live=1 ;;
     --live=*)  run_live=1; live_url="${arg#--live=}" ;;
-    --all)     run_node=1; run_corpus=1; run_browser=1 ;;
+    --all)     run_node=1; run_corpus=1; run_browser=1; run_theme=1 ;;
     --build)   do_build=1 ;;
     --evidence)
         [ $# -ge 2 ] || die_usage "--evidence needs a directory"
@@ -151,7 +154,7 @@ while [ $# -gt 0 ]; do
 done
 
 if [ "$run_node" = 0 ] && [ "$run_corpus" = 0 ] && [ "$run_browser" = 0 ] && [ "$run_sweep" = 0 ] &&
-    [ "$run_perf" = 0 ] && [ "$run_smoke" = 0 ] && [ "$run_live" = 0 ]; then
+    [ "$run_perf" = 0 ] && [ "$run_smoke" = 0 ] && [ "$run_live" = 0 ] && [ "$run_theme" = 0 ]; then
     run_node=1
     run_corpus=1
 fi
@@ -221,6 +224,7 @@ rc_sweep=0
 rc_perf=0
 rc_smoke=0
 rc_live=0
+rc_theme=0
 status_node="SKIP"
 status_corpus="SKIP"
 status_browser="SKIP"
@@ -228,6 +232,7 @@ status_sweep="SKIP"
 status_perf="SKIP"
 status_smoke="SKIP"
 status_live="SKIP"
+status_theme="SKIP"
 
 if [ "$run_node" = 1 ]; then
     say ""
@@ -304,6 +309,14 @@ if [ "$run_live" = 1 ]; then
     if [ "$rc_live" -eq 0 ]; then status_live="PASS"; else status_live="FAIL"; fi
 fi
 
+if [ "$run_theme" = 1 ]; then
+    say ""
+    say "== suite: dark/light colour scheme"
+    python3 "$here/tools/check_web_theme.py" --out "$evidence/shots" 2>&1 | tee -a "$log"
+    rc_theme=${PIPESTATUS[0]}
+    if [ "$rc_theme" -eq 0 ]; then status_theme="PASS"; else status_theme="FAIL"; fi
+fi
+
 # ---- summary ----------------------------------------------------------------
 
 finished_at=$(date +%s)
@@ -331,11 +344,14 @@ fi
 if [ "$run_live" = 1 ]; then
     say "   live:    $status_live"
 fi
+if [ "$run_theme" = 1 ]; then
+    say "   theme:   $status_theme"
+fi
 say "   evidence: $evidence"
 say "   elapsed:  ${elapsed}s"
 
 if [ "$rc_node" -ne 0 ] || [ "$rc_corpus" -ne 0 ] || [ "$rc_browser" -ne 0 ] || [ "$rc_sweep" -ne 0 ] ||
-    [ "$rc_perf" -ne 0 ] || [ "$rc_smoke" -ne 0 ] || [ "$rc_live" -ne 0 ]; then
+    [ "$rc_perf" -ne 0 ] || [ "$rc_smoke" -ne 0 ] || [ "$rc_live" -ne 0 ] || [ "$rc_theme" -ne 0 ]; then
     say "== RESULT: FAIL"
     exit 1
 fi
