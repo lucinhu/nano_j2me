@@ -781,7 +781,7 @@ typedef struct sdl_state {
 } sdl_state;
 
 /* The speeds the badge cycles through, in percent. */
-static const int sdl2_speeds[] = { 100, 150, 200, 300, 50 };
+static const int sdl2_speeds[] = { 100, 150, 200, 300, 400, 600, 800, 50 };
 #define SDL2_NSPEEDS ((int)(sizeof(sdl2_speeds) / sizeof(sdl2_speeds[0])))
 
 

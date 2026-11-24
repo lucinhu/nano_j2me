@@ -2212,7 +2212,7 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
      * whole.
      */
     private void speedDialog() {
-        final int[] percents = { 50, 75, 100, 150, 200, 300 };
+        final int[] percents = { 50, 75, 100, 150, 200, 300, 400, 600, 800 };
         String[] labels = new String[percents.length];
         String[] hints = new String[percents.length];
         int checked = 2;
