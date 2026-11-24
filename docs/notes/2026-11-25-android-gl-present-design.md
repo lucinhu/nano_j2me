@@ -231,3 +231,29 @@ LCD / CRT / FSR1 呈现效果。约束：
   行对齐/纹理行距或 UV 半像素偏移。
 - 下一轮顺序：先在宿主修掉 4x 输出被拒绝的分支，得到 960x1280 的离屏 PPM；与 CPU
   4x 期望逐像素对比应能直接复现 81% 差异并快速验证修正（宿主迭代成本远低于模拟器）。
+
+## Round 30：修复——窗口呈现改为仅垂直翻转 + 解除呈现目标像素预算
+
+两个根因：
+1. **翻转方向**：窗口 framebuffer 的 row 0 是窗口底部，CPU 帧缓冲是 top-down，
+   因此需要的是**仅垂直翻转（v-flip）**，而 round 19 用的是 180° 旋转
+   （u、v 同时翻转），在方形测试图上不易察觉但导致 81% 采样差异。新增 `uv_vflip`
+   变体，窗口路径与 FBO 捕获路径都改用 v-flip；桌面离屏/A2 路径仍用 uv_flat。
+2. **呈现目标尺寸预算**：`nj_gles2_present()` 用通用 `dimensions()` 检查，
+   受 `config.max_pixels`（默认 1M 像素）限制，1080x2400 窗口（2.59M）和
+   960x1280 的 4x 输出（1.23M）都会被拒绝（宿主可复现 `present decline: out size`）。
+   呈现目标改为只受 `max_texture` / `max_viewport` 约束（新增注释说明窗口尺寸
+   天然有界），输入纹理仍走原预算。
+
+验证：
+- 宿主 GLES2 4x nearest 离屏：`out=960x1280` 成功，与 CPU 期望逐像素 **0 / 1,228,800
+  差异**（maxd 7，仅 565→888 量化）。
+- Android 模拟器（StaticDemo，`debug.nj2me.glpresent=1`，nearest，v-flip 捕获）：
+  与 CPU 期望逐像素 **0.249% / 2,592,000** 差异（maxd 255），且全部残余差异集中在
+  x 372–587、y 16–67 —— 正是 "STATIC" 文字区域：设备用系统字体、CLI 参考用内置
+  回退字体，字形不同，属预期差异，**不是采样/几何问题**。
+- 设备截图 `/tmp/r30-screen.png`：画面正向、红块居中、右上蓝块、左下绿块，与
+  StaticDemo 设计一致；on-screen 路径不再是“影像级”问题。
+- 该路径仍默认关闭（`debug.nj2me.glpresent`），自动回退软件呈现；下一步把
+  nearest/scanline/LCD/CRT 与 GL 呈现接入 Android 设置 UI（滤镜行已有软件滤镜，
+  需要把 GL 呈现作为可选模式），并补 FSR（Android 端需 FBO staging，A2 已就绪）。

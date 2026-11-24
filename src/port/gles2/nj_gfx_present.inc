@@ -484,14 +484,26 @@ int nj_gles2_present(void *ud, const nj_surface *src, int mode, int out_w, int o
     nj_gles2 *s = (nj_gles2 *)ud;
     size_t in_bytes;
     int x, y;
-    if (!s || !src || !src->pixels || !out || mode < 0 || mode >= NJ_GL_PRESENT_MODES)
-        return 0;
-    if (!current(s) || !present_init(s)) return 0;
+#if !defined(__ANDROID__)
+#define NJ_PRESENT_DBG(why) do { \
+    const char *e = getenv("NJ_GL_PRESENT_DEBUG"); \
+    if (e && e[0] == '1') fprintf(stderr, "present decline: %s\n", why); } while (0)
+#else
+#define NJ_PRESENT_DBG(why) ((void)0)
+#endif
+    if (!s || !src || !src->pixels || !out || mode < 0 || mode >= NJ_GL_PRESENT_MODES) {
+        NJ_PRESENT_DBG("arguments/mode"); return 0;
+    }
+    if (!current(s) || !present_init(s)) { NJ_PRESENT_DBG("current/init"); return 0; }
+    /* Presentation targets are bounded by the drawable/viewport, not by the
+     * generic 1M-pixel texture budget (a 1080x2400 window alone exceeds it). */
     if (out_w <= 0 || out_h <= 0 || out_w > s->max_viewport[0] || out_h > s->max_viewport[1] ||
-        !dimensions(s, out_w, out_h)) return 0;
-    if (!dimensions(s, src->width, src->height)) return 0;
+        out_w > s->max_texture || out_h > s->max_texture) {
+        NJ_PRESENT_DBG("out size"); return 0;
+    }
+    if (!dimensions(s, src->width, src->height)) { NJ_PRESENT_DBG("source size"); return 0; }
     if (src->format != NJ_PIXFMT_RGB565 && src->format != NJ_PIXFMT_RGB888 &&
-        src->format != NJ_PIXFMT_ARGB8888) return 0;
+        src->format != NJ_PIXFMT_ARGB8888) { NJ_PRESENT_DBG("format"); return 0; }
     in_bytes = (size_t)src->width * (size_t)src->height * 4u;
     if (!reserve(&s->upload, &s->upload_size, in_bytes)) return 0;
     for (y = 0; y < src->height; ++y) {
@@ -506,8 +518,9 @@ int nj_gles2_present(void *ud, const nj_surface *src, int mode, int out_w, int o
     }
     s->gl.ActiveTexture(GL_TEXTURE0);
     texture(s, s->present_input);
-    if (!texture_upload(s, &s->present_input_storage, src->width, src->height, GL_RGBA, s->upload))
-        return 0;
+    if (!texture_upload(s, &s->present_input_storage, src->width, src->height, GL_RGBA, s->upload)) {
+        NJ_PRESENT_DBG("input upload"); return 0;
+    }
     if (mode == 5) {
         if (!present_fsr(s, src->width, src->height, out_w, out_h, out)) {
             return 0;
@@ -515,13 +528,15 @@ int nj_gles2_present(void *ud, const nj_surface *src, int mode, int out_w, int o
         return clean_errors(s);
     }
     texture(s, s->present_target);
-    if (!texture_upload(s, &s->present_target_storage, out_w, out_h, GL_RGBA, NULL))
-        return 0;
+    if (!texture_upload(s, &s->present_target_storage, out_w, out_h, GL_RGBA, NULL)) {
+        NJ_PRESENT_DBG("target upload"); return 0;
+    }
     s->gl.BindFramebuffer(GL_FRAMEBUFFER, s->present_fbo);
     s->gl.FramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
                                s->present_target, 0);
-    if (s->gl.CheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
-        return 0;
+    if (s->gl.CheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+        NJ_PRESENT_DBG("fbo incomplete"); return 0;
+    }
     s->gl.Viewport(0, 0, out_w, out_h);
     s->gl.UseProgram(s->present_program[mode]);
     s->gl.ActiveTexture(GL_TEXTURE0);
@@ -556,7 +571,7 @@ static int present_upload(nj_gles2 *s, const nj_surface *src)
     if (!s || !src || !src->pixels) return 0;
     if (!dimensions(s, src->width, src->height)) return 0;
     if (src->format != NJ_PIXFMT_RGB565 && src->format != NJ_PIXFMT_RGB888 &&
-        src->format != NJ_PIXFMT_ARGB8888) return 0;
+        src->format != NJ_PIXFMT_ARGB8888) { NJ_PRESENT_DBG("format"); return 0; }
     in_bytes = (size_t)src->width * (size_t)src->height * 4u;
     if (!reserve(&s->upload, &s->upload_size, in_bytes)) return 0;
     for (y = 0; y < src->height; ++y) {
@@ -585,7 +600,8 @@ static int present_draw_quad(nj_gles2 *s, int mode, int src_w, int src_h,
     static const GLfloat quad[8] = {-1, -1, 1, -1, -1, 1, 1, 1};
     static const GLfloat uv_flat[8] = {0, 0, 1, 0, 1, 1, 0, 1};
     static const GLfloat uv_flip[8] = {1, 1, 0, 1, 0, 0, 1, 0};
-    const GLfloat *uv = flip ? uv_flip : uv_flat;
+    static const GLfloat uv_vflip[8] = {0, 1, 1, 1, 0, 0, 1, 0};
+    const GLfloat *uv = (flip == 2) ? uv_vflip : (flip ? uv_flip : uv_flat);
 
     s->gl.UseProgram(s->present_program[mode]);
     s->gl.ActiveTexture(GL_TEXTURE0);
@@ -659,7 +675,7 @@ int nj_gles2_present_onscreen_capture(void *ud, const nj_surface *src, int mode,
         s->gl.ClearColor(0.0f, 0.0f, 0.0f, 1.0f);
         s->gl.Clear(GL_COLOR_BUFFER_BIT);
         s->gl.Viewport(vp_x, vp_y, vp_w, vp_h);
-        if (present_draw_quad(s, mode, src->width, src->height, vp_w, vp_h, 1)) {
+        if (present_draw_quad(s, mode, src->width, src->height, vp_w, vp_h, 2)) {
             s->gl.ReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, out_rgba);
             ok = 1;
         }
@@ -704,5 +720,8 @@ int nj_gles2_present_onscreen(void *ud, const nj_surface *src, int mode,
     s->gl.ClearColor(0.0f, 0.0f, 0.0f, 1.0f);
     s->gl.Clear(GL_COLOR_BUFFER_BIT);
     s->gl.Viewport(vp_x, vp_y, vp_w, vp_h);
-    return present_draw_quad(s, mode, src->width, src->height, vp_w, vp_h, 1);
+    /* A window framebuffer's row 0 is the bottom of the visible window, so the
+     * texture needs its vertical axis flipped; horizontal orientation matches
+     * the CPU framebuffer. */
+    return present_draw_quad(s, mode, src->width, src->height, vp_w, vp_h, 2);
 }
