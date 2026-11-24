@@ -216,3 +216,18 @@ LCD / CRT / FSR1 呈现效果。约束：
   (2) 修正后回到模拟器验证 38.6% 应降为 0（nearest），再测滤镜/FSR。
 - 调试通道保持默认关闭（`debug.nj2me.glpresent` + `debug.nj2me.gldump`），
   FBO 回读函数仅用于诊断，不影响正常呈现路径。
+
+## Round 29：宿主复现与通道排查
+
+- 宿主 GLES2（`/tmp/r5-gles2`）上用同一组函数做 4x nearest 离屏导出：
+  `NJ_GL_PRESENT=0 NJ_GL_PRESENT_SCALE=4 NJ_GL_PRESENT_DUMP=...` 时呈现器每次
+  都 `present: mode=0 declined`（静默回退，无 PPM）；改成 scale 2 立刻成功
+  （`present: mode=0 out=480x640 ok (1 ms) (dumping)` 并写出 PPM）。说明
+  `nj_gles2_present()` 在 960x1280 输出时有一个确定的拒绝分支，可直接在宿主复现，
+  比模拟器迭代快；下一步在 `nj_gles2_present()` 的各个 return 0 前加一次性原因日志定位。
+- 用 round-28 的 FBO 回读图对 6 种通道排列做逐 texel 比对：正常顺序最好但仍
+  81.6% 差异，R/B、R/G 等任何交换都更差 → **不是通道错序**，剩余为采样/几何层面的
+  系统性偏差；网格间距测得 32 输出像素（=8 源像素 ×4）说明水平缩放正确，嫌疑集中在
+  行对齐/纹理行距或 UV 半像素偏移。
+- 下一轮顺序：先在宿主修掉 4x 输出被拒绝的分支，得到 960x1280 的离屏 PPM；与 CPU
+  4x 期望逐像素对比应能直接复现 81% 差异并快速验证修正（宿主迭代成本远低于模拟器）。
