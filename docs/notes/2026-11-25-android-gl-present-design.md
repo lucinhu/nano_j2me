@@ -257,3 +257,21 @@ LCD / CRT / FSR1 呈现效果。约束：
 - 该路径仍默认关闭（`debug.nj2me.glpresent`），自动回退软件呈现；下一步把
   nearest/scanline/LCD/CRT 与 GL 呈现接入 Android 设置 UI（滤镜行已有软件滤镜，
   需要把 GL 呈现作为可选模式），并补 FSR（Android 端需 FBO staging，A2 已就绪）。
+
+## Round 31：设置面板接入（实验开关）
+
+- 游戏内设置新增一行 **「GL 呈现（实验）：关闭/最近邻（GL）/扫描线（GL）/LCD 网格（GL）/CRT（GL）」**，
+  选择即时生效并写入 SharedPreferences（`gl_present`、`gl_present_mode`），
+  JNI `nativeSetGlPresent(handle,on,mode)` 只写原生状态，实际呈现仍在运行线程完成；
+  任何失败自动回退软件呈现（该行保持"默认关闭"）。
+- 原生修复：GL 呈现开关与 3D 加速开关独立，2D 游戏也需要私有 EGL 上下文。
+  `android_gl_present_frame()` 现在按需在运行线程 `nj_android_gles2_start_mode(&s->gles2, 1)`
+  启动 EGL，再创建窗口 surface。此前运行中开启会只打印
+  `present: GL path has no window surface (window_ok=1)` 并回退。
+- legacy（API 5）构建：`gl_present*` 字段只存在于 GLES2 构建，新增 JNI 与设置调用都放在
+  `#if NJ_ANDROID_GLES2 && !NJ_ANDROID_LEGACY` / `graphicsSupported()` 保护内，
+  `tools/build_android_legacy.sh` 与 x86_64 APK 均构建通过。
+- 模拟器验证（Medium_Phone_API_36.1）：打开面板选「最近邻（GL）」→ logcat
+  `present: GL first frame buf=1080x2400 surface=1080x2400 vp=60,88 960x1280 view=0 zoom=1.000`，
+  无需重启游戏；切到「扫描线（GL）」后窗口画面出现扫描线（截图对比明显变化），
+  设置重启后仍保留。

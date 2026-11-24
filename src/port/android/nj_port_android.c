@@ -1502,6 +1502,17 @@ static int android_gl_present_frame(android_state *s)
         return 0;
     }
     if (s->width <= 0 || s->height <= 0) return 0;
+    /* The GL present switch is independent from the 3D accelerator toggle: a
+     * 2D-only game still needs the private EGL context here.  Start it lazily
+     * on the run thread the first time the setting is on. */
+    if (!s->gles2.initialized) {
+        nj_android_gles2_start_mode(&s->gles2, 1);
+        if (!s->gles2.initialized) {
+            if (!s->gl_present_logged) { s->gl_present_logged = 1; __android_log_print(ANDROID_LOG_INFO, LOG_TAG,
+                "present: GL path cannot start EGL; software presentation"); }
+            return 0;
+        }
+    }
     if (!nj_android_gles2_set_window(&s->gles2, s->window)) {
         if (!s->gl_present_logged) { s->gl_present_logged = 1; __android_log_print(ANDROID_LOG_INFO, LOG_TAG,
             "present: GL path has no window surface (window_ok=%d)", s->gles2.window_ok); }
@@ -6918,6 +6929,33 @@ Java_com_lucinhu_nj2me_GameActivity_nativeSetPresentFilter(JNIEnv *env,
         }
     }
 }
+
+
+#if NJ_ANDROID_GLES2 && !NJ_ANDROID_LEGACY
+/*
+ * GL 呈现（实验）：on/off 以及呈现模式（0 最近邻、2 扫描线、3 LCD、4 CRT）。
+ * 由设置界面写入，下一帧生效；GL 未生效时呈现循环自动回退软件路径。
+ */
+JNIEXPORT void JNICALL
+Java_com_lucinhu_nj2me_GameActivity_nativeSetGlPresent(JNIEnv *env, jobject thiz,
+                                                       jlong handle, jint on,
+                                                       jint mode)
+{
+    android_app *a = (android_app *)(intptr_t)handle;
+    (void)env; (void)thiz;
+    if (a) {
+        android_state *s = AS(a->port.ud);
+        if (s) {
+            if (mode < 0 || mode > 4) {
+                mode = 0;
+            }
+            s->gl_present = on ? 1 : 0;
+            s->gl_present_mode = (int)mode;
+            s->gl_present_logged = 0;
+        }
+    }
+}
+#endif /* NJ_ANDROID_GLES2 && !NJ_ANDROID_LEGACY */
 
 
 /*

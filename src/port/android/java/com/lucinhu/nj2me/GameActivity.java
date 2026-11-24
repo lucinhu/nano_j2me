@@ -148,6 +148,8 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
     private int speed = 100;      /* game speed, percent of real time */
     private int pictureAA;        /* 0 nearest, 1 bilinear: 画面反锯齿 */
     private int presentFilter;    /* 0 off, 2 scanline, 3 LCD, 4 CRT: 画面滤镜 */
+    private int glPresent;        /* 0 software, 1 GL window present: GL 呈现（实验） */
+    private int glPresentMode;    /* GL 呈现的模式: 0 nearest, 2 scanline, 3 LCD, 4 CRT */
     private int rewindSeconds;    /* 0 off, 1/2/5: in-memory rewind window */
     private int insetL, insetT, insetR, insetB;
 
@@ -280,6 +282,8 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
      * 呈现循环下一帧应用；只作用于窗口缓冲，不影响模拟器帧/存档/截图。
      */
     private static native void nativeSetPresentFilter(long handle, int mode);
+    /** GL 呈现（实验）：on=0 关闭；on=1 时 mode 为 0 最近邻、2 扫描线、3 LCD、4 CRT。 */
+    private static native void nativeSetGlPresent(long handle, int on, int mode);
     private static native void nativeSetRewind(long handle, int intervalFrames,
                                                int slots);
     private static native void nativeRewindStep(long handle);
@@ -840,6 +844,9 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
                 nativeSetSpeed(handle, speed);
                 nativeSetFilter(handle, pictureAA);
                 nativeSetPresentFilter(handle, presentFilter);
+                if (graphicsSupported()) {
+                    nativeSetGlPresent(handle, glPresent, glPresentMode);
+                }
                 applyRewindSetting();
                 nativeSetFrameCap(handle, Settings.frameCap(this));
                 /* A new MIDlet: its own vocabulary is what the subset row will
@@ -1333,11 +1340,21 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
         if (presentFilter == 1 || presentFilter < 0 || presentFilter > 4) {
             presentFilter = 0;
         }
+        glPresent = getSharedPreferences("nano_j2me", MODE_PRIVATE)
+                .getInt("gl_present", 0) != 0 ? 1 : 0;
+        glPresentMode = getSharedPreferences("nano_j2me", MODE_PRIVATE)
+                .getInt("gl_present_mode", 0);
+        if (glPresentMode != 2 && glPresentMode != 3 && glPresentMode != 4) {
+            glPresentMode = 0;
+        }
         rewindSeconds = Settings.rewindSeconds(this);
         synchronized (lock) {
             if (handle != 0) {
                 nativeSetFilter(handle, pictureAA);
                 nativeSetPresentFilter(handle, presentFilter);
+                if (graphicsSupported()) {
+                    nativeSetGlPresent(handle, glPresent, glPresentMode);
+                }
                 applyRewindSetting();
                 nativeSetFrameCap(handle, Settings.frameCap(this));
                 nativeGlyphReset(handle);
@@ -1440,6 +1457,19 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
                 "画面滤镜：" + filterNames[filterIdx],
                 "只作用于窗口显示，不改模拟器画面；存档/截图保持原样",
                 presentFilter > 0, null);
+        LinearLayout glPresentRow = Md3.row(this, Md3.IC_SCREEN,
+                "GL 呈现（实验）：" + glPresentText(),
+                "把画面交给 GPU 着色器呈现（最近邻/扫描线/LCD/CRT）；默认软件呈现，"
+                        + "设置马上生效；GL 不可用时自动回退",
+                glPresent != 0, null);
+        glPresentRow.setEnabled(graphicsSupported());
+        glPresentRow.setAlpha(graphicsSupported() ? 1f : 0.5f);
+        glPresentRow.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                glPresentDialog();
+            }
+        });
         LinearLayout rewindRow = Md3.row(this, Md3.IC_PLAY,
                 "倒带：" + Settings.rewindText(rewindSeconds),
                 "把最近几秒的完整状态存在内存里，随时回退；大堆游戏开销明显，默认关闭",
@@ -1493,6 +1523,7 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
         box.addView(picAaRow);
         box.addView(Md3.divider(this));
         box.addView(filterRow);
+        box.addView(glPresentRow);
         box.addView(rewindRow);
         box.addView(Md3.divider(this));
         box.addView(fpsRow);
@@ -1706,6 +1737,58 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
      * toast that promises a file nobody wrote.
      */
     /** Choose the slot to write; an existing one asks before it is replaced. */
+    private String glPresentText() {
+        if (glPresent == 0) {
+            return "关闭（软件呈现）";
+        }
+        switch (glPresentMode) {
+            case 2: return "扫描线（GL）";
+            case 3: return "LCD 网格（GL）";
+            case 4: return "CRT（GL）";
+            default: return "最近邻（GL）";
+        }
+    }
+
+    private void glPresentDialog() {
+        final int[] modes = { -1, 0, 2, 3, 4 };
+        final String[] labels = { "关闭（软件呈现）", "最近邻（GL）", "扫描线（GL）",
+                "LCD 网格（GL）", "CRT（GL）" };
+        final String[] hints = {
+                "保持现有软件呈现；完全不占用 GPU 呈现资源",
+                "GPU 把原始帧放大到屏幕，像素清晰、开销低；与软件呈现逐像素一致",
+                "GPU 呈现时叠加扫描线；只作用于窗口显示",
+                "GPU 呈现时叠加 LCD 网格；只作用于窗口显示",
+                "GPU 呈现时叠加 CRT 扫描线/荫罩效果；只作用于窗口显示" };
+        int checked = 0;
+        for (int i = 0; i < modes.length; i++) {
+            if (modes[i] == (glPresent != 0 ? glPresentMode : -1)) {
+                checked = i;
+            }
+        }
+        Md3.chooser(this, Md3.IC_SCREEN, "GL 呈现（实验）", "当前 " + glPresentText(),
+                labels, hints, checked, new Md3.Choice() {
+                    @Override
+                    public void picked(int which, AlertDialog d) {
+                        if (modes[which] < 0) {
+                            glPresent = 0;
+                            glPresentMode = 0;
+                        } else {
+                            glPresent = 1;
+                            glPresentMode = modes[which];
+                        }
+                        getSharedPreferences("nano_j2me", MODE_PRIVATE).edit()
+                                .putInt("gl_present", glPresent)
+                                .putInt("gl_present_mode", glPresentMode).apply();
+                        synchronized (lock) {
+                            if (handle != 0 && graphicsSupported()) {
+                                nativeSetGlPresent(handle, glPresent, glPresentMode);
+                            }
+                        }
+                        toast("GL 呈现：" + glPresentText());
+                    }
+                });
+    }
+
     private void saveSlotDialog() {
         LinearLayout box = Md3.body(this);
         box.addView(Md3.title(this, "保存状态"));
