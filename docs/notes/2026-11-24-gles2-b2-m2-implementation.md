@@ -69,3 +69,27 @@ sys / 驱动侧），而软件路径同场景约 5.0 s。也就是说：
   接近打平的可能；只做 M2 的 ROI 很低。
 
 该实验开关已还原（`git checkout -- src/midp/nj_lib_m3g.c`），工作区干净。
+
+## 决定：停止 B2 实施（2026-11-24，按用户选择）
+
+用户在 M2 上限实验后确认：**停止 B2 的实施**，保留现有 B1/B1.5 实验代码与
+完整测量记录。具体状态：
+
+* 软件渲染保持默认；GLES2（含 B1 frame-resident 2D、B1.5 hold-context）继续
+  是 opt-in 实验路径（`--graphics gles2` + `NJ_M3G_FORCE_ACCEL=1` 等），不影响
+  任何默认行为、存档或兼容性。
+* 测得的上限（Galaxy on Fire 2，560 帧）：每 clear 读回全免也只能把 GL 总 CPU
+  从 ≈7.0–7.1s 降到 ≈6.2–6.6s；zero-readback 上限 5.55s，均仍高于软件 ≈5.0s。
+  因此 B2/M2 的预期收益（约 10–13%，主要在 sys）不足以达到验收标准。
+* 结论与依据完整保留在：
+  * `docs/notes/2026-11-22-gles2-whole-frame-renderer.md`（总体设计）
+  * `docs/notes/2026-11-24-gles2-frame-resident-2d-layer.md`（B1/B1.5 实现与
+    Phase 拆分、zero-readback 上限）
+  * `docs/notes/2026-11-24-gles2-b2-plan.md`（B2 方案与里程碑）
+  * 本文（M1 分类、drain 归因、M2 上限、决定）
+  * `docs/notes/2026-11-24-gles2-b2-m1-classification.md`（2D op 分类数据）
+* 若未来重启 GL 性能线，唯一有理论机会的路线是 **M2.5（持久顶点/索引缓冲 +
+  真实深度纹理 + 减少 seed/upload + EGL 窗口呈现）**；按现有数据其现实目标是
+  接近打平（≈5.0s）而非胜出，需重新立项评估。
+* 未启动项：B3（EGL 呈现）与 GLES2/FSR 后处理 shader 管线仍属于目标三的后续
+  候选（需先有窗口呈现路径）。
