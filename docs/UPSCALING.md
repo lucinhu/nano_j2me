@@ -96,3 +96,26 @@ SharedPreferences（`present_filter`），通过 `nativeSetPresentFilter(mode)` 
 （23.7%，隔行压暗）；「CRT」后 819,712 像素变化（31.6%，扫描线+栅格）；
 按键/状态栏 UI 不在滤镜区域。`am force-stop` 后重新启动并进入游戏，设置面板仍显示
 「画面滤镜：CRT」，SharedPreferences 持久化验证通过。
+
+## 真实游戏验证（2026-11-25，SDL2/GLES2 桌面）
+
+窗口截图取自 SDL2 GLES2 路径（`--graphics gles2 --upscale ... --upscale-scale 2`，
+Galaxy on Fire 2 启动画面，960x1039 窗口，含按键层）：
+
+| 对照 | 差异（>6/255 像素） | 说明 |
+|---|---|---|
+| nearest 2x vs FSR 2x | 631,524 / 997,440（**63.31%**） | 文字与 UI 边缘经 EASU 重建 + RCAS 锐化，块状锯齿明显减少 |
+| nearest 1x vs 软件呈现 | 0 / 997,440 | 呈现层替换本身无几何/采样偏差（A2 证据） |
+
+截图：[`docs/images/upscale-nearest-galaxy.png`](images/upscale-nearest-galaxy.png)、
+[`docs/images/upscale-fsr-galaxy.png`](images/upscale-fsr-galaxy.png)。
+
+CPU 记录（同机 RTX 5080，Linux）：
+
+| 场景 | 软件呈现 | GL 呈现 + FSR 2x | 差值 |
+|---|---|---|---|
+| Galaxy on Fire 2，560 帧 @30 fps（3D GL） | user 4.663 s / sys 0.313 s | user 5.872 s / sys 0.268 s | +1.21 s user（≈+26%） |
+| LoopDemo，3000 帧 fps 0（纯 2D，演示后处理本身开销） | user 5.884 s / sys 0.390 s | user 8.116 s / sys 0.416 s | +2.23 s（≈0.74 ms/帧） |
+
+结论：FSR 2x 的后处理成本约 0.7–2 ms/帧（取决于分辨率与场景），换来明显更好的
+放大质量；默认仍为软件渲染，`--upscale` 为显式选项。
