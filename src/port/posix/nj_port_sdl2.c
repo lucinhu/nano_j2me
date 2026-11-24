@@ -155,6 +155,11 @@ static const sdl2_key_def sdl2_keys[NJ_SDL2_NBTN] = {
  * is installed before nj_run copies nj_port; its address/ud never change while
  * any nj_gfx can reference them, even after a permanent software fallback. */
 typedef GLenum (GL_APIENTRY *sdl2_gl_reset_fn)(void);
+typedef struct sdl2_gl_binding {
+    SDL_Window *window;
+    SDL_GLContext context;
+} sdl2_gl_binding;
+
 typedef struct sdl2_gles2 {
     nj_gfx_accel callbacks;
     nj_gl_api gl; /* loaded only with this instance's dedicated context current */
@@ -166,17 +171,15 @@ typedef struct sdl2_gles2 {
     sdl2_gl_reset_fn reset_status;
     int requested, active;
     int frame_on;       /* NJ_SDL2_GLES2_FRAME: 2D ops deferred to one GL layer */
+    int hold;           /* NJ_SDL2_GLES2_HOLD: keep the private context current */
+    int held;           /* context currently held across callbacks (hold mode) */
+    sdl2_gl_binding held_previous;  /* binding to restore when the frame yields */
     /* Deep context probes are driver calls; the cheap identity checks run every
      * packet, the GL queries only periodically while nothing changed. */
     unsigned int deep_probes;
     int deep_ok;
     nj_u8 fills, blits, rasters, declines, triangles, batches;
 } sdl2_gles2;
-
-typedef struct sdl2_gl_binding {
-    SDL_Window *window;
-    SDL_GLContext context;
-} sdl2_gl_binding;
 
 static sdl2_gl_binding sdl2_gl_save(void)
 {
@@ -242,12 +245,26 @@ static int sdl2_gles2_enter(sdl2_gles2 *s, sdl2_gl_binding *previous)
         sdl2_gles2_disable(s, "drawing on a different native thread");
         return 0;
     }
+    /* Hold mode keeps the private context current across every callback of a
+     * frame, so only the first one switches and the last one restores. */
+    if (s->hold && s->held) {
+        if (!sdl2_gles2_current(s)) {
+            sdl2_gles2_disable(s, "context lost while held");
+            return 0;
+        }
+        *previous = s->held_previous;
+        return 1;
+    }
     *previous = sdl2_gl_save();
     if (SDL_GL_MakeCurrent(s->window, s->context) != 0 ||
         !sdl2_gles2_current(s)) {
         sdl2_gles2_disable(s, "context switch or validation failed");
         (void)sdl2_gl_restore(*previous);
         return 0;
+    }
+    if (s->hold) {
+        s->held = 1;
+        s->held_previous = *previous;
     }
     return 1;
 }
@@ -265,10 +282,25 @@ static void sdl2_gles2_flush_frame(sdl2_gles2 *s)
 
 static void sdl2_gles2_leave(sdl2_gles2 *s, sdl2_gl_binding previous)
 {
-    if (!sdl2_gles2_current(s))
+    if (!sdl2_gles2_current(s)) {
+        s->held = 0;
         sdl2_gles2_disable(s, "context lost during drawing");
+    }
+    if (s->hold && s->held) return;   /* the frame yields the context later */
     if (!sdl2_gl_restore(previous))
         sdl2_gles2_disable(s, "cannot restore presentation context");
+}
+
+/* End of frame: commit the deferred 2D layer and give the presentation context
+ * back to SDL before the texture upload and renderer calls. */
+static void sdl2_gles2_yield(sdl2_gles2 *s)
+{
+    if (!s || !s->active || !s->hold || !s->held) return;
+    if (s->frame_on && s->backend)
+        (void)nj_gles2_frame_flush(s->backend, NULL);
+    s->held = 0;
+    if (!sdl2_gl_restore(s->held_previous))
+        sdl2_gles2_disable(s, "cannot restore presentation context after frame");
 }
 
 static int sdl2_gles2_fill(void *ud, const nj_gfx *g,
@@ -554,6 +586,11 @@ static void sdl2_gles2_open(sdl2_gles2 *s)
         s->frame_on = 1;
         SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
                     "gfx: frame-resident 2D layer enabled (experimental)");
+    }
+    if (getenv("NJ_SDL2_GLES2_HOLD") && s->backend) {
+        s->hold = 1;
+        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                    "gfx: GL context held across each frame (experimental)");
     }
 done:
     while (changed) {
@@ -2854,6 +2891,7 @@ static void sdl_display_present(void *ud, int x, int y, int w, int h)
     }
 #if NJ_SDL2_GLES2
     sdl2_gles2_flush_frame(&s->gfx);
+    sdl2_gles2_yield(&s->gfx);
 #endif
     SDL_UpdateTexture(s->texture, &r,
                       (const nj_u1 *)s->pixels + (size_t)r.y * (size_t)s->stride

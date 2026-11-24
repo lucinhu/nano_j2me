@@ -79,3 +79,8 @@ M3G scene --resident FBO, resident textures--> composite (GL) --> present (EGL w
   `2026-11-24-gles2-frame-resident-2d-layer.md`. B1.5 (hold the GL context for
   a whole frame, batch submissions, widen blit coverage) is the next milestone
   before B2.
+- 2026-11-24 (B1.5): holding the GL context across a frame plus the deferred
+  2D layer recovers ≈1 s of the ≈5.7 s GL-2D overhead (Galaxy: 10.6 s user vs
+  11.6 s without hold, 5.9 s with software 2D), but per-op GL 2D remains a net
+  loss. Plan revised: CPU 2D overlay composite (3D frame FBO + one overlay
+  upload/composite per frame + EGL present) replaces per-op 2D GL capture.

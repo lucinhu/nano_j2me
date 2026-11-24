@@ -95,3 +95,40 @@ operations without per-operation `SDL_GL_MakeCurrent`, then widen
 `frame_blit` coverage so declines shrink. That attacks the real cost measured
 here; only after that does B2 (triangles into the same frame FBO) become worth
 measuring against software.
+
+## B1.5: holding the GL context across a frame
+
+The per-callback cost was confirmed to be the private-context switch, so the
+port gained a hold mode (`NJ_SDL2_GLES2_HOLD=1`, requires the private context
+to remain valid): the first callback of a frame switches context, later
+callbacks reuse it, and `sdl_display_present` flushes the deferred layer and
+restores the presentation binding once. Measured on Galaxy on Fire 2 (560
+frames @30 fps, forced GL, real RTX 5080 laptop, runs in one session):
+
+| mode | user CPU | sys CPU |
+| --- | --- | --- |
+| 3D GL + software 2D (reference) | 5.90 s | 1.12 s |
+| 2D accel, no hold | 11.64 / 11.79 s | 2.71 / 2.61 s |
+| 2D accel + hold | 11.13 / 11.06 s | 1.86 / 1.80 s |
+| 2D accel + hold + frame layer | **10.62 / 10.57 s** | 2.04 / 2.01 s |
+
+Doom3 (600 frames, pure 3D): 3D GL 3.12 s user, +hold 2.94 s, +hold+frame
+2.73 s (software 2.10 s). Presentation parity with hold+frame: LoopDemo and
+Galaxy captures again identical to software (0/997,440 px, three frames).
+
+## Revised conclusion for the plan
+
+Holding the context plus deferring readback recovered ≈1 s of the ≈5.7 s that
+the GL 2D path costs over software 2D, but **routing every 2D operation through
+GL is still a net loss against software 2D** (10.6 s vs 5.9 s user with 3D in
+GL). The per-operation GL command/upload cost is larger than a software blit
+for these small, numerous operations.
+
+The next architectural step therefore changes: rather than B2 (triangles into
+the same frame FBO with per-op 2D capture), build the **CPU 2D overlay
+composite**: 3D renders into the frame FBO, 2D drawing stays on a software
+overlay surface (damage-tracked), the overlay is uploaded once per frame as a
+texture, GL composites FBO + overlay, and EGL presents the result without any
+per-frame readback. CPU observers (getRGB/motion probes) force one composite
+readback on demand. That keeps the fast software 2D path and removes the 3D
+readback + presentation cost that made forced GL lose to software.
