@@ -771,6 +771,29 @@ typedef struct sdl_state {
     int         slot_req;       /* -1 prev, +1 next, 2 load, 3 delete */
 
     /*
+     * Optional rewind: an in-memory ring of full snapshots, one every
+     * rewind_interval frames, loaded back by F4 (newest first).  Off by
+     * default: a snapshot copies the whole arena, so both time and memory
+     * scale with --heap (docs/REWIND.md has the measurements).
+     */
+    int         rewind_interval;
+    int         rewind_count;
+    size_t      rewind_cap;
+    nj_u1     **rewind_blobs;
+    nj_size    *rewind_sizes;
+    int         rewind_len;
+    size_t      rewind_bytes;
+    int         rewind_frames;
+    int         rewind_cooldown;
+    int         rewind_req;
+    int         rewind_auto_at; /* test aid: ask for one step at this frame */
+    int         rewind_frame;
+    int         rewind_warned;
+    int         rewind_logged;
+    Uint64      rewind_last_us;
+    Uint64      rewind_last_load_us;
+
+    /*
      * A .jar the user dropped on the window.
      *
      * The drop is an instruction to switch games, and the port cannot switch:
@@ -1368,6 +1391,7 @@ static int sdl2_reserved_key(int key)
 {
     switch (key) {
     case SDLK_F3:   /* game speed   */
+    case SDLK_F4:   /* rewind one step */
     case SDLK_F5:   /* save to the current slot */
     case SDLK_F6:   /* previous slot */
     case SDLK_F7:   /* next slot    */
@@ -2556,6 +2580,7 @@ static void sdl_draw_filter(sdl_state *s)
     (void)SDL_SetRenderDrawBlendMode(s->renderer, SDL_BLENDMODE_NONE);
 }
 
+#if NJ_SDL2_GLES2
 /* A1: render one frame through the offscreen presentation shader pass and
  * write it as a PPM for frame-parity comparison.  Optional and env-gated: it
  * never runs unless NJ_GL_PRESENT_DUMP is set. */
@@ -2639,6 +2664,7 @@ static void sdl2_gles2_present_frame(sdl2_gles2 *s, SDL_Renderer *renderer,
     free(rgba);
     free(row);
 }
+#endif /* NJ_SDL2_GLES2 */
 
 static void sdl_display_present(void *ud, int x, int y, int w, int h)
 {
@@ -2837,6 +2863,20 @@ static void sdl_display_present(void *ud, int x, int y, int w, int h)
             if (ev.type == SDL_KEYDOWN && ev.key.repeat == 0 &&
                 ev.key.keysym.sym == SDLK_F5) {
                 s->save_req = 1;
+                break;
+            }
+            /*
+             * F4 rewinds one snapshot.  Only a request here: loading rewrites
+             * the arena, so it is served by input_poll at the top of a frame.
+             */
+            if (ev.type == SDL_KEYDOWN && ev.key.repeat == 0 &&
+                ev.key.keysym.sym == SDLK_F4) {
+                if (s->rewind_interval <= 0) {
+                    sdl_log(s, 1, "rewind: off; set NJ_SDL2_REWIND=<frames> "
+                                  "to keep snapshots");
+                } else {
+                    s->rewind_req = 1;
+                }
                 break;
             }
             /*
@@ -3495,6 +3535,113 @@ static int sdl_input_push(void *ud, const nj_event *ev)
     return 1;
 }
 
+/* Drop the rewind ring, freeing every blob it still holds. */
+static void sdl_rewind_reset(sdl_state *s)
+{
+    int i;
+    if (s->rewind_blobs != NULL) {
+        for (i = 0; i < s->rewind_len; i++) {
+            free(s->rewind_blobs[i]);
+        }
+        free(s->rewind_blobs);
+    }
+    free(s->rewind_sizes);
+    s->rewind_blobs = NULL;
+    s->rewind_sizes = NULL;
+    s->rewind_len = 0;
+    s->rewind_bytes = 0;
+}
+
+/* Take one snapshot into the ring, dropping the oldest entries to fit. */
+static int sdl_rewind_capture(sdl_state *s)
+{
+    nj_u1 *blob = NULL;
+    nj_size size = 0;
+
+    if (s->vm == NULL || s->rewind_blobs == NULL) {
+        return 0;
+    }
+    {
+        Uint64 started = SDL_GetPerformanceCounter();
+        int rc = nj_vm_save_mem_boundary(s->vm, &blob, &size);
+        s->rewind_last_us = SDL_GetPerformanceCounter() - started;
+        if (rc != NJ_OK || blob == NULL) {
+            if (!s->rewind_warned) {
+                char msg[160];
+                s->rewind_warned = 1;
+                SDL_snprintf(msg, sizeof(msg), "rewind: snapshot failed -> %d", rc);
+                sdl_log(s, 1, msg);
+            }
+            return 0;
+        }
+    }
+    while (s->rewind_len > 0 &&
+           (s->rewind_len >= s->rewind_count ||
+            s->rewind_bytes + (size_t)size - (size_t)s->rewind_sizes[0] >
+                s->rewind_cap)) {
+        free(s->rewind_blobs[0]);
+        s->rewind_bytes -= (size_t)s->rewind_sizes[0];
+        memmove(s->rewind_blobs, s->rewind_blobs + 1,
+                (size_t)(s->rewind_len - 1) * sizeof s->rewind_blobs[0]);
+        memmove(s->rewind_sizes, s->rewind_sizes + 1,
+                (size_t)(s->rewind_len - 1) * sizeof s->rewind_sizes[0]);
+        s->rewind_len--;
+    }
+    if (s->rewind_bytes + (size_t)size > s->rewind_cap) {
+        free(blob);
+        return 0;
+    }
+    s->rewind_blobs[s->rewind_len] = blob;
+    s->rewind_sizes[s->rewind_len] = size;
+    s->rewind_len++;
+    s->rewind_bytes += (size_t)size;
+    if (!s->rewind_logged) {
+        char msg[192];
+        s->rewind_logged = 1;
+        SDL_snprintf(msg, sizeof(msg),
+                     "rewind: first snapshot %lu bytes in %lu us",
+                     (unsigned long)size,
+                     (unsigned long)((s->rewind_last_us * 1000000ul) /
+                                      SDL_GetPerformanceFrequency()));
+        sdl_log(s, 2, msg);
+    }
+    return 1;
+}
+
+/* Load the newest snapshot back into the VM. */
+static int sdl_rewind_step(sdl_state *s)
+{
+    char msg[256];
+    int rc;
+
+    if (s->vm == NULL || s->rewind_blobs == NULL) {
+        return 0;
+    }
+    if (s->rewind_len <= 0) {
+        sdl_log(s, 1, "rewind: no snapshot left in the ring");
+        return 0;
+    }
+    s->rewind_len--;
+    {
+        Uint64 started = SDL_GetPerformanceCounter();
+        rc = nj_vm_load_mem(s->vm, s->rewind_blobs[s->rewind_len],
+                            s->rewind_sizes[s->rewind_len]);
+        s->rewind_last_load_us = SDL_GetPerformanceCounter() - started;
+    }
+    free(s->rewind_blobs[s->rewind_len]);
+    s->rewind_blobs[s->rewind_len] = NULL;
+    s->rewind_bytes -= (size_t)s->rewind_sizes[s->rewind_len];
+    s->rewind_cooldown = s->rewind_interval > 0 ? s->rewind_interval : 1;
+    SDL_snprintf(msg, sizeof(msg),
+                 "rewind: restored a snapshot -> %d in %lu us (%u left, %lu bytes held)",
+                 rc,
+                 (unsigned long)((s->rewind_last_load_us * 1000000ul) /
+                                  SDL_GetPerformanceFrequency()),
+                 (unsigned)s->rewind_len, (unsigned long)s->rewind_bytes);
+    sdl_log(s, rc == NJ_OK ? 2 : 1, msg);
+    return rc == NJ_OK;
+}
+
 /*
  * "<dir>/<stem>-slot<N>.state", the same naming the command line uses for
  * --save-slot/--load-slot.  state_path points at slot_buf while slots are on,
@@ -3534,11 +3681,19 @@ static void sdl_save_state(sdl_state *s)
                       "one for you)");
         return;
     }
-    rc = nj_vm_can_save(s->vm) ? nj_vm_save_file(s->vm, s->state_path)
-                               : NJ_ERR_STATE;
-    SDL_snprintf(msg, sizeof(msg), "state: save to %s -> %d%s",
-                 s->state_path, rc,
-                 rc == NJ_OK ? "  (resume it with --load-state)" : "");
+    if (nj_vm_can_save(s->vm)) {
+        rc = nj_vm_save_file(s->vm, s->state_path);
+    } else {
+        const char *why = nj_vm_save_block_reason(s->vm);
+        rc = NJ_ERR_STATE;
+        SDL_snprintf(msg, sizeof(msg), "state: save refused (%s)",
+                     why != NULL ? why : "unknown VM state");
+    }
+    if (rc != NJ_ERR_STATE) {
+        SDL_snprintf(msg, sizeof(msg), "state: save to %s -> %d%s",
+                     s->state_path, rc,
+                     rc == NJ_OK ? "  (resume it with --load-state)" : "");
+    }
     sdl_log(s, rc == NJ_OK ? 2 : 1, msg);
 }
 
@@ -3618,6 +3773,21 @@ static int sdl_input_poll(void *ud, nj_event *ev)
             SDL_snprintf(msg, sizeof(msg), "speed: MIDlet time runs at %d%%",
                          s->speed_percent);
             sdl_log(s, 2, msg);
+        }
+    }
+    if (s->rewind_interval > 0) {
+        s->rewind_frame++;
+        if (s->rewind_cooldown > 0) {
+            s->rewind_cooldown--;
+        } else if (s->rewind_frame % s->rewind_interval == 0) {
+            (void)sdl_rewind_capture(s);
+        }
+        if (s->rewind_auto_at > 0 && s->rewind_frame == s->rewind_auto_at) {
+            s->rewind_req = 1;
+        }
+        if (s->rewind_req) {
+            s->rewind_req = 0;
+            (void)sdl_rewind_step(s);
         }
     }
     if (s->save_req) {
@@ -3733,6 +3903,7 @@ static void sdl_shutdown(void *ud)
 #ifdef NJ_HAVE_POSIX_NETWORK
     nj_posix_network_destroy(&s->network);
 #endif
+    sdl_rewind_reset(s);
     /* The path is inline in this state, so it must not outlive it: a shutdown
      * port answers "nothing dropped" even if somebody kept the pointer. */
     s->drop_path[0] = '\0';
@@ -3960,6 +4131,65 @@ nj_status nj_port_sdl2_ex(nj_port *out, const char *title, int graphics_mode)
                 sdl_slot_path(s);
                 sdl_log(s, 2, "state: slots in place (F5 save, F6/F7 switch, "
                               "F8 load, F9 delete)");
+            }
+        }
+    }
+    /*
+     * Rewind: NJ_SDL2_REWIND=<frames between snapshots> turns the ring on,
+     * NJ_SDL2_REWIND_COUNT=<slots> (default 16) sizes it and
+     * NJ_SDL2_REWIND_MAX_MB=<MiB> (default 256) caps the memory.
+     * NJ_SDL2_REWIND_AT=<frame> is a test aid: it asks for one rewound frame
+     * at that frame so an automated run can prove the load path.
+     */
+    s->rewind_interval = 0;
+    s->rewind_count = 0;
+    s->rewind_cap = 0;
+    s->rewind_blobs = NULL;
+    s->rewind_sizes = NULL;
+    s->rewind_len = 0;
+    s->rewind_bytes = 0;
+    s->rewind_frames = 0;
+    s->rewind_cooldown = 0;
+    s->rewind_req = 0;
+    s->rewind_auto_at = 0;
+    s->rewind_frame = 0;
+    s->rewind_warned = 0;
+    s->rewind_logged = 0;
+    s->rewind_last_us = 0;
+    s->rewind_last_load_us = 0;
+    {
+        const char *iv = SDL_getenv("NJ_SDL2_REWIND");
+        int interval = (iv != NULL && *iv != '\0') ? SDL_atoi(iv) : 0;
+        if (interval > 0) {
+            const char *cnt = SDL_getenv("NJ_SDL2_REWIND_COUNT");
+            const char *mb = SDL_getenv("NJ_SDL2_REWIND_MAX_MB");
+            const char *at = SDL_getenv("NJ_SDL2_REWIND_AT");
+            int count = (cnt != NULL && *cnt != '\0') ? SDL_atoi(cnt) : 16;
+            int mib = (mb != NULL && *mb != '\0') ? SDL_atoi(mb) : 256;
+            if (count < 1) count = 1;
+            if (mib < 1) mib = 1;
+            s->rewind_blobs = (nj_u1 **)calloc((size_t)count,
+                                               sizeof s->rewind_blobs[0]);
+            s->rewind_sizes = (nj_size *)calloc((size_t)count,
+                                                sizeof s->rewind_sizes[0]);
+            if (s->rewind_blobs == NULL || s->rewind_sizes == NULL) {
+                free(s->rewind_blobs);
+                free(s->rewind_sizes);
+                s->rewind_blobs = NULL;
+                s->rewind_sizes = NULL;
+                sdl_log(s, 1, "rewind: out of memory; disabled");
+            } else {
+                char msg[192];
+                s->rewind_interval = interval;
+                s->rewind_count = count;
+                s->rewind_cap = (size_t)mib * 1024u * 1024u;
+                if (at != NULL && *at != '\0') {
+                    s->rewind_auto_at = SDL_atoi(at);
+                }
+                SDL_snprintf(msg, sizeof(msg),
+                             "rewind: on (snapshot every %d frames, %d slots, "
+                             "%d MiB cap, F4 steps back)", interval, count, mib);
+                sdl_log(s, 2, msg);
             }
         }
     }

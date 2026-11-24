@@ -509,6 +509,12 @@ int nj_vm_verbose(const nj_vm *vm);
  * instead of a FILE, for an embedder that hands the blob to a frontend.
  */
 int  nj_vm_can_save(const nj_vm *vm);
+
+/*
+ * Why nj_vm_can_save() refused, or NULL when it would accept.  Intended for
+ * "cannot save" log lines; the checks are the same ones can_save() makes.
+ */
+const char *nj_vm_save_block_reason(const nj_vm *vm);
 /* Non-zero while a paint callback is running on the worker's C stack. */
 int  nj_vm_in_paint(const nj_vm *vm);
 int  nj_vm_save(nj_vm *vm, FILE *f);
@@ -556,6 +562,11 @@ int  nj_vm_load_file(nj_vm *vm, const char *path);
  * any time.  An actual blob is usually much smaller.
  */
 int     nj_vm_save_mem(nj_vm *vm, nj_u1 **out_blob, nj_size *out_size);
+/*
+ * nj_vm_save_mem() with the frame-hook guard relaxed (see
+ * nj_vm_save_file_boundary()); for ports that snapshot from their frame hook.
+ */
+int     nj_vm_save_mem_boundary(nj_vm *vm, nj_u1 **out_blob, nj_size *out_size);
 int     nj_vm_load_mem(nj_vm *vm, const nj_u1 *blob, nj_size size);
 nj_size nj_vm_blob_max(const nj_vm *vm);
 

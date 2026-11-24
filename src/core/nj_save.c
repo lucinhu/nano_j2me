@@ -727,6 +727,76 @@ int nj_vm_can_save(const nj_vm *vm_c)
     return 1;
 }
 
+/*
+ * Why nj_vm_can_save() says no, for diagnostics and port logs.  Returns NULL
+ * when a snapshot is possible.  This deliberately repeats the checks in
+ * nj_vm_can_save(): it is only called on the refusal path, and a port that
+ * tells the player "cannot save" without saying why is not much better than
+ * one that stays silent.
+ */
+const char *nj_vm_save_block_reason(const nj_vm *vm)
+{
+    nj_u2 t;
+
+    if (!vm) return "no VM";
+    if (!vm->heap.base || !vm->statics) return "the VM has no arena yet";
+    if (vm->heap.size < 4096u || vm->heap.bump > vm->heap.size) {
+        return "the heap is unusable";
+    }
+    if (vm->heap.external) return "the arena belongs to the embedder";
+    if (vm->native_depth != 0u) return "a native call is on the stack";
+    if (!vm->boundary_save) {
+        if (vm->in_paint) return "inside paint";
+        if (vm->in_frame_hook) return "inside the frame hook";
+        if (vm->in_call_pump) return "inside a nested C call pump";
+        if (vm->in_exception_new) return "inside exception construction";
+    }
+    if (vm->nroots != 0u) return "C code holds a temporary reference";
+    if (vm->gc_disabled) return "a native call holds unrooted references";
+    if (vm->nthreads > (nj_u2)NJ_MAX_THREADS ||
+        vm->nstatics > (nj_u4)NJ_MAX_STATICS ||
+        vm->nclasses > (nj_u2)NJ_MAX_CLASSES) {
+        return "too many threads, statics or classes";
+    }
+    for (t = 0u; t < vm->nthreads; t++) {
+        const nj_thread *th = vm->threads[t];
+        int nfr;
+        int f;
+
+        if (!th) continue;
+        if (th->in_c_call && !vm->boundary_save) {
+            return "a thread is parked in a C call";
+        }
+        if (!th->stack_mem || !th->stack_end || th->top < th->stack_mem ||
+            th->top > th->stack_end) {
+            return "a Java stack is outside its arena";
+        }
+        if (th->nframes < 0 || th->nframes > NJ_MAX_FRAMES) {
+            return "a Java stack has an impossible frame count";
+        }
+        nfr = th->nframes;
+        if (vm->boundary_save && th->in_c_call && nfr > 0 &&
+            th->frames[nfr - 1].is_native) {
+            nfr--;
+        }
+        for (f = 0; f < nfr; f++) {
+            const nj_frame *fr = &th->frames[f];
+            if (fr->is_native) return "a thread has a live native frame";
+            if (!slot_in_thread(th, fr->locals) ||
+                !slot_in_thread(th, fr->stack) ||
+                !slot_in_thread(th, fr->sp) ||
+                !slot_in_thread(th, fr->stack_limit) ||
+                !slot_in_thread(th, fr->argbase)) {
+                return "a Java frame points outside its stack";
+            }
+            if (fr->sp < fr->locals || fr->stack_limit < fr->stack) {
+                return "a Java frame has bad bounds";
+            }
+        }
+    }
+    return NULL;
+}
+
 /* ------------------------------------------------------------------ */
 /* Save: section writers                                               */
 /* ------------------------------------------------------------------ */
@@ -1480,6 +1550,25 @@ int nj_vm_save_mem(nj_vm *vm, nj_u1 **out_blob, nj_size *out_size)
     *out_blob = w.buf;
     *out_size = w.len;
     return NJ_OK;
+}
+
+/*
+ * nj_vm_save_mem() with the frame-hook boundary relaxed, exactly like
+ * nj_vm_save_file_boundary().  A port that keeps snapshots from its frame hook
+ * (SDL2 rewind) needs this: the hook guard is expected there and the parked
+ * native dispatch frames are droppable, see save_threads().
+ */
+int nj_vm_save_mem_boundary(nj_vm *vm, nj_u1 **out_blob, nj_size *out_size)
+{
+    int rc;
+
+    if (!vm) {
+        return NJ_ERR;
+    }
+    vm->boundary_save = 1;
+    rc = nj_vm_save_mem(vm, out_blob, out_size);
+    vm->boundary_save = 0;
+    return rc;
 }
 
 nj_size nj_vm_blob_max(const nj_vm *vm)
