@@ -43,3 +43,30 @@
 2. A1 离屏 shader 管线与 FSR 验证。
 3. A2 窗口呈现 + GL UI。
 4. 把 Android 呈现也切到 GL 路径（ANativeWindow + EGL window），滤镜/FSR 共用 A1。
+
+## A1 进展：离屏 GLSL 呈现管线（2026-11-25，round 4）
+
+新增 `src/port/gles2/nj_gfx_present.inc`（由 `nj_gfx_gles2.c` 末尾包含，使用私有
+结构体与静态辅助函数），公开接口 `nj_gles2_present(ud, src, mode, out_w, out_h,
+out_rgba)`（`include/nj2me/nj_gfx_gles2.h`，模式 0..5）。流程：任意 `nj_surface`
+格式→RGBA8888 上传→离屏 FBO→可插拔片元着色器→`glReadPixels`（输出行序从上到下）。
+默认软件呈现不变，只有显式设置环境变量才运行。
+
+环境变量（SDL2 端口写入 PPM 供帧对比）：
+- `NJ_GL_PRESENT=<0..5>`：0 nearest / 1 sharp-bilinear / 2 扫描线 / 3 LCD / 4 CRT /
+  5 FSR-lite（sharp-bilinear + RCAS 风格锐化；FSR1 EASU 尚未实现，着色器注释已注明）
+- `NJ_GL_PRESENT_DUMP=<prefix>`：输出 `<prefix>00000.ppm`，需配合 `--graphics gles2`
+- `NJ_GL_PRESENT_SCALE=<1..8>`（默认 2）、`NJ_GL_PRESENT_COUNT=<n>`（默认 1）
+
+验证（LoopDemo 240x320，2x 输出 480x640，RTX 5080）：与软件帧缓冲（RGB565 按同样的
+位扩展还原）对比——
+- nearest：**0 / 307,200 像素差异（逐像素一致）**
+- sharp-bilinear：0（整数倍时退化为最近邻，符合算法）
+- 扫描线：153,600（恰为隔行一半像素）、LCD：170,880、CRT：297,554
+- FSR-lite：44（仅边缘锐化）
+- 单次 480x640 呈现 + 读回约 2 ms（首次 45 ms 含着色器编译）
+- 默认构建（headless CLI）与软件呈现不受影响；`--upscale` 命令行开关随 A2 窗口呈现
+  一起接入，A1 阶段用环境变量。
+
+待办：A2 窗口 GL 呈现（私有上下文→SDL 窗口交换，失败自动回落软件）、FSR1 EASU
+精确实现、Android GL 呈现接入同一管线。

@@ -37,6 +37,14 @@ struct nj_gles2 {
     /* Frame-resident 2D layer (Stage B1): one GL texture per tracked CPU
      * surface; fills/blits accumulate in GL and are committed once. */
     int frame_enabled;
+    /* Offscreen presentation shader pass (nj_gfx_present.inc). */
+    int present_ready;
+    GLuint present_program[NJ_GL_PRESENT_MODES];
+    GLint present_sampler[NJ_GL_PRESENT_MODES];
+    GLint present_texel[NJ_GL_PRESENT_MODES];
+    GLint present_outsize[NJ_GL_PRESENT_MODES];
+    GLuint present_input, present_target, present_fbo;
+    texture_storage present_input_storage, present_target_storage;
     struct frame_slot { nj_surface *surface; GLuint fbo, tex; int w, h, stride;
                         int format, bpp, dirty, x0, y0, x1, y1, stale;
                         texture_storage storage; } frame[4];
@@ -868,6 +876,8 @@ void nj_gles2_abandon(nj_gles2 *s)
 {
     if (s) { triangles_abandon(s); free(s->upload); free(s->readback); free(s->depth_readback); free(s); }
 }
+static void present_delete(nj_gles2 *s); /* nj_gfx_present.inc */
+
 int nj_gles2_destroy(nj_gles2 *s)
 {
     if (!s) return 1;
@@ -883,6 +893,7 @@ int nj_gles2_destroy(nj_gles2 *s)
     s->gl.DeleteProgram(s->program);
     raster_delete(s);
     triangles_delete(s);
+    if (s->present_ready) present_delete(s);
     s->gl.DeleteFramebuffers(1, &s->framebuffer);
     s->gl.DeleteTextures(1, &s->target);
     s->gl.DeleteTextures(1, &s->source);
@@ -979,3 +990,6 @@ fail:
     }
     return NULL;
 }
+
+/* A1 offscreen presentation pass (needs the private struct/statics). */
+#include "nj_gfx_present.inc"

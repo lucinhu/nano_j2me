@@ -79,6 +79,17 @@ int nj_gles2_frame_flush(void *ud, nj_surface *surface);
 /* Non-zero when the layer is enabled (ops may be deferred). */
 int nj_gles2_frame_active(const void *ud);
 
+/* Offscreen presentation shader pass (goal A: GL presentation layer).
+ * Modes: 0 nearest, 1 sharp-bilinear, 2 scanline, 3 LCD grid, 4 CRT,
+ * 5 FSR-lite (sharp-bilinear + RCAS-style sharpen; EASU pending).
+ * `src` may be any surface format the backend accepts; `out` receives
+ * out_w*out_h tightly packed RGBA8888 rows, top-down. Returns 1 on success and
+ * 0 on decline (context not current, unsupported size, or GL failure); the
+ * caller then falls back to the software presentation unchanged. */
+#define NJ_GL_PRESENT_MODES 6
+int nj_gles2_present(void *ud, const nj_surface *src, int mode, int out_w, int out_h,
+                     nj_u1 *out_rgba);
+
 void nj_gles2_get_stats(const nj_gles2 *state, nj_gles2_stats *out);
 
 /* Detach from all ports/contexts and finish drawing first. Returns 0 without
