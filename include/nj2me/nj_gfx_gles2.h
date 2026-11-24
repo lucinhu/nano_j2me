@@ -90,6 +90,14 @@ int nj_gles2_frame_active(const void *ud);
 int nj_gles2_present(void *ud, const nj_surface *src, int mode, int out_w, int out_h,
                      nj_u1 *out_rgba);
 
+/* Render the presentation shader into the current draw framebuffer (0) with
+ * no readback.  This is the Android window-presentation entry point; modes
+ * 0-4 are supported and the FSR1 mode is not yet (it needs its readback
+ * staging).  Returns 0 for unsupported modes or any GL failure so callers
+ * can fall back to software presentation. */
+int nj_gles2_present_onscreen(void *ud, const nj_surface *src, int mode,
+                              int out_w, int out_h);
+
 void nj_gles2_get_stats(const nj_gles2 *state, nj_gles2_stats *out);
 
 /* Detach from all ports/contexts and finish drawing first. Returns 0 without

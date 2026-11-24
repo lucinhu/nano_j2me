@@ -543,3 +543,92 @@ int nj_gles2_present(void *ud, const nj_surface *src, int mode, int out_w, int o
     s->gl.BindFramebuffer(GL_FRAMEBUFFER, 0);
     return clean_errors(s);
 }
+
+/*
+ * Upload the source framebuffer as an RGBA texture for the presentation
+ * shaders.  Shared by the offscreen (readback) and on-screen variants.
+ */
+static int present_upload(nj_gles2 *s, const nj_surface *src)
+{
+    size_t in_bytes;
+    int x, y;
+
+    if (!s || !src || !src->pixels) return 0;
+    if (!dimensions(s, src->width, src->height)) return 0;
+    if (src->format != NJ_PIXFMT_RGB565 && src->format != NJ_PIXFMT_RGB888 &&
+        src->format != NJ_PIXFMT_ARGB8888) return 0;
+    in_bytes = (size_t)src->width * (size_t)src->height * 4u;
+    if (!reserve(&s->upload, &s->upload_size, in_bytes)) return 0;
+    for (y = 0; y < src->height; ++y) {
+        nj_u1 *dst = s->upload + (size_t)y * (size_t)src->width * 4u;
+        for (x = 0; x < src->width; ++x) {
+            nj_u4 c = nj_surface_get(src, x, y);
+            dst[x * 4 + 0] = (nj_u1)(c >> 16);
+            dst[x * 4 + 1] = (nj_u1)(c >> 8);
+            dst[x * 4 + 2] = (nj_u1)c;
+            dst[x * 4 + 3] = 255;
+        }
+    }
+    s->gl.ActiveTexture(GL_TEXTURE0);
+    texture(s, s->present_input);
+    return texture_upload(s, &s->present_input_storage, src->width, src->height,
+                          GL_RGBA, s->upload);
+}
+
+/*
+ * Draw the presentation quad for the loaded input texture.  The caller has
+ * already bound the destination framebuffer and set the viewport.
+ */
+static int present_draw_quad(nj_gles2 *s, int mode, int src_w, int src_h,
+                             int out_w, int out_h)
+{
+    static const GLfloat quad[8] = {-1, -1, 1, -1, -1, 1, 1, 1};
+    static const GLfloat uv[8] = {0, 0, 1, 0, 1, 1, 0, 1};
+
+    s->gl.UseProgram(s->present_program[mode]);
+    s->gl.ActiveTexture(GL_TEXTURE0);
+    s->gl.BindTexture(GL_TEXTURE_2D, s->present_input);
+    s->gl.Uniform1i(s->present_sampler[mode], 0);
+    if (s->present_texel[mode] >= 0)
+        s->gl.Uniform2f(s->present_texel[mode], 1.0f / (float)src_w, 1.0f / (float)src_h);
+    if (s->present_outsize[mode] >= 0)
+        s->gl.Uniform2f(s->present_outsize[mode], (float)out_w, (float)out_h);
+    s->gl.EnableVertexAttribArray(0);
+    s->gl.EnableVertexAttribArray(1);
+    s->gl.VertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, quad);
+    s->gl.VertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 0, uv);
+    s->gl.DrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    s->gl.DisableVertexAttribArray(0);
+    s->gl.DisableVertexAttribArray(1);
+    s->gl.VertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, NULL);
+    s->gl.VertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 0, NULL);
+    return clean_errors(s);
+}
+
+/*
+ * On-screen variant: render the presentation shader straight into the
+ * current draw framebuffer (framebuffer 0) with no readback.  Used by the
+ * Android window presentation path; the desktop SDL2 port keeps using
+ * nj_gles2_present() so its PPM comparison tooling stays unchanged.
+ *
+ * Mode 5 (FSR1) is not supported on this path yet: EASU/RCAS write through an
+ * intermediate stage texture and read the result back today, so an Android
+ * port of the on-screen FSR chain is a separate step.  Returns 0 (caller
+ * falls back to software presentation) for unsupported modes.
+ */
+int nj_gles2_present_onscreen(void *ud, const nj_surface *src, int mode,
+                              int out_w, int out_h)
+{
+    nj_gles2 *s = (nj_gles2 *)ud;
+
+    if (!s || !src || !src->pixels) return 0;
+    if (mode < 0 || mode >= NJ_GL_PRESENT_MODES || mode == 5) return 0;
+    if (!current(s) || !present_init(s)) return 0;
+    if (out_w <= 0 || out_h <= 0 ||
+        out_w > s->max_viewport[0] || out_h > s->max_viewport[1]) return 0;
+    if (!present_upload(s, src)) return 0;
+
+    s->gl.BindFramebuffer(GL_FRAMEBUFFER, 0);
+    s->gl.Viewport(0, 0, out_w, out_h);
+    return present_draw_quad(s, mode, src->width, src->height, out_w, out_h);
+}
