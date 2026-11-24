@@ -129,3 +129,13 @@ LCD / CRT / FSR1 呈现效果。约束：
   怀疑整数倍采样边界（半像素/texel 中心）或 EGL surface 与 ANativeWindow buffer 尺寸不一致导致的
   轻微缩放。下一轮：在 StaticDemo 上逐像素比对网格线位置（用每 8 逻辑像素一条的网格作为标尺），
   确认是 1 像素偏移还是 scale 不同，再决定用 texel-center UV 采样或改 drawable 尺寸来源。
+
+## Round 20：剩余 38.6% 差异的性质（未定论）
+
+- 用 StaticDemo 的 8 逻辑像素网格做标尺，逐行比较软件/GL 截图：软件网格线位于 x=67/71、87/91、119/123…（间距 32）
+  且各行完全一致；GL 的网格线间距同为 32，但**相位随行变化**（y=1100 时整体 -5 px、y=1150 时 +1 px、y=1200 时 -6 px），
+  ±4 px 平移搜索也无法把差异降到 82% 以下。说明不是简单的 1 像素平移，而是**逐帧/逐行的轻微缩放或位移**，
+  最可能的来源是 AUTO 视图的 pacer 平移（`view_dy` 每帧变化）或 EGL surface 与 ANativeWindow buffer 尺寸不一致。
+- 验证状态：方向、位置、矩形 bbox 已与软件一致（`91eaec6`）；nearest 的 38.6% 静态差异仍未解决，
+  Android GL 呈现保持默认关闭的实验特性，自动回退软件呈现。下一轮计划：在测试日志里打印 EGL surface 尺寸
+  （`eglQuerySurface`）与 ANativeWindow buffer 尺寸并固定 AUTO 平移（测试时锁定 view 模式）再比对，确认缩放来源后修正。
