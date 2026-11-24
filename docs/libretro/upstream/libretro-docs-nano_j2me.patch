@@ -1,23 +1,23 @@
 diff --git a/docs/development/licenses.md b/docs/development/licenses.md
-index 668c7ec..dde4193 100644
+index 1918ba8..c341218 100644
 --- a/docs/development/licenses.md
 +++ b/docs/development/licenses.md
-@@ -178,6 +178,7 @@ See below for a summary of the licenses behind RetroArch and its cores:
- | Mupen64Plus                                               		           | [GPLv3](https://github.com/libretro/mupen64plus-libretro/blob/master/LICENSE)             |                |
+@@ -179,6 +179,7 @@ See below for a summary of the licenses behind RetroArch and its cores:
  | Mupen64Plus GLES3                                         		           | [GPLv3](https://github.com/libretro/mupen64plus-libretro/blob/master/LICENSE)             |                |
+ | [My386](../library/my386.md)                                                     | [zlib](https://codeberg.org/my386/my386/src/branch/develop/LICENSE)                       |                |
  | [Native32Emu](../library/native32emu.md)                                         | [BSD-3-Clause](https://github.com/jiangxincode/Native32Emu/blob/master/LICENSE)           |                |
 +| nano_j2me | [MIT](https://github.com/lucinhu/nano_j2me/blob/main/LICENSE), [OFL 1.1](https://github.com/lucinhu/nano_j2me/blob/main/docs/licenses/Liberation-Fonts-OFL.txt), [Apache-2.0](https://github.com/lucinhu/nano_j2me/blob/main/docs/licenses/AMR-Apache-2.0.txt) | |
  | [CoolbarEmu](../library/coolbaremu.md)                                               | [BSD-3-Clause](https://github.com/AloysHF/CoolbarEmu/blob/master/LICENSE)              |                |
  | Neko Project II                                           		           |                                                                                           |                |
  | Neko Project II Kai                                                              | [MIT](https://github.com/AZO234/NP2kai/blob/master/LICENSE)                               |                |
 diff --git a/docs/guides/core-list.md b/docs/guides/core-list.md
-index 1f51b8a..4164110 100644
+index e14d8a7..37921e7 100644
 --- a/docs/guides/core-list.md
 +++ b/docs/guides/core-list.md
-@@ -158,6 +158,7 @@
- | [Mupen64Plus-Next](https://docs.libretro.com/library/mupen64plus/)          | Nintendo 64            | An up-to-date port of the Mupen64Plus N64 emulator, ported to libretro |
+@@ -159,6 +159,7 @@
  | [Mupen64Plus-Next GLES2](https://docs.libretro.com/library/mupen64plus/)    | Nintendo 64            | An up-to-date port of the Mupen64Plus N64 emulator, ported to libretro |
  | [Mupen64Plus-Next GLES3](https://docs.libretro.com/library/mupen64plus/)    | Nintendo 64            | An up-to-date port of the Mupen64Plus N64 emulator, ported to libretro |
+ | [My386](../library/my386.md) | PC/AT (80386) | A self-contained 386SX/DX PC/AT emulator with built-in firmware and SvarDOS. |
 +| [nano_j2me](../library/nano_j2me.md) | J2ME | A native C99 J2ME runtime with M3G 3D, MIDI/MP3/AMR/MPEG-4 media and manual save states |
  | [n64emu](../library/n64emu.md) | Nintendo 64 | An cycle-based Nintendo 64 emulator focusing on game/homebrew emulation accuracy. |
  | [Native32Emu](../library/native32emu.md) | Sunplus Native32 | An emulator for the Sunplus Native32 game format used by DVD player and TV chipsets |
@@ -343,10 +343,10 @@ index 2221354..2424792 100644
  
  - [Microsoft - MSX (fMSX)](../library/fmsx.md)
 diff --git a/mkdocs.yml b/mkdocs.yml
-index 6e31d38..8dbc120 100644
+index 0d19a50..375c6d1 100644
 --- a/mkdocs.yml
 +++ b/mkdocs.yml
-@@ -224,6 +224,7 @@ nav:
+@@ -225,6 +225,7 @@ nav:
        - 'Mobile Emulation':
          - 'Mobile - J2ME (FreeJ2ME)': 'library/freej2me.md'
          - 'Mobile - J2ME (FreeJ2ME-Plus)': 'library/freej2me_plus.md'
