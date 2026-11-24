@@ -581,8 +581,13 @@ int nj_android_gles2_present(nj_android_gles2 *s, const nj_surface *src,
         } else {
             s->current = 0;
             if (usable(s)) {
+                /* vp_y arrives in window (top-down) pixels; glViewport is
+                 * bottom-up, so convert through the real surface height. */
+                int gl_h = (s->surface_h > 0) ? s->surface_h : (vp_y + vp_h);
+                int gl_y = gl_h - (vp_y + vp_h);
+                if (gl_y < 0) gl_y = 0;
                 ok = nj_gles2_present_onscreen(s->backend, src, mode,
-                                               vp_x, vp_y, vp_w, vp_h);
+                                               vp_x, gl_y, vp_w, vp_h);
             }
             (void)eglSwapBuffers(s->display, s->window);
             /* The 3D accelerator expects the pbuffer current between frames. */

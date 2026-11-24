@@ -580,10 +580,12 @@ static int present_upload(nj_gles2 *s, const nj_surface *src)
  * already bound the destination framebuffer and set the viewport.
  */
 static int present_draw_quad(nj_gles2 *s, int mode, int src_w, int src_h,
-                             int out_w, int out_h)
+                             int out_w, int out_h, int flip)
 {
     static const GLfloat quad[8] = {-1, -1, 1, -1, -1, 1, 1, 1};
-    static const GLfloat uv[8] = {0, 0, 1, 0, 1, 1, 0, 1};
+    static const GLfloat uv_flat[8] = {0, 0, 1, 0, 1, 1, 0, 1};
+    static const GLfloat uv_flip[8] = {1, 1, 0, 1, 0, 0, 1, 0};
+    const GLfloat *uv = flip ? uv_flip : uv_flat;
 
     s->gl.UseProgram(s->present_program[mode]);
     s->gl.ActiveTexture(GL_TEXTURE0);
@@ -637,5 +639,5 @@ int nj_gles2_present_onscreen(void *ud, const nj_surface *src, int mode,
     s->gl.ClearColor(0.0f, 0.0f, 0.0f, 1.0f);
     s->gl.Clear(GL_COLOR_BUFFER_BIT);
     s->gl.Viewport(vp_x, vp_y, vp_w, vp_h);
-    return present_draw_quad(s, mode, src->width, src->height, vp_w, vp_h);
+    return present_draw_quad(s, mode, src->width, src->height, vp_w, vp_h, 1);
 }

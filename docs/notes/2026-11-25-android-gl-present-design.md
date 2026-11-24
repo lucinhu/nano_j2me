@@ -114,3 +114,18 @@ LCD / CRT / FSR1 呈现效果。约束：
   SDL2 桌面 PPM 对比一致的那条路径），再用一次全屏纹理 blit 到窗口，方向由 `eglQuerySurface` 与
   `ANativeWindow_getWidth/Height` 的差值决定；以 StaticDemo nearest 0 像素差异为验收，再开放 scanline/
   LCD/CRT 与 FSR1。
+
+## Round 19：方向与视口修正（差异 80.5% → 38.6%）
+
+- 两个真实缺陷修复并提交：
+  1. `src/port/android/nj_android_gles2.c`：`vp_y` 是窗口坐标（自上而下），`glViewport` 是自下而上；
+     现按 EGL surface 高度换算（`gl_y = surface_h - (vp_y + vp_h)`），画面从窗口底部移回顶部；
+  2. `src/port/gles2/nj_gfx_present.inc`：on-screen 路径的四边形 UV 需要 180° 旋转（EGL window
+     surface 的呈现方向与离屏 FBO/回读路径相反）；离屏路径保持原 UV 不变（桌面 PPM 对比仍 0 差异）。
+- StaticDemo 同相位对比：`debug.nj2me.glpresent=1`（nearest）vs 软件呈现 80.5% → **38.6%**
+  （1,000,603 / 2,592,000 像素），且方向已正确（STATIC 正立、蓝块右上、绿块左下、红色中心，与软件一致），
+  画面区域边界与软件完全一致（内容 bbox 相同，差异只在游戏画面矩形内）。
+- 剩余差异性质：位置不再是平移问题（±40px 平移搜索最优 dy=0），采样色值在黑底/网格边缘处不同，
+  怀疑整数倍采样边界（半像素/texel 中心）或 EGL surface 与 ANativeWindow buffer 尺寸不一致导致的
+  轻微缩放。下一轮：在 StaticDemo 上逐像素比对网格线位置（用每 8 逻辑像素一条的网格作为标尺），
+  确认是 1 像素偏移还是 scale 不同，再决定用 texel-center UV 采样或改 drawable 尺寸来源。
