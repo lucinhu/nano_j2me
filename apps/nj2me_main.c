@@ -16,6 +16,14 @@
 #include <stdlib.h>
 #include <errno.h>
 #include <limits.h>
+#if defined(_WIN32)
+#include <direct.h>
+#define NJ_CLI_MKDIR(path) _mkdir(path)
+#else
+#include <sys/stat.h>
+#include <sys/types.h>
+#define NJ_CLI_MKDIR(path) mkdir((path), 0777)
+#endif
 
 /*
  * Dev-only self-sampling profiler: NJ_SAMPLE_PROF=1 arms a 1 kHz SIGPROF
@@ -193,6 +201,9 @@ static void usage(const char *argv0)
 "                        game thread in the MIDlet constructor) is never\n"
 "                        snapshotted; the run says so at the end.\n"
 "  --load-state <file>  resume a snapshot instead of starting the MIDlet\n"
+"  --state-dir <dir>    slot directory (default: <jar dir>/states)\n"
+"  --save-slot <n>      write slot n of this game (0-999)\n"
+"  --load-slot <n>      resume slot n of this game\n"
 "  --keys <script>      replay key and pointer events at given frames\n"
         "  --cheat <code>       arena-offset cheat code re-applied every frame\n"
         "                       (format \"<offset>:<hex bytes>\", repeatable)\n"
@@ -332,10 +343,140 @@ typedef struct cli {
     const char *save_state;
     const char *load_state;
     int         save_frame;
+    const char *state_dir;      /* --state-dir: directory for slot files   */
+    int         save_slot;      /* --save-slot: -1 unset                   */
+    int         load_slot;      /* --load-slot: -1 unset                   */
+    char        slot_save_path[1024];
+    char        slot_load_path[1024];
     int         client;         /* --client: the desktop client, not one run */
     const char *games_dir;      /* --games: client library directory */
     int         print_library;  /* --print-library: list and exit */
 } cli;
+
+/* ---- save-state slots ---------------------------------------------------- */
+#define NJ_CLI_SLOT_MAX 999
+
+static int cli_parse_slot(const char *text, int *out)
+{
+    char *end = NULL;
+    long v;
+    if (text == NULL || *text == '\0') return -1;
+    errno = 0;
+    v = strtol(text, &end, 10);
+    if (errno != 0 || end == text || *end != '\0' || v < 0 || v > NJ_CLI_SLOT_MAX) {
+        return -1;
+    }
+    *out = (int)v;
+    return 0;
+}
+
+/*
+ * Resolve "<dir>/<stem>-slot<N>.state".  The directory defaults to
+ * "<jar dir>/states" and is created when missing; an explicit --state-dir has
+ * to exist already so a typo cannot silently write somewhere unexpected.
+ */
+static int cli_slot_paths(cli *c)
+{
+    char dir[1024];
+    char stem[256];
+    const char *jar = c->jar;
+    const char *base;
+    const char *dot = NULL;
+    const char *s;
+    size_t n;
+    size_t dlen;
+
+    if (jar == NULL) return -1;
+    base = jar;
+    for (s = jar; *s != '\0'; s++) {
+        if (*s == '/' || *s == '\\') base = s + 1;
+    }
+    n = strlen(base);
+    if (n == 0) return -1;
+    for (s = base; *s != '\0'; s++) {
+        if (*s == '.') dot = s;
+    }
+    if (dot != NULL && dot > base) n = (size_t)(dot - base);
+    if (n >= sizeof stem) return -1;
+    memcpy(stem, base, n);
+    stem[n] = '\0';
+
+    if (c->state_dir != NULL) {
+        if (strlen(c->state_dir) + 1u > sizeof dir) return -1;
+        strcpy(dir, c->state_dir);
+    } else {
+        dlen = (size_t)(base - jar);
+        if (dlen + 8u > sizeof dir) return -1;
+        memcpy(dir, jar, dlen);
+        if (dlen > 0u && dir[dlen - 1u] != '/' && dir[dlen - 1u] != '\\') {
+            dir[dlen++] = '/';
+        }
+        strcpy(dir + dlen, "states");
+        (void)NJ_CLI_MKDIR(dir);
+    }
+    if (c->save_slot >= 0) {
+        snprintf(c->slot_save_path, sizeof c->slot_save_path,
+                 "%s/%s-slot%d.state", dir, stem, c->save_slot);
+    }
+    if (c->load_slot >= 0) {
+        snprintf(c->slot_load_path, sizeof c->slot_load_path,
+                 "%s/%s-slot%d.state", dir, stem, c->load_slot);
+    }
+    return 0;
+}
+
+#if defined(_WIN32)
+#define NJ_CLI_SETENV(name, value) _putenv_s((name), (value))
+#else
+#define NJ_CLI_SETENV(name, value) setenv((name), (value), 1)
+#endif
+
+/*
+ * Direct SDL2 runs get save slots for free: the port's F5/F6/F7/F8/F9 keys need
+ * a directory and a game prefix, and this is the only place that knows both the
+ * JAR path and that the SDL2 port was chosen.  An environment variable set by
+ * the caller always wins.
+ */
+static void cli_slot_env(const cli *c)
+{
+    char dir[1024];
+    char stem[256];
+    const char *jar = c->jar;
+    const char *base;
+    const char *dot = NULL;
+    const char *s;
+    size_t n;
+    size_t dlen;
+
+    if (jar == NULL || getenv("NJ_SDL2_STATE_DIR") != NULL ||
+        (getenv("NJ_SDL2_STATE") != NULL && getenv("NJ_SDL2_STATE")[0] != '\0')) {
+        return;
+    }
+    base = jar;
+    for (s = jar; *s != '\0'; s++) {
+        if (*s == '/' || *s == '\\') base = s + 1;
+    }
+    n = strlen(base);
+    if (n == 0) return;
+    for (s = base; *s != '\0'; s++) {
+        if (*s == '.') dot = s;
+    }
+    if (dot != NULL && dot > base) n = (size_t)(dot - base);
+    if (n >= sizeof stem) return;
+    memcpy(stem, base, n);
+    stem[n] = '\0';
+
+    dlen = (size_t)(base - jar);
+    if (dlen + 8u > sizeof dir) return;
+    memcpy(dir, jar, dlen);
+    if (dlen > 0u && dir[dlen - 1u] != '/' && dir[dlen - 1u] != '\\') {
+        dir[dlen++] = '/';
+    }
+    strcpy(dir + dlen, "states");
+    (void)NJ_CLI_MKDIR(dir);
+    (void)NJ_CLI_SETENV("NJ_SDL2_STATE_DIR", dir);
+    (void)NJ_CLI_SETENV("NJ_SDL2_STATE_STEM", stem);
+}
 
 /*
  * Room for a device profile plus the caller's own --prop entries.  The largest
@@ -669,6 +810,8 @@ int main(int argc, char **argv)
     c.height = NJ_SCREEN_HEIGHT;
     c.heap_mb = (unsigned)NJ_CLI_HEAP_MB;
     c.upscale = -1;
+    c.save_slot = -1;
+    c.load_slot = -1;
 #if NJ_HAVE_SDL2
     c.port_name = "sdl2";
 #else
@@ -846,6 +989,20 @@ int main(int argc, char **argv)
             }
         } else if (strcmp(a, "--load-state") == 0 && i + 1 < argc) {
             c.load_state = argv[++i];
+        } else if (strcmp(a, "--state-dir") == 0 && i + 1 < argc) {
+            c.state_dir = argv[++i];
+        } else if (strcmp(a, "--save-slot") == 0 && i + 1 < argc) {
+            if (cli_parse_slot(argv[++i], &c.save_slot) != 0) {
+                fprintf(stderr, "--save-slot needs an integer in 0..%d\n",
+                        NJ_CLI_SLOT_MAX);
+                return 2;
+            }
+        } else if (strcmp(a, "--load-slot") == 0 && i + 1 < argc) {
+            if (cli_parse_slot(argv[++i], &c.load_slot) != 0) {
+                fprintf(stderr, "--load-slot needs an integer in 0..%d\n",
+                        NJ_CLI_SLOT_MAX);
+                return 2;
+            }
         } else if (a[0] == '-') {
             fprintf(stderr, "unknown option: %s\n", a);
             usage(argv[0]);
@@ -947,6 +1104,37 @@ int main(int argc, char **argv)
     if (c.jar == NULL) {
         usage(argv[0]);
         return 2;
+    }
+
+    if (c.save_slot >= 0 || c.load_slot >= 0) {
+        if (c.save_slot >= 0 && c.save_state != NULL) {
+            fprintf(stderr, "--save-slot and --save-state are mutually exclusive\n");
+            return 2;
+        }
+        if (c.load_slot >= 0 && c.load_state != NULL) {
+            fprintf(stderr, "--load-slot and --load-state are mutually exclusive\n");
+            return 2;
+        }
+        if (cli_slot_paths(&c) != 0) {
+            fprintf(stderr, "cannot build a save-slot path from %s\n", c.jar);
+            return 2;
+        }
+        if (c.save_slot >= 0) {
+            opts.save_state_path = c.slot_save_path;
+            if (opts.save_state_frame == 0u) {
+                opts.save_state_frame = 1u;
+            }
+            printf("state: slot %d -> %s\n", c.save_slot, c.slot_save_path);
+        }
+        if (c.load_slot >= 0) {
+            opts.load_state_path = c.slot_load_path;
+            printf("state: resuming slot %d <- %s\n",
+                   c.load_slot, c.slot_load_path);
+        }
+    }
+
+    if (strcmp(c.port_name, "sdl2") == 0) {
+        cli_slot_env(&c);
     }
 
     if (c.upscale >= 0) {

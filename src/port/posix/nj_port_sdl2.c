@@ -762,8 +762,13 @@ typedef struct sdl_state {
      * before the MIDlet is constructed, which only the runner can do
      * (--load-state), never a hotkey in a running VM.
      */
-    const char *state_path; /* NJ_SDL2_STATE, or NULL */
+    const char *state_path; /* NJ_SDL2_STATE or the current slot path */
     int         save_req;   /* F5 was pressed; served on the next frame */
+    char        slot_dir[512];  /* NJ_SDL2_STATE_DIR, empty when unused */
+    char        slot_stem[128]; /* NJ_SDL2_STATE_STEM, or "game" */
+    char        slot_buf[1024]; /* "<dir>/<stem>-slot<N>.state" */
+    int         state_slot;     /* current slot, NJ_SDL2_SLOT or 1 */
+    int         slot_req;       /* -1 prev, +1 next, 2 load, 3 delete */
 
     /*
      * A .jar the user dropped on the window.
@@ -1363,7 +1368,11 @@ static int sdl2_reserved_key(int key)
 {
     switch (key) {
     case SDLK_F3:   /* game speed   */
-    case SDLK_F5:   /* save state   */
+    case SDLK_F5:   /* save to the current slot */
+    case SDLK_F6:   /* previous slot */
+    case SDLK_F7:   /* next slot    */
+    case SDLK_F8:   /* load current slot */
+    case SDLK_F9:   /* delete current slot */
     case SDLK_F10:  /* end this run */
     case SDLK_F11:  /* fullscreen   */
     case SDLK_F12:  /* on-screen keypad */
@@ -2831,6 +2840,30 @@ static void sdl_display_present(void *ud, int x, int y, int w, int h)
                 break;
             }
             /*
+             * F6/F7 step through save slots, F8 loads the current one and F9
+             * deletes it.  The requests are applied by input_poll at the top of
+             * a frame, on the VM's own thread, exactly like F5: a slot change
+             * is a file operation and a load rewrites the arena, neither of
+             * which may happen while the window is being presented.
+             */
+            if (ev.type == SDL_KEYDOWN && ev.key.repeat == 0 &&
+                (ev.key.keysym.sym == SDLK_F6 || ev.key.keysym.sym == SDLK_F7 ||
+                 ev.key.keysym.sym == SDLK_F8 || ev.key.keysym.sym == SDLK_F9)) {
+                if (s->slot_dir[0] == '\0') {
+                    sdl_log(s, 1, "state: slots need NJ_SDL2_STATE_DIR "
+                                  "(the desktop client sets it from the JAR)");
+                } else if (ev.key.keysym.sym == SDLK_F6) {
+                    s->slot_req = -1;
+                } else if (ev.key.keysym.sym == SDLK_F7) {
+                    s->slot_req = 1;
+                } else if (ev.key.keysym.sym == SDLK_F8) {
+                    s->slot_req = 2;
+                } else {
+                    s->slot_req = 3;
+                }
+                break;
+            }
+            /*
              * F10 ends the run, exactly like the window's close button: the
              * runtime gets the same NJ_EV_QUIT and stops the MIDlet cleanly.
              * In the desktop client the caller then returns to the library
@@ -3463,6 +3496,21 @@ static int sdl_input_push(void *ud, const nj_event *ev)
 }
 
 /*
+ * "<dir>/<stem>-slot<N>.state", the same naming the command line uses for
+ * --save-slot/--load-slot.  state_path points at slot_buf while slots are on,
+ * so the existing F5 code needs no further change.
+ */
+static void sdl_slot_path(sdl_state *s)
+{
+    if (s->slot_dir[0] == '\0') {
+        return;
+    }
+    SDL_snprintf(s->slot_buf, sizeof(s->slot_buf), "%s/%s-slot%d.state",
+                 s->slot_dir, s->slot_stem, s->state_slot);
+    s->state_path = s->slot_buf;
+}
+
+/*
  * Take the snapshot the F5 key asked for.
  *
  * Called from sdl_input_poll - the VM's own thread, at the top of a frame, with
@@ -3492,6 +3540,56 @@ static void sdl_save_state(sdl_state *s)
                  s->state_path, rc,
                  rc == NJ_OK ? "  (resume it with --load-state)" : "");
     sdl_log(s, rc == NJ_OK ? 2 : 1, msg);
+}
+
+/*
+ * Slot requests (F6/F7/F8/F9).  Runs in input_poll, on the VM thread at the top
+ * of a frame: the same point where F5 snapshots, so a load rewrites the arena
+ * at a place the runner would have loaded it too.
+ */
+static void sdl_slot_serve(sdl_state *s)
+{
+    char msg[768];
+    int rc;
+
+    if (s->slot_req == 0) {
+        return;
+    }
+    if (s->slot_dir[0] == '\0') {
+        s->slot_req = 0;
+        return;
+    }
+    switch (s->slot_req) {
+    case -1:
+    case 1:
+        s->state_slot += s->slot_req;
+        if (s->state_slot < 0) s->state_slot = 99;
+        if (s->state_slot > 99) s->state_slot = 0;
+        sdl_slot_path(s);
+        SDL_snprintf(msg, sizeof(msg), "state: slot %d (%s)",
+                     s->state_slot, s->state_path);
+        sdl_log(s, 2, msg);
+        break;
+    case 2:
+        if (s->vm == NULL) {
+            sdl_log(s, 1, "state: no VM yet, nothing to load");
+            break;
+        }
+        sdl_slot_path(s);
+        rc = nj_vm_load_file(s->vm, s->state_path);
+        SDL_snprintf(msg, sizeof(msg), "state: load slot %d <- %s -> %d",
+                     s->state_slot, s->state_path, rc);
+        sdl_log(s, rc == NJ_OK ? 2 : 1, msg);
+        break;
+    default:
+        sdl_slot_path(s);
+        rc = remove(s->state_path);
+        SDL_snprintf(msg, sizeof(msg), "state: delete slot %d (%s) -> %d",
+                     s->state_slot, s->state_path, rc);
+        sdl_log(s, rc == 0 ? 2 : 1, msg);
+        break;
+    }
+    s->slot_req = 0;
 }
 
 static int sdl_input_poll(void *ud, nj_event *ev)
@@ -3526,6 +3624,7 @@ static int sdl_input_poll(void *ud, nj_event *ev)
         s->save_req = 0;
         sdl_save_state(s);
     }
+    sdl_slot_serve(s);
 
     if (s->qh == s->qt) {
         return 0;
@@ -3834,6 +3933,36 @@ nj_status nj_port_sdl2_ex(nj_port *out, const char *title, int graphics_mode)
     }
     /* F5 saves here; unset means F5 explains itself and saves nothing. */
     s->state_path = SDL_getenv("NJ_SDL2_STATE");
+    /*
+     * Save slots.  NJ_SDL2_STATE_DIR names the directory, NJ_SDL2_STATE_STEM
+     * the game prefix (the runner sets both from the JAR path) and
+     * NJ_SDL2_SLOT the first slot; F5/F6/F7/F8/F9 then work without any UI.
+     * NJ_SDL2_STATE keeps its old meaning and wins when both are present.
+     */
+    s->slot_dir[0] = '\0';
+    s->slot_stem[0] = '\0';
+    s->state_slot = 1;
+    {
+        const char *dir = SDL_getenv("NJ_SDL2_STATE_DIR");
+        const char *stem = SDL_getenv("NJ_SDL2_STATE_STEM");
+        const char *slot = SDL_getenv("NJ_SDL2_SLOT");
+        if (dir != NULL && *dir != '\0') {
+            SDL_snprintf(s->slot_dir, sizeof(s->slot_dir), "%s", dir);
+            SDL_snprintf(s->slot_stem, sizeof(s->slot_stem), "%s",
+                         (stem != NULL && *stem != '\0') ? stem : "game");
+            if (slot != NULL && *slot != '\0') {
+                int v = SDL_atoi(slot);
+                if (v >= 0 && v <= 99) {
+                    s->state_slot = v;
+                }
+            }
+            if (s->state_path == NULL || s->state_path[0] == '\0') {
+                sdl_slot_path(s);
+                sdl_log(s, 2, "state: slots in place (F5 save, F6/F7 switch, "
+                              "F8 load, F9 delete)");
+            }
+        }
+    }
 
     s->capture = SDL_getenv("NJ_SDL2_CAPTURE");
     s->capture_n = 0;

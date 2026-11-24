@@ -237,7 +237,7 @@ tools/build_libretro_cores.sh --list    # cross-built libretro cores
 
 Load the libretro core in RetroArch as **Mobile - J2ME (nano_j2me)** and pick a
 `.jar`; controls, core options and save locations are in
-[docs/LIBRETRO.md](docs/LIBRETRO.md). For the ESP32-S3 see
+[docs/LIBRETRO.md](docs/LIBRETRO.md), [docs/SAVE_SLOTS.md](docs/SAVE_SLOTS.md). For the ESP32-S3 see
 [docs/PORTING.md](docs/PORTING.md) and `tests/embedded/idf/`; the port is
 exercised under Espressif's `esp-emu` with `tools/run_esp_emulator.sh`. The
 ready-to-flash Korvo board port is

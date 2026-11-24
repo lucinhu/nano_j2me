@@ -1216,6 +1216,17 @@ endif()
   # run_frame_hook() counts pumped frames, so refusals spent the run budget
   # and the title presented one picture.  See
   # docs/notes/2026-10-27-paint-pump.md and tools/check_sf2_loader.sh.
+  # Save-state slots: one snapshot per slot, resumable by name, overwritable,
+  # deletable; the SDL2 hotkeys write the same files (see docs/SAVE_SLOTS.md).
+  if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_save_slots.sh)
+    add_test(NAME check_save_slots
+             COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_save_slots.sh
+                     $<TARGET_FILE:nj2me-cli>
+                     ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/loopdemo.jar)
+    set_tests_properties(check_save_slots PROPERTIES TIMEOUT 180
+                         SKIP_RETURN_CODE 77)
+  endif()
+
   if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_paint_pump.sh)
     add_test(NAME check_paint_pump
              COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_paint_pump.sh
