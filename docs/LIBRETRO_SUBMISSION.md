@@ -2320,6 +2320,17 @@ so tasks are preempted at quantum boundaries (details and evidence in
 - PR libretro-super#2204 body/head updated to 0.5.41; libretro/docs#1239 stays
   open and mergeable (page content unchanged).
 
+## 0.5.43 / r62
+
+2026-11-25 发布。r62 核心（`.info` `46f0677f…`，8 目标 128 文件）与 0.5.43 APK。
+本版新增：CLI/SDL2/Android 多即时存档位（`--save-slot`/`--load-slot`/`--state-dir`；
+SDL2 F5–F9；Android 面板与启动器槽位选择）、SDL2/Android 倒带（内存环形快照，
+默认关闭）、SDL2 GL 呈现后处理 `--upscale`（nearest/sharp/scanline/LCD/CRT/FSR1
+EASU+RCAS，默认软件呈现不变）与统一图标。上游分支：libretro-super `28a861c7`
+（基于 `c3c55c2d`）、libretro/docs `4f360b1`。验证：CTest 211/211、mock 20/20、
+真实 RetroArch LoopDemo PASS、Wine 4/4 @300、bundle 32/32、全语料探针 1034 部
+（1031 通过 / 1 已知限制 / 2 已记录失败）。未执行上游合并。
+
 ## 0.5.42 / r61
 
 2026-11-25 发布。r61 核心（`.info` `a7daee31…`，8 目标 128 文件）与 0.5.42 APK

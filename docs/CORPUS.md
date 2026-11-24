@@ -2362,3 +2362,19 @@ still on disk (1,034 of the 1,664 merged rows; fetched vaults are partly gone):
   4 s state-service window, so `retro_serialize` is refused).
 - `TheMummy_K700F.jar` **passes** now (47/47 checks, 297/317 content frames),
   the first probe where it is not in the failure list.
+
+## Round 12: whole-corpus probe on the 0.5.43 / r62 core (2026-11-25)
+
+Ran `tools/check_libretro_corpus_visual.py` over the merged rows directory
+(rows whose JARs still exist on disk) with the r62 core at 300 presented frames,
+8 jobs:
+
+- **1,034 titles measured: 1,031 passed, 1 known limitation, 2 failed.**
+- Known limitation: `毁灭战士3_10598.jar` (game loop inside the MIDlet
+  constructor; loading is very slow and states are refused).
+- Failed: `PAC-MAN (176x220)` (title-side: empty Sprint Muglet URI, needs a
+  carrier service) and `Asphalt4EliteRacing_1.0.0_320x240` (a single frame
+  exceeds the 4 s state-service window, so `retro_serialize` is refused).
+
+Identical verdict set to the r61 probe — save slots, rewind, presentation
+filters and the icon changes did not change corpus rendering.

@@ -910,6 +910,15 @@ pixels, 85 distinct frames) and save/restore round-trip through the core;
 serialize request is refused - it remains one of the long-first-frame titles.
 
 
+## 发布 r62 / 0.5.43
+
+0.5.43（r62）在 r61 基础上新增：SDL2/Android 多即时存档位、SDL2/Android 倒带、
+SDL2 GL 呈现后处理（`--upscale`，含 FSR1 EASU+RCAS）与统一品牌图标。`.info` 不变
+（SHA-256 `46f0677f…`，`0.5.43`），核心 8 目标 128 文件；全量 CTest 211/211、
+mock 20/20、真实 RetroArch、Wine 4/4、bundle 32/32 与 1034 部全语料探针（1031 通过
+/ 1 已知限制 / 2 已记录失败）均通过。详见 `docs/RELEASE_0.5.43.md`。存档格式不变；
+倒带默认关闭；GL 呈现与 B1/B1.5 仍为 opt-in 实验路径，软件渲染默认。
+
 ## 发布 r61 / 0.5.42
 
 0.5.42（r61，提交见仓库历史）在 r60 基础上新增：SDL2 呈现滤镜（扫描线/LCD/CRT，

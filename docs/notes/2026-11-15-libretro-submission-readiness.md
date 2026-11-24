@@ -2116,3 +2116,21 @@ fork branch `lucinhu/libretro-super:add-nano_j2me` at
 real RetroArch PASS, Wine 4/4 at 300 frames, bundle 32/32, clean-clone bundle
 41/41 from the previous round still applies.  libretro/docs#1239 remains open
 and mergeable; nothing is pushed upstream without explicit authorization.
+
+## Round 12: release 0.5.43 / r62 (2026-11-25)
+
+- Metadata: `.info` SHA-256 `46f0677f0041c8c2c6eacadb74060297ab2838ab2fcea7e1ded355055ab44893`,
+  `display_version = "0.5.43"`; super patch regenerated against
+  `libretro-super` `c3c55c2d5d16ecf7b447fcfc867acc363b0aa1d9`, fork commit
+  `28a861c77caaab39361831f7eb5fdc846cee9c5b` (`git apply --check` verified on a
+  clean clone).
+- Cores: 8 targets / 128 files, archive
+  `nj2me-0.5.43-libretro-cores.zip` 12,189,054 B SHA-256
+  `cf80765d257a172774247a02ddcbd1b35b438142ccfa58227b589c9a9886534e`;
+  installed as `build/libretro-dist`.
+- Validation: full serial CTest 211/211 (375.42 s), mock matrix 20/20 (after
+  the audiodemo fixture was moved to 30 frames — it calls `notifyDestroyed()`
+  and a 60-frame save request is correctly refused), real RetroArch LoopDemo
+  PASS, Wine x86-64 4/4 @300, bundle 32/32, whole-corpus probe 1,034 titles /
+  1,031 passed / 1 known / 2 failed (unchanged set).
+- APKs versionCode 543 for all five ABIs in `/var/tmp/release-0543`.
