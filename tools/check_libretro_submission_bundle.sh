@@ -36,7 +36,7 @@ BUNDLE=$ROOT/docs/libretro/upstream
 SUPER_PATCH=$BUNDLE/libretro-super-nano_j2me-info.patch
 DOCS_PATCH=$BUNDLE/libretro-docs-nano_j2me.patch
 BUNDLE_INFO=$BUNDLE/nano_j2me_libretro.info
-SUPER_BASE=55e50a81195eaf8dd1b7720a601282459832ced1
+SUPER_BASE=c3c55c2280a0eac7e8343a7f15e3c2e35f9a69e6
 DOCS_BASE=e0280f629ca0158f8861d34c1f50e6b5b20504e3
 
 DIST=
