@@ -174,9 +174,10 @@ The shell is a static site with a service worker, so any static host can serve
 it and the browser can install it as an app.
 
 - `web/manifest.json` — `display: standalone`, theme/background colours, and
-  four icons (`icon.svg`, 192 px, 512 px, maskable 512 px). Desktop Chrome/Edge
-  show an install button in the address bar; Firefox and mobile browsers offer
-  "add to home screen".
+  four icons (`icon.svg`, 192 px, 512 px, maskable 512 px) drawn from the same
+  plate/D-pad mark as the Android launcher and the desktop window icon
+  (`tools/gen_brand_assets.py`). Desktop Chrome/Edge show an install button in
+  the address bar; Firefox and mobile browsers offer "add to home screen".
 - `web/sw.js` — on install it precaches the shell (`index.html`, CSS, icons, all
   `js/*.js` modules) and the engine (`js/nj2me.js` + `js/nj2me.wasm`), then
   serves cache-first. After the engine cache completes, stopping the web server
@@ -805,7 +806,7 @@ because CI has no corpus.
 | `src/port/web/nj_web.c` | the Emscripten port: `nj_port` hooks, runner, `njw_*` exports |
 | `web/` | the bundled shell (HTML/CSS/ES modules) |
 | `web/manifest.json`, `web/sw.js` | PWA manifest and service worker (installable, offline shell + engine) |
-| `web/assets/icon*.png` | 192/512/maskable icons generated from `icon.svg` |
+| `web/assets/icon*.png` | 192/512/maskable icons rendered from the Android icon design by `tools/gen_brand_assets.py` (`icon.svg` is its vector twin) |
 | `tools/build_web.sh` | SDK discovery, `emcmake` build, `build/web/` assembly |
 | `tools/emsdk_setup.sh` | installs the Emscripten SDK into `.local-tools/emsdk` |
 | `tools/check_web.sh`, `tools/web_test/` | Node API/corpus, full-corpus sweep, throughput, module-smoke and live-demo suites, Playwright browser verification |
