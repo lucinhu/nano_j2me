@@ -156,3 +156,16 @@ LCD / CRT / FSR1 呈现效果。约束：
   上传本身正确）。Android GL 呈现继续默认关闭、自动回退软件。
 - 下一轮：用正确的安装流程（并在启动后校验 `lastUpdateTime`）重做 StaticDemo 基准对比；
   若修不动，则把 Android GL 呈现明确封为实验特性并在文档/发布说明中标注，转入 F 项收尾与 0.5.45。
+
+## Round 22：像素一致性仍不成立，Android GL 呈现定为实验特性
+
+- 新增测试钩子 `debug.nj2me.glview=0/1/2`（把逻辑视图钉死为 AUTO/INT/FILL，避开 AUTO 平移干扰），
+  并保留一次性的 `present: GL first frame buf=.. surface=.. vp=.. view=..` 几何日志。
+- 用正确安装流程（`lastUpdateTime` 已确认）重做 StaticDemo 对比：日志证实
+  `buf=1080x2400 surface=1080x2400 vp=60,88 960x1280`，但 GL 与软件截图的差异仍为
+  整屏 38.6% / 画面区 81.4%，在 ±40 像素内穷举平移最优仍为 78%+，格线逐行相位不一致。
+  说明差异不是平移/翻转/尺寸，而是 on-screen 四边形采样本身与软件像素网格不对应
+  （离屏回读路径与 SDL2 窗口路径均为 0 差异，shader 与上传逻辑正确）。
+- 结论：Android GL 呈现（`debug.nj2me.glpresent=1`）保持**默认关闭的实验特性**，
+  自动回退软件呈现，不进入正式 UI/发布说明；后续若继续，需要对比 GL 在 window surface 上
+  逐像素输出（或改用 FBO→readback 混合验证）来定位根因。其余目标项不受影响。

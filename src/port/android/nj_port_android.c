@@ -5598,6 +5598,21 @@ nj_status nj_port_android_ex(nj_port *out, int screen_w, int screen_h)
         }
     }
     {
+        /* Test hook: pin the logical view so presentation comparisons are not
+         * disturbed by the AUTO view pacer panning the picture between runs. */
+        char prop[PROP_VALUE_MAX];
+        prop[0] = '\0';
+        (void)__system_property_get("debug.nj2me.glview", prop);
+        if (prop[0] != '\0') {
+            int v = atoi(prop);
+            if (v >= 0 && v <= 2) {
+                s->view_mode = v;
+                __android_log_print(ANDROID_LOG_INFO, LOG_TAG,
+                                    "display: view mode pinned to %d (debug.nj2me.glview)", v);
+            }
+        }
+    }
+    {
         char prop[PROP_VALUE_MAX];
         prop[0] = '\0';
         (void)__system_property_get("debug.nj2me.fps", prop);
