@@ -132,3 +132,52 @@ texture, GL composites FBO + overlay, and EGL presents the result without any
 per-frame readback. CPU observers (getRGB/motion probes) force one composite
 readback on demand. That keeps the fast software 2D path and removes the 3D
 readback + presentation cost that made forced GL lose to software.
+
+## Round 9: where the transaction time goes, and the B2 go/no-go
+
+Profiled Galaxy on Fire 2 with `-DNJ_GLES2_PROFILE=1` on the frame-resident
+build (560 frames @30 fps, forced GL, 2D software, real RTX 5080 laptop). The
+frame produced **2,956 triangle flushes** (≈5.3 per frame), and the transaction
+code alone spent **3,663.8 ms**:
+
+| phase | ms | share |
+| --- | --- | --- |
+| colour readback (`read_c`) | 1,283.6 | 35% |
+| depth readback (`read_d`) | 166.3 | 5% |
+| depth-key texture upload (`up_d`) | 558.1 | 15% |
+| setup | 392.3 | 11% |
+| prep | 369.9 | 10% |
+| CPU colour commit (`commit`) | 366.6 | 10% |
+| colour import (`import_c`) | 262.7 | 7% |
+| pack keys (`pack_d`) | 62.6 | 2% |
+| seed pass | 78.7 | 2% |
+| draw | 55.9 | 2% |
+| colour upload (`up_c`) | 42.5 | 1% |
+
+Upper-bound runs on the same jar (560 frames): software everything **5.01 s**
+user; 3D GL + software 2D **6.01 s**; 3D GL + software 2D with colour/depth
+readback and CPU commit skipped (benchmark-only switch, reverted) **5.55 s**;
+2D accel + hold + frame layer + skipped commit 10.17 s. So readback+commit is
+only ≈0.45 s of the 1 s gap between GL and software in this configuration.
+
+**Go/no-go:** a frame-resident B2 that renders one frame's triangles into a
+persistent FBO with a real depth buffer and commits once at the 2D boundary
+would remove `read_*`, `commit`, `up_d`, `pack_d`, `seed` and most of the
+repeated `prep`/`setup`: ≈3.1 s of the 3.66 s transaction budget, taking the
+GL-3D + software-2D configuration from ≈6.0 s to ≈2.9 s user — below software
+(5.0 s) and near the <3.5 s acceptance line. B2 is therefore worth
+implementing, provided frame order allows a single commit per frame (2D draws
+after 3D in the same frame). The remaining risk is titles that interleave 3D
+and 2D writes arbitrarily; for those the layer must fall back to a flush at the
+boundary (current behaviour).
+
+Next implementation steps:
+1. Persistent screen-sized frame FBO with a real depth renderbuffer in the
+   triangle backend, used instead of the per-transaction colour+depth keys
+   pair.
+2. Defer the CPU commit to the frame boundary (`nj_midp_present`) unless an
+   observer (getRGB, software 2D read, save state) needs pixels earlier; then
+   fall back to the current transaction.
+3. One colour readback per frame for the SDL2 software presentation path
+   (≈0.24 s per 560 frames) — Android gets the EGL window path later and skips
+   it entirely.
