@@ -2134,3 +2134,17 @@ and mergeable; nothing is pushed upstream without explicit authorization.
   PASS, Wine x86-64 4/4 @300, bundle 32/32, whole-corpus probe 1,034 titles /
   1,031 passed / 1 known / 2 failed (unchanged set).
 - APKs versionCode 543 for all five ABIs in `/var/tmp/release-0543`.
+
+## Round 14: release 0.5.44 / r63 (2026-11-25)
+
+- Metadata: `.info` SHA-256 `a3855729efc0444c90cc700307c9288a73d3098ba5366ad76a5df7a4cb0987e9`,
+  `display_version = "0.5.44"`; super patch rebuilt on `c3c55c2280a0eac7e8343a7f15e3c2e35f9a69e6`
+  as fork commit `bfec0fabb8e3f8ee3bea7f8e743505df5747b7e0` (`git apply --check` verified).
+- Cores 8 targets / 128 files; archive SHA-256
+  `38120c5a1340cc53f23aadd3e1ebfea05b6db3b4c6528db9c4af5187b62a9077` (12,188,910 B);
+  installed into `build/libretro-dist`.
+- Validation: CTest 211/211 in 377.29 s, mock 20/20, real RetroArch PASS,
+  Wine 4/4 @300, bundle 32/32; whole-corpus probe from 0.5.43 remains valid
+  (colour/docs-only change).
+- APKs versionCode 544 (five ABIs) in `/var/tmp/release-0544`; release carries the
+  brand-palette UI and the real-game FSR evidence.

@@ -910,6 +910,15 @@ pixels, 85 distinct frames) and save/restore round-trip through the core;
 serialize request is refused - it remains one of the long-first-frame titles.
 
 
+## 发布 r63 / 0.5.44
+
+0.5.44（r63）是界面与证据更新版：Android/web/SDL2 三端统一品牌配色（深蓝/藏青，
+停用 Material You 以保持与图标一致），网页 PWA 主题色对齐；新增真实游戏 FSR 对比
+（Galaxy on Fire 2 2x：FSR 与 nearest 像素差 63.31%，CPU +1.21 s/560 帧；纯 2D
+后处理约 0.74 ms/帧，见 `docs/UPSCALING.md`）。`.info`（SHA-256 `a3855729…`）与
+运行时/存档格式不变；CTest 211/211、mock 20/20、真实 RetroArch、Wine 4/4、
+bundle 32/32 通过。详见 `docs/RELEASE_0.5.44.md`。
+
 ## 发布 r62 / 0.5.43
 
 0.5.43（r62）在 r61 基础上新增：SDL2/Android 多即时存档位、SDL2/Android 倒带、

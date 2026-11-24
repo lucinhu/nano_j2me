@@ -2320,6 +2320,15 @@ so tasks are preempted at quantum boundaries (details and evidence in
 - PR libretro-super#2204 body/head updated to 0.5.41; libretro/docs#1239 stays
   open and mergeable (page content unchanged).
 
+## 0.5.44 / r63
+
+2026-11-25 发布。r63 核心（`.info` `a3855729…`，8 目标 128 文件）与 0.5.44 APK。
+本版为界面与证据更新：Android/web/SDL2 统一品牌配色、网页 PWA 主题色对齐、
+真实游戏 FSR 质量/CPU 记录；运行时与存档格式不变。上游分支：libretro-super
+`bfec0fab`（基于 `c3c55c2d`）、libretro/docs `4f360b1`。验证：CTest 211/211
+（377.29 s）、mock 20/20、真实 RetroArch LoopDemo PASS、Wine 4/4 @300、
+bundle 32/32；0.5.43 全语料探针结果继续有效。未执行上游合并。
+
 ## 0.5.43 / r62
 
 2026-11-25 发布。r62 核心（`.info` `46f0677f…`，8 目标 128 文件）与 0.5.43 APK。
