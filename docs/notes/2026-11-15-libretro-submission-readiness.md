@@ -2148,3 +2148,12 @@ and mergeable; nothing is pushed upstream without explicit authorization.
   (colour/docs-only change).
 - APKs versionCode 544 (five ABIs) in `/var/tmp/release-0544`; release carries the
   brand-palette UI and the real-game FSR evidence.
+
+## Round 23（2026-11-25）：0.5.45 / r64
+
+- 版本 0.5.45 metadata（`d81d377`），`.info` SHA-256
+  `7ca05549700f384491606c14d2a254732001bda9d662324439530c6b0da86730`。
+- libretro-super 补丁重建于 `c3c55c22`（fork `5fb18f15`，50 行，PATCH_OK）。
+- r64 八目标核包 11,757,156 B，SHA-256 `2e4a86cf…`；APK versionCode 545（5 ABI）。
+- 验证：CTest 211/211、前端矩阵 20/20、真实 RetroArch PASS、Wine 4/4、bundle 32/32。
+- Android：多存档位、倒带、呈现滤镜、调色板统一；GL on-screen 呈现保持默认关闭的实验特性。

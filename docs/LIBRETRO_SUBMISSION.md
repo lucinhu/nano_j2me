@@ -2347,3 +2347,14 @@ EASU+RCAS，默认软件呈现不变）与统一图标。上游分支：libretro
 真实 RetroArch LoopDemo 120 帧 PASS、提交自检 32/32。上游 PR #2204 / #1239 保持
 open/mergeable，未合并。Fork 分支基于 `libretro-super` master `c3c55c2` 重建
 （commit `5496b68f80ee40ee0040a88d514045ef07dc20f5`）。
+
+## 0.5.45 / r64（2026-11-25）
+
+- 版本 0.5.45，`.info` SHA-256 `7ca05549700f384491606c14d2a254732001bda9d662324439530c6b0da86730`。
+- libretro-super 补丁基于 master `c3c55c2280a0eac7e8343a7f15e3c2e35f9a69e6`，
+  fork 分支 `add-nano_j2me` @ `5fb18f152413eee576af103eba4729053d93d7c0`。
+- r64 八目标核包：`nj2me-0.5.45-libretro-cores.zip` 11,757,156 B
+  SHA-256 `2e4a86cfa254a7ba15e0abd2b92f8a11441b537e6c3aa862fdbf5f6a707b7cc3`。
+- 前端矩阵 20/20、真实 RetroArch LoopDemo 120 帧、Wine 4/4、提交材料 32/32、
+  全量 CTest 211/211。Android 侧新增多存档位、倒带、滤镜与统一调色板；
+  Android GL 呈现仍为默认关闭的实验路径。

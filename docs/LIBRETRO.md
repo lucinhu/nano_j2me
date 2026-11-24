@@ -935,3 +935,12 @@ mock 20/20、真实 RetroArch、Wine 4/4、bundle 32/32 与 1034 部全语料探
 （`NJ_M3G_FLUSH_DBG`，默认零开销）。验证：CTest 210/210、前端矩阵 20/20、
 真实 RetroArch LoopDemo 120 帧 PASS、提交自检 32/32；核心哈希见
 `docs/RELEASE_0.5.42.md`。存档格式不变。GLES2 仍为 opt-in 实验路径，软件默认。
+
+## Release 0.5.45
+
+Version 0.5.45 ships the r64 core package (`7ca05549700f…` `.info`, 8 targets,
+linux/android/windows). The core API is unchanged from 0.5.44; the release
+focuses on the Android frontend (multi save slots, rewind, presentation
+filters, unified launcher palette) plus the experimental Android on-screen GL
+presentation path (`debug.nj2me.glpresent`, default off, automatic software
+fallback). See `docs/RELEASE_0.5.45.md` for hashes and the verification table.
