@@ -2319,3 +2319,11 @@ so tasks are preempted at quantum boundaries (details and evidence in
   no longer fails; PAC-MAN and Asphalt4 remain documented).
 - PR libretro-super#2204 body/head updated to 0.5.41; libretro/docs#1239 stays
   open and mergeable (page content unchanged).
+
+## 0.5.42 / r61
+
+2026-11-25 发布。r61 核心（`.info` `a7daee31…`，8 目标 128 文件）与 0.5.42 APK
+（五架构）已上传 GitHub release；验证：CTest 210/210（367.21 s）、前端矩阵 20/20、
+真实 RetroArch LoopDemo 120 帧 PASS、提交自检 32/32。上游 PR #2204 / #1239 保持
+open/mergeable，未合并。Fork 分支基于 `libretro-super` master `c3c55c2` 重建
+（commit `5496b68f80ee40ee0040a88d514045ef07dc20f5`）。

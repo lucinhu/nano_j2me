@@ -909,3 +909,11 @@ pixels, 85 distinct frames) and save/restore round-trip through the core;
 `Midnight Pool2` is fixed too.  `Asphalt4EliteRacing` still renders but its
 serialize request is refused - it remains one of the long-first-frame titles.
 
+
+## 发布 r61 / 0.5.42
+
+0.5.42（r61，提交见仓库历史）在 r60 基础上新增：SDL2 呈现滤镜（扫描线/LCD/CRT，
+`filter_mode` 设置项）、Android/SDL2 加速上限 4×→8×、M3G 批次 flush 归因诊断
+（`NJ_M3G_FLUSH_DBG`，默认零开销）。验证：CTest 210/210、前端矩阵 20/20、
+真实 RetroArch LoopDemo 120 帧 PASS、提交自检 32/32；核心哈希见
+`docs/RELEASE_0.5.42.md`。存档格式不变。GLES2 仍为 opt-in 实验路径，软件默认。
