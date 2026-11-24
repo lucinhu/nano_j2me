@@ -139,3 +139,20 @@ LCD / CRT / FSR1 呈现效果。约束：
 - 验证状态：方向、位置、矩形 bbox 已与软件一致（`91eaec6`）；nearest 的 38.6% 静态差异仍未解决，
   Android GL 呈现保持默认关闭的实验特性，自动回退软件呈现。下一轮计划：在测试日志里打印 EGL surface 尺寸
   （`eglQuerySurface`）与 ANativeWindow buffer 尺寸并固定 AUTO 平移（测试时锁定 view 模式）再比对，确认缩放来源后修正。
+
+## Round 21：几何参数已核实一致；此前对比数据来自旧 APK
+
+- 关键发现：测试脚本里 `adb install -r -t a.apk | tail -1 || adb install -r -t b.apk | tail -1`
+  的 `||` 实际绑定到 `tail`（其退出码恒为 0），所以**安装失败时不会执行第二遍安装**，
+  设备上一直是旧 APK。`dumpsys package` 的 `lastUpdateTime` 核对证实了这一点。
+  这解释了前几轮"方向/几何改完截图不变"的现象；后续测试必须先单次 `adb install` 并用
+  `lastUpdateTime` 确认版本。
+- 正确安装本轮 APK 后，新增的一次性日志给出确定数据：
+  `present: GL first frame buf=1080x2400 surface=1080x2400 vp=60,88 960x1280 view=0 zoom=1.000`
+  —— EGL surface 与 ANativeWindow buffer 尺寸一致、视口与软件路径的整数倍布局一致，
+  因此"surface/buffer 尺寸不一致导致缩放"的假设被排除。
+- 现状：nearest 下截图仍与软件呈现不同（画面内容相位/区域不一致，非平移/翻转可对齐），
+  问题范围收敛到 on-screen 四边形采样/方向细节（离屏路径 PPM 对比保持 0 差异，说明 shader 与
+  上传本身正确）。Android GL 呈现继续默认关闭、自动回退软件。
+- 下一轮：用正确的安装流程（并在启动后校验 `lastUpdateTime`）重做 StaticDemo 基准对比；
+  若修不动，则把 Android GL 呈现明确封为实验特性并在文档/发布说明中标注，转入 F 项收尾与 0.5.45。

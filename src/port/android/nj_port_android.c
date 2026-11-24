@@ -1584,6 +1584,13 @@ static int android_gl_present_frame(android_state *s)
     {
         int ok = nj_android_gles2_present(&s->gles2, &surf, s->gl_present_mode,
                                           ox, oy, dw, dh);
+        if (ok && !s->gl_present_logged) {
+            s->gl_present_logged = 1;
+            __android_log_print(ANDROID_LOG_INFO, LOG_TAG,
+                "present: GL first frame buf=%dx%d surface=%dx%d vp=%d,%d %dx%d view=%d zoom=%.3f",
+                bw, bh, s->gles2.surface_w, s->gles2.surface_h, ox, oy, dw, dh,
+                s->view_mode, (double)s->view_zoom);
+        }
         if (!ok && !s->gl_present_logged) { s->gl_present_logged = 1; __android_log_print(ANDROID_LOG_INFO, LOG_TAG,
             "present: GL path present declined (vp=%d,%d %dx%d)", ox, oy, dw, dh); }
         return ok;
