@@ -182,6 +182,10 @@ typedef struct sdl2_gles2 {
     /* A1 offscreen presentation shader pass (NJ_GL_PRESENT* env). */
     int present_mode, present_scale, present_left, present_index;
     char present_prefix[512];
+    int present_window;      /* NJ_GL_PRESENT: present through the shader pass */
+    int present_ok;          /* this frame has a shader-presented texture ready */
+    int present_out_w, present_out_h;
+    SDL_Texture *present_texture;
 } sdl2_gles2;
 
 static sdl2_gl_binding sdl2_gl_save(void)
@@ -445,6 +449,10 @@ static void sdl2_gles2_triangles_abort(void *ud)
  * and only then abandon CPU state; never issue GL deletes in another context. */
 static void sdl2_gles2_close(sdl2_gles2 *s)
 {
+    if (s->present_texture) {
+        SDL_DestroyTexture(s->present_texture);
+        s->present_texture = NULL;
+    }
     sdl2_gl_binding previous = sdl2_gl_save();
     SDL_GLContext owned = s->context;
     s->active = 0;
@@ -598,12 +606,18 @@ static void sdl2_gles2_open(sdl2_gles2 *s)
     s->present_scale = 2;
     s->present_left = 0;
     {
+        const char *mode_env = getenv("NJ_GL_PRESENT");
         const char *dump_prefix = getenv("NJ_GL_PRESENT_DUMP");
-        if (dump_prefix && dump_prefix[0] && s->backend) {
-            const char *mode_env = getenv("NJ_GL_PRESENT");
-            const char *scale_env = getenv("NJ_GL_PRESENT_SCALE");
-            const char *count_env = getenv("NJ_GL_PRESENT_COUNT");
-            int mode = mode_env ? SDL_atoi(mode_env) : 0;
+        const char *scale_env = getenv("NJ_GL_PRESENT_SCALE");
+        const char *count_env = getenv("NJ_GL_PRESENT_COUNT");
+        int mode;
+        if ((!mode_env || !mode_env[0]) && (!dump_prefix || !dump_prefix[0])) {
+            /* A1/A2 presentation pass disabled: default software path. */
+        } else if (!s->backend) {
+            SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                        "gfx: NJ_GL_PRESENT needs --graphics gles2; using software path");
+        } else {
+            mode = mode_env && mode_env[0] ? SDL_atoi(mode_env) : 0;
             s->present_scale = scale_env ? SDL_atoi(scale_env) : 2;
             s->present_left = count_env ? SDL_atoi(count_env) : 1;
             if (s->present_scale < 1) s->present_scale = 1;
@@ -611,10 +625,16 @@ static void sdl2_gles2_open(sdl2_gles2 *s)
             if (s->present_left < 1) s->present_left = 1;
             if (mode < 0 || mode >= NJ_GL_PRESENT_MODES) mode = 0;
             s->present_mode = mode;
-            SDL_snprintf(s->present_prefix, sizeof s->present_prefix, "%s", dump_prefix);
+            if (mode_env && mode_env[0]) s->present_window = 1;
+            if (dump_prefix && dump_prefix[0]) {
+                SDL_snprintf(s->present_prefix, sizeof s->present_prefix, "%s",
+                             dump_prefix);
+            }
             SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
-                        "gfx: offscreen presentation pass mode %d, %d frame(s) -> %s",
-                        mode, s->present_left, s->present_prefix);
+                        "gfx: presentation shader pass mode %d%s%s; scale x%d",
+                        mode, s->present_window ? " (window)" : "",
+                        s->present_prefix[0] ? " (dumping PPM)" : "",
+                        s->present_scale);
         }
     }
 done:
@@ -2517,8 +2537,9 @@ static void sdl_draw_filter(sdl_state *s)
 /* A1: render one frame through the offscreen presentation shader pass and
  * write it as a PPM for frame-parity comparison.  Optional and env-gated: it
  * never runs unless NJ_GL_PRESENT_DUMP is set. */
-static void sdl2_gles2_present_dump(sdl2_gles2 *s, int width, int height,
-                                    int stride, int format, void *pixels)
+static void sdl2_gles2_present_frame(sdl2_gles2 *s, SDL_Renderer *renderer,
+                                     int width, int height,
+                                     int stride, int format, void *pixels)
 {
     sdl2_gl_binding previous;
     nj_surface src;
@@ -2528,7 +2549,8 @@ static void sdl2_gles2_present_dump(sdl2_gles2 *s, int width, int height,
     clock_t started;
     int out_w, out_h, ok, x, y;
 
-    if (!s->present_prefix[0] || s->present_left <= 0 || !s->backend) return;
+    if (!s->backend || width <= 0 || height <= 0) return;
+    if (!s->present_window && (!s->present_prefix[0] || s->present_left <= 0)) return;
     out_w = width * s->present_scale;
     out_h = height * s->present_scale;
     rgba = (unsigned char *)malloc((size_t)out_w * (size_t)out_h * 4u);
@@ -2543,29 +2565,55 @@ static void sdl2_gles2_present_dump(sdl2_gles2 *s, int width, int height,
     ok = nj_gles2_present(s->backend, &src, s->present_mode, out_w, out_h, rgba);
     sdl2_gles2_leave(s, previous);
     if (ok) {
-        SDL_snprintf(path, sizeof path, "%s%05d.ppm", s->present_prefix, s->present_index);
-        f = fopen(path, "wb");
-        if (f) {
-            fprintf(f, "P6\n%d %d\n255\n", out_w, out_h);
-            for (y = 0; y < out_h; ++y) {
-                const unsigned char *p = rgba + (size_t)y * (size_t)out_w * 4u;
-                for (x = 0; x < out_w; ++x) {
-                    row[x*3+0] = p[x*4+0];
-                    row[x*3+1] = p[x*4+1];
-                    row[x*3+2] = p[x*4+2];
-                }
-                fwrite(row, 1, (size_t)out_w * 3u, f);
+        if (s->present_window) {
+            if (!s->present_texture || s->present_out_w != out_w ||
+                s->present_out_h != out_h) {
+                if (s->present_texture) SDL_DestroyTexture(s->present_texture);
+                s->present_texture = SDL_CreateTexture(
+                    renderer, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STREAMING,
+                    out_w, out_h);
+                s->present_out_w = out_w;
+                s->present_out_h = out_h;
             }
-            fclose(f);
+            if (s->present_texture &&
+                SDL_UpdateTexture(s->present_texture, NULL, rgba,
+                                  out_w * 4) == 0) {
+                s->present_ok = 1;
+            }
         }
-        fprintf(stderr, "present: mode=%d out=%dx%d -> %s (%ld ms)\n",
-                s->present_mode, out_w, out_h, path,
-                (long)((clock() - started) * 1000 / CLOCKS_PER_SEC));
-        s->present_index++;
+        if (s->present_prefix[0] && s->present_left > 0) {
+            SDL_snprintf(path, sizeof path, "%s%05d.ppm",
+                         s->present_prefix, s->present_index);
+            f = fopen(path, "wb");
+            if (f) {
+                fprintf(f, "P6\n%d %d\n255\n", out_w, out_h);
+                for (y = 0; y < out_h; ++y) {
+                    const unsigned char *p = rgba + (size_t)y * (size_t)out_w * 4u;
+                    for (x = 0; x < out_w; ++x) {
+                        row[x*3+0] = p[x*4+0];
+                        row[x*3+1] = p[x*4+1];
+                        row[x*3+2] = p[x*4+2];
+                    }
+                    fwrite(row, 1, (size_t)out_w * 3u, f);
+                }
+                fclose(f);
+            }
+            s->present_index++;
+        }
+        if (s->present_index < 3 || (s->present_index % 300) == 0) {
+            fprintf(stderr, "present: mode=%d out=%dx%d ok (%ld ms)%s\n",
+                    s->present_mode, out_w, out_h,
+                    (long)((clock() - started) * 1000 / CLOCKS_PER_SEC),
+                    s->present_prefix[0] ? " (dumping)" : "");
+        }
     } else {
-        fprintf(stderr, "present: mode=%d declined\n", s->present_mode);
+        s->present_ok = 0;
+        if (s->present_index < 3) {
+            fprintf(stderr, "present: mode=%d declined, using software path\n",
+                    s->present_mode);
+        }
     }
-    s->present_left--;
+    if (s->present_left > 0) s->present_left--;
     free(rgba);
     free(row);
 }
@@ -3042,16 +3090,28 @@ static void sdl_display_present(void *ud, int x, int y, int w, int h)
 #if NJ_SDL2_GLES2
     sdl2_gles2_flush_frame(&s->gfx);
     sdl2_gles2_yield(&s->gfx);
-    sdl2_gles2_present_dump(&s->gfx, s->width, s->height, s->stride, s->format,
-                            s->pixels);
+    sdl2_gles2_present_frame(&s->gfx, s->renderer, s->width, s->height, s->stride,
+                             s->format, s->pixels);
 #endif
-    SDL_UpdateTexture(s->texture, &r,
-                      (const nj_u1 *)s->pixels + (size_t)r.y * (size_t)s->stride
-                          + (size_t)r.x * (size_t)sdl_bytes_per_pixel(s->format),
-                      s->stride);
-    sdl_layout(s);
-    SDL_RenderClear(s->renderer);
-    SDL_RenderCopy(s->renderer, s->texture, NULL, &s->game_dst);
+#if NJ_SDL2_GLES2
+    if (s->gfx.present_ok) {
+        /* A2: the frame already went through the GL presentation shaders; show
+         * that texture instead of the software one. */
+        sdl_layout(s);
+        SDL_RenderClear(s->renderer);
+        SDL_RenderCopy(s->renderer, s->gfx.present_texture, NULL, &s->game_dst);
+        s->gfx.present_ok = 0;
+    } else
+#endif
+    {
+        SDL_UpdateTexture(s->texture, &r,
+                          (const nj_u1 *)s->pixels + (size_t)r.y * (size_t)s->stride
+                              + (size_t)r.x * (size_t)sdl_bytes_per_pixel(s->format),
+                          s->stride);
+        sdl_layout(s);
+        SDL_RenderClear(s->renderer);
+        SDL_RenderCopy(s->renderer, s->texture, NULL, &s->game_dst);
+    }
     sdl_draw_filter(s);
     sdl_draw_keys(s);
     sdl_draw_speed(s);

@@ -235,6 +235,8 @@ static void usage(const char *argv0)
 "    NJ_SDL2_KEYS=0     start with them hidden\n"
 "  --where              say where each thread stopped, frame by frame\n"
 "  --dump-frames <prefix>  write a PPM per frame as <prefix>NNNNN.ppm\n"
+"  --upscale <mode>     present through the GLES2 shader pass: nearest|sharp|scanline|lcd|crt|fsr\n"
+"  --upscale-scale <n>  output scale for --upscale (1-8, default 2)\n"
 "                          (headless; give a directory by ending it in /)\n"
 "  --dump-every <n>     write every n-th frame (headless, default: 1)\n"
 "  --version            print the version and exit\n"
@@ -325,6 +327,8 @@ typedef struct cli {
     int         cheat_count;        /* --cheat entries collected so far     */
     const char *font;
     const char *device_name;
+    int         upscale;      /* --upscale: -1 unset, 0..5 shader pass mode */
+    int         upscale_scale;/* --upscale-scale: 0 port default */
     const char *save_state;
     const char *load_state;
     int         save_frame;
@@ -664,6 +668,7 @@ int main(int argc, char **argv)
     c.width = NJ_SCREEN_WIDTH;
     c.height = NJ_SCREEN_HEIGHT;
     c.heap_mb = (unsigned)NJ_CLI_HEAP_MB;
+    c.upscale = -1;
 #if NJ_HAVE_SDL2
     c.port_name = "sdl2";
 #else
@@ -725,6 +730,25 @@ int main(int argc, char **argv)
             c.grow_given = 1;
         } else if (strcmp(a, "--scale") == 0 && i + 1 < argc) {
             c.scale = atoi(argv[++i]);
+        } else if (strcmp(a, "--upscale") == 0 && i + 1 < argc) {
+            const char *m = argv[++i];
+            if (strcmp(m, "nearest") == 0) c.upscale = 0;
+            else if (strcmp(m, "sharp") == 0) c.upscale = 1;
+            else if (strcmp(m, "scanline") == 0) c.upscale = 2;
+            else if (strcmp(m, "lcd") == 0) c.upscale = 3;
+            else if (strcmp(m, "crt") == 0) c.upscale = 4;
+            else if (strcmp(m, "fsr") == 0) c.upscale = 5;
+            else if (m[0] >= '0' && m[0] <= '5' && m[1] == '\0') c.upscale = m[0] - '0';
+            else {
+                fprintf(stderr, "--upscale: bad mode %s (nearest|sharp|scanline|lcd|crt|fsr|0..5)\n", m);
+                return 2;
+            }
+        } else if (strcmp(a, "--upscale-scale") == 0 && i + 1 < argc) {
+            c.upscale_scale = atoi(argv[++i]);
+            if (c.upscale_scale < 1 || c.upscale_scale > 8) {
+                fprintf(stderr, "--upscale-scale: expected 1..8\n");
+                return 2;
+            }
         } else if (strcmp(a, "--fps") == 0 && i + 1 < argc) {
             c.fps = atoi(argv[++i]);
         } else if (strcmp(a, "--size") == 0 && i + 1 < argc) {
@@ -923,6 +947,29 @@ int main(int argc, char **argv)
     if (c.jar == NULL) {
         usage(argv[0]);
         return 2;
+    }
+
+    if (c.upscale >= 0) {
+        char v[8];
+        if (c.graphics_mode == 0) {
+            fprintf(stderr, "--upscale needs a GLES2 path: use --graphics gles2\n");
+        } else {
+            if (c.graphics_mode < 0) c.graphics_mode = 1;
+            snprintf(v, sizeof v, "%d", c.upscale);
+#if defined(_WIN32)
+            _putenv_s("NJ_GL_PRESENT", v);
+            if (c.upscale_scale > 0) {
+                snprintf(v, sizeof v, "%d", c.upscale_scale);
+                _putenv_s("NJ_GL_PRESENT_SCALE", v);
+            }
+#else
+            setenv("NJ_GL_PRESENT", v, 1);
+            if (c.upscale_scale > 0) {
+                snprintf(v, sizeof v, "%d", c.upscale_scale);
+                setenv("NJ_GL_PRESENT_SCALE", v, 1);
+            }
+#endif
+        }
     }
 
     {

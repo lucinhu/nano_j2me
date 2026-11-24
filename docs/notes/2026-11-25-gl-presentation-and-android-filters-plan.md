@@ -70,3 +70,25 @@ out_rgba)`（`include/nj2me/nj_gfx_gles2.h`，模式 0..5）。流程：任意 `
 
 待办：A2 窗口 GL 呈现（私有上下文→SDL 窗口交换，失败自动回落软件）、FSR1 EASU
 精确实现、Android GL 呈现接入同一管线。
+
+## A2 进展：窗口 GL 呈现（2026-11-25，round 5）
+
+在 A1 离屏管线之上把着色器输出真正呈现到 SDL2 窗口：私有 GLES2 上下文按帧渲染
+`NJ_GL_PRESENT` 指定的模式到 RGBA 纹理，再作为 `SDL_Texture` 铺到游戏区域；任何一步
+失败（无 `--graphics gles2`、上下文丢失、FBO 不完整）都自动回落原有软件呈现，默认行为
+完全不变。新增命令行：
+
+```
+nj2me --graphics gles2 --upscale <nearest|sharp|scanline|lcd|crt|fsr> [--upscale-scale 1..8] game.jar
+```
+
+环境变量仍可用：`NJ_GL_PRESENT`（模式，设置即启用窗口呈现）、`NJ_GL_PRESENT_SCALE`、
+`NJ_GL_PRESENT_DUMP`/`_COUNT`（PPM 导出，供帧对比）。
+
+验证（LoopDemo 240x320，窗口截图 960x1039）：
+- `--upscale nearest --upscale-scale 1`：与软件呈现窗口截图像素级一致
+  （**0 / 997,440 差异**），说明呈现路径替换未引入任何几何/采样偏差；
+- `--upscale crt --upscale-scale 2`：**652,616 / 997,440 像素变化（65.4%）**，滤镜
+  通过窗口可见；
+- 单帧呈现+纹理上传约 0–1 ms（240x320，RTX 5080）；默认 headless/SDL2 软件路径
+  构建与运行不受影响。
