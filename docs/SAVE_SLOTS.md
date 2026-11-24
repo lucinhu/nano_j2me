@@ -58,9 +58,27 @@ load restores the arena and Java stacks in place, which is what the runner's
 
 ## Android
 
-The Android front end keeps its existing in-run snapshot UI; multiple slots for
-the APK (folder `<jars>/states/<stem>-slotN.state`, same naming) are the next
-step of this goal.
+The APK keeps its snapshots in the app's private files directory, one file per
+slot:
+
+```
+<filesDir>/<jar name>.state              slot 0, the original quick save
+<filesDir>/<jar name>-slot1.state        slot 1
+...                                     up to slot 4
+```
+
+- In game, the panel row **保存状态** opens a slot chooser: quick save or slots
+  1-4, each showing 空 / 已保存 <time>; saving over a slot asks 覆盖<slot>? first.
+  The snapshot is taken by the same `nativeSaveState(handle, path)` call at the
+  frame boundary the single-file version used, so no native change was needed.
+- The library card's **读取存档** row lists the slots that hold a snapshot for
+  that game (with the save time) and launches with the chosen one; the old
+  single "恢复进度" row is now this chooser, and legacy `.state` files appear as
+  快速存档, so old snapshots still resume.
+- **删除存档** clears every slot for the game.
+- Emulator verification checklist: save to 快速存档 and to 存档位 1, overwrite a
+  slot (confirm dialog), relaunch the game from both slots, delete the archive
+  and confirm the slots disappear.
 
 ## libretro
 

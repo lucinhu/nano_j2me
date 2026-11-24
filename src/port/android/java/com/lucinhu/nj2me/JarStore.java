@@ -184,13 +184,48 @@ final class JarStore {
         return new File(dir(ctx), jar + ".state");
     }
 
-    static boolean hasState(Context ctx, String jar) {
-        File f = stateFile(ctx, jar);
+    /** Save slots: 0 is the original single snapshot, 1..SLOT_MAX are extra. */
+    static final int SLOT_MAX = 4;
+
+    static File slotFile(Context ctx, String jar, int slot) {
+        if (slot <= 0) {
+            return stateFile(ctx, jar);
+        }
+        return new File(dir(ctx), jar + "-slot" + slot + ".state");
+    }
+
+    static String slotName(int slot) {
+        return slot <= 0 ? "快速存档" : "存档位 " + slot;
+    }
+
+    static boolean hasSlot(Context ctx, String jar, int slot) {
+        File f = slotFile(ctx, jar, slot);
         return f.isFile() && f.length() > 0;
     }
 
+    static boolean hasState(Context ctx, String jar) {
+        for (int i = 0; i <= SLOT_MAX; i++) {
+            if (hasSlot(ctx, jar, i)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     static void deleteState(Context ctx, String jar) {
-        stateFile(ctx, jar).delete();
+        for (int i = 0; i <= SLOT_MAX; i++) {
+            slotFile(ctx, jar, i).delete();
+        }
+    }
+
+    /** "已保存 11月25日 01:40", or "空" for a slot that is not there. */
+    static String slotTimeText(Context ctx, String jar, int slot) {
+        File f = slotFile(ctx, jar, slot);
+        if (!f.isFile() || f.length() == 0) {
+            return "空";
+        }
+        return new java.text.SimpleDateFormat("M月d日 HH:mm",
+                java.util.Locale.getDefault()).format(new java.util.Date(f.lastModified()));
     }
 
     /** Directory the MIDlet sees as its file:// root, and where RMS goes. */

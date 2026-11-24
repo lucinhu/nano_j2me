@@ -3,6 +3,7 @@ package com.lucinhu.nj2me;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.Context;
+import android.content.DialogInterface;
 import android.content.Intent;
 import android.graphics.Color;
 import android.media.AudioManager;
@@ -1463,7 +1464,7 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
                                 : "每秒最多 " + frameCap + " 帧；调高更流畅，也更快用完电",
                 false, null);
         LinearLayout save = Md3.row(this, Md3.IC_MEMORY, "保存状态",
-                "把这一局的进度存下来，回到游戏卡片里选「恢复进度」", false, null);
+                "选一个存档位保存这一局；回到游戏卡片里「读取存档」继续", false, null);
         LinearLayout quit = Md3.dangerRow(this, Md3.IC_POWER, "退出游戏", null);
 
         box.addView(adjust, Md3.gap(this, 12));
@@ -1663,7 +1664,7 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
             @Override
             public void onClick(View v) {
                 dlg.dismiss();
-                saveState();
+                saveSlotDialog();
             }
         });
         quit.setOnClickListener(new View.OnClickListener() {
@@ -1685,9 +1686,51 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
      * the port refuses the rest - so this can fail, and saying so beats a
      * toast that promises a file nobody wrote.
      */
-    private void saveState() {
+    /** Choose the slot to write; an existing one asks before it is replaced. */
+    private void saveSlotDialog() {
+        LinearLayout box = Md3.body(this);
+        box.addView(Md3.title(this, "保存状态"));
+        box.addView(Md3.supporting(this,
+                "每个槽位单独保存；覆盖前会再确认。读取在游戏卡片的「读取存档」里。"),
+                Md3.gap(this, 6));
+        for (int slot = 0; slot <= JarStore.SLOT_MAX; slot++) {
+            final int s = slot;
+            String when = JarStore.slotTimeText(this, jarName, s);
+            box.addView(Md3.row(this, Md3.IC_MEMORY, JarStore.slotName(s),
+                    "空".equals(when) ? "空，点击保存" : "已保存 " + when + "，点击覆盖",
+                    false, new View.OnClickListener() {
+                        @Override
+                        public void onClick(View v) {
+                            confirmSave(s);
+                        }
+                    }));
+        }
+        Md3.show(new AlertDialog.Builder(this)
+                .setView(Md3.scroller(this, box))
+                .setNegativeButton("关闭", null), this);
+    }
+
+    private void confirmSave(final int slot) {
+        if (!JarStore.hasSlot(this, jarName, slot)) {
+            saveState(JarStore.slotFile(this, jarName, slot), slot);
+            return;
+        }
+        new AlertDialog.Builder(this)
+                .setTitle("覆盖" + JarStore.slotName(slot) + "？")
+                .setMessage("这个槽位里的进度会被替换，不能撤销。")
+                .setNegativeButton("取消", null)
+                .setPositiveButton("覆盖", new DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(DialogInterface dialog, int which) {
+                        saveState(JarStore.slotFile(GameActivity.this, jarName, slot), slot);
+                    }
+                })
+                .show();
+    }
+
+    private void saveState(java.io.File file, int slot) {
         int rc;
-        String path = JarStore.stateFile(this, jarName).getAbsolutePath();
+        String path = file.getAbsolutePath();
         synchronized (lock) {
             if (handle == 0) {
                 toast("游戏还没跑起来，稍等一下再存");
@@ -1696,7 +1739,7 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
             rc = nativeSaveState(handle, path);
         }
         if (rc == 0) {
-            toast("已保存进度，下次在游戏卡片里选「恢复进度」");
+            toast("已保存到" + JarStore.slotName(slot) + "，在游戏卡片里读取");
         } else if (rc == -8) {
             /* NJ_ERR_STATE: the frame boundary landed while the MIDlet thread
              * was parked inside a native call (serviceRepaints-driven loops),

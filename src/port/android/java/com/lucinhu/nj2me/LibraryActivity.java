@@ -527,6 +527,52 @@ public class LibraryActivity extends Activity {
         startActivity(it);
     }
 
+    /** Start with one specific save slot; the port loads it before the MIDlet. */
+    private void launchWithState(JarStore.Entry e, java.io.File state) {
+        JarStore.touch(this, e);
+        Intent it = new Intent(this, GameActivity.class);
+        it.putExtra("jar", e.jar.getName());
+        it.putExtra("jarpath", e.jar.getAbsolutePath());
+        it.putExtra("title", e.title);
+        it.putExtra("w", e.w);
+        it.putExtra("h", e.h);
+        it.putExtra("heap", e.heapMB);
+        it.putExtra("view", e.viewMode);
+        it.putExtra("zoom", e.zoom);
+        it.putExtra("panx", e.panX);
+        it.putExtra("pany", e.panY);
+        it.putExtra("state", state.getAbsolutePath());
+        startActivity(it);
+    }
+
+    /** Pick which save slot to continue from. */
+    private void stateDialog(final JarStore.Entry e) {
+        LinearLayout box = Md3.body(this);
+        box.addView(Md3.title(this, "读取存档"));
+        box.addView(Md3.supporting(this,
+                "存档属于这个游戏；在游戏内面板的「保存状态」里选择槽位。"),
+                Md3.gap(this, 6));
+        for (int slot = 0; slot <= JarStore.SLOT_MAX; slot++) {
+            final int s = slot;
+            if (!JarStore.hasSlot(this, e.jar.getName(), s)) {
+                continue;
+            }
+            box.addView(rowAction(Md3.IC_PLAY, JarStore.slotName(s),
+                    "保存于 " + JarStore.slotTimeText(this, e.jar.getName(), s),
+                    new Runnable() {
+                        @Override
+                        public void run() {
+                            if (openBox != null) {
+                                openBox.dismiss();
+                            }
+                            launchWithState(e, JarStore.slotFile(
+                                    LibraryActivity.this, e.jar.getName(), s));
+                        }
+                    }));
+        }
+        showBox(box, "关闭");
+    }
+
     /** After importing, ask the two questions that decide whether it will run. */
     private void offload(final JarStore.Entry e) {
         LinearLayout box = Md3.body(this);
@@ -577,11 +623,11 @@ public class LibraryActivity extends Activity {
             /* Only offered when there is something to go back to: a row that
              * starts the game at the title screen while calling itself "resume"
              * is worse than no row at all. */
-            box.addView(rowAction(Md3.IC_PLAY, "恢复进度",
-                    "接着上次保存的地方继续玩", new Runnable() {
+            box.addView(rowAction(Md3.IC_PLAY, "读取存档",
+                    "选择快速存档或某个存档位继续", new Runnable() {
                         @Override
                         public void run() {
-                            launch(e, true);
+                            stateDialog(e);
                         }
                     }));
         }
