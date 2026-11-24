@@ -81,7 +81,7 @@ int nj_gles2_frame_active(const void *ud);
 
 /* Offscreen presentation shader pass (goal A: GL presentation layer).
  * Modes: 0 nearest, 1 sharp-bilinear, 2 scanline, 3 LCD grid, 4 CRT,
- * 5 FSR-lite (sharp-bilinear + RCAS-style sharpen; EASU pending).
+ * 5 FSR1 (EASU edge-adaptive upscale + RCAS sharpening, two passes).
  * `src` may be any surface format the backend accepts; `out` receives
  * out_w*out_h tightly packed RGBA8888 rows, top-down. Returns 1 on success and
  * 0 on decline (context not current, unsupported size, or GL failure); the

@@ -92,3 +92,35 @@ nj2me --graphics gles2 --upscale <nearest|sharp|scanline|lcd|crt|fsr> [--upscale
   通过窗口可见；
 - 单帧呈现+纹理上传约 0–1 ms（240x320，RTX 5080）；默认 headless/SDL2 软件路径
   构建与运行不受影响。
+
+
+## A3 进展：FSR1 EASU + RCAS（2026-11-25，round 7）
+
+模式 5 从 FSR-lite 替换为真正的 FSR1 两遍实现：
+
+- **EASU**：从 MIT 许可的 AMD FidelityFX FSR1 参考（`ffx_fsr1.h`）移植
+  `FsrEasuF` / `FsrEasuTapF` / `FsrEasuSetF` 与 `FsrEasuCon` 常数；
+  `textureGather` 在 GLSL ES 1.0 不存在，用 4 次 `texture2D` 在
+  `floor(p*size-0.5)` 的 2x2 footprint 上手工重建（`easu_gather()`）。
+  输出到 `present_stage_tex`（离屏中间目标）。
+- **RCAS**：按参考默认 0.2 stops（`sharp = exp2(-0.2) = 0.87055`）实现，
+  含噪声检测与 `FSR_RCAS_LIMIT` 限幅，读 `present_stage_tex` 输出到最终
+  目标。FSR1 的近似倒数/平方根改用精确 `1.0/x` / `inversesqrt`，结果更稳。
+- 两遍各自使用 `present_stage_fbo` / `present_fbo`；输入纹理复用 A1 的
+  RGBA 上传，坐标约定沿用“无 V 翻转、readback 行即 CPU 顶行”。
+- 失败路径（shader 编译/FBO 不完整/uniform 缺失）自动回落到软件呈现。
+
+验证（RTX 5080，`DISPLAY=:1`，SDL2+GLES2 构建 `/tmp/r5-gles2`）：
+
+| 用例 | 结果 |
+|---|---|
+| `--upscale fsr --upscale-scale 2`，LoopDemo 60 帧 | `present: mode=5 out=480x640 ok (0-3 ms)`，无回落 |
+| `--upscale fsr --upscale-scale 3`，魔塔 120 帧 720x960 | 100% 非黑；与 nearest 3x 相比 **5.33% 像素差异**；边缘能量 1,133,278 vs 348,380（≈3.25×，EASU 重建 + RCAS 锐化） |
+| 同一帧转 PNG 目视 | 启动 logo/中文字样清晰，无块状/错位伪影 |
+
+说明：FSR 是“放大 + 锐化”，与 nearest 不会像素一致；与软件呈现的
+像素级对比只在 nearest 模式做（A1 已记录 0/307,200）。性能记录为
+240x320 → 480x640 约 0-3 ms/帧，720x960 约 3-5 ms/帧（含两遍 shader）。
+
+仍待：Android 端把同一 GL/FSR 管线接到 Surface，以及 FSR 在真实游戏
+（Galaxy/Doom3）上的主观对比截图。

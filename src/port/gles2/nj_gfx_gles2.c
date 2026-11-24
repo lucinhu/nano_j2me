@@ -7,6 +7,7 @@
 #include <math.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
 
 #if !NJ_ENABLE_GFX_ACCEL
@@ -45,6 +46,14 @@ struct nj_gles2 {
     GLint present_outsize[NJ_GL_PRESENT_MODES];
     GLuint present_input, present_target, present_fbo;
     texture_storage present_input_storage, present_target_storage;
+    /* FSR1 (mode 5) runs EASU into a separate stage target, then RCAS into
+     * the output target above. */
+    GLuint present_stage_tex, present_stage_fbo;
+    texture_storage present_stage_storage;
+    GLuint present_fsr_easu, present_fsr_rcas;
+    GLint present_fsr_easu_sampler, present_fsr_easu_insize, present_fsr_easu_outsize;
+    GLint present_fsr_easu_con[4];
+    GLint present_fsr_rcas_sampler, present_fsr_rcas_texel, present_fsr_rcas_sharp;
     struct frame_slot { nj_surface *surface; GLuint fbo, tex; int w, h, stride;
                         int format, bpp, dirty, x0, y0, x1, y1, stale;
                         texture_storage storage; } frame[4];
@@ -645,7 +654,18 @@ static GLuint shader(nj_gles2 *s, GLenum type, const char *text)
     if (!current(s)) { s->shader_orphan = name; return 0; }
     s->gl.GetShaderiv(name, GL_COMPILE_STATUS, &ok);
     if (!current(s)) { s->shader_orphan = name; return 0; }
-    if (!ok) { s->gl.DeleteShader(name); return 0; }
+    if (!ok) {
+        char log[512];
+        GLsizei len = 0;
+        log[0] = '\0';
+        if (s->gl.GetShaderInfoLog) {
+            s->gl.GetShaderInfoLog(name, (GLsizei)sizeof log - 1, &len, log);
+            if (len > 0) log[len < (GLsizei)sizeof log ? len : (GLsizei)sizeof log - 1] = '\0';
+        }
+        fprintf(stderr, "GL shader compile failed: %s\n", log);
+        s->gl.DeleteShader(name);
+        return 0;
+    }
     return name;
 }
 /* Both passes sample the SAME old-depth texture. In particular the colour

@@ -64,9 +64,14 @@ J2ME 画面的原生分辨率很小（常见 240×320、176×208、320×240）�
   扫描线模式 345,600/997,440 px 不同（34.7%），CRT 模式 537,600 px（53.9%），
   均为预期的隔行压暗，非渲染差异。
 
-## 2b. GLES2 / FSR 后处理（计划，依赖 EGL 呈现）
+## 2b. GLES2 / FSR 后处理（已实现，SDL2 桌面版）
 
-FSR1（EASU+RCAS）与 sharp-bilinear 需要把原生帧作为纹理经 shader 画到窗口。
+SDL2 桌面版现在有一条真正的 GL 呈现路径：原生帧上传为纹理，经可插拔
+着色器画到窗口（`--upscale` / `NJ_GL_PRESENT`）。模式 5 为 **FSR1**
+（EASU 边缘自适应放大 + RCAS 对比度自适应锐化，两遍渲染；EASU 的
+textureGather 在 GLSL ES 1.0 下用 4 次 texture2D 手工重建）。其余模式为
+nearest / sharp-bilinear / 扫描线 / LCD / CRT。默认仍是原有软件呈现，
+只有显式传 `--upscale` 时启用（失败自动回落）。
 目前 SDL2/Android 的私有 GLES2 上下文只有离屏 pbuffer，没有窗口 surface（呈现
 仍走 CPU framebuffer）。因此该 pass 排在目标 (1) 的 EGL 呈现（B3）之后：
 呈现层改到 EGL window surface 后，再接入 `--upscale` 的 shader 管线，验收为
