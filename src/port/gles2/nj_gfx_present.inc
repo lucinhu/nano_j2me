@@ -617,18 +617,25 @@ static int present_draw_quad(nj_gles2 *s, int mode, int src_w, int src_h,
  * falls back to software presentation) for unsupported modes.
  */
 int nj_gles2_present_onscreen(void *ud, const nj_surface *src, int mode,
-                              int out_w, int out_h)
+                              int vp_x, int vp_y, int vp_w, int vp_h)
 {
     nj_gles2 *s = (nj_gles2 *)ud;
 
     if (!s || !src || !src->pixels) return 0;
     if (mode < 0 || mode >= NJ_GL_PRESENT_MODES || mode == 5) return 0;
     if (!current(s) || !present_init(s)) return 0;
-    if (out_w <= 0 || out_h <= 0 ||
-        out_w > s->max_viewport[0] || out_h > s->max_viewport[1]) return 0;
+    if (vp_w <= 0 || vp_h <= 0 || vp_x < 0 || vp_y < 0) return 0;
+    if (vp_x + vp_w > s->max_viewport[0] || vp_y + vp_h > s->max_viewport[1])
+        return 0;
     if (!present_upload(s, src)) return 0;
 
+    /* The window path fills the whole drawable: black bars first, then the
+     * picture inside the viewport the port computed for the letterbox. */
     s->gl.BindFramebuffer(GL_FRAMEBUFFER, 0);
-    s->gl.Viewport(0, 0, out_w, out_h);
-    return present_draw_quad(s, mode, src->width, src->height, out_w, out_h);
+    s->gl.Disable(GL_SCISSOR_TEST);
+    s->gl.Viewport(0, 0, s->max_viewport[0], s->max_viewport[1]);
+    s->gl.ClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+    s->gl.Clear(GL_COLOR_BUFFER_BIT);
+    s->gl.Viewport(vp_x, vp_y, vp_w, vp_h);
+    return present_draw_quad(s, mode, src->width, src->height, vp_w, vp_h);
 }

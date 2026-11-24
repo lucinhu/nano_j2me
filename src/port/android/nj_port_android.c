@@ -41,6 +41,7 @@
 
 #include <string.h>
 #include <stdlib.h>
+#include "nj2me/nj_gfx.h"
 #include <stdio.h>
 
 #if defined(__ANDROID__)
@@ -294,6 +295,14 @@ typedef struct android_state {
 #if NJ_ANDROID_GLES2 && !NJ_ANDROID_LEGACY
     nj_android_gles2 gles2;   /* stable callback userdata; EGL belongs to run thread */
     int gles2_bound;
+    /* Experimental GL window presentation (debug.nj2me.glpresent): render the
+     * CPU framebuffer through the presentation shaders into the SurfaceView
+     * window instead of blitting it with ANativeWindow_lock.  Default off;
+     * every failure falls through to the software path in display_present(). */
+    int gl_present;
+    int gl_present_mode;   /* 0 nearest, 2 scanline, 3 LCD, 4 CRT */
+    int gl_present_scale;  /* integer picture scale cap (1..4) */
+    int gl_present_logged; /* one-shot diagnostic for the GL present path */
 #endif
 #if !NJ_ANDROID_LEGACY
     ANativeWindow *window;
@@ -1470,6 +1479,118 @@ static void android_rewind_configure(android_state *s, int interval_frames,
                         s->rewind_interval, s->rewind_slots);
 }
 
+
+#if !NJ_ANDROID_LEGACY
+/*
+ * Experimental GL presentation: upload the logical screen through the
+ * presentation shaders and present it into the SurfaceView window with the
+ * same integer-fit letterbox the software path uses.  Runs on the frame
+ * thread inside display_present(); returns 0 (caller falls back to
+ * ANativeWindow_lock) when the path is disabled or anything is unsupported.
+ */
+static int android_gl_present_frame(android_state *s)
+{
+    nj_surface surf;
+    int sx0 = 0, sy0 = 0, sw, sh, dw, dh, ox, oy, bpp, bw, bh;
+    float scale;
+
+    if (!s->gl_present) return 0;
+    if (!s->gles2_bound || !s->window || !s->shadow) {
+        if (!s->gl_present_logged) { s->gl_present_logged = 1; __android_log_print(ANDROID_LOG_INFO, LOG_TAG,
+            "present: GL path waiting (bound=%d window=%p shadow=%p)", s->gles2_bound,
+            (void *)s->window, (void *)s->shadow); }
+        return 0;
+    }
+    if (s->width <= 0 || s->height <= 0) return 0;
+    if (!nj_android_gles2_set_window(&s->gles2, s->window)) {
+        if (!s->gl_present_logged) { s->gl_present_logged = 1; __android_log_print(ANDROID_LOG_INFO, LOG_TAG,
+            "present: GL path has no window surface (window_ok=%d)", s->gles2.window_ok); }
+        return 0;
+    }
+    /* The EGL drawable size is the authority for the letterbox, same as the
+     * ANativeWindow buffer size on the software path. */
+    bw = s->gles2.surface_w;
+    bh = s->gles2.surface_h;
+    if (bw <= 0 || bh <= 0) { bw = s->win_w; bh = s->win_h; }
+    if (bw <= 0 || bh <= 0) return 0;
+
+    sw = s->width;
+    sh = s->height;
+    if (s->view_mode != NJ_VIEW_INT && s->view_mode != NJ_VIEW_AUTO &&
+        s->view_mode != NJ_VIEW_FILL) {
+        if (!s->gl_present_logged) { s->gl_present_logged = 1; __android_log_print(ANDROID_LOG_INFO, LOG_TAG,
+            "present: GL path off for view mode=%d", s->view_mode); }
+        return 0;
+    }
+    if (s->view_mode == NJ_VIEW_AUTO && s->det_w >= 16 && s->det_h >= 16 &&
+        (long)s->det_w * s->det_h < (long)s->width * (long)s->height / 10L * 9L) {
+        sx0 = s->det_x;
+        sy0 = s->det_y;
+        sw = s->det_w;
+        sh = s->det_h;
+    }
+    if (sw <= 0 || sh <= 0 || sx0 < 0 || sy0 < 0 ||
+        sx0 + sw > s->width || sy0 + sh > s->height) return 0;
+
+    if (s->view_mode == NJ_VIEW_FILL) {
+        float fx = (float)bw / (float)sw;
+        float fy = (float)bh / (float)sh;
+        scale = (fx < fy) ? fx : fy;
+        if (!(scale > 0.0f)) scale = 1.0f;
+    } else {
+        int fit = 1;
+        int fx = bw / sw;
+        int fy = bh / sh;
+        fit = (fx < fy) ? fx : fy;
+        if (fit < 1) fit = 1;
+        if (s->gl_present_scale > 1 && s->gl_present_scale < fit) fit = s->gl_present_scale;
+        scale = (float)fit;
+    }
+    if (s->view_zoom > 0.05f && (s->view_zoom > 1.0001f || s->view_zoom < 0.9999f)) {
+        scale *= s->view_zoom;
+    }
+    dw = (int)((float)sw * scale);
+    dh = (int)((float)sh * scale);
+    if (dw < 1) dw = 1;
+    if (dh < 1) dh = 1;
+    ox = (bw - dw) / 2 + (int)s->view_dx;
+    oy = (bh - dh) / 2 + (int)s->view_dy;
+    if (dw <= bw) {
+        if (ox < 0) ox = 0;
+        if (ox > bw - dw) ox = bw - dw;
+    } else if (ox > 0) {
+        ox = 0;
+    } else if (ox < bw - dw) {
+        ox = bw - dw;
+    }
+    if (dh <= bh) {
+        if (oy < 0) oy = 0;
+        if (oy > bh - dh) oy = bh - dh;
+    } else if (oy > 0) {
+        oy = 0;
+    } else if (oy < bh - dh) {
+        oy = bh - dh;
+    }
+
+    bpp = (s->width > 0) ? (s->stride / s->width) : 0;
+    if (bpp <= 0) return 0;
+    memset(&surf, 0, sizeof surf);
+    surf.pixels = s->shadow + (size_t)sy0 * (size_t)s->stride + (size_t)sx0 * (size_t)bpp;
+    surf.width = sw;
+    surf.height = sh;
+    surf.stride = s->stride;
+    surf.format = s->format;
+    surf.bpp = bpp;
+    {
+        int ok = nj_android_gles2_present(&s->gles2, &surf, s->gl_present_mode,
+                                          ox, oy, dw, dh);
+        if (!ok && !s->gl_present_logged) { s->gl_present_logged = 1; __android_log_print(ANDROID_LOG_INFO, LOG_TAG,
+            "present: GL path present declined (vp=%d,%d %dx%d)", ox, oy, dw, dh); }
+        return ok;
+    }
+}
+#endif
+
 static void android_display_present(void *ud, int x, int y, int w, int h)
 {
     android_state *s = AS(ud);
@@ -1515,6 +1636,10 @@ static void android_display_present(void *ud, int x, int y, int w, int h)
         if (win) {
             ANativeWindow_release(win);
         }
+        return;
+    }
+    if (android_gl_present_frame(s)) {
+        ANativeWindow_release(win);
         return;
     }
     if (ANativeWindow_lock(win, &buf, NULL) != 0) {
@@ -5443,6 +5568,28 @@ nj_status nj_port_android_ex(nj_port *out, int screen_w, int screen_h)
 #endif
     out->shutdown = android_shutdown;
     out->fps_cap = android_fps_cap();
+    {
+        char prop[PROP_VALUE_MAX];
+        prop[0] = '\0';
+        (void)__system_property_get("debug.nj2me.glpresent", prop);
+        s->gl_present = (prop[0] == '1');
+        if (s->gl_present) {
+            s->gl_present_mode = 0;
+            s->gl_present_scale = 0;    /* 0 = use the software fit */
+            prop[0] = '\0';
+            (void)__system_property_get("debug.nj2me.glpresent.mode", prop);
+            if (prop[0] != '\0') s->gl_present_mode = atoi(prop);
+            if (s->gl_present_mode < 0 || s->gl_present_mode > 4) s->gl_present_mode = 0;
+            prop[0] = '\0';
+            (void)__system_property_get("debug.nj2me.glpresent.scale", prop);
+            if (prop[0] != '\0') s->gl_present_scale = atoi(prop);
+            if (s->gl_present_scale < 0) s->gl_present_scale = 0;
+            if (s->gl_present_scale > 4) s->gl_present_scale = 4;
+            __android_log_print(ANDROID_LOG_INFO, LOG_TAG,
+                                "present: GL window path mode=%d scale=%d (debug.nj2me.glpresent)",
+                                s->gl_present_mode, s->gl_present_scale);
+        }
+    }
     {
         char prop[PROP_VALUE_MAX];
         prop[0] = '\0';

@@ -52,6 +52,16 @@ typedef struct nj_android_gles2 {
     EGLDisplay display;
     EGLContext context;
     EGLSurface pbuffer;
+    /* Optional window presentation: a window surface created from the
+     * SurfaceView's ANativeWindow using the same config/context as the
+     * pbuffer.  Default off; the port enables it only for the experimental
+     * GL presentation path and falls back to software on any failure. */
+    EGLSurface window;
+    EGLConfig config;
+    void *window_ptr;              /* borrowed ANativeWindow, never owned */
+    int window_ok;                 /* the config accepted EGL_WINDOW_BIT */
+    int surface_w;                 /* last eglQuerySurface window width */
+    int surface_h;                 /* last eglQuerySurface window height */
     nj_gles2 *backend;
     unsigned int (*reset_status)(void);
     nj_gles2_stats stats;
@@ -79,5 +89,14 @@ void nj_android_gles2_stop(nj_android_gles2 *state);
 /* No EGL/GL calls. Only after the VM/run thread is finished; returns 0 instead
  * of destroying reachable storage if the owner failed to stop its resources. */
 int nj_android_gles2_dispose(nj_android_gles2 *state);
+/* Run-thread only: attach/detach the SurfaceView window used by the
+ * experimental GL presentation path.  Returns nonzero when a window surface
+ * is ready.  A NULL window detaches. */
+int nj_android_gles2_set_window(nj_android_gles2 *state, void *native_window);
+/* Run-thread only: present one CPU framebuffer through the on-screen
+ * presentation shader (mode 0-4) inside the given viewport.  Fails (0) when
+ * the window/backend is unavailable so the caller can use software. */
+int nj_android_gles2_present(nj_android_gles2 *state, const nj_surface *src,
+                             int mode, int vp_x, int vp_y, int vp_w, int vp_h);
 #endif
 #endif

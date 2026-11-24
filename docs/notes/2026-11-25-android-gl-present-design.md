@@ -80,3 +80,21 @@ LCD / CRT / FSR1 呈现效果。约束：
 - `docs/UPSCALING.md` 增加 Android GL 呈现章节，注明实验性与回退行为；
 - 模拟器截图 + 像素差 + logcat 证据提交到 `docs/notes/`；
 - 默认关；CTest 全量保持 211/211（改动只在 Android 端口，不影响其它平台）。
+
+## Round 16 进展：Android 窗口 GL 呈现（实验，默认关闭）
+
+- `src/port/android/nj_android_gles2.{h,c}`：同一 EGL context 增加 window surface（配置优先
+  `EGL_PBUFFER_BIT|EGL_WINDOW_BIT`，不可用时回退 pbuffer 配置），`nj_android_gles2_set_window()` /
+  `nj_android_gles2_present()` 在运行线程创建窗口 surface、`eglQuerySurface` 取得实际绘制尺寸、
+  绘制后 `eglSwapBuffers`，随后把 pbuffer 恢复为 current（M3G GL 路径依赖它）；任何失败返回 0。
+- `src/port/android/nj_port_android.c`：`android_gl_present_frame()` 用与软件呈现完全相同的几何
+  （整数倍/AUTO 检测裁剪/玩家 pan 与钳制、`debug.nj2me.glpresent.scale` 仅作整数上限，0=跟随软件 fit），
+  把逻辑帧缓冲子区域包装成 `nj_surface` 交给 `nj_gles2_present_onscreen()`（nearest/sharp/scanline/
+  LCD/CRT）；FSR1（mode 5）仍需 readback 暂不在窗口路径。开关为系统属性
+  `debug.nj2me.glpresent=1`（默认关闭，失败自动回退软件呈现）。
+- 验证（Medium_Phone_API_36.1，SwiftShader）：logcat 见 `present: GL window path mode=N scale=S`、
+  `gles2: enabled renderer=... (private pbuffer)`，游戏正常渲染无崩溃；同一次运行内 nearest 与 scanline
+  截图对比 **920,563/2,592,000 像素（35.5%）** 变化，证明滤镜经 GL 窗口路径生效。
+- 未完成/已知问题：GL 与软件呈现的“逐像素一致”验证不成立——LoopDemo 是动画，两次运行的动画相位不同，
+  截图对比必然大量差异（实测 48%–68% 随相位波动）；需要静态画面 fixture 才能做 PPM 对比。下一轮：加
+  `tests/staticdemo`（固定画面）+ 同相位截图对比，再决定是否增加用户可见开关；当前保持默认关闭。

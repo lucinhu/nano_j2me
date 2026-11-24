@@ -65,8 +65,11 @@ static int is_current(void *ud)
            s->context != EGL_NO_CONTEXT &&
            eglGetCurrentDisplay() == s->display &&
            eglGetCurrentContext() == s->context &&
-           eglGetCurrentSurface(EGL_DRAW) == s->pbuffer &&
-           eglGetCurrentSurface(EGL_READ) == s->pbuffer;
+           ((eglGetCurrentSurface(EGL_DRAW) == s->pbuffer &&
+             eglGetCurrentSurface(EGL_READ) == s->pbuffer) ||
+            (s->window != EGL_NO_SURFACE &&
+             eglGetCurrentSurface(EGL_DRAW) == s->window &&
+             eglGetCurrentSurface(EGL_READ) == s->window));
 }
 
 static void failed(nj_android_gles2 *s, const char *stage, EGLint error)
@@ -268,6 +271,10 @@ int nj_android_gles2_bind(nj_android_gles2 *s, nj_port *port)
     s->display = EGL_NO_DISPLAY;
     s->context = EGL_NO_CONTEXT;
     s->pbuffer = EGL_NO_SURFACE;
+    s->window = EGL_NO_SURFACE;
+    s->window_ptr = NULL;
+    s->window_ok = 0;
+    s->config = NULL;
     s->mode = -1;
     if (pthread_mutex_init(&s->lock, NULL) != 0) return 0;
     if (pthread_mutex_init(&s->info_lock, NULL) != 0) {
@@ -338,6 +345,11 @@ static void release(nj_android_gles2 *s)
         }
         /* The context was actually destroyed, so CPU-only abandonment is safe. */
         if (backend) { nj_gles2_abandon(backend); backend = NULL; }
+        if (s->window != EGL_NO_SURFACE) {
+            (void)eglDestroySurface(s->display, s->window);
+            s->window = EGL_NO_SURFACE;
+            s->window_ptr = NULL;
+        }
         if (s->pbuffer != EGL_NO_SURFACE) {
             if (!eglDestroySurface(s->display, s->pbuffer)) {
                 failed(s, "eglDestroySurface failed; retaining resources", eglGetError());
@@ -359,6 +371,12 @@ void nj_android_gles2_start_mode(nj_android_gles2 *s, int mode)
 {
     static const EGLint config_attrs[] = {
         EGL_SURFACE_TYPE, EGL_PBUFFER_BIT,
+        EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT,
+        EGL_RED_SIZE, 8, EGL_GREEN_SIZE, 8, EGL_BLUE_SIZE, 8, EGL_ALPHA_SIZE, 8,
+        EGL_NONE
+    };
+    static const EGLint window_config_attrs[] = {
+        EGL_SURFACE_TYPE, EGL_PBUFFER_BIT | EGL_WINDOW_BIT,
         EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT,
         EGL_RED_SIZE, 8, EGL_GREEN_SIZE, 8, EGL_BLUE_SIZE, 8, EGL_ALPHA_SIZE, 8,
         EGL_NONE
@@ -409,10 +427,16 @@ void nj_android_gles2_start_mode(nj_android_gles2 *s, int mode)
         failed(s, "eglBindAPI failed", eglGetError());
         goto fail;
     }
-    if (!eglChooseConfig(s->display, config_attrs, &config, 1, &count) || count < 1) {
+    /* Prefer a config that can also back a window surface; GL presentation is
+     * optional, so a pbuffer-only config still keeps the 3D path working. */
+    s->window_ok = 0;
+    if (eglChooseConfig(s->display, window_config_attrs, &config, 1, &count) && count >= 1) {
+        s->window_ok = 1;
+    } else if (!eglChooseConfig(s->display, config_attrs, &config, 1, &count) || count < 1) {
         failed(s, "no GLES2 pbuffer config", eglGetError());
         goto fail;
     }
+    s->config = config;
     s->pbuffer = eglCreatePbufferSurface(s->display, config, pbuffer_attrs);
     if (s->pbuffer == EGL_NO_SURFACE) {
         failed(s, "eglCreatePbufferSurface failed", eglGetError());
@@ -495,4 +519,84 @@ int nj_android_gles2_dispose(nj_android_gles2 *s)
     pthread_mutex_destroy(&s->lock);
     return 1;
 }
+int nj_android_gles2_set_window(nj_android_gles2 *s, void *native_window)
+{
+    int ok = 0;
+    if (!s) return 0;
+    pthread_mutex_lock(&s->lock);
+    if (owning_thread(s) && !s->failed && s->initialized &&
+        s->display != EGL_NO_DISPLAY) {
+        if (!native_window) {
+            if (s->window != EGL_NO_SURFACE) {
+                (void)eglDestroySurface(s->display, s->window);
+                s->window = EGL_NO_SURFACE;
+            }
+            s->window_ptr = NULL;
+            ok = 1;
+        } else if (s->window_ptr == native_window && s->window_ok &&
+                   s->window != EGL_NO_SURFACE) {
+            ok = 1;
+        } else {
+            if (s->window != EGL_NO_SURFACE) {
+                (void)eglDestroySurface(s->display, s->window);
+                s->window = EGL_NO_SURFACE;
+            }
+            s->window_ptr = native_window;
+            if (s->window_ok && s->config != NULL) {
+                s->window = eglCreateWindowSurface(
+                    s->display, s->config, (EGLNativeWindowType)native_window, NULL);
+                if (s->window != EGL_NO_SURFACE) {
+                    EGLint sw = 0, sh = 0;
+                    if (eglQuerySurface(s->display, s->window, EGL_WIDTH, &sw) &&
+                        eglQuerySurface(s->display, s->window, EGL_HEIGHT, &sh) &&
+                        sw > 0 && sh > 0) {
+                        s->surface_w = (int)sw;
+                        s->surface_h = (int)sh;
+                    }
+                }
+                if (s->window == EGL_NO_SURFACE) {
+                    __android_log_print(ANDROID_LOG_WARN, GLES2_TAG,
+                                        "gles2: no window surface (EGL 0x%x); software presentation",
+                                        (unsigned int)eglGetError());
+                } else {
+                    ok = 1;
+                }
+            }
+        }
+    }
+    pthread_mutex_unlock(&s->lock);
+    return ok;
+}
+
+int nj_android_gles2_present(nj_android_gles2 *s, const nj_surface *src,
+                             int mode, int vp_x, int vp_y, int vp_w, int vp_h)
+{
+    int ok = 0;
+    if (!s || src == NULL) return 0;
+    pthread_mutex_lock(&s->lock);
+    if (owning_thread(s) && s->backend != NULL && s->window != EGL_NO_SURFACE &&
+        !s->failed && s->context != EGL_NO_CONTEXT) {
+        if (!eglMakeCurrent(s->display, s->window, s->window, s->context)) {
+            failed(s, "eglMakeCurrent(window) failed", eglGetError());
+        } else {
+            s->current = 0;
+            if (usable(s)) {
+                ok = nj_gles2_present_onscreen(s->backend, src, mode,
+                                               vp_x, vp_y, vp_w, vp_h);
+            }
+            (void)eglSwapBuffers(s->display, s->window);
+            /* The 3D accelerator expects the pbuffer current between frames. */
+            if (!eglMakeCurrent(s->display, s->pbuffer, s->pbuffer, s->context)) {
+                failed(s, "eglMakeCurrent(pbuffer restore) failed", eglGetError());
+            } else {
+                s->current = 1;
+                s->version_ok = 0;
+            }
+        }
+        publish(s);
+    }
+    pthread_mutex_unlock(&s->lock);
+    return ok;
+}
+
 #endif
