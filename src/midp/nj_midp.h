@@ -480,7 +480,25 @@ nj_status nj_pim_late_init(nj_vm *vm);
  */
 nj_status nj_m3g_late_init(nj_vm *vm);
 /* Commit deferred Graphics3D triangles before the target can be observed. */
+/* Why a queued triangle journal is being drained; diagnostic reasons for
+ * NJ_M3G_FLUSH_DBG (see nj_lib_m3g.c).  Only the flush path cares. */
+enum nj_m3g_flush_reason {
+    NJ_M3G_FLUSH_TARGET = 0,
+    NJ_M3G_FLUSH_LIMIT,
+    NJ_M3G_FLUSH_TEX,
+    NJ_M3G_FLUSH_ORDER,
+    NJ_M3G_FLUSH_SOFTWARE,
+    NJ_M3G_FLUSH_OBSERVER,
+    NJ_M3G_FLUSH_BIND,
+    NJ_M3G_FLUSH_CLEAR,
+    NJ_M3G_FLUSH_PRESENT,
+    NJ_M3G_FLUSH_GFX,
+    NJ_M3G_FLUSH_READBACK,
+    NJ_M3G_FLUSH_SURF,
+    NJ_M3G_FLUSH_REASONS
+};
 void nj_m3g_flush(nj_vm *vm);
+void nj_m3g_flush_why(nj_vm *vm, int why);
 int nj_m3g_pending(nj_vm *vm);
 void nj_m3g_pump(nj_vm *vm);
 

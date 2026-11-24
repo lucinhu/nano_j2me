@@ -650,7 +650,7 @@ void nj_midp_present(nj_vm *vm)
         return;
     }
     /* Publish every deferred 3D batch before the frame is read. */
-    nj_m3g_flush(vm);
+    nj_m3g_flush_why(vm, NJ_M3G_FLUSH_PRESENT);
     /* Safety net for frames the runner did not paint itself: the Alert
      * timeout still fires at the frame boundary. */
     alert_frame_check(vm);
@@ -784,7 +784,7 @@ static int gfx_load(nj_vm *vm, nj_ref g_obj, nj_gfx *g, nj_surface *surf_scratch
 #ifdef NJ_GFX_2D_STATS
     nj_gfx_2d_stats_start_interval(nj_m3g_pending(vm));
 #endif
-    nj_m3g_flush(vm);
+    nj_m3g_flush_why(vm, NJ_M3G_FLUSH_GFX);
     target = rget_hot(vm, g_obj, NJ_HF_G_TGT, G_CLS, F_G_TGT, D_IMAGE);
     s = nj_midp_surface(vm, target, surf_scratch);
     if (!s) {
@@ -2743,7 +2743,7 @@ NJFN(img_getRGB)
     if (w < 0) { w = 0; }
     if (h < 0) { h = 0; }
     /* Queued Graphics3D draws must land before Java observes the pixels. */
-    nj_m3g_flush(vm);
+    nj_m3g_flush_why(vm, NJ_M3G_FLUSH_READBACK);
     px = nj_midp_image_pixels(vm, self);
     if (!px) {
         return nj_throw(vm, "java/lang/IllegalStateException", "image has no pixels");
@@ -11429,7 +11429,7 @@ static nj_status dg_get_pixels(nj_vm *vm, nj_value *args, nj_value *ret, int ele
 
 NJFN(dg_getPixels)
 {
-    nj_m3g_flush(vm);   /* read the frame only after queued 3D work commits */
+    nj_m3g_flush_why(vm, NJ_M3G_FLUSH_READBACK);   /* read only after queued 3D work commits */
     return dg_get_pixels(vm, args, ret, 2);
 }
 

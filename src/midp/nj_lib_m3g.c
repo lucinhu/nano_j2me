@@ -4044,7 +4044,7 @@ NJFN(m3g_bindTarget)
     nj_ref target = NJ_ARG_REF(args, 0);
     int w = 0, h = 0;
 
-    nj_m3g_flush(vm);   /* queued draws belong to the old target */
+    nj_m3g_flush_why(vm, NJ_M3G_FLUSH_BIND);   /* queued draws belong to the old target */
     nj_rput(vm, self,
             nj_field_lookup(vm, NJ_C_G3D, "_nj_target", "Ljava/lang/Object;", 0),
             target);
@@ -4217,7 +4217,7 @@ NJFN(m3g_clear)
     nj_surface scratch, *surface;
     int x0, y0, x1, y1;
     nj_s4 vx, vy, vw, vh;
-    nj_m3g_flush(vm);   /* queued draws must land before the clear */
+    nj_m3g_flush_why(vm, NJ_M3G_FLUSH_CLEAR);   /* queued draws must land before the clear */
     target = nj_rget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_target", "Ljava/lang/Object;"));
     if (!target) {
         NJ_THROW(vm, "java/lang/IllegalStateException", "clear requires a rendering target");
@@ -15229,7 +15229,7 @@ static int m3g_journal_reserve(nj_vm *vm, m3g_journal *j, nj_u4 entries,
     return 1;
 }
 
-static void m3g_journal_flush(nj_vm *vm);
+static void m3g_journal_flush(nj_vm *vm, int why);
 static void m3g_journal_commit(nj_vm *vm);
 static void m3g_journal_pump(nj_vm *vm);
 static int m3g_journal_append(m3g_jr *r, const nj_gfx_triangles *p);
@@ -15553,8 +15553,62 @@ static void m3g_journal_commit(nj_vm *vm)
     m3g_journal_destroy(vm);
 }
 
-static void m3g_journal_flush(nj_vm *vm)
+static struct m3g_flush_dbg {
+    int inited, on;
+    long calls, nonempty;
+    long reason[NJ_M3G_FLUSH_REASONS];
+    long reason_hits[NJ_M3G_FLUSH_REASONS];
+} m3g_flush_dbg_state;
+
+static void m3g_flush_dbg_dump(void)
 {
+    static const char *names[NJ_M3G_FLUSH_REASONS] = {
+        "target", "limit", "tex", "order", "software", "observer",
+        "bind", "clear", "present", "gfx", "readback", "surf"
+    };
+    int i;
+    fprintf(stderr, "[m3gflush] calls=%ld nonempty=%ld",
+            m3g_flush_dbg_state.calls, m3g_flush_dbg_state.nonempty);
+    for (i = 0; i < NJ_M3G_FLUSH_REASONS; ++i) {
+        if (m3g_flush_dbg_state.reason[i]) {
+            fprintf(stderr, " %s=%ld", names[i], m3g_flush_dbg_state.reason[i]);
+        }
+    }
+    fprintf(stderr, "\n[m3gflush] hits=...");
+    for (i = 0; i < NJ_M3G_FLUSH_REASONS; ++i) {
+        if (m3g_flush_dbg_state.reason_hits[i]) {
+            fprintf(stderr, " %s=%ld", names[i], m3g_flush_dbg_state.reason_hits[i]);
+        }
+    }
+    fprintf(stderr, "\n");
+}
+
+static void m3g_flush_dbg_count(int why, int nonempty)
+{
+    if (!m3g_flush_dbg_state.inited) {
+        m3g_flush_dbg_state.inited = 1;
+        m3g_flush_dbg_state.on = getenv("NJ_M3G_FLUSH_DBG") != NULL;
+        if (m3g_flush_dbg_state.on) {
+            atexit(m3g_flush_dbg_dump);
+        }
+    }
+    if (!m3g_flush_dbg_state.on) {
+        return;
+    }
+    if (why < 0 || why >= NJ_M3G_FLUSH_REASONS) {
+        why = NJ_M3G_FLUSH_OBSERVER;
+    }
+    m3g_flush_dbg_state.calls++;
+    m3g_flush_dbg_state.reason[why]++;
+    if (nonempty) {
+        m3g_flush_dbg_state.nonempty++;
+        m3g_flush_dbg_state.reason_hits[why]++;
+    }
+}
+
+static void m3g_journal_flush(nj_vm *vm, int why)
+{
+    m3g_flush_dbg_count(why, vm && vm->m3g_journal != NULL && ((m3g_journal *)vm->m3g_journal)->count > 0);
     if (!vm || !vm->m3g_journal) return;
     m3g_journal_commit(vm);
 }
@@ -15585,13 +15639,13 @@ static int m3g_journal_append(m3g_jr *r, const nj_gfx_triangles *p)
                      j->surface_copy.stride != p->surface->stride ||
                      j->depth != p->depth ||
                      j->depth_stride != p->depth_stride)) {
-        m3g_journal_flush(vm);
+        m3g_journal_flush(vm, NJ_M3G_FLUSH_TARGET);
         return m3g_journal_append(r, p);
     }
     if (j->count >= NJ_GFX_TRIANGLES_LIST_MAX_PACKETS ||
         p->count > NJ_GFX_TRIANGLES_LIST_MAX_TOTAL - j->total ||
         (j->total && j->total + p->count > M3G_JOURNAL_BATCH_MAX)) {
-        m3g_journal_flush(vm);
+        m3g_journal_flush(vm, NJ_M3G_FLUSH_LIMIT);
         return m3g_journal_append(r, p);
     }
     /* Count the textures this packet needs snapshotted: one copy per distinct
@@ -15620,7 +15674,7 @@ static int m3g_journal_append(m3g_jr *r, const nj_gfx_triangles *p)
         ++new_tex;
     }
     if (need > M3G_JOURNAL_TEXTURE_MAX - j->pool_used) {
-        m3g_journal_flush(vm);
+        m3g_journal_flush(vm, NJ_M3G_FLUSH_TEX);
         return m3g_journal_append(r, p);
     }
     if (!m3g_journal_reserve(vm, j, j->count + 1u, j->ntextures + new_tex,
@@ -15966,7 +16020,7 @@ static int jr_draw_accel(m3g_jr *r)
                     result = NJ_GFX_ACCEL_DONE;
                 } else {
                     /* Never submit out of order: commit what is queued first. */
-                    if (journaled) m3g_journal_flush(r->vm);
+                    if (journaled) m3g_journal_flush(r->vm, NJ_M3G_FLUSH_ORDER);
                     result = r->vm->port->gfx_triangles(
                         r->vm->port->gfx_triangles_ud, &packet, &submitted);
                 }
@@ -15997,7 +16051,7 @@ static nj_u4 jr_draw(m3g_jr *r)
     if (!jr_draw_accel(r)) {
         /* A journaled frame must stay ordered: commit queued draws before the
          * software path writes the same target for this call. */
-        if (r->vm->m3g_journal) m3g_journal_flush(r->vm);
+        if (r->vm->m3g_journal) m3g_journal_flush(r->vm, NJ_M3G_FLUSH_SOFTWARE);
         jr_draw_walk(r);
     }
 #else
@@ -17523,19 +17577,24 @@ nj_status nj_m3g_late_init(nj_vm *vm)
  * present, binding/releasing a target, clearing, and viewport changes.  The
  * cost is a null check when nothing is queued.
  */
-void nj_m3g_flush(nj_vm *vm)
+void nj_m3g_flush_why(nj_vm *vm, int why)
 {
 #if NJ_ENABLE_M3G && NJ_ENABLE_GFX_ACCEL
 #if NJ_M3G_PROFILE
     double t0 = m3g_now();
-    m3g_journal_flush(vm);
+    m3g_journal_flush(vm, why);
     ++m3g_prof.commits; m3g_prof.commit += m3g_now() - t0;
 #else
-    m3g_journal_flush(vm);
+    m3g_journal_flush(vm, why);
 #endif
 #else
     (void)vm;
 #endif
+}
+
+void nj_m3g_flush(nj_vm *vm)
+{
+    nj_m3g_flush_why(vm, NJ_M3G_FLUSH_OBSERVER);
 }
 
 /* True when a deferred triangle batch is queued for this VM.  Diagnostic

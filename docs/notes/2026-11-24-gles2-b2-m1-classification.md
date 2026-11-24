@@ -129,3 +129,37 @@ gles2 completed triangles=1250191 batches=2888
 
 （注：profiler 计数在进程退出时打印，`commits` 是累计值；时间字段为 profiler
 自身累计，不代表真实开销。）
+
+## 第四次测量：排空的触发源（`NJ_M3G_FLUSH_DBG`）
+
+给 `m3g_journal_flush()` 加了 reason 参数（`enum nj_m3g_flush_reason`，见
+`src/midp/nj_midp.h`），所有调用点标注来源，并用 `NJ_M3G_FLUSH_DBG=1` 在退出时
+打印"调用次数 / 其中真正有批次的次数（hits）"。两个工作负载的结果：
+
+Galaxy on Fire 2（560 帧，GL 活跃）：
+```
+[m3gflush] calls=722328 nonempty=2906 bind=1453 clear=7265 present=560 gfx=713045 readback=5
+[m3gflush] hits=... clear=2906
+```
+
+Doom3（600 帧，纯 3D）：
+```
+[m3gflush] calls=4654 nonempty=966 bind=967 clear=967 present=600 gfx=2120
+[m3gflush] hits=... gfx=966
+```
+
+结论（对 M2 的关键输入）：
+
+* **Galaxy 的全部 2,906 次真实排空都来自 `Graphics3D.clear()` 之前的 flush**
+  （当前实现先提交队列、再清屏，以保持顺序）；2D 观察者（`gfx_load`）调用
+  713k 次但没有一次真正排空。也就是说 M2 要优化的"每帧 5.2 次事务"正是
+  **clear 触发的**，而不是 2D 操作触发的。
+* Doom3 相反：966 次真实排空全部来自 `gfx`（Graphics/像素观察者），clear 一次
+  也没有命中；这符合"纯 3D 标题在渲染后读像素"的模式。
+* M2 的具体形态因此是：**持久 scene FBO 上，把 `nj_m3g_flush`+`glClear` 改成
+  `nj_m3g_pump`（按序把队列画进 FBO）+ `glClear(FBO)`**，不再每次 clear 都
+  读回 CPU；只在 present（以及真正需要读像素的观察者，如 Doom3 的 gfx 路径）
+  处提交并读回一次。
+* clear 次数（Galaxy 7,265 次/560 帧 ≈13 次/帧，其中 40% 有真实批次）说明游戏
+  本身在帧内多次清屏/多 pass 渲染；M2 实现要保证同一帧内多次 clear 的语义
+  （clear 只清背景，之前的 3D 已被画进 FBO 后才清）与现在完全一致。
