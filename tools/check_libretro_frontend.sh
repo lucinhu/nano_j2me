@@ -197,8 +197,11 @@ else
 fi
 
 if [ -f "$FIXTURES/audiodemo.jar" ]; then
-   run_one "audiodemo audio (--audio-required, 60 frames)" \
-      --core "$CORE" --jar "$FIXTURES/audiodemo.jar" --frames 60 \
+   # 30 frames, not 60: this fixture plays its clips and calls
+   # notifyDestroyed(), and once the MIDlet has ended a save request is
+   # correctly refused.  Saving has to happen while it is still running.
+   run_one "audiodemo audio (--audio-required, 30 frames)" \
+      --core "$CORE" --jar "$FIXTURES/audiodemo.jar" --frames 30 \
       --audio-required --save-dir "$WORK/save-audio"
 else
    skip "audiodemo audio: missing $FIXTURES/audiodemo.jar"

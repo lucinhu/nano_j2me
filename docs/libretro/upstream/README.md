@@ -4,7 +4,7 @@ The project author authorized libretro upstream submission on 2026-11-16, and
 the prepared bundles were opened as pull requests from forks:
 
 * `libretro/libretro-super#2204` — `info: add nano_j2me (Mobile - J2ME)`
-  (branch `add-nano_j2me` in `lucinhu/libretro-super`, commit `5496b68f80ee40ee0040a88d514045ef07dc20f5`; rebuilt for 0.5.42 on 2026-11-23)
+  (branch `add-nano_j2me` in `lucinhu/libretro-super`, commit `28a861c77caaab39361831f7eb5fdc846cee9c5b`; rebuilt for 0.5.43 on 2026-11-25)
 * `libretro/docs#1239` — `docs: add nano_j2me (Mobile - J2ME)`
   (branch `add-nano_j2me` in `lucinhu/docs`, commit `3316299`)
 
@@ -41,7 +41,7 @@ nano_j2me_libretro.info  ->  dist/info/nano_j2me_libretro.info
 
 The copy in this directory is byte-identical to
 `src/port/libretro/nano_j2me_libretro.info`
-(SHA-256 `a7daee3147a084320b0fc8273c260ec0dd832f7dacaa5483f27cbc7c25f059a1`, version 0.5.42).
+(SHA-256 `46f0677f0041c8c2c6eacadb74060297ab2838ab2fcea7e1ded355055ab44893`, version 0.5.43).
 Suggested PR title: `Add nano_j2me core information for J2ME MIDlets`.
 The ready-to-post title, patch commands, body text and checklist are in
 [`PR-libretro-super.md`](PR-libretro-super.md).
