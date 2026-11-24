@@ -182,3 +182,19 @@ LCD / CRT / FSR1 呈现效果。约束：
 - 该路径继续默认关闭、自动回退软件呈现；像素级修正在现有验证吞吐下成本高，
   已列为可选后续项（下一步若要继续，优先在 native 里 dump "GL framebuffer readback PPM"
   与 "software shadow PPM" 对照，一次即可区分呈现缩放与绘制采样两类原因）。
+
+## Round 27：GL 帧缓冲 dump 与回读限制
+
+- 新增一次性调试钩子：`debug.nj2me.gldump=<path>` 时，GL 呈现路径在首帧绘制后
+  （swap 之前）用 `nj_gles2_present_readback()` 回读 window surface 并写成 PPM。
+- 模拟器实测：日志按预期打印 `present: GL first frame buf=1080x2400 surface=1080x2400
+  vp=60,88 960x1280 view=0 zoom=1.000` 与 `present: dumped 1080x2400 framebuffer -> ...`，
+  但**回读图像全黑（0 / 2,592,000 非黑像素）**。已在 bind framebuffer 0 后重试，仍是全黑；
+  SwiftShader + `eglSwapBuffers` 前的 window surface 回读不可靠，不能作为对比依据。
+- 另一个实际教训：APK 产物名是 `build/android/nj2me.apk`（不是 `njme.apk`），此前
+  `adb install` 失败被 `| tail -1` 吞掉，`dumpsys package` 的 `lastUpdateTime` 是判断
+  设备上是否真的换了包的可靠方法。
+- 后续判定路线（按成本从低到高）：(1) 把同一段 on-screen 绘制重定向到临时 FBO 再回读，
+  用于确认采样是否与 CPU 期望一致（不依赖 window 回读）；(2) 若采样一致，则差异在
+  EGL swap 后被系统合成环节引入，改为在 SurfaceView 尺寸/密度上排查；(3) 该路径继续
+  默认关闭、失败自动回落软件呈现。

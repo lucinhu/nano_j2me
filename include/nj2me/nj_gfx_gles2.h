@@ -89,6 +89,9 @@ int nj_gles2_frame_active(const void *ud);
 #define NJ_GL_PRESENT_MODES 6
 int nj_gles2_present(void *ud, const nj_surface *src, int mode, int out_w, int out_h,
                      nj_u1 *out_rgba);
+/* Debug aid: read the currently bound window framebuffer back into out_rgba
+ * (w*h RGBA8888, bottom-up GL row order). Returns 1 on success, 0 on failure. */
+int nj_gles2_present_readback(void *ud, int w, int h, nj_u1 *out_rgba);
 
 /* Render the presentation shader into the current draw framebuffer (0),
  * inside the given viewport, clearing the rest of the drawable to black.

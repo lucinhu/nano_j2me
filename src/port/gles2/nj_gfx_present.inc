@@ -618,6 +618,18 @@ static int present_draw_quad(nj_gles2 *s, int mode, int src_w, int src_h,
  * port of the on-screen FSR chain is a separate step.  Returns 0 (caller
  * falls back to software presentation) for unsupported modes.
  */
+int nj_gles2_present_readback(void *ud, int w, int h, nj_u1 *out_rgba)
+{
+    nj_gles2 *s = (nj_gles2 *)ud;
+    if (s == NULL || out_rgba == NULL || w <= 0 || h <= 0) return 0;
+    if (!current(s)) return 0;
+    if (!dimensions(s, w, h)) return 0;
+    s->gl.BindFramebuffer(GL_FRAMEBUFFER, 0);
+    s->gl.ReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, out_rgba);
+    (void)clean_errors(s);
+    return 1;
+}
+
 int nj_gles2_present_onscreen(void *ud, const nj_surface *src, int mode,
                               int vp_x, int vp_y, int vp_w, int vp_h)
 {

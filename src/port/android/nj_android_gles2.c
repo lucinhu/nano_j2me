@@ -6,6 +6,8 @@
 #include <GLES2/gl2.h>
 #include <android/log.h>
 #include <sys/system_properties.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 /* 1: install the optional 2D fill/blit GPU callbacks (see the comment at the
@@ -588,6 +590,44 @@ int nj_android_gles2_present(nj_android_gles2 *s, const nj_surface *src,
                 if (gl_y < 0) gl_y = 0;
                 ok = nj_gles2_present_onscreen(s->backend, src, mode,
                                                vp_x, gl_y, vp_w, vp_h);
+            }
+            if (ok && !s->dump_done) {
+                /* One-shot debug dump of the presented window framebuffer
+                 * (GL rows bottom-up -> PPM rows top-down). */
+                char prop[PROP_VALUE_MAX];
+                prop[0] = '\0';
+                (void)__system_property_get("debug.nj2me.gldump", prop);
+                if (prop[0] != '\0' && s->surface_w > 0 && s->surface_h > 0) {
+                    size_t bytes = (size_t)s->surface_w * (size_t)s->surface_h * 4u;
+                    unsigned char *px = (unsigned char *)malloc(bytes);
+                    if (px != NULL) {
+                        int y;
+                        FILE *fp;
+                        (void)nj_gles2_present_readback(s->backend, s->surface_w,
+                                                        s->surface_h, px);
+                        fp = fopen(prop, "wb");
+                        if (fp != NULL) {
+                            fprintf(fp, "P6\n%d %d\n255\n", s->surface_w, s->surface_h);
+                            for (y = s->surface_h - 1; y >= 0; --y) {
+                                unsigned char *row = px + (size_t)y * (size_t)s->surface_w * 4u;
+                                int x;
+                                for (x = 0; x < s->surface_w; ++x) {
+                                    unsigned char rgb[3];
+                                    rgb[0] = row[x * 4 + 0];
+                                    rgb[1] = row[x * 4 + 1];
+                                    rgb[2] = row[x * 4 + 2];
+                                    fwrite(rgb, 1, 3, fp);
+                                }
+                            }
+                            fclose(fp);
+                            __android_log_print(ANDROID_LOG_INFO, GLES2_TAG,
+                                                "present: dumped %dx%d framebuffer -> %s",
+                                                s->surface_w, s->surface_h, prop);
+                        }
+                        free(px);
+                        s->dump_done = 1;
+                    }
+                }
             }
             (void)eglSwapBuffers(s->display, s->window);
             /* The 3D accelerator expects the pbuffer current between frames. */

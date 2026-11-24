@@ -65,6 +65,10 @@ typedef struct nj_android_gles2 {
     nj_gles2 *backend;
     unsigned int (*reset_status)(void);
     nj_gles2_stats stats;
+    /* One-shot presentation debug dump: when debug.nj2me.gldump names a path
+     * the first presented on-screen frame is read back and written as a PPM. */
+    char dump_path[256];
+    int dump_done;
 } nj_android_gles2;
 
 /* Construction only: initializes stable wrappers, without querying properties
