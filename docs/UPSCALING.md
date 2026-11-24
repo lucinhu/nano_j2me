@@ -11,9 +11,31 @@ J2ME 画面的原生分辨率很小（常见 240×320、176×208、320×240）�
   `Aspect Ratio` 选 Core Provided。
 * 打开 `Settings > Video > Shader`，载入 shader 预设。FSR 1.0（EASU + RCAS）
   在官方 shader 包里：`shaders_slang/fsr/fsr.slangp`（需要从
-  `libretro/slang-shaders` 安装/更新 shader 包）。
-* 像素风游戏更推荐整数倍 nearest 或 `sharp-bilinear`；3D 类（M3G）游戏用
-  FSR 观感更平滑。
+  `libretro/slang-shaders` 安装/更新 shader 包）。像素风游戏更推荐整数倍
+  nearest 或 `sharp-bilinear`；3D 类（M3G）游戏用 FSR 观感更平滑。
+
+### 推荐预设（按游戏类型选一个，不需要改内核）
+
+| 游戏类型 | 推荐预设（`shaders_slang/` 下） | 说明 |
+| --- | --- | --- |
+| 2D 像素风 | `sharp-bilinear-simple.slangp` | 轻度平滑但保留像素块，性能开销最小 |
+| 2D 像素风 + 整数倍 | `nearest/nearest.slangp`（开 Integer Scale） | 完全无插值，适合 240×320 的整数倍放大 |
+| 2D + CRT 观感 | `crt/crt-geom.slangp` 或 `crt/shaders/crt-royale.slangp` | 扫描线/荫罩；royale 性能要求高 |
+| LCD 掌机观感 | `handheld/lcd-grid-v2.slangp` | 模拟 LCD 网格 |
+| M3G 3D / 全 3D 标题 | `fsr/fsr.slangp`（EASU+RCAS） | 3D 边缘平滑、字体不糊；性能可接受 |
+| 混合 2D/3D | `fsr/fsr.slangp` 或 `sharpen/sharpen-bilinear.slangp` | 兼顾文字与 3D 边缘 |
+
+使用要点：
+
+* FSR / sharp-bilinear 建议关闭 Integer Scale 并让窗口/全屏自由缩放；
+  nearest 建议开启 Integer Scale，避免非整数倍采样的不均匀像素。
+* `Aspect Ratio` 用 **Core Provided**（内核按游戏原生的 240×320 等比例输出，
+  不做拉伸）；窗口比例不合适时由 shader 的缩放阶段处理。
+* 画质与性能只取决于前端 shader；内核的存档、截图、帧转储仍然是原始
+  分辨率，不受影响。没有 shader 支持的前端（或用命令行 CLI 时）不启用
+  这些预设，行为与现在完全一致。
+* RetroArch 中可用 `Settings > Video > Shader > Apply Shader Preset` 保存为
+  每个内核/游戏的自定义预设；切换游戏时自动生效。
 
 这条路不需要内核改动，也不影响任何兼容性/存档行为。
 
