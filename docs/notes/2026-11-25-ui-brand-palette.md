@@ -1,0 +1,40 @@
+# UI 统一：品牌配色落地（2026-11-25，round 13）
+
+## 背景
+
+Android 启动器/游戏面板原本使用 Material 3 基线配色（浅色为淡紫，深色为紫调），
+Android 12+ 还会取壁纸动态色；网页版用旧的绿色强调色（#3DDC97），SDL2 桌面启动器
+用另一套蓝灰高亮。三个平台和 App 图标（深藏青底 + 白 D-pad + 蓝按钮 #2F6FED）互不
+一致。
+
+## 改动
+
+- **Android**（`src/port/android/java/com/lucinhu/nj2me/Md3.java`）
+  - 浅色与深色两套基线角色改为品牌蓝派生：
+    浅色 `primaryContainer #2F5FA8`（FAB）、`surface #F7F9FF`、
+    `surfaceContainer #EBEFF8`；深色 `primary #AFC6FF`、
+    `primaryContainer #1B4B96`、`surface #10131A`、`surfaceContainer #1B1E27`。
+  - 关闭 Material You 动态取色（`dynamic = false`，保留代码供将来 opt-in）：
+    壁纸色会让每台设备外观不同，与网页/SDL2/图标无法统一。
+- **网页**（`web/css/app.css`）：`--accent #6F9BFF`、`--accent-strong #4C7BFF`、
+  `--accent-software rgba(...)`，深色表面改为与 Android 深色一致的藏青层次
+  （`--surface #11141B` … `--border #242A38`）。
+- **SDL2 启动器**（`src/client/nj_client_ui.c`）：背景/分隔线/选中行改为同一藏青层次，
+  `UI_COL_SEL #2F5FA8`、`UI_COL_BG #0F1219`、`UI_COL_FOLDER #4C7BFF`。
+
+## 验证
+
+Android 模拟器（`Medium_Phone_API_36.1`，x86_64 APK）截图逐像素取样：
+
+| 位置 | 改动前 | 改动后 |
+|---|---|---|
+| 浅色 FAB | `(218, 226, 255)` 淡紫 | `(47, 95, 168)` 品牌蓝 |
+| 浅色标题区背景 | `(254, 251, 255)` | `(247, 249, 255)` 蓝调白 |
+| 深色 FAB | `(58, 70, 104)` 灰蓝（动态色） | `(27, 75, 150)` 品牌蓝 |
+| 深色背景 | `(26, 27, 32)` | `(16, 19, 26)` 藏青 |
+
+截图保存在 `/tmp/r13-shots/`：`before-library.png`、`after-light2.png`、
+`before-dark.png`、`after-dark2.png`、`before-panel.png`、`after-panel.png`。
+
+构建：`tools/build_android_apk.sh --abi x86_64 --gles2` rc=0；
+SDL2 桌面端 `cmake --build /tmp/r5-gles2 -j10` rc=0；网页仅 CSS 变量改动，无 JS/资源变化。

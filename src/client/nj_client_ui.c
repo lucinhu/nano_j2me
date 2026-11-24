@@ -75,13 +75,13 @@
 /* ------------------------------------------------------------------ */
 /* Palette (ARGB8888, matching the spec in the launcher brief)         */
 /* ------------------------------------------------------------------ */
-#define UI_COL_BG         0xFF191C22u
-#define UI_COL_CHROME     0xFF232733u
-#define UI_COL_LINE       0xFF39404Fu
+#define UI_COL_BG         0xFF0F1219u
+#define UI_COL_CHROME     0xFF171A22u
+#define UI_COL_LINE       0xFF2B3140u
 #define UI_COL_TITLE      0xFFF2F5FAu
 #define UI_COL_DIM_TEXT   0xFF8A94A6u
-#define UI_COL_SEL        0xFF2E6EA6u
-#define UI_COL_HOVER      0xFF262C38u
+#define UI_COL_SEL        0xFF2F5FA8u
+#define UI_COL_HOVER      0xFF20242Eu
 #define UI_COL_ZEBRA_A    0xFF1E222Bu
 #define UI_COL_ZEBRA_B    0xFF20242Du
 #define UI_COL_ICON_BG    0xFF2B3342u
@@ -95,7 +95,7 @@
 #define UI_COL_BTN_TEXT   0xFFE7ECF4u
 #define UI_COL_PATH_BAR   0xFF20242Du
 #define UI_COL_PATH_TEXT  0xFFC7D0DCu
-#define UI_COL_FOLDER     0xFF4A6FA5u
+#define UI_COL_FOLDER     0xFF4C7BFFu
 #define UI_COL_PANEL      0xFF252B36u
 #define UI_COL_PANEL_EDGE 0xFF3C4555u
 #define UI_COL_MUTED      0xFF6F7A8Au

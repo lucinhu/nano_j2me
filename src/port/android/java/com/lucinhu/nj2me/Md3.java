@@ -60,32 +60,35 @@ final class Md3 {
 
     /* ------------------------------------------------------------- colours */
 
-    /* The baseline Material 3 dark palette.  It is what a device without
-     * dynamic colour gets, and the fallback for any role the system palette
-     * does not provide.  The app stays on the dark side on purpose: its theme
-     * is dark, a J2ME canvas is black, and the framework's own dialog text
-     * comes out light - a light scheme would need a second theme plus a
-     * hand-painted dialog body to stay readable. */
-    static int primary = 0xFFD0BCFF;
-    static int onPrimary = 0xFF381E72;
-    static int primaryContainer = 0xFF4F378B;
-    static int onPrimaryContainer = 0xFFEADDFF;
-    static int secondary = 0xFFCCC2DC;
-    static int secondaryContainer = 0xFF4A4458;
-    static int onSecondaryContainer = 0xFFE8DEF8;
-    static int tertiary = 0xFFEFB8C8;
-    static int tertiaryContainer = 0xFF633B48;
-    static int surface = 0xFF141218;
-    static int surfaceContainerLow = 0xFF1D1B20;
-    static int surfaceContainer = 0xFF1D1B20;
-    static int surfaceContainerHigh = 0xFF2B2930;
-    static int surfaceContainerHighest = 0xFF36343B;
-    static int onSurface = 0xFFE6E0E9;
-    static int onSurfaceVariant = 0xFFCAC4D0;
-    static int outline = 0xFF938F99;
-    static int outlineVariant = 0xFF49454F;
-    static int error = 0xFFF2B8B5;
-    static int onError = 0xFF601410;
+    /* The nano_j2me brand palette: a dark Material 3 scheme derived from the
+     * app icon's blue (#2F6FED) on its navy plate.  The app, the SDL2 desktop
+     * build and the web shell all use these colours, so the launcher, the game
+     * panel and the browser share one identity instead of the framework's
+     * default purple.  Dynamic colour is intentionally not applied (see
+     * {@link #init}); a wallpaper-derived accent would break that identity. */
+    static int primary = 0xFFAFC6FF;
+    static int onPrimary = 0xFF003062;
+    static int primaryContainer = 0xFF1B4B96;
+    static int onPrimaryContainer = 0xFFD9E2FF;
+    static int secondary = 0xFFBCC5DB;
+    static int onSecondary = 0xFF262F42;
+    static int secondaryContainer = 0xFF3C4559;
+    static int onSecondaryContainer = 0xFFD8E2F9;
+    static int tertiary = 0xFFA6CFD6;
+    static int onTertiary = 0xFF0E343B;
+    static int tertiaryContainer = 0xFF254B52;
+    static int onTertiaryContainer = 0xFFC2E9F0;
+    static int surface = 0xFF10131A;
+    static int surfaceContainerLow = 0xFF171A22;
+    static int surfaceContainer = 0xFF1B1E27;
+    static int surfaceContainerHigh = 0xFF252833;
+    static int surfaceContainerHighest = 0xFF30333E;
+    static int onSurface = 0xFFE2E2E9;
+    static int onSurfaceVariant = 0xFFC4C6D0;
+    static int outline = 0xFF8E9099;
+    static int outlineVariant = 0xFF44474F;
+    static int error = 0xFFFFB4AB;
+    static int onError = 0xFF690005;
 
     /* The steps of one system palette, in the order the framework stores them.
      * Note the direction: system_neutral1_0 is WHITE and system_neutral1_1000
@@ -145,10 +148,11 @@ final class Md3 {
          */
         light = !dark && Build.VERSION.SDK_INT >= 23;
         baseline();
+        /* Brand palette wins over Material You: the launcher, the game panel,
+         * the web shell and the app icon are one visual system, and a
+         * wallpaper-derived accent would make the app look different on every
+         * device.  The dynamic palette code is kept for a future opt-in. */
         dynamic = false;
-        if (Build.VERSION.SDK_INT >= 31) {
-            dynamic = dynamicPalette(ctx);
-        }
     }
 
     /** The Material 3 baseline palette for the scheme in use. */
@@ -156,25 +160,28 @@ final class Md3 {
         if (!light) {
             return;
         }
-        primary = 0xFF6750A4;
+        primary = 0xFF2C5FA8;
         onPrimary = 0xFFFFFFFF;
-        primaryContainer = 0xFFEADDFF;
-        onPrimaryContainer = 0xFF21005D;
-        secondary = 0xFF625B71;
-        secondaryContainer = 0xFFE8DEF8;
-        onSecondaryContainer = 0xFF1D192B;
-        tertiary = 0xFF7D5260;
-        tertiaryContainer = 0xFFFFD8E4;
-        surface = 0xFFFEF7FF;
-        surfaceContainerLow = 0xFFF7F2FA;
-        surfaceContainer = 0xFFF3EDF7;
-        surfaceContainerHigh = 0xFFECE6F0;
-        surfaceContainerHighest = 0xFFE6E0E9;
-        onSurface = 0xFF1D1B20;
-        onSurfaceVariant = 0xFF49454F;
-        outline = 0xFF79747E;
-        outlineVariant = 0xFFCAC4D0;
-        error = 0xFFB3261E;
+        primaryContainer = 0xFF2F5FA8;
+        onPrimaryContainer = 0xFFFFFFFF;
+        secondary = 0xFF565E71;
+        onSecondary = 0xFFFFFFFF;
+        secondaryContainer = 0xFFDAE2F9;
+        onSecondaryContainer = 0xFF131B2C;
+        tertiary = 0xFF3D6373;
+        onTertiary = 0xFFFFFFFF;
+        tertiaryContainer = 0xFFC1E8FA;
+        onTertiaryContainer = 0xFF001F29;
+        surface = 0xFFF7F9FF;
+        surfaceContainerLow = 0xFFF1F4FB;
+        surfaceContainer = 0xFFEBEFF8;
+        surfaceContainerHigh = 0xFFE3E8F4;
+        surfaceContainerHighest = 0xFFDCE2F0;
+        onSurface = 0xFF191C20;
+        onSurfaceVariant = 0xFF44474F;
+        outline = 0xFF73777F;
+        outlineVariant = 0xFFC4C6D0;
+        error = 0xFFBA1A1A;
         onError = 0xFFFFFFFF;
     }
 
