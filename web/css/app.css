@@ -1457,3 +1457,47 @@ body.in-game .app-header { display: none; }
 
 /* The exit auto-save row is read-only until the shell writes it on exit. */
 .slot--auto { border-style: dashed; }
+
+/*
+ * Light theme: the same layout and brand blue, adapted for bright rooms.
+ * The shell ships dark by default; this block only applies when the user's
+ * system prefers a light colour scheme (or a browser forces one), so existing
+ * screenshots and tests that assume the dark shell are unaffected.
+ * See docs/WEB.md "Light theme" for the palette contract.
+ */
+@media (prefers-color-scheme: light) {
+  :root {
+    color-scheme: light;
+
+    --bg: #eef2f8;
+    --bg-glow: #dbe6f6;
+    --surface: #f7f9ff;
+    --surface-2: #eef2fa;
+    --surface-3: #e4eaf5;
+    --surface-4: #d8e0ef;
+    --border: #d3dae7;
+    --border-strong: #b8c3d6;
+
+    --text: #151a22;
+    --text-dim: #4a5568;
+    --text-faint: #6b778b;
+
+    --accent: #2c5fa8;
+    --accent-strong: #1f4f96;
+    --accent-ink: #ffffff;
+    --accent-soft: rgba(44, 95, 168, 0.14);
+
+    --danger: #c0392b;
+    --danger-soft: rgba(192, 57, 43, 0.12);
+    --warn: #a05a00;
+    --warn-soft: rgba(160, 90, 0, 0.12);
+  }
+
+  html,
+  body { background: var(--bg); }
+
+  /* The dark shell's translucent black overlays read as grey smudges on a
+     light background; use white scrims instead. */
+  .game-canvas-wrap,
+  .shell-header { background: var(--surface); }
+}

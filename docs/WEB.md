@@ -821,3 +821,34 @@ The C API is versioned (`NJW_API_VERSION`); the shell checks it at load time and
 degrades to mock mode when it does not match the module it loaded. Keep the API
 comments in `nj_web.h` truthful when changing behaviour — they are the contract
 the shell and third-party embedders program against.
+
+## Light theme
+
+The shell follows the operating system's colour scheme. Dark remains the
+default; when the system or browser reports `prefers-color-scheme: light` the
+`@media (prefers-color-scheme: light)` block at the end of `web/css/app.css`
+overrides the palette tokens:
+
+| token | dark | light |
+| --- | --- | --- |
+| `--bg` | `#0b0e13` | `#eef2f8` |
+| `--surface` | `#11141b` | `#f7f9ff` |
+| `--surface-3` | `#232634` | `#e4eaf5` |
+| `--text` | `#e9eef7` | `#151a22` |
+| `--text-dim` | `#9aa7bc` | `#4a5568` |
+| `--accent` | `#6f9bff` | `#2c5fa8` |
+| `--accent-ink` | `#04102a` | `#ffffff` |
+
+Components inherit the tokens, so no layout or JS changes are involved: the
+same DOM renders in both schemes and all functionality (library, game screen,
+keypad, save slots, settings) behaves identically. Screenshot evidence for both
+schemes is produced by:
+
+```
+python3 tools/check_web_theme.py            # writes evidence to a temp dir
+```
+
+The check starts a throw-away static server over `build/web/`, opens the shell
+with Playwright/Firefox in both `color_scheme="dark"` and `color_scheme="light"`,
+asserts that the computed `background-color` and `color-scheme` actually change,
+and fails on any console/page error.
