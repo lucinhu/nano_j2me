@@ -38,3 +38,15 @@ Android 模拟器（`Medium_Phone_API_36.1`，x86_64 APK）截图逐像素取样
 
 构建：`tools/build_android_apk.sh --abi x86_64 --gles2` rc=0；
 SDL2 桌面端 `cmake --build /tmp/r5-gles2 -j10` rc=0；网页仅 CSS 变量改动，无 JS/资源变化。
+
+## PWA 主题色与网页验证（round 13 收尾）
+
+- `web/index.html` 的 `theme-color` 与 `web/manifest.json` 的 `theme_color` 从旧的
+  `#101318` 对齐到品牌深色表面 `#11141B`（与 Android 暗色 `surface`、web
+  `--surface` 同一值），`background_color` 保持 `#0B0E13`（与 `--bg` 一致）。
+- 布局审计结论（未改代码）：Android 启动器已使用 16dp 水平边距、72dp 行高、
+  `Md3.SHAPE_*` 形状刻度；web 使用 `--radius` 16/10/13 三档；SDL2 启动器
+  48dp 行高与 16dp 边距。三端间距/圆角刻度一致，本次只统一颜色，避免无谓改动。
+- 网页 shell 回归：`tools/check_web.sh --browser` → **PASS**（62 s，
+  Playwright Firefox，42 项页面检查），证据
+  `.local-tools/debug-runs/web-verify-20261125-0318`。

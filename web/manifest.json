@@ -9,7 +9,7 @@
   "display": "standalone",
   "orientation": "any",
   "background_color": "#0b0e13",
-  "theme_color": "#101318",
+  "theme_color": "#11141B",
   "categories": ["games", "emulators", "entertainment"],
   "icons": [
     {
