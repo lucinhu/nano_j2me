@@ -15553,6 +15553,7 @@ static void m3g_journal_commit(nj_vm *vm)
     m3g_journal_destroy(vm);
 }
 
+#if defined(NJ_M3G_FLUSH_PROFILE) && NJ_M3G_FLUSH_PROFILE
 static struct m3g_flush_dbg {
     int inited, on;
     long calls, nonempty;
@@ -15605,6 +15606,13 @@ static void m3g_flush_dbg_count(int why, int nonempty)
         m3g_flush_dbg_state.reason_hits[why]++;
     }
 }
+#else
+static void m3g_flush_dbg_count(int why, int nonempty)
+{
+    (void)why;
+    (void)nonempty;
+}
+#endif
 
 static void m3g_journal_flush(nj_vm *vm, int why)
 {
