@@ -649,7 +649,7 @@ public class LibraryActivity extends Activity {
                     }
                 }));
         box.addView(rowAction(Md3.IC_TUNE, "调整画面和按键",
-                "拖动画面、摆放按键，都在这一页", new Runnable() {
+                null, new Runnable() {
                     @Override
                     public void run() {
                         startEditor(e);
@@ -772,15 +772,15 @@ public class LibraryActivity extends Activity {
             int w = JarStore.PRESETS[i][0];
             int h = JarStore.PRESETS[i][1];
             labels[i] = w + "x" + h;
-            hints[i] = SCREEN_NOTES[notes[i]];
+            hints[i] = null;
             if (e.w == w && e.h == h) {
                 checked = i;
             }
         }
         labels[JarStore.PRESETS.length] = "自定义…";
-        hints[JarStore.PRESETS.length] = "自己填宽和高（32 ~ 4096）";
+        hints[JarStore.PRESETS.length] = "32 ~ 4096";
         Md3.chooser(this, Md3.IC_SCREEN, "画布大小",
-                "MIDlet 看到的就是这么大的一块画布（现在是 " + e.w + "x" + e.h + "）",
+                "现在是 " + e.w + "x" + e.h,
                 labels, hints, checked, new Md3.Choice() {
                     @Override
                     public void picked(int which, AlertDialog d) {

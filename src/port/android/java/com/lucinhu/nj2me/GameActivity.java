@@ -1409,7 +1409,7 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
 
         final boolean shown = status.getVisibility() == View.VISIBLE;
         LinearLayout adjust = Md3.row(this, Md3.IC_TUNE, "调整画面和按键",
-                "拖动画面、摆放按键，都在这一页", false, null);
+                null, false, null);
         LinearLayout toggle = Md3.row(this, Md3.IC_INFO,
                 shown ? "隐藏状态信息" : "显示状态信息",
                 shown ? "收起帧率、缩放这些数字" : "看帧率、缩放和测到的画面大小", false, null);
