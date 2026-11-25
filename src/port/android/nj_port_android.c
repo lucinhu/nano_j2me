@@ -1528,7 +1528,7 @@ static int android_gl_present_frame(android_state *s)
     sw = s->width;
     sh = s->height;
     if (s->view_mode != NJ_VIEW_INT && s->view_mode != NJ_VIEW_AUTO &&
-        s->view_mode != NJ_VIEW_FILL) {
+        s->view_mode != NJ_VIEW_FILL && s->view_mode != NJ_VIEW_CUSTOM) {
         if (!s->gl_present_logged) { s->gl_present_logged = 1; __android_log_print(ANDROID_LOG_INFO, LOG_TAG,
             "present: GL path off for view mode=%d", s->view_mode); }
         return 0;
