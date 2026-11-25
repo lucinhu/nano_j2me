@@ -2,6 +2,7 @@
  * EGL_PLATFORM=surfaceless LIBGL_ALWAYS_SOFTWARE=1. Software GL is valid here;
  * renderer identity is logged, and no hardware/performance claim is made.
  * CHECK deliberately stays active in Release/NDEBUG builds. */
+#include "nj2me/nj.h"
 #include "nj2me/nj_gfx_gles2.h"
 #include "nj2me/nj_gl_api.h"
 #include <limits.h>
@@ -218,6 +219,25 @@ static void test_fills(nj_gles2 *state)
         nj_gfx_fill_rect(&gpu.gfx, 1, 3, sizes[size][0], sizes[size][1]);
         delta(state, before, (unsigned)accepted, 0, (unsigned)!accepted);
         equal(&cpu, &gpu); gl_ok();
+    }
+}
+/* Hand-built surfaces may use one extra byte of spacing between pixels. */
+static void test_readback_spacing(nj_gles2 *state)
+{
+    for (int fmt = NJ_PIXFMT_RGB565; fmt <= NJ_PIXFMT_ARGB8888; ++fmt) {
+        canvas gpu;
+        nj_u1 expected[STORAGE];
+        snprintf(scenario, sizeof scenario, "readback with extra byte per pixel fmt=%d", fmt);
+        init_canvas(&gpu, fmt, 7, 5, 10, 0);
+        gpu.surface.bpp = bytes_per_pixel(fmt) + 1;
+        gpu.gfx.blend = NJ_BLEND_NONE;
+        gpu.gfx.color = 0x8b2468acu;
+        memcpy(expected, gpu.bytes, sizeof expected);
+        for (int y = 1; y < 3; ++y) for (int x = 2; x < 5; ++x)
+            store(expected + GUARD + y*gpu.surface.stride + x*gpu.surface.bpp, fmt, gpu.gfx.color);
+        CHECK(nj_gles2_backend()->fill_rect(state, &gpu.gfx, 2, 1, 3, 2) == NJ_GFX_ACCEL_DONE);
+        CHECK(memcmp(expected, gpu.bytes, sizeof expected) == 0);
+        gl_ok();
     }
 }
 static void test_images(nj_gles2 *state)
@@ -740,13 +760,64 @@ static void test_present_rows(nj_gles2 *state)
         CHECK(!nj_gles2_present(state, &src.surface, 0, 13, 7, rgba));
     }
 }
-int main(void)
+/* Full synchronous fill, readback and CPU format conversion. Verify the
+ * completed fill count and every destination byte outside the timed window. */
+static void bench_readback(nj_gles2 *state)
 {
+    enum { W = 480, H = 640, PAD = 7, WARMUP = 16, FILLS = 512 };
+    const char *names[] = { "RGB565", "RGB888", "ARGB8888" };
+    const int formats[] = { NJ_PIXFMT_RGB565, NJ_PIXFMT_RGB888, NJ_PIXFMT_ARGB8888 };
+    nj_port port;
+    CHECK(nj_port_headless(&port) == NJ_OK && port.millis);
+    for (unsigned f = 0; f < sizeof(formats)/sizeof(formats[0]); ++f) {
+        nj_surface s = {0};
+        nj_gfx g;
+        nj_gles2_stats before;
+        int bpp = bytes_per_pixel(formats[f]);
+        int stride = W*bpp + PAD;
+        size_t len = 2*GUARD + (size_t)H*stride;
+        nj_u1 *actual = malloc(len), *expected = malloc(len);
+        nj_u4 start, elapsed;
+        snprintf(scenario, sizeof scenario, "synchronous readback %s", names[f]);
+        CHECK(actual && expected);
+        memset(actual, 0xa5, len); memset(expected, 0xa5, len);
+        s.pixels = actual+GUARD; s.stride = stride;
+        s.width = W; s.height = H; s.format = formats[f];
+        nj_gfx_init(&g, &s);
+        nj_gfx_set_accel(&g, nj_gles2_backend(), state);
+        g.blend = NJ_BLEND_NONE;
+        g.color = 0xff2468acu;
+        for (int i = 0; i < WARMUP; ++i) nj_gfx_fill_rect(&g, 0, 0, W, H);
+        before = stats(state);
+        start = port.millis(port.ud);
+        for (int i = 0; i < FILLS; ++i) {
+            g.color = 0xff000000u | ((0x123456u + (nj_u4)i * 0x172309u) & 0xffffffu);
+            nj_gfx_fill_rect(&g, 0, 0, W, H);
+        }
+        elapsed = port.millis(port.ud) - start;
+        delta(state, before, FILLS, 0, 0);
+        for (int y = 0; y < H; ++y) for (int x = 0; x < W; ++x)
+            store(expected + GUARD + y*stride + x*bpp, s.format, g.color);
+        CHECK(memcmp(actual, expected, len) == 0); gl_ok();
+        printf("READBACK format=%s width=%d height=%d stride=%d fills=%d wall_ms=%u color=%08x verified=1\n",
+               names[f], W, H, stride, FILLS, (unsigned)elapsed, (unsigned)g.color);
+        free(expected); free(actual);
+    }
+    nj_port_shutdown(&port);
+}
+
+int main(int argc, char **argv)
+{
+    int bench = argc == 2 && strcmp(argv[1], "--bench-readback") == 0;
     egl_fixture e;
     current_gate gate[2];
     nj_gles2_config config;
     nj_gles2 *state[2];
     int i;
+    if (argc != 1 && !bench) {
+        fprintf(stderr, "usage: %s [--bench-readback]\n", argv[0]);
+        return 2;
+    }
     if (!egl_init(&e)) { egl_cleanup(&e); return 77; }
     CHECK(nj_gles2_backend() != NULL);
     CHECK(nj_gles2_backend()->version == NJ_GFX_ACCEL_VERSION);
@@ -765,10 +836,20 @@ int main(void)
         CHECK(state[i] != NULL); CHECK(gate[i].calls >= 2); gl_ok();
     }
     make_current(&e, 0);
+    if (bench) {
+        bench_readback(state[0]);
+        for (i = 0; i < 2; ++i) {
+            make_current(&e, i);
+            CHECK(nj_gles2_destroy(state[i]));
+        }
+        egl_cleanup(&e);
+        return 0;
+    }
     test_present_hd(&gate[0]);
     test_present_rows(state[0]);
     test_present_filters(state[0]);
-    test_fills(state[0]); test_images(state[0]); test_padded_sources(state[0]);
+    test_fills(state[0]); test_readback_spacing(state[0]);
+    test_images(state[0]); test_padded_sources(state[0]);
     test_rgb(state[0]); test_direct_declines(state[0]); test_fallback_matrix(state[0]);
     test_coherence(state[0]); test_budget(&gate[0]); test_default_budget(state[0]);
     test_context_declines(&e, &gate[0], state[0]); test_instances(&e, state[0], state[1]);

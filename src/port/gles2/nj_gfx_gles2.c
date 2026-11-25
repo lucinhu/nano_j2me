@@ -118,16 +118,19 @@ static int reserve(nj_u1 **buffer, size_t *capacity, size_t bytes)
     *buffer = p; *capacity = bytes;
     return 1;
 }
-static int target_ok(const nj_gfx *g, int x, int y, int w, int h)
+static int surface_rect_ok(const nj_surface *t, int x, int y, int w, int h)
 {
-    const nj_surface *t;
     int bpp;
-    if (!g || !(t = g->surf) || !t->pixels) return 0;
+    if (!t || !t->pixels) return 0;
     bpp = bytes_per_pixel(t->format);
     return bpp && t->width > 0 && t->height > 0 &&
            (nj_s8)t->stride >= (nj_s8)t->width*bpp &&
            x >= 0 && y >= 0 && w > 0 && h > 0 &&
            (nj_s8)x+w <= t->width && (nj_s8)y+h <= t->height;
+}
+static int target_ok(const nj_gfx *g, int x, int y, int w, int h)
+{
+    return g && surface_rect_ok(g->surf, x, y, w, h);
 }
 static void texture(nj_gles2 *s, GLuint name)
 {
@@ -178,18 +181,50 @@ static int prepare(nj_gles2 *s, int w, int h)
     s->gl.PixelStorei(GL_UNPACK_ALIGNMENT, 1);
     return clean_errors(s);
 }
-/* RGBA rows are deliberately mapped in the same order as CPU top-down rows.
- * This private framebuffer is never presented directly to a window. */
+/* Private FBO rows and CPU rows have the same orientation. Convert a validated
+ * rectangle at a time, retaining the source pitch of a subrect in a readback. */
+static nj_u4 rgba_argb(const nj_u1 *p)
+{
+    return ((nj_u4)p[3] << 24) | ((nj_u4)p[0] << 16) | ((nj_u4)p[1] << 8) | p[2];
+}
+static void commit_rgba(nj_surface *surface, int x, int y, int w, int h,
+                        const nj_u1 *rgba, int src_width)
+{
+    int bpp = bytes_per_pixel(surface->format);
+    if (!surface_rect_ok(surface, x, y, w, h) || (surface->bpp > 0 && surface->bpp != bpp)) {
+        /* Cached surfaces constructed by an embedder can have unusual pixel
+         * spacing. Preserve the scalar setter's clipping and addressing. */
+        for (int iy = 0; iy < h; ++iy) {
+            const nj_u1 *p = rgba + (size_t)iy * src_width * 4u;
+            for (int ix = 0; ix < w; ++ix, p += 4)
+                nj_surface_set(surface, x + ix, y + iy, rgba_argb(p));
+        }
+        return;
+    }
+    for (int iy = 0; iy < h; ++iy) {
+        const nj_u1 *p = rgba + (size_t)iy * src_width * 4u;
+        nj_u1 *dst = (nj_u1 *)surface->pixels + (size_t)(y + iy) * surface->stride + (size_t)x * bpp;
+        if (bpp == 4) {
+            for (int ix = 0; ix < w; ++ix, p += 4, dst += 4) {
+                nj_u4 color = rgba_argb(p);
+                memcpy(dst, &color, sizeof color);
+            }
+        } else if (bpp == 2) {
+            for (int ix = 0; ix < w; ++ix, p += 4, dst += 2) {
+                nj_u2 color = (nj_u2)(((p[0] >> 3) << 11) | ((p[1] >> 2) << 5) | (p[2] >> 3));
+                memcpy(dst, &color, sizeof color);
+            }
+        } else {
+            for (int ix = 0; ix < w; ++ix, p += 4, dst += 3)
+                memcpy(dst, p, 3);
+        }
+    }
+}
 static int commit(nj_gles2 *s, const nj_gfx *g, int x, int y, int w, int h)
 {
-    int ix, iy;
     s->gl.ReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, s->readback);
     if (!clean_errors(s)) return 0;
-    for (iy = 0; iy < h; ++iy) for (ix = 0; ix < w; ++ix) {
-        const nj_u1 *p = s->readback + ((size_t)iy*(size_t)w+(size_t)ix)*4u;
-        nj_u4 c = ((nj_u4)p[3]<<24) | ((nj_u4)p[0]<<16) | ((nj_u4)p[1]<<8) | p[2];
-        nj_surface_set(g->surf, x+ix, y+iy, c);
-    }
+    commit_rgba(g->surf, x, y, w, h, s->readback, w);
     return 1;
 }
 /* Frame-resident 2D layer (Stage B1): fills and blits targeting a CPU surface
@@ -314,7 +349,7 @@ static int frame_activate(nj_gles2 *s, struct frame_slot *f)
 
 static int frame_commit(nj_gles2 *s, struct frame_slot *f)
 {
-    int x, y, w, h;
+    int w, h;
     if (!f->dirty) return 1;
     if (f->stale) { f->dirty = 0; return 1; }
     if (!current(s) || !frame_bind(s, f)) return 0;
@@ -323,11 +358,7 @@ static int frame_commit(nj_gles2 *s, struct frame_slot *f)
     s->gl.PixelStorei(GL_PACK_ALIGNMENT, 1);
     s->gl.ReadPixels(f->x0, f->y0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, s->readback);
     if (!clean_errors(s) || !current(s)) return 0;
-    for (y = 0; y < h; ++y) for (x = 0; x < w; ++x) {
-        const nj_u1 *q = s->readback + ((size_t)y*(size_t)w+(size_t)x)*4u;
-        nj_u4 c = ((nj_u4)q[3]<<24)|((nj_u4)q[0]<<16)|((nj_u4)q[1]<<8)|q[2];
-        nj_surface_set(f->surface, f->x0+x, f->y0+y, c);
-    }
+    commit_rgba(f->surface, f->x0, f->y0, w, h, s->readback, w);
     f->dirty = 0;
     return 1;
 }

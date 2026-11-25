@@ -739,12 +739,13 @@ static int triangles_run(nj_gles2 *s,const nj_gfx_triangles *const *packets,
         nj_surface *surf=packets[0]->surface;
         nj_s4 *depth=packets[0]->depth;
         int stride=packets[0]->depth_stride;
-        for(i=0;i<(nj_u4)(y1-y0);++i)for(j=0;j<(nj_u4)(x1-x0);++j) {
-            const nj_u1 *q=s->readback+((size_t)i*(size_t)(x1-x0)+(size_t)j)*4u;
-            nj_u4 c=((nj_u4)q[3]<<24)|((nj_u4)q[0]<<16)|((nj_u4)q[1]<<8)|q[2];
-            nj_surface_set(surf,x0+(int)j,y0+(int)i,c);
-            if(any_write&&depth)depth[(size_t)(y0+(int)i)*(size_t)stride+(size_t)(x0+(int)j)]=
-                (nj_s4)unpack_key(s->depth_readback+((size_t)i*(size_t)(x1-x0)+(size_t)j)*4u);
+        commit_rgba(surf, x0, y0, x1-x0, y1-y0, s->readback, x1-x0);
+        if (any_write && depth) {
+            for (i=0; i<(nj_u4)(y1-y0); ++i) {
+                nj_s4 *dst=depth+(size_t)(y0+(int)i)*stride+x0;
+                const nj_u1 *row=s->depth_readback+(size_t)i*(x1-x0)*4u;
+                for (j=0; j<(nj_u4)(x1-x0); ++j) dst[j]=(nj_s4)unpack_key(row+(size_t)j*4u);
+            }
         }
     }
     if(s->frame_enabled&&npackets>0)frame_mark_stale(s,packets[0]->surface);
@@ -1041,15 +1042,14 @@ int nj_gles2_triangles_end(void *ud,nj_u4 *submitted)
         int rh=s->tri_session_rects[rect][3];
         int px=s->tri_session_rects[rect][0];
         int py=s->tri_session_rects[rect][1];
-        for(i=0;i<rh;++i)for(j=0;j<rw;++j) {
-            const nj_u1 *q=s->readback+
-                ((size_t)(ry+i)*(size_t)w+(size_t)(rx+j))*4u;
-            nj_u4 c=((nj_u4)q[3]<<24)|((nj_u4)q[0]<<16)|((nj_u4)q[1]<<8)|q[2];
-            nj_surface_set(surf,px+j,py+i,c);
-            if(s->tri_session_write&&depth)
-                depth[(size_t)(py+i)*(size_t)stride+(size_t)(px+j)]=
-                    (nj_s4)unpack_key(s->depth_readback+
-                        ((size_t)(ry+i)*(size_t)w+(size_t)(rx+j))*4u);
+        size_t start=((size_t)ry*w+rx)*4u;
+        commit_rgba(surf, px, py, rw, rh, s->readback+start, w);
+        if (s->tri_session_write && depth) {
+            for (i=0; i<rh; ++i) {
+                nj_s4 *dst=depth+(size_t)(py+i)*stride+px;
+                const nj_u1 *row=s->depth_readback+start+(size_t)i*w*4u;
+                for (j=0; j<rw; ++j) dst[j]=(nj_s4)unpack_key(row+(size_t)j*4u);
+            }
         }
     }
     if(s->frame_enabled)frame_mark_stale(s,surf);
