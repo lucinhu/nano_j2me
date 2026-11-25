@@ -1,8 +1,8 @@
 # Baseline JIT performance: measurements and reproduction
 
-The measurements below cover the earlier JIT. Later results include the
-[resolved-field cache measurements](JIT_CACHE_LOOKUP.md) and the
-[November 26 hot-loop and Minecraft world-generation measurements](notes/2026-11-26-render-jit-performance.md#jit).
+The measurements below cover the earlier JIT. Later benchmarks cover the
+[resolved-field cache](JIT_CACHE_LOOKUP.md), [hot-loop counting and cache readmission](notes/2026-11-26-render-jit-performance.md#jit),
+and [conditional branches in Minecraft world generation](notes/2026-11-26-smooth-jit-upload.md#jit).
 
 This work responds to a second board report, against `fe974fc` — the commit
 that carried the previous probe/dispatch optimisation set. It landed in several

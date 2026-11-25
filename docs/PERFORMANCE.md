@@ -10,6 +10,8 @@ and given with its assumption spelled out.
 
 The [software rendering, JIT and GPU measurements from November 26](notes/2026-11-26-render-jit-performance.md)
 cover two retail game replays, Minecraft world generation and synchronous GPU calls.
+The [follow-up measurements](notes/2026-11-26-smooth-jit-upload.md) cover smooth HD sprites,
+conditional expressions in the JIT, and mutable GLES2 texture uploads.
 
 ## How to measure
 
