@@ -2358,3 +2358,13 @@ open/mergeable，未合并。Fork 分支基于 `libretro-super` master `c3c55c2`
 - 前端矩阵 20/20、真实 RetroArch LoopDemo 120 帧、Wine 4/4、提交材料 32/32、
   全量 CTest 211/211。Android 侧新增多存档位、倒带、滤镜与统一调色板；
   Android GL 呈现仍为默认关闭的实验路径。
+
+## 0.5.47 / r66
+
+- 版本：0.5.47；`.info` SHA-256 `095f3c16a14d2d7f4a3c0a8bffd40408fc16e71b6c40ba963b53936ea7e56f0c`。
+- super 补丁：基于 `libretro-super` master `c3c55c2d5d16ecf7b447fcfc867acc363b0aa1d9`，
+  分支 `add-nano_j2me` 提交 `15130ac2b2b53da2ae1a046119c08ec047dce1d0`（50 行，`git apply --check` 通过）。
+- 核心：8 目标构建，归档 12,188,997 B SHA-256 `e7d0df1952fd75cf666f4fef0e51573ef16b7fa694cc75795ae6fed5d3382d76`。
+- APK：versionCode 547，5 个 ABI；见 `docs/RELEASE_0.5.47.md`。
+- 验证：CTest 211/211（376.65 s）、mock 20/20、真实 RetroArch PASS、Wine 4/4、bundle 32/32。
+- PR：libretro-super#2204 head `15130ac`、libretro/docs#1239 head `4f360b1`，均 OPEN/MERGEABLE（未合并）。

@@ -944,3 +944,10 @@ focuses on the Android frontend (multi save slots, rewind, presentation
 filters, unified launcher palette) plus the experimental Android on-screen GL
 presentation path (`debug.nj2me.glpresent`, default off, automatic software
 fallback). See `docs/RELEASE_0.5.45.md` for hashes and the verification table.
+
+## 当前发布：0.5.47 / r66（2026-11-25）
+
+本版把三端 UI 统一为「图标 + 短标签 + 行内当前值」并分组，Android 增加 GL 呈现「放大」档位，
+修复自定义比例视图下的 GL 呈现回退与窗口翻转；核心渲染路径不变，libretro 行为沿用 r65。
+核心归档 `nj2me-0.5.47-libretro-cores.zip` 12,188,997 B SHA-256 `e7d0df1952fd75cf666f4fef0e51573ef16b7fa694cc75795ae6fed5d3382d76`，
+`.info` SHA-256 `095f3c16a14d2d7f4a3c0a8bffd40408fc16e71b6c40ba963b53936ea7e56f0c`。

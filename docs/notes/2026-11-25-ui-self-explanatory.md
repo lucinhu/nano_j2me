@@ -81,3 +81,9 @@ Android 启动器（`LibraryActivity.java`）：
   退出；rows, listeners, preferences and JNI calls are unchanged.
 - Verified on `Medium_Phone_API_36.1`: x86_64 APK installs, panel lists 画面 then 文字 in order, and
   the previously chosen `放大：2×` / `GL 呈现（实验）：FSR1（GL）` values persist inside the group.
+
+### 0.5.47 release
+
+UI 工作随 0.5.47 / r66 发布：Android 面板五组分区与「放大」档位、SDL2 启动器文案精简、网页浅色主题与
+文案精简；同版包含自定义比例视图下的 GL 呈现修复与 Android FSR1 直出。验证与哈希见
+`docs/RELEASE_0.5.47.md`。
