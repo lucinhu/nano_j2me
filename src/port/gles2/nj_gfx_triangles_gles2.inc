@@ -72,14 +72,24 @@ static const char triangle_draw_vs[] =
     "gl_Position=vec4(position,0.0,1.0);}";
 static const char triangle_draw_fs[] =
     "varying highp float z;varying highp vec3 uvq;varying highp vec4 tint;"
-    "uniform highp sampler2D image;uniform bool textured;uniform vec2 wrapping;"
+    "uniform highp sampler2D image;uniform bool textured;uniform vec4 wrapping;"
     "uniform vec2 function;uniform float threshold;uniform vec4 fog;"
     "uniform vec3 fogColor;uniform bool depthPass;uniform int blend;"
+    /* wrapping.zw supplies the selected level's size only for sharp draws.
+     * Nearest taps reproduce the CPU/Vulkan coverage-weighted alpha edges. */
+    "vec4 sharpTap(vec2 uv){vec4 c=texture2D(image,uv);"
+    "if(function.x!=226.0&&function.y<0.5)c.rgb*=c.a;return c;}"
+    "vec4 sharpSample(vec2 uv){vec2 size=wrapping.zw;vec2 p=uv*size-0.5;"
+    "vec2 f=clamp((fract(p)-0.5)*4.0+0.5,0.0,1.0);"
+    "vec2 base=(floor(p)+0.5)/size;vec2 d=1.0/size;"
+    "vec4 c=mix(mix(sharpTap(base),sharpTap(base+vec2(d.x,0.0)),f.x),"
+    "mix(sharpTap(base+vec2(0.0,d.y)),sharpTap(base+d),f.x),f.y);"
+    "if(function.x!=226.0&&function.y<0.5&&c.a>0.0)c.rgb/=c.a;return c;}"
     "void main(){vec4 c=clamp(tint,0.0,1.0);"
     "if(textured){vec2 uv=uvq.xy/uvq.z;"
     "uv=vec2(wrapping.x>0.5?fract(uv.x):clamp(uv.x,0.0,1.0),"
     "wrapping.y>0.5?fract(uv.y):clamp(uv.y,0.0,1.0));"
-    "vec4 t=texture2D(image,uv);float a=c.a;"
+    "vec4 t=wrapping.z>0.0?sharpSample(uv):texture2D(image,uv);float a=c.a;"
     "if(function.x==226.0||(function.x==228.0&&function.y>0.5))c.a=a;"
     "else if(function.x==228.0)c.a=t.a;else c.a=a*t.a;"
     "if(function.x==226.0||function.x==228.0)c.rgb=t.rgb;else c.rgb*=t.rgb;}"
@@ -324,7 +334,10 @@ static void triangle_material(nj_gles2 *s,const nj_gfx_triangle_cmd *m,GLuint te
         s->gl.TexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,m->filter==209?GL_LINEAR:GL_NEAREST);
         s->gl.TexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,m->filter==209?GL_LINEAR:GL_NEAREST);
     }
-    s->gl.Uniform2f(t->wrapping,m->wrap_s==241?1.0f:0.0f,m->wrap_t==241?1.0f:0.0f);
+    int sharp = m->filter == NJ_GFX_FILTER_SHARP;
+    s->gl.Uniform4f(t->wrapping,m->wrap_s==241?1.0f:0.0f,m->wrap_t==241?1.0f:0.0f,
+                   sharp ? (GLfloat)m->texture_width : 0.0f,
+                   sharp ? (GLfloat)m->texture_height : 0.0f);
     s->gl.Uniform2f(t->function,(GLfloat)m->texture_function,
                    (m->texture_no_alpha||m->texture_bpp==3)?1.0f:0.0f);
     s->gl.Uniform1f(t->threshold,(GLfloat)m->alpha_threshold);

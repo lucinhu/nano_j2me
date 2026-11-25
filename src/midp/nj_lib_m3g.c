@@ -38,9 +38,7 @@
 #include "nj_internal.h"
 #include "nj_midp.h"
 #include "nj2me/nj_inflate.h"
-#if NJ_ENABLE_GFX_ACCEL
 #include "nj2me/nj_gfx_triangles.h"
-#endif
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -11523,6 +11521,11 @@ static inline nj_u4 sw_tex_alpha(const m3g_sw *sw, nj_u4 ta, nj_u4 argb)
     return (a * ta + 127u) / 255u; /* MODULATE, ADD and BLEND */
 }
 
+static int sw_filtered(int filter)
+{
+    return filter == 209 || filter == 129 || filter == NJ_GFX_FILTER_SHARP;
+}
+
 static nj_u4 sw_texel(const m3g_sw *sw, float s, float t, nj_u4 argb)
 {
     float fs, ft;
@@ -11548,7 +11551,7 @@ static nj_u4 sw_texel(const m3g_sw *sw, float s, float t, nj_u4 argb)
         if (ft < 0.0f) { ft += 1.0f; }
         if (ft >= 1.0f) { ft = 0.999f; }
     }
-    if ((sw->filt_image == 209 || sw->filt_image == 129) &&
+    if (sw_filtered(sw->filt_image) &&
         (sw->tex_w > 1 || sw->tex_h > 1)) {
         /*
          * FILTER_LINEAR: the four texels around the sample point, weighted by
@@ -11577,6 +11580,10 @@ static nj_u4 sw_texel(const m3g_sw *sw, float s, float t, nj_u4 argb)
         if (v0 > last_v) { v0 = last_v; }
         fu = (int)((x - (float)u0) * 256.0f + 0.5f);
         fv = (int)((y - (float)v0) * 256.0f + 0.5f);
+        if (sw->filt_image == NJ_GFX_FILTER_SHARP) {
+            fu = (fu - 128) * 4 + 128;
+            fv = (fv - 128) * 4 + 128;
+        }
         if (fu < 0) { fu = 0; }
         if (fu > 256) { fu = 256; }
         if (fv < 0) { fv = 0; }
@@ -11593,7 +11600,8 @@ static nj_u4 sw_texel(const m3g_sw *sw, float s, float t, nj_u4 argb)
         p11 = p01 + (u1 - u0) * sw->tex_bpp;
         if (sw->tex_bpp == 4) {
             ta = (p00[3] * w00 + p10[3] * w10 + p01[3] * w01 + p11[3] * w11) >> 16;
-            if (sw->sprite && ta != 255u) {
+            if (ta != 255u && (sw->sprite || (sw->filt_image == NJ_GFX_FILTER_SHARP &&
+                !sw->tex_no_alpha && sw->texfunc != 226))) {
                 /* A transparent sprite texel can carry an arbitrary RGB key.
                  * Weight its visible colour by alpha before interpolation. */
                 w00 *= p00[3]; w10 *= p10[3];
@@ -12622,7 +12630,7 @@ static nj_u4 sw_tri_band(m3g_sw *sw, const float xy[6], const float inv[3],
                   (sw->blend == 64 || sw->blend == 68);
     flat_tex = has_tex && !gouraud && !alpha_ramp && !sw->sprite && sw->tex != NULL &&
                sw->tex_bpp >= 3 && sw->tex_w > 0 && sw->tex_h > 0 &&
-               sw->filt_image != 209 && sw->filt_image != 129;
+               !sw_filtered(sw->filt_image);
     flat_tex565 = flat_tex && format == NJ_PIXFMT_RGB565;
     flat_texargb = flat_tex && format == NJ_PIXFMT_ARGB8888;
     /* The nearest-filtered texture case, without the sprite and the
@@ -12632,8 +12640,7 @@ static nj_u4 sw_tri_band(m3g_sw *sw, const float xy[6], const float inv[3],
     tex_near = 0;
 #else
     tex_near = has_tex && sw->tex != NULL && sw->tex_bpp >= 3 && sw->tex_w > 0 &&
-               sw->tex_h > 0 && !sw->sprite && sw->filt_image != 209 &&
-               sw->filt_image != 129;
+               sw->tex_h > 0 && !sw->sprite && !sw_filtered(sw->filt_image);
 #endif
     /* The general loop's Gouraud + nearest ARGB texture + MODULATE class has
        a dedicated span loop; it must see exactly the state the general loop
@@ -13209,6 +13216,7 @@ typedef struct {
     nj_u4 default_colour;
     nj_u4 drawn;
     int hd_scale;               /* positive only in the companion geometry walk */
+    int hd_pixel_art;
     nj_ref hd_self;
 #if NJ_ENABLE_FSR2
     nj_ref hd_vb, hd_ib, hd_node;
@@ -13881,7 +13889,8 @@ static void jr_collect_triangle(m3g_jr *r, const float xy[6], const float inv[3]
     t->texture_no_alpha = textured && sw->tex_no_alpha;
     t->wrap_s = sw->wrap_s;
     t->wrap_t = sw->wrap_t;
-    t->filter = sw->filt_image == 209 || sw->filt_image == 129 ? 209 : 208;
+    t->filter = sw->filt_image == NJ_GFX_FILTER_SHARP ? NJ_GFX_FILTER_SHARP :
+                sw_filtered(sw->filt_image) ? 209 : 208;
     t->texture_function = sw->texfunc;
     t->blend = sw->blend;
     t->alpha_threshold = sw->athresh;
@@ -13969,6 +13978,32 @@ static void jr_hd_raster(m3g_jr *r, const float xy[6], const float inv[3],
 #include "nj_m3g_temporal.inc"
 #endif
 
+/* Bound the perspective-correct texel footprint over this physical face.
+ * For UV = (UV*q)/q, the derivative numerator d(UV*q) - UV*dq is affine
+ * in UV; its norm is bounded by the largest vertex value. Divide by the
+ * smallest q. A receding or edge-on face keeps its game's image filter. */
+static int jr_hd_magnified(const m3g_sw *sw, const float xy[6], const float st[6],
+                           const float q[3])
+{
+    double ax = xy[2]-xy[0], ay = xy[3]-xy[1], bx = xy[4]-xy[0], by = xy[5]-xy[1];
+    double det = (ax*by-bx*ay) * fmin(q[0], fmin(q[1],q[2]));
+    int w = sw->mips ? sw->mip_w : sw->tex_w;
+    int h = sw->mips ? sw->mip_h : sw->tex_h;
+    for (int i=0; i<3; ++i) {
+        double u[3], v[3];
+        for (int j=0; j<3; ++j) {
+            u[j] = ((double)st[2*j]-st[2*i]) * q[j] * (w>1 ? w : 0);
+            v[j] = ((double)st[2*j+1]-st[2*i+1]) * q[j] * (h>1 ? h : 0);
+        }
+        double ux = (u[1]-u[0])*by - (u[2]-u[0])*ay;
+        double vx = (v[1]-v[0])*by - (v[2]-v[0])*ay;
+        double uy = (u[2]-u[0])*ax - (u[1]-u[0])*bx;
+        double vy = (v[2]-v[0])*ax - (v[1]-v[0])*bx;
+        if (!(ux*ux+vx*vx < det*det && uy*uy+vy*vy < det*det)) return 0;
+    }
+    return 1;
+}
+
 static void jr_emit(m3g_jr *r, const jr_vtx *v0, const jr_vtx *v1,
                     const jr_vtx *v2)
 {
@@ -14050,8 +14085,12 @@ static void jr_emit(m3g_jr *r, const jr_vtx *v0, const jr_vtx *v1,
                 m3g_temporal_triangle(r, v0, v1, v2, xy, inv, depth, st, rgb, rgb2);
 #endif
             for (int i = 0; i < 6; ++i) xy[i] *= (float)r->hd_scale;
-            jr_hd_raster(r, xy, inv, depth, st,
-                         r->sw.tex && (r->tpos || r->sw.sprite), rgb, rgb2);
+            int textured = r->sw.tex && (r->tpos || r->sw.sprite);
+            int game_filter = r->sw.filt_image;
+            if (textured && r->hd_pixel_art && jr_hd_magnified(&r->sw, xy, st, inv))
+                r->sw.filt_image = NJ_GFX_FILTER_SHARP;
+            jr_hd_raster(r, xy, inv, depth, st, textured, rgb, rgb2);
+            r->sw.filt_image = game_filter;
             return;
         }
         /* The rasteriser writes the pixels: depth, texture, culling. */
@@ -16243,7 +16282,8 @@ static int jr_hd_target(m3g_jr *r, m3g_jr *hd)
     hd->hd_scale = m->scale;
     /* The physical material feeds the software sampler and both GPU packets.
      * Java's Texture2D still supplies the filter and mip policy for readback. */
-    if (m->smooth_assets) hd->sw.filt_image = 209; /* FILTER_LINEAR */
+    hd->hd_pixel_art = m->smooth_assets == NJ_ASSET_PIXEL_ART;
+    if (m->smooth_assets == NJ_ASSET_SMOOTH) hd->sw.filt_image = 209; /* FILTER_LINEAR */
     hd->sw.vx *= m->scale; hd->sw.vy *= m->scale;
     hd->sw.vw *= m->scale; hd->sw.vh *= m->scale;
     /* Depth offset is specified in logical viewport pixels. */

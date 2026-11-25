@@ -69,6 +69,7 @@ static void check_draw(nj_font font, int scale, int smooth)
         if (text[i] == 0xffffu) {
             for (int j = 0; j < scale; ++j) for (int x = 0; x < 2 * scale; ++x) {
                 double a = 1.5 - (x + .5) / scale;
+                if (smooth == NJ_ASSET_PIXEL_ART) a = 2 * a - .5;
                 int coverage = smooth ? (int)(255 * (a < 0 ? 0 : a > 1 ? 1 : a) + .5) :
                                         (x < scale ? 255 : 0);
                 nj_gfx_blend_coverage(&ref, pen * scale + x, (baseline - 1) * scale + j, coverage);
@@ -96,13 +97,13 @@ static const nj_u1 *coverage_glyph(void *ud, nj_u2 ch, int *w, int *h)
 
 /* Three equivalent 2x2 faces, from the mono table, packed 2bpp rows, and an
  * unpacked provider. An odd physical scale puts one sample on each centre. */
-static void check_bitmap_formats(void)
+static void check_bitmap_formats(int mode)
 {
     nj_u1 bits[][4] = {{0x80,0x40}, {0xc0,0x30}, {255,0,0,255}};
     nj_u4 low[4], high[6*6], reference[6*6];
     nj_surface l = {low,2,2,8,NJ_PIXFMT_ARGB8888,4};
     nj_surface h = {high,6,6,24,NJ_PIXFMT_ARGB8888,4};
-    nj_render_mirror mirror = {.target=&h,.scale=3,.smooth_assets=1};
+    nj_render_mirror mirror = {.target=&h,.scale=3,.smooth_assets=mode};
     for (int n = 0; n < 3; ++n) {
         nj_font f = {.glyph_w=2,.glyph_h=2,.first_char='A',.last_char='A',
                      .bitmap=bits[n],.bitmap_coverage=n==1 ? 2 : 0};
@@ -120,7 +121,11 @@ static void check_bitmap_formats(void)
         nj_gfx_draw_char(&g,'A',0,0);
         CHECK(low[0] == 0xffffffffu && low[1] == 0xff000000u);
         CHECK(high[7] == 0xffffffffu && high[10] == 0xff000000u);
-        CHECK(high[8] == 0xffaaaaaau && high[9] == 0xff555555u);
+        if (mode == NJ_ASSET_PIXEL_ART) {
+            CHECK(high[8] == 0xffd5d5d5u && high[9] == 0xff2a2a2au);
+        } else {
+            CHECK(high[8] == 0xffaaaaaau && high[9] == 0xff555555u);
+        }
         if (n == 0) memcpy(reference,high,sizeof high);
         else CHECK(!memcmp(high,reference,sizeof high));
     }
@@ -138,12 +143,14 @@ int main(int argc, char **argv)
     nj_u1 *data = malloc((size_t)len);
     CHECK(data && fread(data, 1, (size_t)len, fp) == (size_t)len);
     fclose(fp);
-    check_bitmap_formats();
+    check_bitmap_formats(NJ_ASSET_SMOOTH);
+    check_bitmap_formats(NJ_ASSET_PIXEL_ART);
     nj_fontset_init(&fs);
     CHECK(nj_fontset_use_ttf(&fs, data, (nj_u4)len, track, &a) == NJ_FONTSET_SLOTS);
     const nj_font *f = nj_fontset_get(&fs, NJ_FONT_SIZE_MEDIUM, NJ_FONT_STYLE_PLAIN);
     CHECK(a.count == NJ_FONTSET_SLOTS && f->scaled_face);
-    check_draw(*f, 2, 0); check_draw(*f, 4, 1); check_draw(*f, 2, 1);
+    check_draw(*f, 2, NJ_ASSET_NEAREST); check_draw(*f, 4, NJ_ASSET_SMOOTH);
+    check_draw(*f, 2, NJ_ASSET_SMOOTH); check_draw(*f, 4, NJ_ASSET_PIXEL_ART);
     CHECK(a.count == NJ_FONTSET_SLOTS + 1);
     while (a.count) free(a.block[--a.count]);
     free(data);

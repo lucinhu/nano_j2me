@@ -814,7 +814,7 @@ static inline nj_u4 mr_env_add(nj_u4 color, nj_u4 env)
  * centre and clamp neighbours at sheet edges. Keep the reference's packed
  * address calculation for the containing cell, even for out-of-range UVs. */
 static nj_u4 mr_linear_texel(const nj_mascot_texture *tex, int key,
-                            nj_s4 u, nj_s4 v, nj_u4 *coverage)
+                            nj_s4 u, nj_s4 v, int sharp, nj_u4 *coverage)
 {
     nj_u4 width = 1u << tex->width_bit, mask = (nj_u4)tex->len_mask;
     nj_u4 cell = (((nj_u4)(v >> MR_FP) << tex->width_bit) | (nj_u4)(u >> MR_FP)) & mask;
@@ -827,6 +827,12 @@ static nj_u4 mr_linear_texel(const nj_mascot_texture *tex, int key,
     nj_u1 indices[4] = {tex->raster[cell], tex->raster[(int)cell + dx],
                         tex->raster[row], tex->raster[(int)row + dx]};
     nj_u4 wx = (nj_u4)(fx < 0 ? -fx : fx), wy = (nj_u4)(fy < 0 ? -fy : fy);
+    /* wx/wy measure distance from the containing cell's centre (0..128).
+     * Keep its colour until the middle quarter of the texel interval. */
+    if (sharp) {
+        wx = wx > 96u ? (wx-96u)*4u : 0u;
+        wy = wy > 96u ? (wy-96u)*4u : 0u;
+    }
     nj_u4 weights[4] = {(256-wx)*(256-wy), wx*(256-wy), (256-wx)*wy, wx*wy};
     nj_u4 r = 0, g = 0, b = 0, sum = 0;
     int i;
@@ -1141,7 +1147,16 @@ static void mr_fill_segment(const mr_state *st,
 
     /* The physical filter shares the generic light, toon and environment
      * stages. Nearest draws retain their dedicated span dispatch. */
-    const int linear = has_tex && (st->flags & NJ_MR_FILTER_LINEAR);
+    int sharp = has_tex && (st->flags & NJ_MR_FILTER_SHARP);
+    if (sharp) {
+        /* du_row follows the moving scanline edge. Subtract its horizontal
+         * motion to recover the vertical derivative at fixed screen x. */
+        double uy = du_row - (double)du * dx / MR_FP_ONE;
+        double vy = dv_row - (double)dv * dx / MR_FP_ONE;
+        sharp = (double)du*du + (double)dv*dv < MR_FP_ONE*MR_FP_ONE &&
+                uy*uy + vy*vy < MR_FP_ONE*MR_FP_ONE;
+    }
+    const int linear = sharp || (has_tex && (st->flags & NJ_MR_FILTER_LINEAR));
     if (linear) mode = MR_MODE_GENERIC;
 
     /* "Corrected rounding to avoid texture seams": nudge the interpolators by
@@ -1285,7 +1300,7 @@ static void mr_fill_segment(const mr_state *st,
 
                 if (has_tex) {
                     if (linear) {
-                        pix = mr_linear_texel(st->tex, key_idx, uu, vv, &coverage);
+                        pix = mr_linear_texel(st->tex, key_idx, uu, vv, sharp, &coverage);
                         if (!coverage) continue;
                     } else {
                         nj_s4 ti = t_raster[(((nj_u4)(vv >> MR_FP) << t_wbit)

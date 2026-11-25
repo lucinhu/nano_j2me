@@ -302,7 +302,7 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
     /** Launch choice only: 0 software, 1 experimental GLES2. Never changed mid-run. */
     private static native boolean nativeFsr2Built();
     private static native boolean nativeVulkanBuilt();
-    private static native void nativeSetHd(long handle, int scale, int ssaa, boolean subdivide, boolean fsr2, boolean vulkan, boolean smoothAssets);
+    private static native void nativeSetHd(long handle, int scale, int ssaa, boolean subdivide, boolean fsr2, boolean vulkan, int assetFilter);
     private static native void nativeSetGraphicsMode(long handle, int mode);
     private static native boolean nativeGraphicsSupported();
 
@@ -853,7 +853,7 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
                 SharedPreferences hd = getSharedPreferences("nano_j2me", MODE_PRIVATE);
                 nativeSetHd(handle, hd.getInt("hd_scale", 1), hd.getInt("hd_ssaa", 1),
                         hd.getInt("hd_subdivide", 0) != 0, hd.getInt("hd_fsr2", 0) != 0,
-                        hd.getInt("hd_vulkan", 0) != 0, hd.getInt("hd_smooth_assets", 0) != 0);
+                        hd.getInt("hd_vulkan", 0) != 0, hd.getInt("hd_smooth_assets", 0));
                 nativeSetGraphicsMode(handle,
                         graphicsSupported() && Settings.gles2Experimental(this) ? 1 : 0);
                 nativeSetSpeed(handle, speed);
@@ -1469,7 +1469,8 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
         box.addView(glPresentScaleSetting());
         box.addView(glPresentSharpSetting());
         addHdChoice(box, "高清渲染倍率", "hd_scale", 1, new String[]{"1×", "2×", "3×", "4×"}, true);
-        addHdChoice(box, "高清素材平滑（图片、精灵、字体、3D 贴图）", "hd_smooth_assets", 0, new String[]{"关闭", "开启"}, true);
+        addHdChoice(box, "高清素材采样", "hd_smooth_assets", 0,
+                new String[]{"原始像素", "柔和平滑", "像素画清晰"}, true);
         addHdChoice(box, "超采样抗锯齿", "hd_ssaa", 1, new String[]{"关闭", "四采样"}, true);
         addHdChoice(box, "3D 面片细分", "hd_subdivide", 0, new String[]{"关闭", "开启"}, true);
         addHdChoice(box, "Vulkan 3D 面片渲染", "hd_vulkan", 0,

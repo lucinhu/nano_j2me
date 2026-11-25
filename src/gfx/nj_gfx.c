@@ -2239,6 +2239,7 @@ static void nj_region_draw(nj_gfx *g, const nj_u1 *src, nj_s8 src_stride_bytes,
                            int dx, int dy, int alpha);
 
 #include "nj_gfx_asset_filter.inc"
+#include "nj_gfx_pixel_art.inc"
 
 /* Walk clipped logical destination cells and transform their physical samples
  * inside the cell separately. Thus even a rotated 1x1 HD source region keeps
@@ -2269,8 +2270,12 @@ static void hd_blit(nj_gfx *g, const nj_u1 *src, nj_s8 stride, int format,
     if (!image && !mask && !xor_on) {
         if (g->mirror->smooth_assets && k > 1 && img_height &&
             rop == NJ_ROP_PAINT && !opaque && alpha == 255) {
-            hd_filter_bitmap(p.surf, k, src, stride, format, bpp, sx, sy, sw, sh,
-                             transform, dx, dy, x0, y0, x1, y1);
+            if (g->mirror->smooth_assets == NJ_ASSET_PIXEL_ART)
+                hd_pixel_art_bitmap(p.surf, k, src, stride, format, bpp, sx, sy, sw, sh,
+                                    transform, dx, dy, x0, y0, x1, y1);
+            else
+                hd_filter_bitmap(p.surf, k, src, stride, format, bpp, sx, sy, sw, sh,
+                                 transform, dx, dy, x0, y0, x1, y1);
             return;
         }
         nj_s8 step = nj_trans_row_step(transform, bpp, stride);

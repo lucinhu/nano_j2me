@@ -994,7 +994,8 @@ NJFN(mascot_scene_flush)
                     v[k].x = v[k].x * scale + m3_subcoord(sub);
                     v[k].y = v[k].y * scale + m3_subcoord(sub >> 4);
                 }
-                if (tex && mirror->smooth_assets) mat.flags |= NJ_MR_FILTER_LINEAR;
+                if (tex && mirror->smooth_assets == NJ_ASSET_SMOOTH) mat.flags |= NJ_MR_FILTER_LINEAR;
+                if (tex && mirror->smooth_assets == NJ_ASSET_PIXEL_ART) mat.flags |= NJ_MR_FILTER_SHARP;
                 nj_mascot_raster_draw(hd,x1*scale,y1*scale,x2*scale,y2*scale,v,&mat);
             }
             vm->tris++;

@@ -132,7 +132,9 @@ static nj_status vm_setup(nj_vm *vm, const nj_port *port, nj_size heap_bytes)
                                port->render_scale <= 4 ? port->render_scale : 1;
     vm->render_quality.ssaa = port && port->display_hd && port->render_ssaa == 2 ? 2 : 1;
     vm->render_quality.subdivide = port && port->render_subdivide != 0;
-    vm->render_quality.smooth_assets = port && port->render_smooth_assets != 0;
+    int asset_filter = port ? port->render_smooth_assets : NJ_ASSET_NEAREST;
+    vm->render_quality.smooth_assets = asset_filter == NJ_ASSET_PIXEL_ART ? NJ_ASSET_PIXEL_ART :
+                                       asset_filter ? NJ_ASSET_SMOOTH : NJ_ASSET_NEAREST;
     vm->render_quality.fsr2 = port && port->render_fsr2 && vm->render_quality.scale >= 2;
     vm->state = NJ_VM_READY;
     vm->hash_seed = 0x9E3779B9u;

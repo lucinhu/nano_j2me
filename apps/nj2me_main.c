@@ -192,7 +192,8 @@ static void usage(const char *argv0)
 "  --render-scale <1..4>  rasterize geometry and outlines at this output scale\n"
 "  --ssaa <1|2>           samples per axis before resolving the physical frame\n"
 "  --subdivide            split M3G triangles during HD drawing\n"
-"  --smooth-assets        smooth bitmap artwork and M3G textures on the HD target\n"
+"  --asset-filter <mode>  HD artwork: nearest (default), smooth or pixel-art\n"
+"  --smooth-assets        alias for --asset-filter smooth\n"
 "  --fsr2                 request temporal M3G rendering (Vulkan build)\n"
 "  --scale <n>          integer upscale for the window (sdl2, default: auto)\n"
 "  --size <WxH>         screen size, e.g. 240x320 (default: %dx%d)\n"
@@ -909,8 +910,17 @@ int main(int argc, char **argv)
             else c.render_scale = argv[i][0] - '0';
         } else if (strcmp(a, "--subdivide") == 0) {
             c.subdivide = 1;
+        } else if (strcmp(a, "--asset-filter") == 0) {
+            const char *mode = ++i < argc ? argv[i] : "";
+            if (strcmp(mode, "nearest") == 0) c.smooth_assets = NJ_ASSET_NEAREST;
+            else if (strcmp(mode, "smooth") == 0) c.smooth_assets = NJ_ASSET_SMOOTH;
+            else if (strcmp(mode, "pixel-art") == 0) c.smooth_assets = NJ_ASSET_PIXEL_ART;
+            else {
+                fprintf(stderr, "--asset-filter expects nearest, smooth or pixel-art\n");
+                return 2;
+            }
         } else if (strcmp(a, "--smooth-assets") == 0) {
-            c.smooth_assets = 1;
+            c.smooth_assets = NJ_ASSET_SMOOTH;
         } else if (strcmp(a, "--fsr2") == 0) {
 #if NJ_ENABLE_FSR2
             c.fsr2 = 1;

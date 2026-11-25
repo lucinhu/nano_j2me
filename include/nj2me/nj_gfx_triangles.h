@@ -7,6 +7,10 @@ extern "C" {
 #endif
 
 #define NJ_GFX_TRIANGLES_VERSION 1u
+/* Physical magnification: linear weights ramp across the middle quarter of
+ * the interval between texel centres. Alpha-bearing samples that use texture
+ * alpha mix visible RGB weighted by coverage. */
+#define NJ_GFX_FILTER_SHARP 211
 #define NJ_GFX_TRIANGLES_MAX_COUNT 65536u
 
 /* Post-clipping device coordinates (origin top left), window depth [0,1],
@@ -30,7 +34,7 @@ typedef struct nj_gfx_triangle_cmd {
     const nj_u1 *texture;
     int texture_width, texture_height, texture_bpp, texture_no_alpha;
     int wrap_s, wrap_t;       /* 240 clamp, 241 repeat (wrap then clamp taps). */
-    int filter;               /* 208 nearest, 209 linear. */
+    int filter;               /* 208 nearest, 209 linear, NJ_GFX_FILTER_SHARP. */
     int texture_function;     /* 226 decal, 227 modulate, 228 replace. */
     int blend;                /* 64 alpha, 65 add, 66 modulate, 67 x2, 68 replace. */
     int alpha_threshold;      /* 0..255; discard source alpha < threshold. */

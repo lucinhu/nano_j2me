@@ -63,13 +63,14 @@ static void check_geometry(nj_vm *vm, canvas *c, int subdivide,
 
 #if NJ_ENABLE_GFX_ACCEL
 static unsigned filtered_faces;
+static int expected_filter = 209, expected_width = 8;
 static int trace_filtered_texture(void *ud, const nj_gfx_triangles *packet, nj_u4 *submitted)
 {
     const nj_port *driver = ud;
     for (nj_u4 i = 0; i < packet->count; ++i) {
         const nj_gfx_triangle_cmd *face = &packet->triangles[i];
-        check(face->texture_width == 8 && face->texture_height == 1 && face->filter == 209,
-              "physical packet carries the single-row texture and linear sampler");
+        check(face->texture_width == expected_width && face->texture_height == 1 &&
+              face->filter == expected_filter, "physical packet carries the expected mip and sampler");
     }
     if (!driver->gfx_hd_triangles) return NJ_GFX_ACCEL_DECLINE;
     int status = driver->gfx_hd_triangles(driver->gfx_hd_triangles_ud, packet, submitted);
@@ -131,6 +132,40 @@ static void check_mesh_filter(nj_vm *vm, nj_port *port, const nj_port *driver,
     check(intermediate > 200 && outliers < 8,"thin texture filters along its varying axis");
     check(!memcmp(original,nj_array_data(c->pixels),sizeof(original)),
           "Java image retains the eight requested nearest colour bands");
+    /* Measure the width of the sharp transition, then compare every GPU
+     * pixel with the same public draw using the CPU backend. */
+    nj_u4 crisp[128*128];
+    vm->render_quality.smooth_assets = NJ_ASSET_PIXEL_ART;
+    for (int gpu=0; gpu<=1; ++gpu) {
+        int mixed = 0, errors = 0;
+#if NJ_ENABLE_GFX_ACCEL
+        expected_filter = NJ_GFX_FILTER_SHARP;
+        filtered_faces = 0;
+        port->gfx_hd_triangles = gpu ? trace_filtered_texture : NULL;
+        port->gfx_hd_triangles_ud = (void *)driver;
+#endif
+        a[0].i=0; a[1].r=tex;
+        call(vm,c->app,C("Appearance"),"setTexture","(IL" C("Texture2D") ";)V",a,NULL);
+        default_clear(vm,c); triangle(vm,c,xyz);
+        for (int i=0; i<128*128; ++i) {
+            nj_u4 got=nj_surface_get(hd,i%128,i/128);
+            mixed += ((got>>16)&255u) % 30 != 0;
+            if (!gpu) crisp[i]=got;
+            else if (abs((int)((got>>16)&255u)-(int)((crisp[i]>>16)&255u))>1 ||
+                     abs((int)((got>>8)&255u)-(int)((crisp[i]>>8)&255u))>1 ||
+                     (got & 0xff0000ffu)!=(crisp[i] & 0xff0000ffu)) ++errors;
+        }
+        printf("8x1 sharp: %d intermediate samples, %d outliers from software\n",mixed,errors);
+        check(mixed>20 && mixed<intermediate/2 && errors<8,"sharp filter narrows the ramp on all backends");
+#if NJ_ENABLE_GFX_ACCEL
+        check(!gpu || !driver->gfx_hd_triangles || filtered_faces==4,"GPU commits four sharp faces");
+        port->gfx_hd_triangles = NULL;
+        port->gfx_hd_triangles_ud = NULL;
+#endif
+    }
+    check(!memcmp(original,nj_array_data(c->pixels),sizeof(original)),"sharp mode keeps logical nearest colours");
+    a[0].i=0; a[1].r=NULL;
+    call(vm,c->app,C("Appearance"),"setTexture","(IL" C("Texture2D") ";)V",a,NULL);
     vm->render_quality.smooth_assets = 0;
 }
 
@@ -141,14 +176,14 @@ static void check_perspective(nj_vm *vm, nj_port *port, const nj_port *driver, c
     nj_ref image = nj_root(vm,nj_object_new(vm,C("Image2D")));
     nj_ref tex = nj_root(vm,nj_object_new(vm,C("Texture2D")));
     nj_ref coords = nj_root(vm,nj_object_new(vm,C("VertexArray")));
-    nj_ref pixels = nj_root(vm,nj_array_new(vm,"B",24));
+    nj_ref pixels = nj_root(vm,nj_array_new(vm,"B",32));
     nj_ref values = nj_root(vm,nj_array_new(vm,"S",6));
     nj_u1 *bytes = nj_array_data(pixels);
     nj_value a[5];
     for (int i=0; i<8; ++i) {
-        bytes[3*i]=30u*i; bytes[3*i+1]=255u-30u*i; bytes[3*i+2]=0;
+        bytes[4*i]=30u*i; bytes[4*i+1]=255u-30u*i; bytes[4*i+2]=0; bytes[4*i+3]=255;
     }
-    a[0].i=99; a[1].i=8; a[2].i=1;
+    a[0].i=100; a[1].i=8; a[2].i=1;
     if (nj_call_special(vm,image,C("Image2D"),"<init>","(III)V",a,NULL)!=NJ_OK) exit(2);
     a[0].i=a[1].i=0; a[2].i=8; a[3].i=1; a[4].r=pixels;
     call(vm,image,C("Image2D"),"set","(IIII[B)V",a,NULL);
@@ -185,6 +220,38 @@ static void check_perspective(nj_vm *vm, nj_port *port, const nj_port *driver, c
     check(bands==255,"perspective fixture samples all eight texture bands");
     check(differences==0,"subdivision preserves perspective texture coordinates and coverage");
     check_mesh_filter(vm,port,driver,c,ref,tex,xyz);
+
+    /* Minify the same atlas: keep the selected level and game sampler, even
+     * for 8x1 (area alone misses minification when V is constant). */
+    a[0].i=0; a[1].r=coords; a[2].f=16.0f; a[3].r=NULL;
+    call(vm,c->vb,C("VertexBuffer"),"setTexCoords","(IL" C("VertexArray") ";F[F)V",a,NULL);
+    a[0].i=0; a[1].r=tex;
+    call(vm,c->app,C("Appearance"),"setTexture","(IL" C("Texture2D") ";)V",a,NULL);
+    for (int mip=0; mip<=1; ++mip) {
+        a[0].i=mip ? 210 : 208; a[1].i=mip ? 210 : 209;
+        call(vm,tex,C("Texture2D"),"setFiltering","(II)V",a,NULL);
+        vm->render_quality.smooth_assets=NJ_ASSET_PIXEL_ART;
+#if NJ_ENABLE_GFX_ACCEL
+        expected_width = mip ? 1 : 8;
+        expected_filter = mip ? 208 : 209;
+        filtered_faces = 0;
+        port->gfx_hd_triangles=trace_filtered_texture; port->gfx_hd_triangles_ud=(void *)driver;
+#endif
+        default_clear(vm,c); triangle(vm,c,xyz);
+#if NJ_ENABLE_GFX_ACCEL
+        check(!driver->gfx_hd_triangles || filtered_faces==4,"GPU commits minified game filters");
+        port->gfx_hd_triangles=NULL; port->gfx_hd_triangles_ud=NULL;
+#endif
+        nj_u4 saved[128*128];
+        memcpy(saved,hd->pixels,sizeof(saved));
+        vm->render_quality.smooth_assets=0;
+        default_clear(vm,c); triangle(vm,c,xyz);
+        int errors=0;
+        for (int i=0; i<128*128; ++i) errors += saved[i]!=((nj_u4 *)hd->pixels)[i];
+        check(errors < 8,"minification matches game sampling with and without mip selection");
+    }
+    a[0].i=0; a[1].r=NULL;
+    call(vm,c->app,C("Appearance"),"setTexture","(IL" C("Texture2D") ";)V",a,NULL);
 
     /* Previously untested HD paths: an image Background at a cropped
      * viewport, then a scaled Sprite3D. Both use the physical sampling grid. */
@@ -228,7 +295,8 @@ static void check_perspective(nj_vm *vm, nj_port *port, const nj_port *driver, c
     a[0].i=1; a[1].i=0; a[2].i=2; a[3].i=1;
     call(vm,sprite,C("Sprite3D"),"setCrop","(IIII)V",a,NULL);
     a[0].i=64; call(vm,c->cm,C("CompositingMode"),"setBlending","(I)V",a,NULL);
-    for (int smooth=0; smooth<=1; ++smooth) {
+    int smooth_partial=0;
+    for (int smooth=0; smooth<=NJ_ASSET_PIXEL_ART; ++smooth) {
         int partial=0, contaminated=0;
         vm->render_quality.smooth_assets=smooth;
         default_clear(vm,c);
@@ -241,10 +309,41 @@ static void check_perspective(nj_vm *vm, nj_port *port, const nj_port *driver, c
         }
         check(contaminated==0,"neighbour frame and hidden RGB never tint the sprite");
         check(smooth ? partial>20 : partial==0,"linear sprite edges have fractional coverage");
+        if (smooth == NJ_ASSET_SMOOTH) smooth_partial=partial;
+        if (smooth == NJ_ASSET_PIXEL_ART) check(partial<smooth_partial/2,"sharp cropped sprite keeps a narrow coverage ramp");
         if (!smooth) memcpy(logical,nj_array_data(c->pixels),sizeof(logical));
         else check(!memcmp(logical,nj_array_data(c->pixels),sizeof(logical)),
                    "the cropped Sprite3D retains its logical image");
     }
+    /* Render a mesh with arbitrary green in fully transparent texels. The
+     * coverage ramp must produce only red when composited over black. */
+    for (int i=0; i<8; ++i) {
+        nj_u1 *p = (nj_u1 *)nj_array_data(pixels) + 4*i;
+        p[0]=p[3]=i%2 ? 0 : 255; p[1]=255-p[0]; p[2]=0;
+    }
+    a[0].i=a[1].i=0; a[2].i=8; a[3].i=1; a[4].r=pixels;
+    call(vm,image,C("Image2D"),"set","(IIII[B)V",a,NULL);
+    a[0].i=0; a[1].r=coords; a[2].f=1.0f/64.0f; a[3].r=NULL;
+    call(vm,c->vb,C("VertexBuffer"),"setTexCoords","(IL" C("VertexArray") ";F[F)V",a,NULL);
+    a[0].i=0; a[1].r=tex;
+    call(vm,c->app,C("Appearance"),"setTexture","(IL" C("Texture2D") ";)V",a,NULL);
+#if NJ_ENABLE_GFX_ACCEL
+    expected_width=8; expected_filter=NJ_GFX_FILTER_SHARP; filtered_faces=0;
+    port->gfx_hd_triangles=trace_filtered_texture; port->gfx_hd_triangles_ud=(void *)driver;
+#endif
+    default_clear(vm,c); triangle(vm,c,xyz);
+    int partial=0, fringe=0;
+    for (int i=0; i<128*128; ++i) {
+        nj_u4 rgb=nj_surface_get(hd,i%128,i/128)&0xffffffu;
+        partial+=rgb>0 && rgb<0xff0000u; fringe+=(rgb&0xffffu)!=0;
+    }
+    check(partial>100 && !fringe,"transparent mesh texels contribute coverage without hidden RGB");
+#if NJ_ENABLE_GFX_ACCEL
+    check(!driver->gfx_hd_triangles || filtered_faces==1,"GPU commits the single alpha-blended face");
+    port->gfx_hd_triangles=NULL; port->gfx_hd_triangles_ud=NULL;
+#endif
+    a[0].i=0; a[1].r=NULL;
+    call(vm,c->app,C("Appearance"),"setTexture","(IL" C("Texture2D") ";)V",a,NULL);
     vm->render_quality.smooth_assets=0;
 }
 

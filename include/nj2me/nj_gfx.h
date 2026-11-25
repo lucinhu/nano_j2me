@@ -256,13 +256,21 @@ int nj_font_chars_that_fit(const nj_font *f, const nj_u2 *s, int len, int avail)
 /* ------------------------------------------------------------------ */
 /* Graphics state                                                      */
 /* ------------------------------------------------------------------ */
+/* Asset sampling on an HD target. The first two values also represent the
+ * original off/on setting stored by Android and used by existing ports. */
+enum nj_asset_filter {
+    NJ_ASSET_NEAREST   = 0,
+    NJ_ASSET_SMOOTH    = 1,
+    NJ_ASSET_PIXEL_ART = 2
+};
+
 typedef struct nj_render_mirror {
     nj_surface *target; /* ARGB8888 physical target */
     int scale;          /* render_scale * ssaa */
     void *ud;
     /* Borrow an existing physical image. A miss never allocates. */
     const nj_surface *(*lookup)(void *ud, const void *pixels, int w, int h);
-    int smooth_assets;  /* interpolate bitmap assets on the physical target */
+    int smooth_assets;  /* enum nj_asset_filter, physical target only */
 } nj_render_mirror;
 
 struct nj_gfx_accel;

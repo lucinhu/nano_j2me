@@ -87,7 +87,7 @@ int nj_gfx_triangles_validate(const nj_gfx_triangles *r, const nj_u4 *submitted)
                 (t->texture_bpp!=3 && t->texture_bpp!=4) ||
                 (t->wrap_s!=240 && t->wrap_s!=241) ||
                 (t->wrap_t!=240 && t->wrap_t!=241) ||
-                (t->filter!=208 && t->filter!=209) ||
+                (t->filter!=208 && t->filter!=209 && t->filter!=NJ_GFX_FILTER_SHARP) ||
                 (t->texture_function!=226 && t->texture_function!=227 &&
                  t->texture_function!=228) ||
                 (size_t)t->texture_width>SIZE_MAX/(size_t)t->texture_bpp ||

@@ -5,14 +5,16 @@ layout(location=2) in float windowDepth;
 layout(location=0) out vec4 outColor;
 layout(std430,binding=0) readonly buffer TexturePool { uint texels[]; };
 layout(push_constant) uniform Material {
-    int offset, width, height, flags; // bit 0/1: repeat s/t, 2: linear, 3: RGB
+    int offset, width, height, flags; // bit 0/1: repeat s/t, 2: filtered, 3: RGB, 4: sharp
     int function, threshold, blend, fog;
     uint fogColor;
     float nearDist, farDist, density;
 } m;
 vec4 texel(ivec2 index) {
     index = clamp(index, ivec2(0), ivec2(m.width-1, m.height-1));
-    return unpackUnorm4x8(texels[m.offset + index.y*m.width + index.x]);
+    vec4 c = unpackUnorm4x8(texels[m.offset + index.y*m.width + index.x]);
+    if ((m.flags & 24)==16 && m.function!=226) c.rgb *= c.a;
+    return c;
 }
 vec4 sampleTexture(vec2 uv) {
     uv = vec2((m.flags & 1)!=0 ? fract(uv.x) : clamp(uv.x,0,1),
@@ -22,8 +24,11 @@ vec4 sampleTexture(vec2 uv) {
     p -= 0.5;
     ivec2 i = ivec2(floor(p));
     vec2 f = fract(p);
-    return mix(mix(texel(i),texel(i+ivec2(1,0)),f.x),
+    if ((m.flags & 16)!=0) f=clamp((f-0.5)*4.0+0.5,0.0,1.0);
+    vec4 c=mix(mix(texel(i),texel(i+ivec2(1,0)),f.x),
                mix(texel(i+ivec2(0,1)),texel(i+ivec2(1,1)),f.x),f.y);
+    if ((m.flags & 24)==16 && m.function!=226 && c.a>0.0) c.rgb /= c.a;
+    return c;
 }
 void main() {
     vec4 c = clamp(tint,0,1);

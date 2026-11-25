@@ -331,6 +331,115 @@ static void smooth_offscreen(void)
     assert(sprite_hd[0][3] == 0xcfc4003bu);
 }
 
+/* Compare a translucent diagonal silhouette to its analytic half-plane in
+ * the interior. A second fixture puts a square highlight beside a vertical
+ * edge. Render each as a standalone image first, then compare transformed,
+ * clipped draws out of a deliberately hostile atlas to that physical image. */
+static void pixel_art_frames(void)
+{
+    enum { W = 7, H = 6, A = W + 2, MAX_K = 8, SIDE = N * MAX_K };
+    nj_u4 frame[W * H], atlas[A * (H + 2)], grown[W * H * MAX_K * MAX_K];
+    nj_u4 output[SIDE][SIDE + 1], expected[SIDE][SIDE + 1], low[N * N];
+    nj_image img = {W, H, NJ_PIXFMT_ARGB8888, frame, 1};
+    nj_image sheet = {A, H + 2, NJ_PIXFMT_ARGB8888, atlas, 1};
+    const nj_u4 back = 0x800000ffu, red = 0x80ff0000u, over = 0xc0aa0055u;
+    int changed = 0;
+    for (int k = 2; k <= MAX_K; ++k) {
+        int size = N * k;
+        nj_surface target = {output, size, size, sizeof output[0], NJ_PIXFMT_ARGB8888, 4};
+        nj_surface ref = {expected, size, size, sizeof expected[0], NJ_PIXFMT_ARGB8888, 4};
+        nj_render_mirror m = {.target = &target, .scale = k, .smooth_assets = NJ_ASSET_PIXEL_ART};
+        nj_image big = {W * k, H * k, NJ_PIXFMT_ARGB8888, grown, 1};
+        nj_gfx paint, oracle;
+        nj_gfx_init(&paint, &lo);
+        paint.mirror = &m;
+        nj_gfx_init(&oracle, &ref);
+        for (int diagonal = 0; diagonal < 2; ++diagonal) {
+            for (int i = 0; i < A * (H + 2); ++i) atlas[i] = red;
+            for (int y = 0; y < H; ++y) for (int x = 0; x < W; ++x) {
+                nj_u4 hidden = (nj_u4)(y * W + x + 1) * 0x1001u;
+                nj_u4 c = diagonal ? (x >= y ? red : hidden) : (x < 2 ? BG : WHITE);
+                if (!diagonal && x == 4 && y == 3) c = 0xff77bb77u;
+                frame[y * W + x] = atlas[(y + 1) * A + x + 1] = c;
+            }
+            nj_gfx_clear(&paint, back);
+            nj_gfx_draw_image(&paint, &img, 0, 0, 0, 0, W, H);
+            for (int y = 0; y < H * k; ++y) for (int x = 0; x < W * k; ++x) {
+                nj_u4 c = grown[y * W * k + x] = output[y][x];
+                if (!diagonal) {
+                    assert(c == frame[(y / k) * W + x / k]);
+                } else {
+                    assert(c == over || c == back);
+                    changed += c != (x / k >= y / k ? over : back);
+                    if (x >= k && x < (W - 1) * k && y >= k && y < (H - 1) * k)
+                        assert(c == (2 * (x - y) >= -k ? over : back));
+                }
+            }
+            for (int t = 0; t < 8; ++t) for (int clip = 0; clip < 2; ++clip) {
+                memset(output, 0x6c, sizeof output);
+                memset(expected, 0x6c, sizeof expected);
+                nj_gfx_init(&paint, &lo);
+                nj_gfx_init(&oracle, &ref);
+                nj_gfx_clear(&oracle, back);
+                nj_gfx_translate(&paint, 1, 1);
+                if (clip) {
+                    nj_gfx_set_clip(&paint, 2, 1, 3, 4);
+                    nj_gfx_set_clip(&oracle, 3 * k, 2 * k, 3 * k, 4 * k);
+                }
+                for (int pass = 0; pass < 2; ++pass) {
+                    paint.mirror = pass ? &m : NULL;
+                    nj_gfx_clear(&paint, back);
+                    nj_gfx_draw_region(&paint, &sheet, 1, 1, W, H, t, 0, 0, NULL, 0, 0,
+                                       NJ_ROP_PAINT);
+                    if (!pass) memcpy(low, logical, sizeof low);
+                    else assert(!memcmp(low, logical, sizeof low));
+                }
+                nj_gfx_draw_image_rop(&oracle, &big, k, k, 0, 0, W * k, H * k, NJ_ROP_SET, t);
+                assert(!memcmp(output, expected, sizeof output)); /* includes pitch padding */
+            }
+            nj_gfx_init(&paint, &lo);
+            paint.mirror = &m;
+        }
+    }
+    printf("pixel-art: %d physical samples refined on seven two-colour diagonals\n", changed);
+}
+
+/* A visible diagonal ensures the bypass checks exercise art that would
+ * otherwise be reshaped. Compare physical output against the raw blitter. */
+static void pixel_art_bypass(void)
+{
+    enum { S = 5 };
+    nj_u4 colors[S * S], mask_pixels[S * S], baseline[P][P + 1];
+    nj_u1 packed[S * S * 3];
+    nj_image img = {S, S, NJ_PIXFMT_ARGB8888, colors, 1};
+    nj_image stencil = {S, S, NJ_PIXFMT_ARGB8888, mask_pixels, 1};
+    for (int i = 0; i < S * S; ++i) {
+        colors[i] = i % S >= i / S ? WHITE : 0xff225522u;
+        mask_pixels[i] = i % 3 ? WHITE : 0;
+        for (int n = 0; n < 3; ++n) packed[i * 3 + n] = (nj_u1)(colors[i] >> (16 - n * 8));
+    }
+    for (int op = 0; op < 5; ++op) for (int pass = 0; pass < 2; ++pass) {
+        reset();
+        mirror.smooth_assets = pass ? NJ_ASSET_PIXEL_ART : NJ_ASSET_NEAREST;
+        if (op == 4)
+            nj_gfx_draw_rgb(&g, packed, S * 3, 255, 1, 2, 0, 0, S, S, NJ_ROP_PAINT, NJ_TRANS_ROT90);
+        else
+            nj_gfx_draw_region(&g, &img, 0, 0, S, S, NJ_TRANS_ROT90, op == 2, 0xff123456u,
+                               op == 3 ? &stencil : NULL, 1, 2,
+                               op == 0 ? NJ_ROP_SET : op == 1 ? NJ_ROP_OPAQUE : NJ_ROP_PAINT);
+        if (!pass) memcpy(baseline, physical, sizeof baseline);
+        else assert(!memcmp(baseline, physical, sizeof baseline));
+    }
+    /* The highlight touches two different colours along a staircase. */
+    colors[2 * S + 2] = 0xffff6600u;
+    colors[S + 2] = colors[2 * S + 1] = BG;
+    reset();
+    mirror.smooth_assets = NJ_ASSET_PIXEL_ART;
+    nj_gfx_draw_image(&g, &img, 0, 0, 0, 0, S, S);
+    for (int y = 2 * K; y < 3 * K; ++y) for (int x = 2 * K; x < 3 * K; ++x)
+        assert(physical[y][x] == colors[2 * S + 2]);
+}
+
 int main(void)
 {
     geometry();
@@ -338,6 +447,8 @@ int main(void)
     bitmap_planes();
     smooth_frames();
     smooth_offscreen();
+    pixel_art_frames();
+    pixel_art_bypass();
     puts("physical LCDUI geometry, image transforms, clipping and compositing passed");
     return 0;
 }

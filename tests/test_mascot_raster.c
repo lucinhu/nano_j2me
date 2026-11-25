@@ -631,6 +631,24 @@ static void test_linear_palette(void)
     fb_pattern(0);
     nj_mascot_raster_triangle(&surf,0,0,W,H,v,0,&tex,NULL,flags,NJ_MR_BLEND_HALF,0);
     check(fb[10*W+10] == 0xff583048u, "half a red half-blend sample retains 3/4 of the old pixel");
+
+    flags = NJ_MR_TEXTURED | NJ_MR_COLORKEY | NJ_MR_FILTER_SHARP;
+    /* At u=1 the red side covers half a pixel. At u=1.25 it is solid. */
+    memset(fb,0,sizeof fb);
+    nj_mascot_raster_triangle(&surf,0,0,W,H,v,0,&tex,NULL,flags,NJ_MR_BLEND_REPLACE,0);
+    check(fb[10*W+10] == 0x80ff0000u, "sharp key boundary has half coverage and no hidden blue");
+    tri_full(v,4095,320,0);
+    memset(fb,0,sizeof fb);
+    nj_mascot_raster_triangle(&surf,0,0,W,H,v,0,&tex,NULL,flags,NJ_MR_BLEND_REPLACE,0);
+    check(fb[10*W+10] == 0xffff0000u, "sharp palette keeps a solid red texel interior");
+
+    v[1].u += 85*256;
+    fb_pattern(0);
+    nj_mascot_raster_triangle(&surf,0,0,W,H,v,0,&tex,NULL,flags,NJ_MR_BLEND_REPLACE,0);
+    nj_u4 minified = fnv1a(fb,W*H);
+    fb_pattern(0);
+    nj_mascot_raster_triangle(&surf,0,0,W,H,v,0,&tex,NULL,flags & ~NJ_MR_FILTER_SHARP,NJ_MR_BLEND_REPLACE,0);
+    check(minified == fnv1a(fb,W*H), "minified sharp palette retains the game sampler");
 }
 
 /* ------------------------------------------------------------------ */

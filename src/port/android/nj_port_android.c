@@ -6988,13 +6988,14 @@ Java_com_lucinhu_nj2me_GameActivity_nativeFsr2Built(JNIEnv *env, jclass cls)
 /* Java calls this before starting the VM thread. The run owns this copy. */
 JNIEXPORT void JNICALL
 Java_com_lucinhu_nj2me_GameActivity_nativeSetHd(JNIEnv *env, jclass cls, jlong handle,
-                                                jint scale, jint ssaa, jboolean subdivide, jboolean fsr2, jboolean vulkan, jboolean smooth_assets)
+                                                jint scale, jint ssaa, jboolean subdivide,
+                                                jboolean fsr2, jboolean vulkan, jint asset_filter)
 {
     android_app *a = (android_app *)(intptr_t)handle;
     if (!a) return;
     a->port.render_scale = scale >= 1 && scale <= 4 ? scale : 1;
     a->request_vulkan = vulkan != 0;
-    a->port.render_smooth_assets = smooth_assets != 0;
+    a->port.render_smooth_assets = asset_filter;
     a->port.render_ssaa = ssaa == 2 ? 2 : 1;
     a->port.render_subdivide = subdivide != 0;
     a->port.render_fsr2 = fsr2 && a->port.render_scale >= 2 &&

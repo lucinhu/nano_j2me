@@ -1648,8 +1648,8 @@ static void test_hd_scene(nj_vm *vm)
 {
     const nj_u4 white = 0xffffffffu, red = 0xffff0000u, pink = 0xffff7f7fu;
     nj_u4 reference[64 * 64];
-    int pass;
-    for (pass = 0; pass < 3; ++pass) {
+    int pass, smooth_mixed = 0, smooth_covered = 0;
+    for (pass = 0; pass < 4; ++pass) {
         nj_ref img, g, g3, fl, fx, tex, quv, quad, point, line, sprite, sprite_uv;
         nj_ref red_arg, black_arg;
         nj_s4 p[3] = {4, 4, 0}, l[6] = {-124, -124, 0, -60, -92, 0};
@@ -1661,7 +1661,7 @@ static void test_hd_scene(nj_vm *vm)
         nj_surface scratch, *logical;
         nj_render_mirror *m;
         if (pass) { vm->render_quality.scale = 2; vm->render_quality.ssaa = 2; }
-        vm->render_quality.smooth_assets = pass == 2;
+        vm->render_quality.smooth_assets = pass ? pass-1 : 0;
         g3 = scene_setup(vm, &img, &g);
         fl = centre_layout(vm); fx = default_effect(vm); tex = texture(vm, 0, 1);
         red_arg = ints(vm, col, 1); col[0] = 0; black_arg = ints(vm, col, 1);
@@ -1704,9 +1704,12 @@ static void test_hd_scene(nj_vm *vm)
                 }
                 printf("Mascot asset filter %d: %d red/green samples, %d fractional key samples, %d fringe samples\n",
                        m->smooth_assets, mixed, covered, fringe);
-                check(pass == 2 ? mixed > 0 : mixed == 0, "only filtered sprites interpolate palette colours");
-                check((pass == 2 ? covered > 0 : covered == 0) && !fringe,
+                check(pass >= 2 ? mixed > 0 : mixed == 0, "only filtered sprites interpolate palette colours");
+                check((pass >= 2 ? covered > 0 : covered == 0) && !fringe,
                       "keyed sprite interpolates coverage without mixing black into the edge");
+                if (pass == 2) { smooth_mixed=mixed; smooth_covered=covered; }
+                if (pass == 3) check(mixed<smooth_mixed && covered<smooth_covered,
+                                     "sharp palette and key transitions cover fewer pixels");
                 check(nj_surface_get(s,100,100) == red && nj_surface_get(s,156,156) == red,
                       "both triangles of the textured quad sample red texels");
                 check(nj_surface_get(s,129,130) == red && nj_surface_get(s,130,130) == 0xff7f0000u &&

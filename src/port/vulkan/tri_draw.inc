@@ -153,8 +153,8 @@ static material get_material(const nj_gfx_triangle_cmd *t, const packet_info *p)
         m.width = v->width;
         m.height = v->height;
         m.function = t->texture_function;
-        m.flags = (t->wrap_s == 241) | ((t->wrap_t == 241) << 1) | ((t->filter == 209) << 2) |
-                  ((t->texture_no_alpha || v->bpp == 3) << 3);
+        m.flags = (t->wrap_s == 241) | ((t->wrap_t == 241) << 1) | ((t->filter != 208) << 2) |
+                  ((t->texture_no_alpha || v->bpp == 3) << 3) | ((t->filter == NJ_GFX_FILTER_SHARP) << 4);
     }
     return m;
 }

@@ -892,7 +892,7 @@ typedef struct nj_port {
      * display_present. Input coordinates and display_init remain logical. */
     int render_scale, render_ssaa, render_subdivide, render_fsr2;
     void (*display_hd)(void *ud, const nj_surface *frame);
-    int render_smooth_assets; /* opt in to filtering magnified images and textures */
+    int render_smooth_assets; /* enum nj_asset_filter (nearest, smooth, pixel art) */
 } nj_port;
 
 /* ------------------------------------------------------------------ */

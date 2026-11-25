@@ -213,11 +213,23 @@ static unsigned glyph_coverage(const glyph *gl, int x, int y)
     return ((byte >> ((per_byte - 1 - x % per_byte) * bpp)) & mask) * (255 / mask);
 }
 
+/* Keep a solid core in small bitmap strokes while retaining fractional
+ * coverage around their edges. The source coverage itself stays intact. */
+static unsigned glyph_filter_weight(nj_s8 position, nj_s8 period, int crisp)
+{
+    unsigned w = (unsigned)(((position % period) * 256 + period / 2) / period);
+    if (!crisp) return w;
+    if (w <= 64) return 0;
+    if (w >= 192) return 256;
+    return 2 * w - 128;
+}
+
 /* Sample the resolved bitmap within its own ink cell. Keeping the bearing,
  * advance and cell boundary avoids bleeding adjacent glyphs together. */
-static void blit_smooth_bitmap(nj_gfx *physical, const nj_gfx *logical, const glyph *gl,
-                               int pen, int baseline, int scale)
+static void blit_filtered_bitmap(nj_gfx *physical, const nj_gfx *logical, const glyph *gl,
+                                 int pen, int baseline, int scale)
 {
+    int crisp = logical->mirror->smooth_assets == NJ_ASSET_PIXEL_ART;
     nj_s8 left = ((nj_s8)pen + logical->translate_x) * scale;
     nj_s8 top = ((nj_s8)baseline - gl->ascent + logical->translate_y) * scale;
     nj_s8 right = left + (nj_s8)gl->w * scale, bottom = top + (nj_s8)gl->h * scale;
@@ -232,12 +244,12 @@ static void blit_smooth_bitmap(nj_gfx *physical, const nj_gfx *logical, const gl
         nj_s8 v = 2 * (y - top) + 1 - scale, den = 2 * (nj_s8)scale;
         if (v < 0) v = 0;
         int ya = (int)(v / den), yb = ya + 1 < gl->h ? ya + 1 : ya;
-        unsigned wy = (unsigned)(((v % den) * 256 + den / 2) / den);
+        unsigned wy = glyph_filter_weight(v, den, crisp);
         for (int x = x0; x < x1; ++x) {
             nj_s8 u = 2 * (x - left) + 1 - scale;
             if (u < 0) u = 0;
             int xa = (int)(u / den), xb = xa + 1 < gl->w ? xa + 1 : xa;
-            unsigned wx = (unsigned)(((u % den) * 256 + den / 2) / den);
+            unsigned wx = glyph_filter_weight(u, den, crisp);
             unsigned a = (256 - wx) * glyph_coverage(gl, xa, ya) + wx * glyph_coverage(gl, xb, ya);
             unsigned b = (256 - wx) * glyph_coverage(gl, xa, yb) + wx * glyph_coverage(gl, xb, yb);
             int coverage = (int)(((256 - wy) * a + wy * b + 32768) >> 16);
@@ -348,7 +360,7 @@ void nj_gfx_draw_text(nj_gfx *g, const nj_u2 *s, int len, int x, int y,
             target = &logical;
         } else if (scale > 1 && g->mirror->smooth_assets && gl.bits &&
                    !g->use_xor && g->blend == NJ_BLEND_SRC_OVER) {
-            blit_smooth_bitmap(&physical, g, &gl, pen, baseline, scale);
+            blit_filtered_bitmap(&physical, g, &gl, pen, baseline, scale);
             target = &logical;
         }
         blit_glyph(target, &gl, pen, baseline);
