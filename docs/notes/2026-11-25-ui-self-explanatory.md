@@ -54,3 +54,10 @@ Android 启动器（`LibraryActivity.java`）：
   (0 = auto, 2/3/4 = integer cap), logged as `present: GL picture scale=N`.
 - Java: preference `gl_present_scale` (default 0), applied at both native init sites and from the chooser.
 - Build: `tools/build_android_apk.sh --abi x86_64 --gles2` ok.
+
+### Round 10 verification (emulator)
+
+- AVD `Medium_Phone_API_36.1`, fresh x86_64 APK; StaticDemo 360x640 panel shows the new row
+  `放大：自动` directly under `GL 呈现（实验）：FSR1（GL）`.
+- Tapping it opens a four-item chooser (自动（填满画面）/ 2× / 3× / 4×); picking `2×` closes the
+  dialog and the row immediately reads `放大：2×` (preference persisted).
