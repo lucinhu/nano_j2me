@@ -791,6 +791,52 @@ final class Md3 {
         return lp;
     }
 
+    interface Pick { void set(int index); }
+
+    /** A stable focus target. Binary choices toggle directly; lists open at the anchor. */
+    static final class Setting extends android.widget.Button {
+        final String title;
+        final String[] labels;
+        int selected;
+        Setting(Context ctx, String title, String[] labels, int initial, final Pick pick) {
+            super(ctx);
+            this.title = title;
+            this.labels = labels;
+            setAllCaps(false);
+            setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
+            setPadding(dp(ctx, 16), dp(ctx, 8), dp(ctx, 16), dp(ctx, 8));
+            setMinimumHeight(dp(ctx, 52));
+            type(this, 16f, onSurface, false);
+            setBackground(ripple(ctx, Color.TRANSPARENT, SHAPE_S, onSurfaceVariant));
+            select(initial);
+            setOnClickListener(new View.OnClickListener() {
+                @Override public void onClick(View v) {
+                    if (labels.length == 2) {
+                        select(1 - selected);
+                        pick.set(selected);
+                        return;
+                    }
+                    android.widget.PopupMenu menu = new android.widget.PopupMenu(getContext(), Setting.this);
+                    for (int i = 0; i < labels.length; i++) menu.getMenu().add(1, i, i, labels[i]);
+                    menu.getMenu().setGroupCheckable(1, true, true);
+                    menu.getMenu().findItem(selected).setChecked(true);
+                    menu.setOnMenuItemClickListener(new android.widget.PopupMenu.OnMenuItemClickListener() {
+                        @Override public boolean onMenuItemClick(android.view.MenuItem item) {
+                            select(item.getItemId());
+                            pick.set(selected);
+                            return true;
+                        }
+                    });
+                    menu.show();
+                }
+            });
+        }
+        void select(int index) {
+            selected = Math.max(0, Math.min(labels.length - 1, index));
+            setText(title + "：" + labels[selected]);
+        }
+    }
+
     /** What a single-choice dialog does with the row the player picked. */
     interface Choice {
         void picked(int which, AlertDialog dialog);

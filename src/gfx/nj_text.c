@@ -202,6 +202,50 @@ static void blit_glyph(nj_gfx *g, const glyph *gl,
     }
 }
 
+static unsigned glyph_coverage(const glyph *gl, int x, int y)
+{
+    if (gl->coverage == 1) return gl->bits[(nj_size)y * gl->w + x];
+    int bpp = gl->coverage == 2 ? 2 : 1;
+    int per_byte = 8 / bpp;
+    nj_size pitch = ((nj_size)gl->w + per_byte - 1) / per_byte;
+    unsigned byte = gl->bits[(nj_size)y * pitch + x / per_byte];
+    unsigned mask = (1u << bpp) - 1;
+    return ((byte >> ((per_byte - 1 - x % per_byte) * bpp)) & mask) * (255 / mask);
+}
+
+/* Sample the resolved bitmap within its own ink cell. Keeping the bearing,
+ * advance and cell boundary avoids bleeding adjacent glyphs together. */
+static void blit_smooth_bitmap(nj_gfx *physical, const nj_gfx *logical, const glyph *gl,
+                               int pen, int baseline, int scale)
+{
+    nj_s8 left = ((nj_s8)pen + logical->translate_x) * scale;
+    nj_s8 top = ((nj_s8)baseline - gl->ascent + logical->translate_y) * scale;
+    nj_s8 right = left + (nj_s8)gl->w * scale, bottom = top + (nj_s8)gl->h * scale;
+    int x0 = physical->clip_x, x1 = x0 + physical->clip_w;
+    int y0 = physical->clip_y, y1 = y0 + physical->clip_h;
+    if (right <= x0 || left >= x1 || bottom <= y0 || top >= y1) return;
+    if (left > x0) x0 = (int)left;
+    if (top > y0) y0 = (int)top;
+    if (right < x1) x1 = (int)right;
+    if (bottom < y1) y1 = (int)bottom;
+    for (int y = y0; y < y1; ++y) {
+        nj_s8 v = 2 * (y - top) + 1 - scale, den = 2 * (nj_s8)scale;
+        if (v < 0) v = 0;
+        int ya = (int)(v / den), yb = ya + 1 < gl->h ? ya + 1 : ya;
+        unsigned wy = (unsigned)(((v % den) * 256 + den / 2) / den);
+        for (int x = x0; x < x1; ++x) {
+            nj_s8 u = 2 * (x - left) + 1 - scale;
+            if (u < 0) u = 0;
+            int xa = (int)(u / den), xb = xa + 1 < gl->w ? xa + 1 : xa;
+            unsigned wx = (unsigned)(((u % den) * 256 + den / 2) / den);
+            unsigned a = (256 - wx) * glyph_coverage(gl, xa, ya) + wx * glyph_coverage(gl, xb, ya);
+            unsigned b = (256 - wx) * glyph_coverage(gl, xa, yb) + wx * glyph_coverage(gl, xb, yb);
+            int coverage = (int)(((256 - wy) * a + wy * b + 32768) >> 16);
+            if (coverage) nj_gfx_blend_coverage(physical, x, y, coverage);
+        }
+    }
+}
+
 /* Place a physical glyph at the scaled logical pen and baseline. Using
  * device coordinates here also lets us reject off-screen wide products
  * before narrowing them to the rasteriser's int coordinates. */
@@ -301,6 +345,10 @@ void nj_gfx_draw_text(nj_gfx *g, const nj_u2 *s, int len, int x, int y,
         nj_gfx *target = g;
         if (scale && gl.outline && blit_outline(&physical, g, gl.outline,
                                                 s[i], pen, baseline, scale)) {
+            target = &logical;
+        } else if (scale > 1 && g->mirror->smooth_assets && gl.bits &&
+                   !g->use_xor && g->blend == NJ_BLEND_SRC_OVER) {
+            blit_smooth_bitmap(&physical, g, &gl, pen, baseline, scale);
             target = &logical;
         }
         blit_glyph(target, &gl, pen, baseline);

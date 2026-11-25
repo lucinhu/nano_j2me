@@ -61,7 +61,80 @@ static void check_geometry(nj_vm *vm, canvas *c, int subdivide,
     check(memcmp(logical_z,nj_array_data(zbuf(vm,c)),64*64*4)==0,"logical depth unchanged by HD pass");
 }
 
-static void check_perspective(nj_vm *vm, canvas *c, canvas *ref)
+#if NJ_ENABLE_GFX_ACCEL
+static unsigned filtered_faces;
+static int trace_filtered_texture(void *ud, const nj_gfx_triangles *packet, nj_u4 *submitted)
+{
+    const nj_port *driver = ud;
+    for (nj_u4 i = 0; i < packet->count; ++i) {
+        const nj_gfx_triangle_cmd *face = &packet->triangles[i];
+        check(face->texture_width == 8 && face->texture_height == 1 && face->filter == 209,
+              "physical packet carries the single-row texture and linear sampler");
+    }
+    if (!driver->gfx_hd_triangles) return NJ_GFX_ACCEL_DECLINE;
+    int status = driver->gfx_hd_triangles(driver->gfx_hd_triangles_ud, packet, submitted);
+    if (status == NJ_GFX_ACCEL_DONE) filtered_faces += *submitted;
+    return status;
+}
+#endif
+
+/* Compare opt-in smoothing against a separate physical-size binding where
+ * the application explicitly asked for FILTER_LINEAR on the same 8x1 atlas. */
+static void check_mesh_filter(nj_vm *vm, nj_port *port, const nj_port *driver,
+                              canvas *c, canvas *ref, nj_ref tex, const nj_s2 xyz[9])
+{
+    nj_u4 original[64*64];
+    nj_value a[2];
+    const nj_u4 *expected = nj_array_data(ref->pixels);
+    int intermediate = 0, outliers = 0;
+    memcpy(original, nj_array_data(c->pixels), sizeof(original));
+    for (int pass = 0; pass < 2; ++pass) {
+        canvas *target = pass ? c : ref;
+        vm->render_quality.scale = pass ? 2 : 1;
+        vm->render_quality.smooth_assets = pass;
+        a[0].i=208; a[1].i=pass ? 210 : 209;
+        call(vm,tex,C("Texture2D"),"setFiltering","(II)V",a,NULL);
+        a[0].i=0; a[1].r=tex;
+        call(vm,target->app,C("Appearance"),"setTexture","(IL" C("Texture2D") ";)V",a,NULL);
+#if NJ_ENABLE_GFX_ACCEL
+        if (pass) {
+            port->gfx_hd_triangles = trace_filtered_texture;
+            port->gfx_hd_triangles_ud = (void *)driver;
+        }
+#else
+        (void)port; (void)driver;
+#endif
+        default_clear(vm,target);
+        triangle(vm,target,xyz);
+        a[0].i=0; a[1].r=NULL;
+        call(vm,target->app,C("Appearance"),"setTexture","(IL" C("Texture2D") ";)V",a,NULL);
+    }
+#if NJ_ENABLE_GFX_ACCEL
+    check(!driver->gfx_hd_triangles || filtered_faces == 4,
+          "the selected GPU commits all four textured faces");
+    port->gfx_hd_triangles = NULL;
+    port->gfx_hd_triangles_ud = NULL;
+#endif
+    nj_surface *hd = companion(vm,c);
+    for (int i=0; i<128*128; ++i) {
+        nj_u4 got = nj_surface_get(hd,i%128,i/128);
+        int red = (int)((got >> 16) & 255u);
+        intermediate += (red % 30) != 0;
+        /* Hardware normalizes and rounds to UNORM8. Compare the individual
+         * channels and tolerate a small number of top-left edge ties. */
+        if (abs(red - (int)((expected[i] >> 16) & 255u)) > 1 ||
+            abs((int)((got >> 8) & 255u) - (int)((expected[i] >> 8) & 255u)) > 1 ||
+            (got & 0xff0000ffu) != (expected[i] & 0xff0000ffu)) ++outliers;
+    }
+    printf("8x1 linear: %d intermediate samples, %d outliers from independent reference\n",
+           intermediate, outliers);
+    check(intermediate > 200 && outliers < 8,"thin texture filters along its varying axis");
+    check(!memcmp(original,nj_array_data(c->pixels),sizeof(original)),
+          "Java image retains the eight requested nearest colour bands");
+    vm->render_quality.smooth_assets = 0;
+}
+
+static void check_perspective(nj_vm *vm, nj_port *port, const nj_port *driver, canvas *c, canvas *ref)
 {
     const nj_s2 xyz[9] = {-1,-1,-2, 5,-2,-8, -1,3,-4};
     const nj_s2 uv[6] = {1,0, 64,0, 1,64};
@@ -111,6 +184,7 @@ static void check_perspective(nj_vm *vm, canvas *c, canvas *ref)
     printf("perspective texture: sampled bands=%x, HD differences=%d\n",bands,differences);
     check(bands==255,"perspective fixture samples all eight texture bands");
     check(differences==0,"subdivision preserves perspective texture coordinates and coverage");
+    check_mesh_filter(vm,port,driver,c,ref,tex,xyz);
 
     /* Previously untested HD paths: an image Background at a cropped
      * viewport, then a scaled Sprite3D. Both use the physical sampling grid. */
@@ -140,6 +214,38 @@ static void check_perspective(nj_vm *vm, canvas *c, canvas *ref)
     check(reference[60*128+60] != reference[12*128+60],"scaled sprite visible over background");
     check(memcmp(hd->pixels,reference,128u*128u*sizeof(*reference))==0,
           "cropped image Background and scaled Sprite3D match 128x128 reference");
+
+    /* The cropped frame has an opaque red texel beside transparent green.
+     * Its opaque blue neighbours expose a sample that escapes the crop. */
+    const nj_u1 atlas[] = {0,0,255,255, 255,0,0,255, 0,255,0,0, 0,0,255,255};
+    nj_ref rgba = nj_root(vm,nj_object_new(vm,C("Image2D")));
+    nj_ref data = nj_root(vm,nj_array_new(vm,"B",sizeof(atlas)));
+    nj_u4 logical[64*64];
+    memcpy(nj_array_data(data),atlas,sizeof(atlas));
+    a[0].i=100; a[1].i=4; a[2].i=1; a[3].r=data;
+    if (nj_call_special(vm,rgba,C("Image2D"),"<init>","(III[B)V",a,NULL)!=NJ_OK) exit(2);
+    a[0].r=rgba; call(vm,sprite,C("Sprite3D"),"setImage","(L" C("Image2D") ";)V",a,NULL);
+    a[0].i=1; a[1].i=0; a[2].i=2; a[3].i=1;
+    call(vm,sprite,C("Sprite3D"),"setCrop","(IIII)V",a,NULL);
+    a[0].i=64; call(vm,c->cm,C("CompositingMode"),"setBlending","(I)V",a,NULL);
+    for (int smooth=0; smooth<=1; ++smooth) {
+        int partial=0, contaminated=0;
+        vm->render_quality.smooth_assets=smooth;
+        default_clear(vm,c);
+        a[0].r=sprite; a[1].r=model;
+        call(vm,c->g3,C("Graphics3D"),"render","(L" C("Node") ";L" C("Transform") ";)V",a,NULL);
+        for (int y=0; y<128; ++y) for (int x=0; x<128; ++x) {
+            nj_u4 rgb=nj_surface_get(hd,x,y) & 0xffffffu;
+            partial += rgb>0 && rgb<0xff0000u;
+            contaminated += (rgb & 0xffffu)!=0;
+        }
+        check(contaminated==0,"neighbour frame and hidden RGB never tint the sprite");
+        check(smooth ? partial>20 : partial==0,"linear sprite edges have fractional coverage");
+        if (!smooth) memcpy(logical,nj_array_data(c->pixels),sizeof(logical));
+        else check(!memcmp(logical,nj_array_data(c->pixels),sizeof(logical)),
+                   "the cropped Sprite3D retains its logical image");
+    }
+    vm->render_quality.smooth_assets=0;
 }
 
 #if NJ_ENABLE_GFX_ACCEL
@@ -295,8 +401,8 @@ int main(int argc, char **argv)
     canvas c, ref;
     nj_u4 baseline[64*64];
     nj_s4 logical_z[64*64];
-#if NJ_ENABLE_GFX_ACCEL
     nj_port backend = {0};
+#if NJ_ENABLE_GFX_ACCEL
     if (argc > 1) {
 #if NJ_ENABLE_VULKAN
         if (strcmp(argv[1],"vulkan")==0 && !nj_vk_renderer_attach(&backend)) return 77;
@@ -329,11 +435,11 @@ int main(int argc, char **argv)
     vm->render_quality.scale=2;
 #if NJ_ENABLE_GFX_ACCEL
     check_physical(vm,&port,&c,&ref,baseline,logical_z,&backend);
-    nj_port_shutdown(&backend);
 #endif
     check_geometry(vm,&c,0,baseline,logical_z,&ref);
     check_geometry(vm,&c,1,baseline,logical_z,&ref);
-    check_perspective(vm,&c,&ref);
+    check_perspective(vm,&port,&backend,&c,&ref);
+    nj_port_shutdown(&backend);
     default_clear(vm,&c); draw(vm,&c,3,0xffff0000u,0);
     viewport(vm,&c,0,0,32,64); clear(vm,&c,0,1);
     viewport(vm,&c,0,0,64,64); draw(vm,&c,4,0xff00ff00u,0);

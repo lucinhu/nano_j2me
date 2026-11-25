@@ -123,6 +123,35 @@ static void check_image_copies(nj_vm *vm, nj_ref image, nj_surface *logical, nj_
         CHECK(nj_surface_get(copy, x, y) == nj_surface_get(hd, 4+y, 11-x));
 }
 
+/* drawRGB addresses Java int[] samples. Even if that array backs an Image
+ * with a detailed HD surface, disjoint and self-copy paths use its raw data. */
+static void check_raw_rgb(nj_vm *vm, nj_ref image)
+{
+    nj_ref other = nj_root(vm,nj_midp_image_new(vm,6,4,1));
+    nj_ref data = nj_rget(vm,image,nj_field_lookup(vm,NJ_C_IMAGE,"imgPixels","[I",0));
+    nj_surface logical;
+    nj_u4 pattern[24];
+    vm->render_quality.smooth_assets = 1;
+    CHECK(other && data && nj_midp_surface(vm,image,&logical));
+    nj_surface *source_hd = nj_midp_hd_target(vm,&logical)->target;
+    for (int i=0; i<24; ++i) pattern[i] = i%2 ? 0xffff0000u : 0xff00ff00u;
+    for (int alias=0; alias<2; ++alias) {
+        nj_ref target = alias ? image : other;
+        nj_ref graphics = nj_root(vm,nj_midp_image_graphics(vm,target));
+        nj_value a[8] = {{0}};
+        memcpy(nj_array_data(data),pattern,sizeof(pattern));
+        for (int y=0; y<16; ++y) for (int x=0; x<24; ++x)
+            nj_surface_set(source_hd,x,y,0xff0000ffu);
+        a[0].r=data; a[2].i=6; a[5].i=6; a[6].i=4; a[7].i=1;
+        CHECK(nj_call(vm,graphics,NJ_C_GRAPHICS,"drawRGB","([IIIIIIIZ)V",a,NULL)==NJ_OK);
+        CHECK(nj_midp_surface(vm,target,&logical));
+        nj_surface *hd = nj_midp_hd_target(vm,&logical)->target;
+        for (int y=0; y<16; ++y) for (int x=0; x<24; ++x)
+            CHECK(nj_surface_get(hd,x,y) == pattern[(y/4)*6 + x/4]);
+    }
+    vm->render_quality.smooth_assets = 0;
+}
+
 int main(void)
 {
     nj_port port = {0};
@@ -170,6 +199,7 @@ int main(void)
     nj_surface_set(screen, 0, 0, 0xff000000u);
     nj_midp_hd_invalidate(vm, screen);
     CHECK(nj_midp_hd_present(vm) && frames == 2 && first == 0xff000000u);
+    check_raw_rgb(vm, image);
     check_image_copies(vm, image, &surface, src->target);
     check_copy_area(vm, nj_root(vm, nj_midp_image_graphics(vm, image)), &surface, src->target);
     /* A null target selects the port's framebuffer in this implementation. */

@@ -262,6 +262,7 @@ typedef struct nj_render_mirror {
     void *ud;
     /* Borrow an existing physical image. A miss never allocates. */
     const nj_surface *(*lookup)(void *ud, const void *pixels, int w, int h);
+    int smooth_assets;  /* interpolate bitmap assets on the physical target */
 } nj_render_mirror;
 
 struct nj_gfx_accel;

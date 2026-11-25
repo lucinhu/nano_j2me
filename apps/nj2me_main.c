@@ -192,6 +192,7 @@ static void usage(const char *argv0)
 "  --render-scale <1..4>  rasterize geometry and outlines at this output scale\n"
 "  --ssaa <1|2>           samples per axis before resolving the physical frame\n"
 "  --subdivide            split M3G triangles during HD drawing\n"
+"  --smooth-assets        smooth bitmap artwork and M3G textures on the HD target\n"
 "  --fsr2                 request temporal M3G rendering (Vulkan build)\n"
 "  --scale <n>          integer upscale for the window (sdl2, default: auto)\n"
 "  --size <WxH>         screen size, e.g. 240x320 (default: %dx%d)\n"
@@ -325,7 +326,7 @@ typedef struct cli {
     const char *dump_dir;
     int         dump_every;
     int         scale;
-    int         render_scale, ssaa, subdivide, fsr2;
+    int         render_scale, ssaa, subdivide, fsr2, smooth_assets;
     int         fps;
     int         width;
     int         height;
@@ -644,6 +645,7 @@ static int setup_port(const cli *c, nj_port *port,
     port->render_ssaa = c->ssaa;
     port->render_subdivide = c->subdivide;
     port->render_fsr2 = c->fsr2;
+    port->render_smooth_assets = c->smooth_assets;
     port->width = c->width;
     port->height = c->height;
     if (c->fps >= 0) {
@@ -726,6 +728,7 @@ static int run_client_mode(const cli *c, const nj_run_opts *opts)
     co.render_ssaa = c->ssaa;
     co.render_subdivide = c->subdivide;
     co.render_fsr2 = c->fsr2;
+    co.render_smooth_assets = c->smooth_assets;
     st = nj_client_run(&co);
     if (c->stats) {
         fprintf(stderr, "nano_j2me: exit status %d\n", (int)st);
@@ -906,6 +909,8 @@ int main(int argc, char **argv)
             else c.render_scale = argv[i][0] - '0';
         } else if (strcmp(a, "--subdivide") == 0) {
             c.subdivide = 1;
+        } else if (strcmp(a, "--smooth-assets") == 0) {
+            c.smooth_assets = 1;
         } else if (strcmp(a, "--fsr2") == 0) {
 #if NJ_ENABLE_FSR2
             c.fsr2 = 1;

@@ -74,6 +74,7 @@ extern "C" {
 #define NJ_MR_LIGHTING 0x0008u  /* interpolate light/env from the vertices  */
 #define NJ_MR_ENVMAP   0x0010u  /* add the environment-map colour           */
 #define NJ_MR_TOON     0x0020u  /* toon shading: light passes through toon  */
+#define NJ_MR_FILTER_LINEAR 0x0040u /* physical target: interpolate palette colours */
 
 /*
  * Toon shading (Effect3D.TOON_SHADING).

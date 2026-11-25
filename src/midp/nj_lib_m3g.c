@@ -11508,18 +11508,6 @@ static const nj_u1 *m3g_mip_level(const nj_u1 *base, const nj_u1 *mips,
     return lv ? p : base;
 }
 
-#if !NJ_M3G_FAST_PATHS
-/* One texel as 0xAARRGGBB, for the filter below. */
-static nj_u4 sw_texel_pack(const m3g_sw *sw, int u, int v)
-{
-    const nj_u1 *p = sw->tex + ((nj_size)v * (nj_size)sw->tex_w + (nj_size)u) *
-                                (nj_size)sw->tex_bpp;
-    nj_u4 a = (sw->tex_bpp == 4) ? (nj_u4)p[3] : 255u;
-
-    return (a << 24) | ((nj_u4)p[0] << 16) | ((nj_u4)p[1] << 8) | (nj_u4)p[2];
-}
-#endif
-
 /* Texture2D's alpha equation is independent of its RGB equation. Keep the
  * source format even when a conversion or mip level supplies RGBA bytes. */
 static inline nj_u4 sw_tex_alpha(const m3g_sw *sw, nj_u4 ta, nj_u4 argb)
@@ -11561,7 +11549,7 @@ static nj_u4 sw_texel(const m3g_sw *sw, float s, float t, nj_u4 argb)
         if (ft >= 1.0f) { ft = 0.999f; }
     }
     if ((sw->filt_image == 209 || sw->filt_image == 129) &&
-        sw->tex_w > 1 && sw->tex_h > 1) {
+        (sw->tex_w > 1 || sw->tex_h > 1)) {
         /*
          * FILTER_LINEAR: the four texels around the sample point, weighted by
          * the distance to each.  The weights are 8-bit and sum to 65536, so
@@ -11574,57 +11562,53 @@ static nj_u4 sw_texel(const m3g_sw *sw, float s, float t, nj_u4 argb)
         float y = ft * (float)sw->tex_h - 0.5f;
         int u0 = (int)x, v0 = (int)y, u1, v1, fu, fv;
         nj_u4 w00, w10, w01, w11;
-#if NJ_M3G_FAST_PATHS
         const nj_u1 *p00, *p10, *p01, *p11;
-#else
-        nj_u4 c00, c10, c01, c11;
-#endif
+        nj_u4 coverage = 0;
 
-        if (u0 < 0) { u0 = 0; }
-        if (u0 >= sw->tex_w) { u0 = sw->tex_w - 1; }
-        if (v0 < 0) { v0 = 0; }
-        if (v0 >= sw->tex_h) { v0 = sw->tex_h - 1; }
+        /* A Sprite3D crop can be one frame in an animation atlas. All four
+         * taps must stay in that frame, even when a UV lies on its edge. */
+        int left = sw->sprite ? sw->sprite_l : 0;
+        int top = sw->sprite ? sw->sprite_t : 0;
+        int last_u = (sw->sprite ? sw->sprite_r : sw->tex_w) - 1;
+        int last_v = (sw->sprite ? sw->sprite_b : sw->tex_h) - 1;
+        if (u0 < left) { u0 = left; }
+        if (u0 > last_u) { u0 = last_u; }
+        if (v0 < top) { v0 = top; }
+        if (v0 > last_v) { v0 = last_v; }
         fu = (int)((x - (float)u0) * 256.0f + 0.5f);
         fv = (int)((y - (float)v0) * 256.0f + 0.5f);
         if (fu < 0) { fu = 0; }
         if (fu > 256) { fu = 256; }
         if (fv < 0) { fv = 0; }
         if (fv > 256) { fv = 256; }
-        u1 = (u0 + 1 < sw->tex_w) ? u0 + 1 : u0;
-        v1 = (v0 + 1 < sw->tex_h) ? v0 + 1 : v0;
+        u1 = u0 < last_u ? u0 + 1 : u0;
+        v1 = v0 < last_v ? v0 + 1 : v0;
         w00 = (nj_u4)(256 - fu) * (nj_u4)(256 - fv);
         w10 = (nj_u4)fu * (nj_u4)(256 - fv);
         w01 = (nj_u4)(256 - fu) * (nj_u4)fv;
         w11 = (nj_u4)fu * (nj_u4)fv;
-#if NJ_M3G_FAST_PATHS
-        /* Filter the stored channels directly; packing four ARGB words only
-         * to unpack them again adds work to every linear sample. Preserve
-         * the original weights and final shift, including RGB's alpha=255. */
-        p00 = sw->tex + ((nj_size)v0 * (nj_size)sw->tex_w + (nj_size)u0) *
-                        (nj_size)sw->tex_bpp;
-        p10 = p00 + (nj_size)(u1 - u0) * (nj_size)sw->tex_bpp;
-        p01 = p00 + (nj_size)(v1 - v0) * (nj_size)sw->tex_w * (nj_size)sw->tex_bpp;
-        p11 = p01 + (nj_size)(u1 - u0) * (nj_size)sw->tex_bpp;
-        tr = (p00[0] * w00 + p10[0] * w10 + p01[0] * w01 + p11[0] * w11) >> 16;
-        tg = (p00[1] * w00 + p10[1] * w10 + p01[1] * w01 + p11[1] * w11) >> 16;
-        tb = (p00[2] * w00 + p10[2] * w10 + p01[2] * w01 + p11[2] * w11) >> 16;
+        p00 = sw->tex + ((nj_size)v0 * sw->tex_w + u0) * sw->tex_bpp;
+        p10 = p00 + (u1 - u0) * sw->tex_bpp;
+        p01 = p00 + (nj_size)(v1 - v0) * sw->tex_w * sw->tex_bpp;
+        p11 = p01 + (u1 - u0) * sw->tex_bpp;
         if (sw->tex_bpp == 4) {
             ta = (p00[3] * w00 + p10[3] * w10 + p01[3] * w01 + p11[3] * w11) >> 16;
+            if (sw->sprite && ta != 255u) {
+                /* A transparent sprite texel can carry an arbitrary RGB key.
+                 * Weight its visible colour by alpha before interpolation. */
+                w00 *= p00[3]; w10 *= p10[3];
+                w01 *= p01[3]; w11 *= p11[3];
+                coverage = w00 + w10 + w01 + w11;
+            }
         }
-#else
-        c00 = sw_texel_pack(sw, u0, v0);
-        c10 = sw_texel_pack(sw, u1, v0);
-        c01 = sw_texel_pack(sw, u0, v1);
-        c11 = sw_texel_pack(sw, u1, v1);
-        tr = (nj_u1)(((((c00 >> 16) & 0xFFu) * w00 + ((c10 >> 16) & 0xFFu) * w10 +
-                       ((c01 >> 16) & 0xFFu) * w01 + ((c11 >> 16) & 0xFFu) * w11) >> 16) & 0xFFu);
-        tg = (nj_u1)(((((c00 >> 8) & 0xFFu) * w00 + ((c10 >> 8) & 0xFFu) * w10 +
-                       ((c01 >> 8) & 0xFFu) * w01 + ((c11 >> 8) & 0xFFu) * w11) >> 16) & 0xFFu);
-        tb = (nj_u1)((((c00 & 0xFFu) * w00 + (c10 & 0xFFu) * w10 +
-                       (c01 & 0xFFu) * w01 + (c11 & 0xFFu) * w11) >> 16) & 0xFFu);
-        ta = (nj_u1)(((((c00 >> 24) & 0xFFu) * w00 + ((c10 >> 24) & 0xFFu) * w10 +
-                       ((c01 >> 24) & 0xFFu) * w01 + ((c11 >> 24) & 0xFFu) * w11) >> 16) & 0xFFu);
-#endif
+        tr = p00[0] * w00 + p10[0] * w10 + p01[0] * w01 + p11[0] * w11;
+        tg = p00[1] * w00 + p10[1] * w10 + p01[1] * w01 + p11[1] * w11;
+        tb = p00[2] * w00 + p10[2] * w10 + p01[2] * w01 + p11[2] * w11;
+        if (coverage) {
+            tr /= coverage; tg /= coverage; tb /= coverage;
+        } else {
+            tr >>= 16; tg >>= 16; tb >>= 16;
+        }
     } else {
         if (sw->sprite) {
             u = (int)(fs * (float)sw->tex_w);
@@ -16257,6 +16241,9 @@ static int jr_hd_target(m3g_jr *r, m3g_jr *hd)
     hd->sw.surf = m->target;
     hd->sw.z = d->keys;
     hd->hd_scale = m->scale;
+    /* The physical material feeds the software sampler and both GPU packets.
+     * Java's Texture2D still supplies the filter and mip policy for readback. */
+    if (m->smooth_assets) hd->sw.filt_image = 209; /* FILTER_LINEAR */
     hd->sw.vx *= m->scale; hd->sw.vy *= m->scale;
     hd->sw.vw *= m->scale; hd->sw.vh *= m->scale;
     /* Depth offset is specified in logical viewport pixels. */

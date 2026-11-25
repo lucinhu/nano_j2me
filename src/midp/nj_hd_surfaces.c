@@ -144,6 +144,7 @@ nj_render_mirror *nj_midp_hd_target(nj_vm *vm, const nj_surface *s)
         e->mirror.ud = store;
         e->mirror.lookup = hd_lookup;
     }
+    e->mirror.smooth_assets = vm->render_quality.smooth_assets;
     if (!e->valid) hd_seed(e, s);
     return &e->mirror;
 }

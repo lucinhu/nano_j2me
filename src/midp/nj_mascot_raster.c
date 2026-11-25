@@ -810,6 +810,70 @@ static inline nj_u4 mr_env_add(nj_u4 color, nj_u4 env)
     return 0xFF000000u | (color + env - tmp) | tmp;
 }
 
+/* The reference selects a cell at floor(uv). Interpolate around that cell's
+ * centre and clamp neighbours at sheet edges. Keep the reference's packed
+ * address calculation for the containing cell, even for out-of-range UVs. */
+static nj_u4 mr_linear_texel(const nj_mascot_texture *tex, int key,
+                            nj_s4 u, nj_s4 v, nj_u4 *coverage)
+{
+    nj_u4 width = 1u << tex->width_bit, mask = (nj_u4)tex->len_mask;
+    nj_u4 cell = (((nj_u4)(v >> MR_FP) << tex->width_bit) | (nj_u4)(u >> MR_FP)) & mask;
+    int fx = (int)(((nj_u4)u >> (MR_FP - 8)) & 255u) - 128;
+    int fy = (int)(((nj_u4)v >> (MR_FP - 8)) & 255u) - 128;
+    int x = (int)(cell & (width - 1u));
+    int dx = fx < 0 ? -(x > 0) : (x + 1 < (int)width);
+    int dy = fy < 0 ? -(int)(cell >= width) : (cell + width <= mask);
+    nj_u4 row = (nj_u4)((int)cell + dy * (int)width);
+    nj_u1 indices[4] = {tex->raster[cell], tex->raster[(int)cell + dx],
+                        tex->raster[row], tex->raster[(int)row + dx]};
+    nj_u4 wx = (nj_u4)(fx < 0 ? -fx : fx), wy = (nj_u4)(fy < 0 ? -fy : fy);
+    nj_u4 weights[4] = {(256-wx)*(256-wy), wx*(256-wy), (256-wx)*wy, wx*wy};
+    nj_u4 r = 0, g = 0, b = 0, sum = 0;
+    int i;
+    if (indices[0] == indices[1] && indices[0] == indices[2] && indices[0] == indices[3]) {
+        *coverage = indices[0] == key ? 0u : 256u;
+        return mr_pal_get(tex->palette, indices[0]);
+    }
+    for (i = 0; i < 4; ++i) {
+        if (indices[i] != key) {
+            nj_u4 color = mr_pal_get(tex->palette, indices[i]), w = weights[i];
+            r += ((color >> 16) & 255u) * w;
+            g += ((color >>  8) & 255u) * w;
+            b += ( color        & 255u) * w;
+            sum += w;
+        }
+    }
+    *coverage = (sum + 128u) >> 8;
+    if (!*coverage) return 0;
+    if (sum == 65536u) {
+        r = (r + 32768u) >> 16; g = (g + 32768u) >> 16; b = (b + 32768u) >> 16;
+    } else {
+        /* Unassociate only the covered taps before shading and blending. */
+        r = (r + sum/2) / sum; g = (g + sum/2) / sum; b = (b + sum/2) / sum;
+    }
+    return 0xff000000u | (r << 16) | (g << 8) | b;
+}
+
+/* Fractional coverage chooses between the material's fully blended result
+ * and the old framebuffer. Store straight ARGB for transparent Image targets. */
+static nj_u4 mr_covered(nj_u4 src, nj_u4 dst, nj_u4 weight)
+{
+    nj_u4 a = 255u * weight, da = (dst >> 24) * (256u - weight), sum = a + da;
+    nj_u4 out = ((sum + 128u) >> 8) << 24;
+    unsigned shift;
+    if ((dst >> 24) == 255u) {
+        nj_u4 inverse = 256u - weight;
+        nj_u4 rb = ((src & 0xff00ffu) * weight + (dst & 0xff00ffu) * inverse + 0x800080u) >> 8;
+        nj_u4 g = ((src & 0xff00u) * weight + (dst & 0xff00u) * inverse + 0x8000u) >> 8;
+        return 0xff000000u | (rb & 0xff00ffu) | (g & 0xff00u);
+    }
+    for (shift = 0; shift <= 16; shift += 8) {
+        nj_u4 ch = (((src >> shift) & 255u) * a + ((dst >> shift) & 255u) * da + sum/2) / sum;
+        out |= ch << shift;
+    }
+    return out;
+}
+
 /* Fill the rows of one clipped segment.  All coordinates are 12.12 fixed
  * point; the per-row edge starts advance by the edge derivatives and the
  * in-row interpolators by the scanline derivatives. */
@@ -1075,6 +1139,11 @@ static void mr_fill_segment(const mr_state *st,
     (void)mode;
 #endif
 
+    /* The physical filter shares the generic light, toon and environment
+     * stages. Nearest draws retain their dedicated span dispatch. */
+    const int linear = has_tex && (st->flags & NJ_MR_FILTER_LINEAR);
+    if (linear) mode = MR_MODE_GENERIC;
+
     /* "Corrected rounding to avoid texture seams": nudge the interpolators by
      * one subpixel in the direction they are moving.  Only the attributes the
      * reference interpolates get this. */
@@ -1212,17 +1281,18 @@ static void mr_fill_segment(const mr_state *st,
             for (px = xl; px < xr;
                  px++, uu += du, vv += dv, ss += ds, eeu += deu, eev += dev,
                  pp += bpp) {
-                nj_u4 pix;
+                nj_u4 pix, coverage = 256;
 
                 if (has_tex) {
-                    nj_s4 ti = (nj_s4)t_raster[
-                        (nj_s4)((((nj_u4)(vv >> MR_FP) << t_wbit)
-                                 | (nj_u4)(uu >> MR_FP)) & (nj_u4)t_mask)];
-
-                    if (ti == key_idx) {
-                        continue;
+                    if (linear) {
+                        pix = mr_linear_texel(st->tex, key_idx, uu, vv, &coverage);
+                        if (!coverage) continue;
+                    } else {
+                        nj_s4 ti = t_raster[(((nj_u4)(vv >> MR_FP) << t_wbit)
+                                            | (nj_u4)(uu >> MR_FP)) & (nj_u4)t_mask];
+                        if (ti == key_idx) continue;
+                        pix = mr_pal_get(t_palette, ti);
                     }
-                    pix = mr_pal_get(t_palette, ti & 0xFF);
                     if (tex_shaded) {
                         nj_s4 level;
 
@@ -1273,11 +1343,12 @@ static void mr_fill_segment(const mr_state *st,
                     }
                 }
 
-                if (blend == NJ_MR_BLEND_REPLACE) {
-                    mr_raw_put(pp, pix, fmt);
-                } else {
-                    mr_raw_put(pp, mr_blend(pix, mr_raw_get(pp, fmt), blend), fmt);
+                if (blend != NJ_MR_BLEND_REPLACE || coverage < 256) {
+                    nj_u4 dst = mr_raw_get(pp, fmt);
+                    if (blend != NJ_MR_BLEND_REPLACE) pix = mr_blend(pix, dst, blend);
+                    if (coverage < 256) pix = mr_covered(pix, dst, coverage);
                 }
+                mr_raw_put(pp, pix, fmt);
             }
                 break;
             }

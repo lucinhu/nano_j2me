@@ -476,7 +476,6 @@ public class LibraryActivity extends Activity {
             if (res == RESULT_OK && data != null && data.getData() != null) {
                 String path = FontPicker.install(this, data.getData());
                 toast(path == null ? "这个文件不是字体，还是用系统字体" : "字体已更换，游戏里的字会用它");
-                displayDialog();
             }
             return;
         }
@@ -634,13 +633,7 @@ public class LibraryActivity extends Activity {
                 screenDialog(e);
             }
         }));
-        box.addView(rowAction(Md3.IC_MEMORY, "Java 堆",
-                JarStore.heapText(this, e.heapMB), new Runnable() {
-            @Override
-            public void run() {
-                heapDialog(e);
-            }
-        }));
+        box.addView(heapSetting(e));
         box.addView(rowAction(Md3.IC_RENAME, "显示名字",
                 e.title, new Runnable() {
                     @Override
@@ -655,19 +648,8 @@ public class LibraryActivity extends Activity {
                         startEditor(e);
                     }
                 }));
-        box.addView(rowAction(Md3.IC_IMPORT, "联网",
-                e.net != 0 ? "允许（默认）" : "已禁止", new Runnable() {
-                    @Override
-                    public void run() {
-                        netDialog(e);
-                    }
-                }));
-        box.addView(rowAction(Md3.IC_INFO, "传感器", sensorHint(e.sensor), new Runnable() {
-                    @Override
-                    public void run() {
-                        sensorDialog(e);
-                    }
-                }));
+        box.addView(netSetting(e));
+        box.addView(sensorSetting(e));
         if (JarStore.hasState(this, e.jar.getName())) {
             box.addView(dangerAction(Md3.IC_DELETE, "删除存档", new Runnable() {
                 @Override
@@ -717,14 +699,13 @@ public class LibraryActivity extends Activity {
      * opens then fails at once, which is the answer the game is already written
      * to handle.
      */
-    private void netDialog(final JarStore.Entry e) {
+    private View netSetting(final JarStore.Entry e) {
         String[] labels = { "允许联网（默认）", "禁止联网" };
         String[] hints = { "游戏可以像在手机上一样上网",
                            "连接直接失败，游戏走它自己的断网提示" };
-        Md3.chooser(this, Md3.IC_IMPORT, "联网", e.title, labels, hints,
-                e.net != 0 ? 0 : 1, new Md3.Choice() {
+        return new Md3.Setting(this, "联网", labels, e.net != 0 ? 0 : 1, new Md3.Pick() {
                     @Override
-                    public void picked(int which, AlertDialog d) {
+                    public void set(int which) {
                         e.net = (which == 0) ? 1 : 0;
                         JarStore.write(LibraryActivity.this, e);
                         toast(e.net != 0 ? "已允许联网（下次启动生效）"
@@ -742,7 +723,7 @@ public class LibraryActivity extends Activity {
      * not have, the other steers by tilt and needs one that holds still while
      * the player uses the keys.
      */
-    private void sensorDialog(final JarStore.Entry e) {
+    private View sensorSetting(final JarStore.Entry e) {
         String[] labels = { "用手机的传感器（默认）", "模拟：平放", "模拟：左倾",
                             "模拟：右倾", "关闭传感器" };
         String[] hints = {
@@ -752,10 +733,9 @@ public class LibraryActivity extends Activity {
                 "提供一个加速度计，向右倒",
                 "游戏看不到任何传感器" };
         int checked = (e.sensor >= 0 && e.sensor <= 4) ? e.sensor : 0;
-        Md3.chooser(this, Md3.IC_INFO, "传感器", e.title, labels, hints, checked,
-                new Md3.Choice() {
+        return new Md3.Setting(this, "传感器", labels, checked, new Md3.Pick() {
                     @Override
-                    public void picked(int which, AlertDialog d) {
+                    public void set(int which) {
                         e.sensor = which;
                         JarStore.write(LibraryActivity.this, e);
                         toast("传感器：" + sensorHint(which) + "（下次启动生效）");
@@ -846,7 +826,7 @@ public class LibraryActivity extends Activity {
     }
 
 
-    private void heapDialog(final JarStore.Entry e) {
+    private View heapSetting(final JarStore.Entry e) {
         /*
          * Automatic first and by default: the port reads the phone's RAM and
          * picks a heap from it, so a game picked up on a 1 GB handset and on a
@@ -868,12 +848,9 @@ public class LibraryActivity extends Activity {
                 checked = i;
             }
         }
-        Md3.chooser(this, Md3.IC_MEMORY, "Java 堆大小",
-                "MIDlet 能用多少内存（现在是 " + JarStore.heapText(this, e.heapMB)
-                        + "）。游戏报 OutOfMemory 就调大一点。",
-                labels, hints, checked, new Md3.Choice() {
+        return new Md3.Setting(this, "Java 堆", labels, checked, new Md3.Pick() {
                     @Override
-                    public void picked(int which, AlertDialog d) {
+                    public void set(int which) {
                         e.heapMB = sizes[which];
                         JarStore.write(LibraryActivity.this, e);
                         reload();
@@ -972,16 +949,9 @@ public class LibraryActivity extends Activity {
                         startActivity(new Intent(LibraryActivity.this, PadEditActivity.class));
                     }
                 }), Md3.gap(this, 12));
-        box.addView(rowAction(Md3.IC_FULLSCREEN, immersive ? "沉浸模式：开" : "沉浸模式：关",
-                immersive ? "游戏里隐藏状态栏和导航栏" : "游戏里显示状态栏", new Runnable() {
-                    @Override
-                    public void run() {
-                        Ui.setImmersive(LibraryActivity.this, !immersive);
-                        toast(!immersive
-                                ? "沉浸模式已打开：游戏里隐藏状态栏和导航栏"
-                                : "沉浸模式已关闭：游戏里显示状态栏");
-                    }
-                }));
+        box.addView(new Md3.Setting(this, "沉浸模式", DisplayControls.OFF_ON, immersive ? 1 : 0, new Md3.Pick() {
+            @Override public void set(int i) { Ui.setImmersive(LibraryActivity.this, i == 1); }
+        }));
         box.addView(rowAction(Md3.IC_SORT, "排序方式", SORT_NAMES[sortMode], new Runnable() {
             @Override
             public void run() {
@@ -1030,106 +1000,29 @@ public class LibraryActivity extends Activity {
      * display prefs, so setting them here is the same setting.
      */
     private void displayDialog() {
-        final boolean fontAa = Settings.fontAntiAlias(this);
-        final boolean picAa = Settings.pictureAntiAlias(this);
-        final String path = Settings.fontFile(this);
         LinearLayout box = Md3.body(this);
         box.addView(Md3.title(this, "显示设置"));
-        box.addView(Md3.supporting(this, "字体、平滑和帧率返回游戏时生效；GLES2 选择在下次启动游戏时生效"),
-                Md3.gap(this, 6));
-        final AlertDialog d = Md3.show(new AlertDialog.Builder(this)
-                .setView(Md3.scroller(this, box))
+        box.addView(DisplayControls.control(this, DisplayControls.Option.FONT, null));
+        box.addView(DisplayControls.control(this, DisplayControls.Option.PICTURE, null));
+        box.addView(DisplayControls.control(this, DisplayControls.Option.FPS, null));
+        box.addView(DisplayControls.control(this, DisplayControls.Option.GLES, null));
+        box.addView(rowAction(Md3.IC_IMPORT, "更换字体…", null, new Runnable() {
+            @Override public void run() { FontPicker.pick(LibraryActivity.this); }
+        }));
+        box.addView(rowAction(Md3.IC_DELETE, "换回系统字体", null, new Runnable() {
+            @Override public void run() {
+                FontPicker.reset(LibraryActivity.this);
+                toast("已换回系统字体");
+            }
+        }));
+        box.addView(rowAction(Md3.IC_DELETE, "只保留用到的字", null, new Runnable() {
+            @Override public void run() {
+                int[] result = GlyphSource.trimToUsed();
+                toast("字形缓存 " + result[1] + " → " + result[2] + " 个");
+            }
+        }));
+        Md3.show(new AlertDialog.Builder(this).setView(Md3.scroller(this, box))
                 .setNegativeButton("关闭", null), this);
-        box.addView(rowAction(Md3.IC_SCREEN, fontAa ? "字体反锯齿：开" : "字体反锯齿：关",
-                "关掉以后小字更硬，也更快", new Runnable() {
-                    @Override
-                    public void run() {
-                        Settings.setFontAntiAlias(LibraryActivity.this, !fontAa);
-                        d.dismiss();
-                        toast(!fontAa ? "字体反锯齿已打开" : "字体反锯齿已关闭");
-                        displayDialog();
-                    }
-                }), Md3.gap(this, 12));
-        box.addView(rowAction(Md3.IC_IMPORT, path == null ? "更换字体…" : "更换字体…（现在：" + new File(path).getName() + "）",
-                path == null ? "挑一个 .ttf / .otf，游戏里的字就用它" : "再挑一个就换掉现在这个", new Runnable() {
-                    @Override
-                    public void run() {
-                        FontPicker.pick(LibraryActivity.this);
-                    }
-                }));
-        if (path != null) {
-            box.addView(rowAction(Md3.IC_DELETE, "换回系统字体", new File(path).getName(),
-                    new Runnable() {
-                        @Override
-                        public void run() {
-                            FontPicker.reset(LibraryActivity.this);
-                            d.dismiss();
-                            toast("已换回系统字体");
-                            displayDialog();
-                        }
-                    }));
-        }
-        box.addView(rowAction(Md3.IC_DELETE, "只保留用到的字",
-                glyphSummary(), new Runnable() {
-                    @Override
-                    public void run() {
-                        int[] before = GlyphSource.stats();
-                        int[] r = GlyphSource.trimToUsed();
-                        d.dismiss();
-                        toast(before[0] <= 0
-                                ? "还没有字形可清理：先玩一下游戏"
-                                : "字形缓存 " + r[1] + " → " + r[2] + " 个 · "
-                                        + FontKit.size(r[3]) + " → " + FontKit.size(r[4]));
-                        displayDialog();
-                    }
-                }));
-        box.addView(rowAction(Md3.IC_FULLSCREEN, picAa ? "画面反锯齿：开" : "画面反锯齿：关",
-                picAa ? "放大画面时平滑，边角不锯齿" : "放大画面时保留硬像素（更快）", new Runnable() {
-                    @Override
-                    public void run() {
-                        Settings.setPictureAntiAlias(LibraryActivity.this, !picAa);
-                        d.dismiss();
-                        toast(!picAa ? "画面反锯齿已打开" : "画面反锯齿已关闭");
-                        displayDialog();
-                    }
-                }), Md3.gap(this, 12));
-        final int frameCap = Settings.frameCap(this);
-        box.addView(rowAction(Md3.IC_PLAY, "帧率上限：" + Settings.frameCapText(frameCap),
-                frameCap < 0 ? "默认不限制，画面最流畅；想省电就往下调"
-                        : frameCap == 0 ? "不设上限：最流畅，也最费电"
-                                : "每秒最多 " + frameCap + " 帧", new Runnable() {
-                    @Override
-                    public void run() {
-                        int next = Settings.nextFrameCap(frameCap);
-                        Settings.setFrameCap(LibraryActivity.this, next);
-                        d.dismiss();
-                        toast("帧率上限：" + Settings.frameCapText(next));
-                        displayDialog();
-                    }
-                }), Md3.gap(this, 12));
-        final boolean graphicsAvailable = GameActivity.graphicsSupported();
-        final boolean gles2 = graphicsAvailable && Settings.gles2Experimental(this);
-        LinearLayout graphicsRow = Md3.row(this, Md3.IC_SCREEN,
-                graphicsAvailable ? "硬件加速（GLES2）：" + (gles2 ? "开" : "关") + "（下次启动）"
-                                  : "硬件加速（GLES2）：不可用",
-                graphicsAvailable ? "下次启动游戏生效；支持的绘制交给 GPU，其余用软件。性能提升不保证。"
-                                  : "此安装包未含 GLES2，使用软件绘制。",
-                gles2, null);
-        graphicsRow.setEnabled(graphicsAvailable);
-        graphicsRow.setAlpha(graphicsAvailable ? 1f : 0.5f);
-        if (graphicsAvailable) {
-            graphicsRow.setOnClickListener(new View.OnClickListener() {
-                @Override
-                public void onClick(View v) {
-                    Settings.setGles2Experimental(LibraryActivity.this, !gles2);
-                    d.dismiss();
-                    toast("已选择" + (!gles2 ? " GLES2 实验加速" : "软件绘制")
-                            + "，下次启动游戏生效；本局保持不变");
-                    displayDialog();
-                }
-            });
-        }
-        box.addView(graphicsRow, Md3.gap(this, 12));
     }
 
     /** What the glyph cache holds right now, for the sweep row. */

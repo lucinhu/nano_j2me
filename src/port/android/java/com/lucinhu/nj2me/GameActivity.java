@@ -302,7 +302,7 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
     /** Launch choice only: 0 software, 1 experimental GLES2. Never changed mid-run. */
     private static native boolean nativeFsr2Built();
     private static native boolean nativeVulkanBuilt();
-    private static native void nativeSetHd(long handle, int scale, int ssaa, boolean subdivide, boolean fsr2, boolean vulkan);
+    private static native void nativeSetHd(long handle, int scale, int ssaa, boolean subdivide, boolean fsr2, boolean vulkan, boolean smoothAssets);
     private static native void nativeSetGraphicsMode(long handle, int mode);
     private static native boolean nativeGraphicsSupported();
 
@@ -853,7 +853,7 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
                 SharedPreferences hd = getSharedPreferences("nano_j2me", MODE_PRIVATE);
                 nativeSetHd(handle, hd.getInt("hd_scale", 1), hd.getInt("hd_ssaa", 1),
                         hd.getInt("hd_subdivide", 0) != 0, hd.getInt("hd_fsr2", 0) != 0,
-                        hd.getInt("hd_vulkan", 0) != 0);
+                        hd.getInt("hd_vulkan", 0) != 0, hd.getInt("hd_smooth_assets", 0) != 0);
                 nativeSetGraphicsMode(handle,
                         graphicsSupported() && Settings.gles2Experimental(this) ? 1 : 0);
                 nativeSetSpeed(handle, speed);
@@ -1427,86 +1427,13 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
         box.addView(Md3.supporting(this, screenW + "x" + screenH
                 + (detW > 0 ? " · 画面 " + detW + "x" + detH : "")), Md3.gap(this, 6));
 
-        final boolean shown = status.getVisibility() == View.VISIBLE;
-        LinearLayout adjust = Md3.row(this, Md3.IC_TUNE, "调整画面和按键",
-                null, false, null);
-        LinearLayout toggle = Md3.row(this, Md3.IC_INFO,
-                shown ? "隐藏状态信息" : "显示状态信息",
-                null, false, null);
-        LinearLayout fast = Md3.row(this, Md3.IC_PLAY, "游戏速度",
-                speedText(), false, null);
-        LinearLayout menuRow = Md3.row(this, Md3.IC_KEYS,
-                padConfig.menuVisible ? "隐藏菜单按钮" : "显示菜单按钮",
-                null, false, null);
-        /*
-         * 文字 and 画面 anti-aliasing, and the font.  The switches are the
-         * player's, not this game's, so they are the same rows the library's
-         * menu offers - and they change what the VM thread reads, so they are
-         * written through Settings and re-applied here.
-         */
-        final boolean fontAA = Settings.fontAntiAlias(this);
-        final boolean picAA = Settings.pictureAntiAlias(this);
+        LinearLayout adjust = Md3.row(this, Md3.IC_TUNE, "调整画面和按键", null, false, null);
         final String fontPath = Settings.fontFile(this);
         int[] glyphs = GlyphSource.stats();
-        LinearLayout fontAaRow = Md3.row(this, Md3.IC_KEYS,
-                fontAA ? "关闭文字反锯齿" : "打开文字反锯齿",
-                null, fontAA, null);
         LinearLayout fontRow = Md3.row(this, Md3.IC_IMPORT, "更换字体…",
-                fontPath == null ? "系统字体" : new java.io.File(fontPath).getName(),
-                false, null);
+                fontPath == null ? "系统字体" : new File(fontPath).getName(), false, null);
         LinearLayout subsetRow = Md3.row(this, Md3.IC_TUNE, "只保留这个游戏用到的字",
                 "字形缓存 " + glyphs[0] + " 个 · " + FontKit.size(glyphs[1]), false, null);
-        LinearLayout picAaRow = Md3.row(this, Md3.IC_SCREEN,
-                picAA ? "关闭画面反锯齿" : "打开画面反锯齿", null, picAA, null);
-        final String[] filterNames = { "关闭", "扫描线", "LCD 网格", "CRT" };
-        int filterIdx = 0;
-        for (int i = 1; i < filterNames.length; i++) {
-            if (presentFilter == i + 1) {
-                filterIdx = i;
-            }
-        }
-        LinearLayout filterRow = Md3.row(this, Md3.IC_SCREEN,
-                "画面滤镜：" + filterNames[filterIdx], null, presentFilter > 0, null);
-        LinearLayout glPresentRow = Md3.row(this, Md3.IC_SCREEN,
-                "GL 呈现（实验）：" + glPresentText(), null, glPresent != 0, null);
-        LinearLayout glPresentScaleRow = Md3.row(this, Md3.IC_SCREEN,
-                "放大：" + glPresentScaleText(), null, false, null);
-        glPresentScaleRow.setEnabled(graphicsSupported());
-        glPresentScaleRow.setAlpha(graphicsSupported() ? 1f : 0.5f);
-        glPresentScaleRow.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                glPresentScaleDialog();
-            }
-        });
-        LinearLayout glPresentSharpRow = Md3.row(this, Md3.IC_SCREEN,
-                "FSR1 锐度：" + glPresentSharpText(), null, false, null);
-        glPresentSharpRow.setEnabled(graphicsSupported());
-        glPresentSharpRow.setAlpha(graphicsSupported() ? 1f : 0.5f);
-        glPresentSharpRow.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                glPresentSharpDialog();
-            }
-        });
-        glPresentRow.setEnabled(graphicsSupported());
-        glPresentRow.setAlpha(graphicsSupported() ? 1f : 0.5f);
-        glPresentRow.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                glPresentDialog();
-            }
-        });
-        LinearLayout rewindRow = Md3.row(this, Md3.IC_PLAY,
-                "倒带：" + Settings.rewindText(rewindSeconds), null, rewindSeconds > 0, null);
-        final boolean graphicsAvailable = graphicsSupported();
-        final boolean gles2 = graphicsAvailable && Settings.gles2Experimental(this);
-        LinearLayout graphicsRow = Md3.row(this, Md3.IC_SCREEN,
-                graphicsAvailable ? "硬件加速（GLES2）：" + (gles2 ? "开" : "关") + "（下次启动）"
-                                  : "硬件加速（GLES2）：不可用",
-                graphicsAvailable ? null : "此安装包未含 GLES2", gles2, null);
-        graphicsRow.setEnabled(graphicsAvailable);
-        graphicsRow.setAlpha(graphicsAvailable ? 1f : 0.5f);
         final TextView graphicsDetails = Md3.supporting(this, "");
         graphicsPanelStatus = graphicsDetails;
         updateGraphicsPanel(readGraphicsInfo());
@@ -1517,26 +1444,32 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
                 false, null);
         LinearLayout searchRow = Md3.row(this, Md3.IC_TUNE, "搜索作弊数值",
                 null, false, null);
-        final int frameCap = Settings.frameCap(this);
-        LinearLayout fpsRow = Md3.row(this, Md3.IC_PLAY, "帧率上限",
-                Settings.frameCapText(frameCap), false, null);
         LinearLayout save = Md3.row(this, Md3.IC_MEMORY, "保存状态", null, false, null);
         LinearLayout quit = Md3.dangerRow(this, Md3.IC_POWER, "退出游戏", null);
 
         box.addView(Md3.header(this, "画面"));
         box.addView(adjust, Md3.gap(this, 12));
         box.addView(Md3.divider(this));
-        box.addView(toggle);
+        box.addView(new Md3.Setting(this, "状态信息", DisplayControls.OFF_ON,
+                status.getVisibility() == View.VISIBLE ? 1 : 0, new Md3.Pick() {
+            @Override public void set(int i) {
+                status.setVisibility(i == 1 ? View.VISIBLE : View.GONE);
+                refreshStatus();
+            }
+        }));
         box.addView(Md3.divider(this));
-        box.addView(picAaRow);
+        box.addView(DisplayControls.control(this, DisplayControls.Option.PICTURE, new Runnable() {
+            @Override public void run() { applyDisplaySettings(); }
+        }));
         box.addView(Md3.divider(this));
-        box.addView(filterRow);
+        box.addView(filterSetting());
         box.addView(Md3.divider(this));
-        box.addView(glPresentRow);
+        box.addView(glPresentSetting());
         box.addView(Md3.divider(this));
-        box.addView(glPresentScaleRow);
-        box.addView(glPresentSharpRow);
+        box.addView(glPresentScaleSetting());
+        box.addView(glPresentSharpSetting());
         addHdChoice(box, "高清渲染倍率", "hd_scale", 1, new String[]{"1×", "2×", "3×", "4×"}, true);
+        addHdChoice(box, "高清素材平滑（图片、精灵、字体、3D 贴图）", "hd_smooth_assets", 0, new String[]{"关闭", "开启"}, true);
         addHdChoice(box, "超采样抗锯齿", "hd_ssaa", 1, new String[]{"关闭", "四采样"}, true);
         addHdChoice(box, "3D 面片细分", "hd_subdivide", 0, new String[]{"关闭", "开启"}, true);
         addHdChoice(box, "Vulkan 3D 面片渲染", "hd_vulkan", 0,
@@ -1544,28 +1477,40 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
         addHdChoice(box, "FSR2 时域放大", "hd_fsr2", 0,
                 new String[]{"关闭", "请求启用（需设备支持）"}, nativeFsr2Built());
         box.addView(Md3.divider(this));
-        box.addView(fpsRow);
+        box.addView(DisplayControls.control(this, DisplayControls.Option.FPS, new Runnable() {
+            @Override public void run() { applyDisplaySettings(); }
+        }));
         box.addView(Md3.header(this, "文字"));
-        box.addView(fontAaRow);
+        box.addView(DisplayControls.control(this, DisplayControls.Option.FONT, new Runnable() {
+            @Override public void run() { applyDisplaySettings(); }
+        }));
         box.addView(Md3.divider(this));
         box.addView(fontRow);
         box.addView(Md3.divider(this));
         box.addView(subsetRow);
         box.addView(Md3.header(this, "游戏"));
-        box.addView(fast);
+        box.addView(speedSetting());
         box.addView(Md3.divider(this));
-        box.addView(graphicsRow);
+        box.addView(DisplayControls.control(this, DisplayControls.Option.GLES, new Runnable() {
+            @Override public void run() { applyDisplaySettings(); }
+        }));
         box.addView(graphicsDetails, Md3.gap(this, 6));
         box.addView(Md3.header(this, "存档"));
         box.addView(save);
         box.addView(Md3.divider(this));
-        box.addView(rewindRow);
+        box.addView(rewindSetting());
         box.addView(Md3.header(this, "高级"));
         box.addView(cheatRow);
         box.addView(Md3.divider(this));
         box.addView(searchRow);
         box.addView(Md3.divider(this));
-        box.addView(menuRow);
+        box.addView(new Md3.Setting(this, "菜单按钮", DisplayControls.OFF_ON, padConfig.menuVisible ? 1 : 0, new Md3.Pick() {
+            @Override public void set(int i) {
+                padConfig.menuVisible = i == 1;
+                positionHandle();
+                PadConfig.saveForGame(GameActivity.this, jarName, padConfig);
+            }
+        }));
         box.addView(quit, Md3.gap(this, 12));
 
         final AlertDialog dlg = Md3.show(new AlertDialog.Builder(this)
@@ -1580,18 +1525,6 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
                 }
             }
         });
-        if (graphicsAvailable) {
-            graphicsRow.setOnClickListener(new View.OnClickListener() {
-                @Override
-                public void onClick(View v) {
-                    Settings.setGles2Experimental(GameActivity.this, !gles2);
-                    dlg.dismiss();
-                    toast("已选择" + (!gles2 ? " GLES2 实验加速" : "软件绘制")
-                            + "，下次启动游戏生效；本局保持不变");
-                    showPanel();
-                }
-            });
-        }
         cheatRow.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
@@ -1619,31 +1552,6 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
                 it.putExtra("w", screenW);
                 it.putExtra("h", screenH);
                 startActivity(it);
-            }
-        });
-        toggle.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                status.setVisibility(shown ? View.GONE : View.VISIBLE);
-                refreshStatus();
-                dlg.dismiss();
-            }
-        });
-        fast.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                dlg.dismiss();
-                speedDialog();
-            }
-        });
-        fontAaRow.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                Settings.setFontAntiAlias(GameActivity.this, !fontAA);
-                applyDisplaySettings();
-                Log.i(TAG, "font: anti-alias " + (fontAA ? "off" : "on"));
-                dlg.dismiss();
-                toast(!fontAA ? "文字反锯齿已打开" : "文字反锯齿已关闭");
             }
         });
         fontRow.setOnClickListener(new View.OnClickListener() {
@@ -1681,60 +1589,6 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
                 toast("字形缓存 " + r[1] + " → " + r[2] + " 个 · "
                         + FontKit.size(r[3]) + " → " + FontKit.size(r[4]));
                 dlg.dismiss();
-            }
-        });
-        picAaRow.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                Settings.setPictureAntiAlias(GameActivity.this, !picAA);
-                applyDisplaySettings();
-                Log.i(TAG, "picture: anti-alias " + (picAA ? "off" : "on"));
-                dlg.dismiss();
-                toast(!picAA ? "画面反锯齿已打开" : "画面反锯齿已关闭");
-            }
-        });
-        filterRow.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                dlg.dismiss();
-                filterDialog();
-            }
-        });
-        rewindRow.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                dlg.dismiss();
-                rewindDialog();
-            }
-        });
-        fpsRow.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                int next = Settings.nextFrameCap(frameCap);
-                Settings.setFrameCap(GameActivity.this, next);
-                /* The next frame applies it; the run thread waits for the
-                 * request in android_input_poll, never here. */
-                synchronized (lock) {
-                    if (handle != 0) {
-                        nativeSetFrameCap(handle, next);
-                    }
-                }
-                Log.i(TAG, "fps: cap " + next);
-                dlg.dismiss();
-                toast("帧率上限：" + Settings.frameCapText(next));
-            }
-        });
-        menuRow.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                /* Hidden is a setting, not a one-way door: the panel is open
-                 * right now, and Back opens it again whenever the handle is
-                 * gone. */
-                padConfig.menuVisible = !padConfig.menuVisible;
-                positionHandle();
-                PadConfig.saveForGame(GameActivity.this, jarName, padConfig);
-                dlg.dismiss();
-                toast(padConfig.menuVisible ? "菜单按钮已显示" : "菜单按钮已隐藏，按返回键打开面板");
             }
         });
         save.setOnClickListener(new View.OnClickListener() {
@@ -1791,29 +1645,27 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
                              final int base, final String[] labels, boolean available) {
         final SharedPreferences prefs = getSharedPreferences("nano_j2me", MODE_PRIVATE);
         final int current = Math.max(0, Math.min(labels.length - 1, prefs.getInt(key, base) - base));
-        LinearLayout row = Md3.row(this, Md3.IC_SCREEN, title,
-                available ? labels[current] : "此安装包未含此后端", current != 0 && available, null);
-        row.setEnabled(available);
-        if (available) row.setOnClickListener(new View.OnClickListener() {
-            @Override public void onClick(View view) {
-                Md3.chooser(GameActivity.this, Md3.IC_SCREEN, title, "下次启动游戏时生效",
-                        labels, null, current, new Md3.Choice() {
-                    @Override public void picked(int which, AlertDialog dialog) {
-                        SharedPreferences.Editor edit = prefs.edit().putInt(key, which + base);
-                        if ("hd_fsr2".equals(key) && which != 0 && prefs.getInt("hd_scale", 1) < 2)
-                            edit.putInt("hd_scale", 2);
-                        if ("hd_scale".equals(key) && which == 0) edit.putInt("hd_fsr2", 0);
-                        edit.apply();
-                        dialog.dismiss();
-                        showPanel();
-                    }
-                });
+        Md3.Setting row = new Md3.Setting(this, title + "（下次启动）", labels, current, new Md3.Pick() {
+            @Override public void set(int which) {
+                SharedPreferences.Editor edit = prefs.edit().putInt(key, which + base);
+                if ("hd_fsr2".equals(key) && which != 0 && prefs.getInt("hd_scale", 1) < 2) {
+                    edit.putInt("hd_scale", 2);
+                    ((Md3.Setting)box.findViewWithTag("hd_scale")).select(1);
+                }
+                if ("hd_scale".equals(key) && which == 0) {
+                    edit.putInt("hd_fsr2", 0);
+                    ((Md3.Setting)box.findViewWithTag("hd_fsr2")).select(0);
+                }
+                edit.apply();
             }
         });
+        row.setTag(key);
+        row.setEnabled(available);
+        if (!available) row.setText(title + "：此安装包未含此后端");
         box.addView(row);
     }
 
-    private void glPresentScaleDialog() {
+    private View glPresentScaleSetting() {
         final int[] scales = { 0, 2, 3, 4 };
         final String[] labels = { "自动（填满画面）", "2×", "3×", "4×" };
         int checked = 0;
@@ -1822,18 +1674,17 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
                 checked = i;
             }
         }
-        Md3.chooser(this, Md3.IC_SCREEN, "放大", null, labels, null, checked,
-                new Md3.Choice() {
+        Md3.Setting row = new Md3.Setting(this, "GL 放大", labels, checked, new Md3.Pick() {
                     @Override
-                    public void picked(int which, AlertDialog d) {
+                    public void set(int which) {
                         glPresentScale = scales[which];
                         getSharedPreferences("nano_j2me", MODE_PRIVATE).edit()
                                 .putInt("gl_present_scale", glPresentScale).apply();
                         applyGlPresentSettings();
-                        d.dismiss();
-                        showPanel();
                     }
                 });
+        row.setEnabled(graphicsSupported());
+        return row;
     }
 
     private String glPresentSharpText() {
@@ -1849,7 +1700,7 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
         return "0.87（默认）";
     }
 
-    private void glPresentSharpDialog() {
+    private View glPresentSharpSetting() {
         final float[] values = { 0.30f, 0.55f, 0.87f, 1.00f };
         final String[] names = { "0.30（柔和，光晕最少）", "0.55（中等）",
                 "0.87（默认，AMD 参考）", "1.00（最锐，光晕更强）" };
@@ -1859,10 +1710,9 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
                 selected = i;
             }
         }
-        Md3.chooser(this, Md3.IC_SCREEN, "锐度", "当前 " + glPresentSharpText(),
-                names, null, selected, new Md3.Choice() {
+        Md3.Setting row = new Md3.Setting(this, "FSR1 锐度", names, selected, new Md3.Pick() {
                     @Override
-                    public void picked(int which, AlertDialog d) {
+                    public void set(int which) {
                         glPresentSharp = values[which];
                         getSharedPreferences("nano_j2me", MODE_PRIVATE).edit()
                                 .putFloat("gl_present_sharp", glPresentSharp).apply();
@@ -1870,9 +1720,11 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
                         toast("FSR1 锐度：" + glPresentSharpText());
                     }
                 });
+        row.setEnabled(graphicsSupported());
+        return row;
     }
 
-    private void glPresentDialog() {
+    private View glPresentSetting() {
         final int[] modes = { -1, 0, 2, 3, 4, 5, 6 };
         final String[] labels = { "关闭（软件呈现）", "最近邻（GL）", "扫描线（GL）",
                 "LCD 网格（GL）", "CRT（GL）", "FSR1（GL）", "双三次（GL）" };
@@ -1890,10 +1742,9 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
                 checked = i;
             }
         }
-        Md3.chooser(this, Md3.IC_SCREEN, "GL 呈现（实验）", "当前 " + glPresentText(),
-                labels, hints, checked, new Md3.Choice() {
+        Md3.Setting row = new Md3.Setting(this, "GL 呈现", labels, checked, new Md3.Pick() {
                     @Override
-                    public void picked(int which, AlertDialog d) {
+                    public void set(int which) {
                         if (modes[which] < 0) {
                             glPresent = 0;
                             glPresentMode = 0;
@@ -1908,6 +1759,8 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
                         toast("GL 呈现：" + glPresentText());
                     }
                 });
+        row.setEnabled(graphicsSupported());
+        return row;
     }
 
     private void saveSlotDialog() {
@@ -2511,7 +2364,7 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
      * a game that is merely slow (or one whose animations drag) speeds up as a
      * whole.
      */
-    private void speedDialog() {
+    private View speedSetting() {
         final int[] percents = { 50, 75, 100, 150, 200, 300, 400, 600, 800 };
         String[] labels = new String[percents.length];
         String[] hints = new String[percents.length];
@@ -2525,10 +2378,9 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
                 checked = i;
             }
         }
-        Md3.chooser(this, Md3.IC_PLAY, "游戏速度", "当前 " + speedText(),
-                labels, hints, checked, new Md3.Choice() {
+        Md3.Setting row = new Md3.Setting(this, "游戏速度", labels, checked, new Md3.Pick() {
                     @Override
-                    public void picked(int which, AlertDialog d) {
+                    public void set(int which) {
                         speed = percents[which];
                         synchronized (lock) {
                             if (handle != 0) {
@@ -2543,6 +2395,7 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
                         toast("游戏速度 " + speedText());
                     }
                 });
+        return row;
     }
 
     /** Tell the port which rewind window this install wants (0 = off). */
@@ -2562,7 +2415,7 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
      * copies the whole arena; 1/2/5 s pick the window, and the last entry
      * steps back immediately.
      */
-    private void rewindDialog() {
+    private View rewindSetting() {
         final int[] values = { 0, 1, 2, 5 };
         final String[] labels = { "关闭（不占内存）", "1 秒", "2 秒", "5 秒", "倒带一步（立刻回退）" };
         final String[] hints = {
@@ -2578,10 +2431,9 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
                 checked = i;
             }
         }
-        Md3.chooser(this, Md3.IC_PLAY, "倒带", "当前 " + Settings.rewindText(rewindSeconds),
-                labels, hints, checked, new Md3.Choice() {
+        Md3.Setting row = new Md3.Setting(this, "倒带", labels, checked, new Md3.Pick() {
                     @Override
-                    public void picked(int which, AlertDialog d) {
+                    public void set(int which) {
                         if (which == 4) {
                             synchronized (lock) {
                                 if (handle != 0) {
@@ -2600,6 +2452,7 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
                         toast("倒带 " + Settings.rewindText(rewindSeconds));
                     }
                 });
+        return row;
     }
 
     /*
@@ -2608,7 +2461,7 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
      * them, which is why this is a present-path setting and not a Graphics
      * one.  Stored per install, applied on the next frame.
      */
-    private void filterDialog() {
+    private View filterSetting() {
         final String[] labels = { "关闭（像素原样）", "扫描线", "LCD 网格", "CRT" };
         final int[] modes = { 0, 2, 3, 4 };
         final String[] hints = {
@@ -2623,10 +2476,9 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
                 checked = i;
             }
         }
-        Md3.chooser(this, Md3.IC_SCREEN, "画面滤镜", "当前 " + labels[checked],
-                labels, hints, checked, new Md3.Choice() {
+        Md3.Setting row = new Md3.Setting(this, "画面滤镜", labels, checked, new Md3.Pick() {
                     @Override
-                    public void picked(int which, AlertDialog d) {
+                    public void set(int which) {
                         presentFilter = modes[which];
                         getSharedPreferences("nano_j2me", MODE_PRIVATE).edit()
                                 .putInt("present_filter", presentFilter).apply();
@@ -2638,6 +2490,7 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
                         toast("画面滤镜 " + labels[which]);
                     }
                 });
+        return row;
     }
 
 

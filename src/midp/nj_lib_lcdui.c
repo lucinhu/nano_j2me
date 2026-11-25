@@ -1935,8 +1935,17 @@ NJFN(g_drawRGB)
         }
     }
 
+    nj_render_mirror raw_mirror;
     if (!gfx_load(vm, self, &g, &sc)) {
         return NJ_ERR;
+    }
+    /* Every drawRGB sample comes from this int[], even when it also backs a
+     * mutable Image with a separate high-resolution drawing surface. */
+    if (g.mirror) {
+        raw_mirror = *g.mirror;
+        raw_mirror.lookup = NULL;
+        raw_mirror.smooth_assets = 0;
+        g.mirror = &raw_mirror;
     }
     direct = arr->kind == NJ_OBJ_ARRAY && arr->aflags == NJ_ARRAY_T_INT ?
         (const nj_u4 *)arr->u.bytes : NULL;

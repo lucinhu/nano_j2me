@@ -2,6 +2,7 @@
 #include "nj2me/nj_gfx.h"
 #include <assert.h>
 #include <limits.h>
+#include <math.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -154,6 +155,7 @@ static void images(void)
         sprite[x] = x == 0 ? 0 : 0x8066aaffu;
     for (t = 0; t < 8; t++) {
         reset();
+        mirror.smooth_assets = 1; /* the genuine physical source wins */
         mirror.lookup = lookup;
         mirror.ud = sprite;
         lookups = 0;
@@ -183,6 +185,7 @@ static void images(void)
             assert(physical[K + y][3 * K + x] == want);
         }
     reset();
+    mirror.smooth_assets = 1;
     nj_gfx_draw_rgb(&g, rgb, 6, 93, 2, 3, 0, 0, 2, 2, NJ_ROP_PAINT, NJ_TRANS_ROT270);
     for (y = 0; y < P; y++)
         for (x = 0; x < P; x++)
@@ -241,11 +244,100 @@ static void bitmap_planes(void)
     }
 }
 
+/* Independent scalar reference: generate the 4x frame in source orientation,
+ * then transform this physical image using the ordinary Sprite blitter. */
+static void smooth_frames(void)
+{
+    enum { W = 3, H = 2, A = W + 2 };
+    nj_u4 atlas[A * (H + 2)], grown[W * K * H * K], expected[P * P], low[N * N];
+    const nj_u4 frame[W * H] = {0xffff0000u, 0x00ff00ffu, 0x80400000u,
+                                 0x20e00000u, 0x60000000u, 0xffffff00u};
+    nj_image img = {A,H+2,NJ_PIXFMT_ARGB8888,atlas,1};
+    nj_image big = {W*K,H*K,NJ_PIXFMT_ARGB8888,grown,0};
+    nj_surface ref = {expected,P,P,P*4,NJ_PIXFMT_ARGB8888,4};
+    nj_gfx oracle;
+    for (int i = 0; i < A*(H+2); ++i) atlas[i] = 0xff0000ffu;
+    for (int y = 0; y < H; ++y) memcpy(atlas+(y+1)*A+1, frame+y*W, W*4);
+    for (int y = 0; y < H*K; ++y) for (int x = 0; x < W*K; ++x) {
+        double rgb[3] = {0,0,0};
+        for (int j = 0; j < H; ++j) for (int i = 0; i < W; ++i) {
+            double u = (x + 0.5)/K - 0.5, v = (y + 0.5)/K - 0.5;
+            u = u < 0 ? 0 : u > W-1 ? W-1 : u;
+            v = v < 0 ? 0 : v > H-1 ? H-1 : v;
+            double wx = 1 - fabs(i-u), wy = 1 - fabs(j-v);
+            if (wx <= 0 || wy <= 0) continue;
+            nj_u4 c = frame[j*W+i];
+            for (int channel = 0; channel < 3; ++channel)
+                rgb[channel] += wx*wy*(c >> 24)*((c >> (channel*8)) & 255u)/255.;
+        }
+        grown[y*W*K+x] = BG;
+        for (int channel = 0; channel < 3; ++channel)
+            grown[y*W*K+x] |= (nj_u4)(rgb[channel]+0.5) << (channel*8);
+    }
+    assert(grown[0] == 0xffff0000u && grown[3] == 0xff9f0000u);
+    for (int t = 0; t < 8; ++t) for (int clip = 0; clip <= 1; ++clip) {
+        reset(); nj_gfx_translate(&g,1,1);
+        if (clip) nj_gfx_set_clip(&g,2,2,1,2);
+        nj_gfx_draw_region(&g,&img,1,1,W,H,t,0,0,NULL,1,1,NJ_ROP_PAINT);
+        memcpy(low,logical,sizeof low);
+        reset(); mirror.smooth_assets = 1;
+        nj_gfx_translate(&g,1,1);
+        if (clip) nj_gfx_set_clip(&g,2,2,1,2);
+        nj_gfx_draw_region(&g,&img,1,1,W,H,t,0,0,NULL,1,1,NJ_ROP_PAINT);
+        assert(!memcmp(low,logical,sizeof low));
+        nj_gfx_init(&oracle,&ref); nj_gfx_clear(&oracle,BG);
+        if (clip) nj_gfx_set_clip(&oracle,3*K,3*K,K,2*K);
+        nj_gfx_draw_image_rop(&oracle,&big,2*K,2*K,0,0,W*K,H*K,NJ_ROP_SET,t);
+        for (int y = 0; y < P; ++y) for (int x = 0; x < P; ++x)
+            assert(physical[y][x] == expected[y*P+x]);
+    }
+    for (int op = 0; op < 4; ++op) {
+        reset(); mirror.smooth_assets = 1;
+        nj_image stencil = {W,H,NJ_PIXFMT_ARGB8888,mask,1};
+        nj_gfx_draw_region(&g,&img,1,1,W,H,NJ_TRANS_NONE,op==2,WHITE,op==3?&stencil:NULL,
+                           0,0,op==0?NJ_ROP_SET:op==1?NJ_ROP_OPAQUE:NJ_ROP_PAINT);
+        for (int y = 0; y < P; ++y) for (int x = 0; x < P; ++x)
+            assert(physical[y][x] == logical[y/K*N+x/K]);
+    }
+}
+
+/* A filtered sprite may be painted into a transparent Image before it reaches
+ * the screen. Both the Image and the second blit consume straight ARGB. */
+static void smooth_offscreen(void)
+{
+    nj_u4 edge[] = {0xffff0000u, 0x0000ff00u};
+    nj_image art = {2, 1, NJ_PIXFMT_ARGB8888, edge, 1};
+    nj_image layer_image = {3, 2, NJ_PIXFMT_ARGB8888, sprite, 1};
+    nj_surface layer = {sprite, 3, 2, 3 * 4, NJ_PIXFMT_ARGB8888, 4};
+    nj_render_mirror layer_mirror = {.target = &src_hi, .scale = K, .smooth_assets = 1};
+    nj_gfx paint;
+    nj_gfx_init(&paint, &layer);
+    paint.mirror = &layer_mirror;
+
+    nj_gfx_clear(&paint, 0x000000ffu);
+    nj_gfx_draw_image(&paint, &art, 0, 0, 0, 0, 2, 1);
+    /* At sample 3 the red texel covers 5/8. Hidden green and blue contribute zero. */
+    assert(sprite_hd[0][3] == 0x9fff0000u);
+    reset();
+    nj_gfx_clear(&g, WHITE);
+    mirror.smooth_assets = 1;
+    mirror.lookup = lookup;
+    mirror.ud = sprite;
+    nj_gfx_draw_image(&g, &layer_image, 0, 0, 0, 0, 3, 2);
+    assert(physical[0][3] == 0xffff6060u);
+
+    nj_gfx_clear(&paint, 0x800000ffu);
+    nj_gfx_draw_image(&paint, &art, 0, 0, 0, 0, 2, 1);
+    assert(sprite_hd[0][3] == 0xcfc4003bu);
+}
+
 int main(void)
 {
     geometry();
     images();
     bitmap_planes();
+    smooth_frames();
+    smooth_offscreen();
     puts("physical LCDUI geometry, image transforms, clipping and compositing passed");
     return 0;
 }

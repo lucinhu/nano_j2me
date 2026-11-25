@@ -607,6 +607,32 @@ static void test_textured(void)
           "off-screen vertices with negative attributes survive");
 }
 
+static void test_linear_palette(void)
+{
+    nj_u1 palette[16], indices[4] = {0,1,2,3};
+    nj_mascot_texture tex = {palette, indices, 1, 1, 3, NJ_MR_TEX_MODEL};
+    nj_u4 flags = NJ_MR_TEXTURED | NJ_MR_FILTER_LINEAR;
+    nj_mascot_vertex v[3];
+    put_u32(palette,      0xff0000ffu);
+    put_u32(palette + 4,  0xffff0000u);
+    put_u32(palette + 8,  0xff00ff00u);
+    put_u32(palette + 12, 0xffffffffu);
+    tri_full(v,4095,256,0); /* (1,1) sits between the four centres. */
+    fb_pattern(0);
+    nj_mascot_raster_triangle(&surf,0,0,W,H,v,0,&tex,NULL,flags,NJ_MR_BLEND_REPLACE,0);
+    check(fb[10*W+10] == 0xff808080u, "linear palette uses all four colours with equal weights");
+
+    flags |= NJ_MR_COLORKEY;
+    memset(fb,0,sizeof fb);
+    nj_mascot_raster_triangle(&surf,0,0,W,H,v,0,&tex,NULL,flags,NJ_MR_BLEND_REPLACE,0);
+    check(fb[10*W+10] == 0xbfaaaa55u, "three covered taps yield straight RGB and 3/4 opacity on transparent ARGB");
+
+    indices[2] = 0; indices[3] = 1;
+    fb_pattern(0);
+    nj_mascot_raster_triangle(&surf,0,0,W,H,v,0,&tex,NULL,flags,NJ_MR_BLEND_HALF,0);
+    check(fb[10*W+10] == 0xff583048u, "half a red half-blend sample retains 3/4 of the old pixel");
+}
+
 /* ------------------------------------------------------------------ */
 /* Golden framebuffers                                                 */
 /* ------------------------------------------------------------------ */
@@ -726,6 +752,7 @@ int main(void)
     printf("test_mascot_raster: raster\n");
     test_flat_colour();
     test_textured();
+    test_linear_palette();
     test_golden();
 
     free(model_blob);

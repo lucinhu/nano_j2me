@@ -780,7 +780,7 @@ struct nj_vm {
     nj_fontset    fonts;          /* mutable font registry (see nj_gfx.h)  */
     nj_surface    screen;         /* view of the UI framebuffer            */
     struct {
-        int scale, ssaa, subdivide, fsr2;
+        int scale, ssaa, subdivide, fsr2, smooth_assets;
     } render_quality;
     struct nj_hd_store *hd_store; /* presentation-only companions to logical images */
     void *m3g_hd_state;          /* M3G physical depth and temporal resources */
