@@ -196,10 +196,56 @@ static void images(void)
             assert(physical[y][x] == logical[y / K * N + x / K]);
 }
 
+/* A bitmap blends against the existing high-resolution scene. Each subpixel
+ * plane of that scene must match an ordinary draw onto the same plane. */
+static void bitmap_planes(void)
+{
+    enum { W = 5, H = 4, PITCH = P * 4 + 3 };
+    const int formats[] = {NJ_PIXFMT_ARGB8888, NJ_PIXFMT_RGB888, NJ_PIXFMT_RGB565};
+    const int ops[] = {NJ_ROP_SET, NJ_ROP_PAINT, NJ_ROP_OPAQUE};
+    const unsigned alpha[] = {0, 255, 127, 1, 254, 255, 255};
+    nj_u1 source[1 + W * H * 4], output[1 + PITCH * P];
+    nj_u4 samples[N * N];
+    nj_surface dest = {output + 1, P, P, PITCH, NJ_PIXFMT_ARGB8888, 4};
+    nj_surface plane = {samples, N, N, N * 4, NJ_PIXFMT_ARGB8888, 4};
+    for (int fmt = 0; fmt < 3; ++fmt) {
+        nj_surface bitmap = {source + 1, W, H, W * (4 - fmt), formats[fmt], 4 - fmt};
+        nj_image image = {W, H, formats[fmt], (nj_u4 *)(void *)(source + 1), 0};
+        for (int i = 0; i < W * H; ++i)
+            nj_surface_set(&bitmap, i % W, i / W, (alpha[i % 7] << 24) | (0x15813u * (i + 1)));
+        for (int t = 0; t < 8; ++t) for (int op = 0; op < 3; ++op) {
+            reset();
+            mirror.target = &dest;
+            nj_gfx_translate(&g, 2, 1);
+            nj_gfx_set_clip(&g, 1, 1, 2, 4);
+            memset(output, 0x6c, sizeof output);
+            for (int y = 0; y < P; ++y) for (int x = 0; x < P; ++x)
+                nj_surface_set(&dest, x, y, 0x10304050u + (unsigned)(y * P + x) * 0x20315u);
+            nj_gfx_draw_image_rop(&g, &image, 0, 1, 1, 0, 4, 3, ops[op], t);
+            nj_gfx ref = g;
+            ref.surf = &plane;
+            ref.mirror = NULL;
+            for (int j = 0; j < K; ++j) for (int i = 0; i < K; ++i) {
+                for (int y = 0; y < N; ++y) for (int x = 0; x < N; ++x) {
+                    unsigned pos = (unsigned)((y * K + j) * P + x * K + i);
+                    samples[y * N + x] = 0x10304050u + pos * 0x20315u;
+                }
+                nj_gfx_draw_image_rop(&ref, &image, 0, 1, 1, 0, 4, 3, ops[op], t);
+                for (int y = 0; y < N; ++y) for (int x = 0; x < N; ++x)
+                    assert(nj_surface_get(&dest, x * K + i, y * K + j) == samples[y * N + x]);
+            }
+            assert(output[0] == 0x6c);
+            for (int y = 0; y < P; ++y) for (int x = P * 4; x < PITCH; ++x)
+                assert(output[1 + y * PITCH + x] == 0x6c);
+        }
+    }
+}
+
 int main(void)
 {
     geometry();
     images();
+    bitmap_planes();
     puts("physical LCDUI geometry, image transforms, clipping and compositing passed");
     return 0;
 }

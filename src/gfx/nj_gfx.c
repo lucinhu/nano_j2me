@@ -2189,6 +2189,47 @@ static void hd_blit_span(nj_gfx *p, int x, int last, int y, nj_u4 src,
     nj_span(p, x, last, y, src);
 }
 
+/* A bitmap texel covers a scale-by-scale block. Expand each run of replacement
+ * pixels on its first scanline and copy just that run to its remaining rows.
+ * Transparent texels leave the underlying geometry visible. Translucent ones
+ * must blend with each individual physical sample. */
+static void hd_repeat_row(nj_u1 *row, int pitch, size_t bytes, int scale)
+{
+    if (bytes) {
+        for (int y = 1; y < scale; ++y)
+            memcpy(row + (nj_s8)y * pitch, row, bytes);
+    }
+}
+
+static void hd_bitmap_row(nj_u1 *row, int pitch, int scale, int count,
+                          const nj_u1 *source, nj_s8 offset, nj_s8 step, int format,
+                          int replace, int force_opaque, int alpha)
+{
+    size_t cell_bytes = (size_t)scale * sizeof(nj_u4);
+    nj_u1 *run = row;
+    for (int i = 0; i < count; ++i, offset += step, row += cell_bytes) {
+        nj_u4 color = nj_src_pixel(source, offset, format) | (force_opaque ? 0xff000000u : 0u);
+        unsigned coverage = ((color >> 24) * (unsigned)alpha + 127u) / 255u;
+        if (replace || coverage == 255) {
+            for (int x = 0; x < scale; ++x) memcpy(row + (size_t)x * 4, &color, 4);
+            continue;
+        }
+        hd_repeat_row(run, pitch, (size_t)(row - run), scale);
+        run = row + cell_bytes;
+        if (coverage) {
+            color = (color & 0x00ffffffu) | ((nj_u4)coverage << 24);
+            for (int y = 0; y < scale; ++y) {
+                nj_u1 *dst = row + (nj_s8)y * pitch;
+                for (int x = 0; x < scale; ++x, dst += 4) {
+                    nj_u4 blended = nj_blend_argb(nj_word_get(dst, 0), color);
+                    memcpy(dst, &blended, 4);
+                }
+            }
+        }
+    }
+    hd_repeat_row(run, pitch, (size_t)(row - run), scale);
+}
+
 static void nj_region_draw(nj_gfx *g, const nj_u1 *src, nj_s8 src_stride_bytes,
                            int image_height,
                            int src_format, const nj_u1 *mask,
@@ -2221,6 +2262,18 @@ static void hd_blit(nj_gfx *g, const nj_u1 *src, nj_s8 stride, int format,
                        image->format, NULL, 0, 0, sx*k, sy*k, sw*k, sh*k,
                        transform, opaque ? NJ_ROP_OPAQUE : rop, xor_on,
                        xor_argb, (int)(dx*k), (int)(dy*k), alpha);
+        return;
+    }
+    if (!image && !mask && !xor_on) {
+        nj_s8 step = nj_trans_row_step(transform, bpp, stride);
+        for (y = y0; y <= y1; ++y) {
+            int u, v;
+            nj_u1 *row = (nj_u1 *)p.surf->pixels + (nj_s8)y * k * p.surf->stride + (nj_s8)x0 * k * 4;
+            nj_trans_inverse(transform, (int)(x0 - dx), (int)(y - dy), sw, sh, &u, &v);
+            nj_s8 offset = ((nj_s8)sy + v) * stride + ((nj_s8)sx + u) * bpp;
+            hd_bitmap_row(row, p.surf->stride, k, x1 - x0 + 1, src, offset, step,
+                          format, rop == NJ_ROP_SET, opaque, alpha);
+        }
         return;
     }
     mask_image = hd_image(g, mask, mw, mh);
@@ -3029,8 +3082,6 @@ void nj_gfx_draw_region(nj_gfx *g, const nj_image *src, int sx, int sy, int sw,
     }
     /* The caller's is_xor/xor_argb pair drives sprite drawing; the graphics
      * context's own XOR mode also applies. */
-    xor_on = is_xor || g->use_xor;
-    fmt = nj_image_format(src);
     xor_on = is_xor || g->use_xor;
     NJ2D_OP(NJ2D_IMAGE_ROP, !xor_on && transform == 0 && mask == NULL
             && !src->has_alpha && rop == NJ_ROP_PAINT);
