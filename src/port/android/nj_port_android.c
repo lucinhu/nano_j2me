@@ -6937,6 +6937,28 @@ Java_com_lucinhu_nj2me_GameActivity_nativeSetPresentFilter(JNIEnv *env,
  * 由设置界面写入，下一帧生效；GL 未生效时呈现循环自动回退软件路径。
  */
 JNIEXPORT void JNICALL
+Java_com_lucinhu_nj2me_GameActivity_nativeSetGlPresentScale(JNIEnv *env, jobject thiz,
+                                                            jlong handle, jint scale)
+{
+    android_app *a = (android_app *)(intptr_t)handle;
+    (void)env; (void)thiz;
+    if (a) {
+        android_state *s = AS(a->port.ud);
+        if (s) {
+            if (scale < 0) {
+                scale = 0;
+            }
+            if (scale > 4) {
+                scale = 4;
+            }
+            s->gl_present_scale = scale;
+            __android_log_print(ANDROID_LOG_INFO, LOG_TAG,
+                    "present: GL picture scale=%d", (int)scale);
+        }
+    }
+}
+
+JNIEXPORT void JNICALL
 Java_com_lucinhu_nj2me_GameActivity_nativeSetGlPresent(JNIEnv *env, jobject thiz,
                                                        jlong handle, jint on,
                                                        jint mode)

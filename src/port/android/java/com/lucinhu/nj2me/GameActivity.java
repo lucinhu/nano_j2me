@@ -150,6 +150,7 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
     private int presentFilter;    /* 0 off, 2 scanline, 3 LCD, 4 CRT: 画面滤镜 */
     private int glPresent;        /* 0 software, 1 GL window present: GL 呈现（实验） */
     private int glPresentMode;    /* GL 呈现的模式: 0 nearest, 2 scanline, 3 LCD, 4 CRT */
+    private int glPresentScale;   /* GL 呈现的放大上限: 0 auto, 2/3/4 */
     private int rewindSeconds;    /* 0 off, 1/2/5: in-memory rewind window */
     private int insetL, insetT, insetR, insetB;
 
@@ -284,6 +285,7 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
     private static native void nativeSetPresentFilter(long handle, int mode);
     /** GL 呈现（实验）：on=0 关闭；on=1 时 mode 为 0 最近邻、2 扫描线、3 LCD、4 CRT。 */
     private static native void nativeSetGlPresent(long handle, int on, int mode);
+    private static native void nativeSetGlPresentScale(long handle, int scale);
     private static native void nativeSetRewind(long handle, int intervalFrames,
                                                int slots);
     private static native void nativeRewindStep(long handle);
@@ -846,6 +848,7 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
                 nativeSetPresentFilter(handle, presentFilter);
                 if (graphicsSupported()) {
                     nativeSetGlPresent(handle, glPresent, glPresentMode);
+                    nativeSetGlPresentScale(handle, glPresentScale);
                 }
                 applyRewindSetting();
                 nativeSetFrameCap(handle, Settings.frameCap(this));
@@ -1348,6 +1351,11 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
                 && glPresentMode != 5) {
             glPresentMode = 0;
         }
+        glPresentScale = getSharedPreferences("nano_j2me", MODE_PRIVATE)
+                .getInt("gl_present_scale", 0);
+        if (glPresentScale != 2 && glPresentScale != 3 && glPresentScale != 4) {
+            glPresentScale = 0;
+        }
         rewindSeconds = Settings.rewindSeconds(this);
         synchronized (lock) {
             if (handle != 0) {
@@ -1355,6 +1363,7 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
                 nativeSetPresentFilter(handle, presentFilter);
                 if (graphicsSupported()) {
                     nativeSetGlPresent(handle, glPresent, glPresentMode);
+                    nativeSetGlPresentScale(handle, glPresentScale);
                 }
                 applyRewindSetting();
                 nativeSetFrameCap(handle, Settings.frameCap(this));
@@ -1459,10 +1468,17 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
                 "只作用于窗口显示，不改模拟器画面；存档/截图保持原样",
                 presentFilter > 0, null);
         LinearLayout glPresentRow = Md3.row(this, Md3.IC_SCREEN,
-                "GL 呈现（实验）：" + glPresentText(),
-                "把画面交给 GPU 着色器呈现（最近邻/扫描线/LCD/CRT）；默认软件呈现，"
-                        + "设置马上生效；GL 不可用时自动回退",
-                glPresent != 0, null);
+                "GL 呈现（实验）：" + glPresentText(), null, glPresent != 0, null);
+        LinearLayout glPresentScaleRow = Md3.row(this, Md3.IC_SCREEN,
+                "放大：" + glPresentScaleText(), null, false, null);
+        glPresentScaleRow.setEnabled(graphicsSupported());
+        glPresentScaleRow.setAlpha(graphicsSupported() ? 1f : 0.5f);
+        glPresentScaleRow.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                glPresentScaleDialog();
+            }
+        });
         glPresentRow.setEnabled(graphicsSupported());
         glPresentRow.setAlpha(graphicsSupported() ? 1f : 0.5f);
         glPresentRow.setOnClickListener(new View.OnClickListener() {
@@ -1517,6 +1533,7 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
         box.addView(Md3.divider(this));
         box.addView(filterRow);
         box.addView(glPresentRow);
+        box.addView(glPresentScaleRow);
         box.addView(rewindRow);
         box.addView(Md3.divider(this));
         box.addView(fpsRow);
@@ -1741,6 +1758,42 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
             case 5: return "FSR1（GL）";
             default: return "最近邻（GL）";
         }
+    }
+
+    private String glPresentScaleText() {
+        switch (glPresentScale) {
+            case 2: return "2×";
+            case 3: return "3×";
+            case 4: return "4×";
+            default: return "自动";
+        }
+    }
+
+    private void glPresentScaleDialog() {
+        final int[] scales = { 0, 2, 3, 4 };
+        final String[] labels = { "自动（填满画面）", "2×", "3×", "4×" };
+        int checked = 0;
+        for (int i = 0; i < scales.length; ++i) {
+            if (scales[i] == glPresentScale) {
+                checked = i;
+            }
+        }
+        Md3.chooser(this, Md3.IC_SCREEN, "放大", null, labels, null, checked,
+                new Md3.Choice() {
+                    @Override
+                    public void picked(int which, AlertDialog d) {
+                        glPresentScale = scales[which];
+                        getSharedPreferences("nano_j2me", MODE_PRIVATE).edit()
+                                .putInt("gl_present_scale", glPresentScale).apply();
+                        synchronized (lock) {
+                            if (handle != 0) {
+                                nativeSetGlPresentScale(handle, glPresentScale);
+                            }
+                        }
+                        d.dismiss();
+                        showPanel();
+                    }
+                });
     }
 
     private void glPresentDialog() {

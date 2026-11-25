@@ -45,3 +45,12 @@ Android 启动器（`LibraryActivity.java`）：
 - round 3：画布大小选择器删除错误/冗长的分辨率释义，只留数值；自定义项副标题改为“32 ~ 4096”；对话框说明改为“现在是 WxH”（`56e8a53`）。
 - round 4：网页导入/存储提示精简为单句约束（`0c63b9e`）。
 - 待办：SDL2 启动器文案精简；Android 面板“放大：自动/2×/3×/4×”选项；面板分组（画面/存档/输入/高级）。
+
+## Round 10: Android「放大」setting for the GL present
+
+- The experimental GL present row keeps its short label; the picture magnifier is now a separate row
+  「放大：自动 / 2× / 3× / 4×」 (self-explanatory, no paragraph hint).
+- Native: `nativeSetGlPresentScale(handle, scale)` stores `android_state.gl_present_scale`
+  (0 = auto, 2/3/4 = integer cap), logged as `present: GL picture scale=N`.
+- Java: preference `gl_present_scale` (default 0), applied at both native init sites and from the chooser.
+- Build: `tools/build_android_apk.sh --abi x86_64 --gles2` ok.
