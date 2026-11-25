@@ -86,7 +86,7 @@ int nj_gles2_frame_active(const void *ud);
  * out_w*out_h tightly packed RGBA8888 rows, top-down. Returns 1 on success and
  * 0 on decline (context not current, unsupported size, or GL failure); the
  * caller then falls back to the software presentation unchanged. */
-#define NJ_GL_PRESENT_MODES 6
+#define NJ_GL_PRESENT_MODES 7
 int nj_gles2_present(void *ud, const nj_surface *src, int mode, int out_w, int out_h,
                      nj_u1 *out_rgba);
 /* Debug aid: read the currently bound window framebuffer back into out_rgba

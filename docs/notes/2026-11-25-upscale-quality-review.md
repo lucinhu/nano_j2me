@@ -32,3 +32,10 @@
 
 桌面端 FSR 在像素画/文字上是"算法不匹配"而非参数错误；先给用户可选模式与说明，再实现 bicubic/Lanczos
 与 RCAS 强度调节，并用同一 StaticDemo 对比图验收。
+
+
+## round 17 实现：bicubic 模式（mode 6）
+
+- `--upscale bicubic`（或数字 6）在桌面上可用；Catmull-Rom 4x4 采样，无 EASU 边缘自适应、无 RCAS 过冲。
+- StaticDemo 3x 对比：bicubic 与 nearest 有 36.0% 像素差异，但字形不再加粗/出光晕；文本带梯度均值 20.16（nearest 20.77，fsr 31.77 —— 高梯度正是 FSR 光晕的体现）。
+- 结论：文字/像素画优先 nearest/bicubic；FSR 留给 3D。Android 选择器与 RCAS 强度参数下一步接入。

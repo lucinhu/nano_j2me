@@ -65,6 +65,33 @@ static const char present_fs_crt[] =
  * FSR 1* reference (ffx_fsr1.h); textureGather is rebuilt with four
  * texture2D taps because GLSL ES 1.0 has no gather instruction.
  * The RCAS sharpness is the reference default of 0.2 stops. */
+static const char present_fs_bicubic[] =
+    "precision highp float;\n"
+    "uniform sampler2D image;\n"
+    "uniform vec2 texel;\n"
+    "varying vec2 uv;\n"
+    "void main() {\n"
+    "  vec2 p = uv / texel - 0.5;\n"
+    "  vec2 f = fract(p);\n"
+    "  vec2 base = floor(p);\n"
+    "  vec2 f2 = f * f;\n"
+    "  vec2 f3 = f2 * f;\n"
+    "  vec2 w0 = -0.5 * f3 + 1.0 * f2 - 0.5 * f;\n"
+    "  vec2 w1 =  1.5 * f3 - 2.5 * f2 + 1.0;\n"
+    "  vec2 w2 = -1.5 * f3 + 2.0 * f2 + 0.5 * f;\n"
+    "  vec2 w3 =  0.5 * f3 - 0.5 * f2;\n"
+    "  vec4 acc = vec4(0.0);\n"
+    "  for (int j = 0; j < 4; ++j) {\n"
+    "    float wy = (j == 0) ? w0.y : ((j == 1) ? w1.y : ((j == 2) ? w2.y : w3.y));\n"
+    "    for (int i = 0; i < 4; ++i) {\n"
+    "      float wx = (i == 0) ? w0.x : ((i == 1) ? w1.x : ((i == 2) ? w2.x : w3.x));\n"
+    "      vec2 o = vec2(float(i) - 1.0, float(j) - 1.0);\n"
+    "      acc += texture2D(image, (base + o + 0.5) * texel) * (wx * wy);\n"
+    "    }\n"
+    "  }\n"
+    "  gl_FragColor = acc;\n"
+    "}\n";
+
 static const char present_fs_easu[] =
     "#ifdef GL_ES\n"
     "precision highp float;\n"
@@ -346,7 +373,7 @@ fail:
 
 static int present_init(nj_gles2 *s)
 {
-    static const char *const fragments[NJ_GL_PRESENT_MODES - 1] = {
+    static const char *const fragments[5] = {
         present_fs_nearest, present_fs_sharp, present_fs_scanline,
         present_fs_lcd, present_fs_crt
     };
@@ -357,10 +384,13 @@ static int present_init(nj_gles2 *s)
         present_delete(s);
         if (!current(s) || !clean_errors(s)) return 0;
     }
-    for (i = 0; i < NJ_GL_PRESENT_MODES - 1; ++i) {
+    for (i = 0; i < 5; ++i) {
         if (!present_program(s, i, fragments[i])) {
             goto fail;
         }
+    }
+    if (!present_program(s, 6, present_fs_bicubic)) {
+        goto fail;
     }
     s->present_fsr_easu = present_simple_program(s, present_fs_easu);
     s->present_fsr_rcas = present_simple_program(s, present_fs_rcas);

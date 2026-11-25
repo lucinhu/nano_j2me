@@ -246,7 +246,7 @@ static void usage(const char *argv0)
 "    NJ_SDL2_KEYS=0     start with them hidden\n"
 "  --where              say where each thread stopped, frame by frame\n"
 "  --dump-frames <prefix>  write a PPM per frame as <prefix>NNNNN.ppm\n"
-"  --upscale <mode>     present through the GLES2 shader pass: nearest|sharp|scanline|lcd|crt|fsr\n"
+"  --upscale <mode>     present through the GLES2 shader pass: nearest|sharp|scanline|lcd|crt|fsr|bicubic\n"
 "  --upscale-scale <n|auto>  output scale for --upscale (1-8, auto = display, default 2)\n"
 "                          (headless; give a directory by ending it in /)\n"
 "  --dump-every <n>     write every n-th frame (headless, default: 1)\n"
@@ -338,7 +338,7 @@ typedef struct cli {
     int         cheat_count;        /* --cheat entries collected so far     */
     const char *font;
     const char *device_name;
-    int         upscale;      /* --upscale: -1 unset, 0..5 shader pass mode */
+    int         upscale;      /* --upscale: -1 unset, 0..6 shader pass mode */
     int         upscale_scale;/* --upscale-scale: 0 port default */
     int         upscale_auto;/* --upscale-scale auto: 1 */
     const char *save_state;
@@ -882,9 +882,10 @@ int main(int argc, char **argv)
             else if (strcmp(m, "lcd") == 0) c.upscale = 3;
             else if (strcmp(m, "crt") == 0) c.upscale = 4;
             else if (strcmp(m, "fsr") == 0) c.upscale = 5;
-            else if (m[0] >= '0' && m[0] <= '5' && m[1] == '\0') c.upscale = m[0] - '0';
+            else if (strcmp(m, "bicubic") == 0) c.upscale = 6;
+            else if (m[0] >= '0' && m[0] <= '6' && m[1] == '\0') c.upscale = m[0] - '0';
             else {
-                fprintf(stderr, "--upscale: bad mode %s (nearest|sharp|scanline|lcd|crt|fsr|0..5)\n", m);
+                fprintf(stderr, "--upscale: bad mode %s (nearest|sharp|scanline|lcd|crt|fsr|bicubic|0..6)\n", m);
                 return 2;
             }
         } else if (strcmp(a, "--upscale-scale") == 0 && i + 1 < argc) {
