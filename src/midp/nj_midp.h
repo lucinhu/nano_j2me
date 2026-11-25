@@ -238,6 +238,9 @@ nj_ref nj_midp_image_adopt(nj_vm *vm, nj_u4 *pixels, int w, int h);
 /* Fetch the pixel array of an Image as ARGB8888 (may be NULL). */
 nj_u4 *nj_midp_image_pixels(nj_vm *vm, nj_ref image_obj);
 
+/* Borrow one stack view of a live Java Image for the duration of a native draw. */
+int nj_midp_image_view(nj_vm *vm, nj_ref image_obj, nj_image *out);
+
 /* The singleton Display object, creating it on first use. */
 nj_ref nj_midp_display(nj_vm *vm);
 

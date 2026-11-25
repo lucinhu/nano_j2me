@@ -238,6 +238,23 @@ static void check_queue(nj_vm *vm, nj_port *port, canvas *c)
     check(list_calls && packet_calls,"native collection and decline replay execute");
     check(nj_surface_get(hd,64,64)==expected && pixel(c,32,32)==(expected&0xffffffu),
           "logical fallback and HD companion each blend exactly once");
+    /* Sprite.paint must commit earlier M3G work before drawing the overlay. */
+    const char *sprite_class = "javax/microedition/lcdui/game/Sprite";
+    nj_ref image = nj_root(vm,nj_midp_image_new(vm,1,1,1));
+    nj_ref sprite = nj_root(vm,nj_object_new(vm,sprite_class));
+    nj_value a[2];
+    nj_midp_image_pixels(vm,image)[0] = 0xffa020e0u;
+    a[0].r=image;
+    if (nj_call_special(vm,sprite,sprite_class,"<init>","(L" IMAGE ";)V",a,NULL)!=NJ_OK) exit(2);
+    a[0].i=a[1].i=32;
+    call(vm,sprite,"javax/microedition/lcdui/game/Layer","setPosition","(II)V",a,NULL);
+    default_clear(vm,c);
+    draw(vm,c,3,0xff00ff00u,0);
+    check(nj_m3g_pending(vm),"ordered overlay starts with a queued M3G draw");
+    a[0].r=c->graphics;
+    call(vm,sprite,sprite_class,"paint","(Ljavax/microedition/lcdui/Graphics;)V",a,NULL);
+    check(!nj_m3g_pending(vm) && pixel(c,32,32)==0xa020e0u && pixel(c,31,32)==0x00ff00u &&
+          nj_surface_get(hd,64,64)==0xffa020e0u,"Sprite.paint overlays the committed 3D colour on both targets");
     port->gfx_triangles= NULL;
     port->gfx_triangles_list= NULL;
 }

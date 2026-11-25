@@ -399,7 +399,7 @@ static nj_ref img_alloc(nj_vm *vm, int w, int h, int mutable)
 }
 
 /* Build a stack nj_image view over an Image for the blitters. */
-static int img_view(nj_vm *vm, nj_ref img, nj_image *out)
+int nj_midp_image_view(nj_vm *vm, nj_ref img, nj_image *out)
 {
     int w = 0, h = 0;
     nj_u4 *px;
@@ -675,7 +675,7 @@ void nj_midp_present(nj_vm *vm)
             nj_ref buf = rget(vm, cur, NJ_C_CANVAS, F_C_BUFFER, D_IMAGE);
             nj_image view;
 
-            if (scr && buf && img_view(vm, buf, &view)) {
+            if (scr && buf && nj_midp_image_view(vm, buf, &view)) {
                 nj_gfx blit;
                 nj_midp_gfx_init(vm, &blit, scr);
                 nj_gfx_draw_image(&blit, &view, 0, 0, 0, 0, view.width,
@@ -1801,7 +1801,7 @@ NJFN(g_drawImage)
         return nj_throw(vm, "java/lang/IllegalArgumentException",
                         "bad horizontal anchor");
     }
-    if (!img_view(vm, img, &view)) {
+    if (!nj_midp_image_view(vm, img, &view)) {
         return nj_throw(vm, "java/lang/IllegalArgumentException",
                         "image has no pixels");
     }
@@ -1852,7 +1852,7 @@ NJFN(g_drawRegion)
         return nj_throw(vm, "java/lang/IllegalArgumentException",
                         "bad horizontal anchor");
     }
-    if (!img_view(vm, img, &view)) {
+    if (!nj_midp_image_view(vm, img, &view)) {
         return nj_throw(vm, "java/lang/IllegalArgumentException",
                         "image has no pixels");
     }
@@ -2197,7 +2197,7 @@ NJFN(img_createImage_img)
         return nj_throw(vm, "java/lang/IllegalArgumentException",
                         "negative source origin");
     }
-    if (!img_view(vm, src, &view)) {
+    if (!nj_midp_image_view(vm, src, &view)) {
         return nj_throw(vm, "java/lang/IllegalArgumentException",
                         "source image has no pixels");
     }
@@ -4501,7 +4501,7 @@ static int item_measure(nj_vm *vm, nj_ref item, const ui_frame *uf, int avail)
     } else if (isa(vm, item, NJ_C_IMAGEITEM)) {
         nj_image image;
         nj_ref ref = rget(vm, item, NJ_C_ITEM, "itImage", D_IMAGE);
-        if (ref && img_view(vm, ref, &image) && image.height > h) h = image.height;
+        if (ref && nj_midp_image_view(vm, ref, &image) && image.height > h) h = image.height;
     }
     {
         nj_s4 preferred = fget(vm, item, NJ_C_ITEM, "itPrefH", D_INT);
@@ -4556,7 +4556,7 @@ static void item_draw_default(nj_vm *vm, nj_gfx *g, nj_ref item, const ui_frame 
     }
     if (img) {
         nj_image view;
-        if (img_view(vm, img, &view)) {
+        if (nj_midp_image_view(vm, img, &view)) {
             nj_gfx_draw_image(g, &view, x, ty, 0, 0, view.width, view.height);
             ty += view.height;
         }
@@ -4841,7 +4841,7 @@ static void list_render(nj_vm *vm, nj_gfx *g, nj_ref list, ui_frame *uf)
         if (imgs && (nj_u4)i < imgs->length) {
             nj_ref im = nj_array_get_ref(imgs, (nj_u4)i);
             nj_image view;
-            if (im && img_view(vm, im, &view)) {
+            if (im && nj_midp_image_view(vm, im, &view)) {
                 nj_gfx_draw_image(g, &view, tx, sy + 1, 0, 0, view.width,
                                   view.height);
                 tx += view.width + 2;
@@ -4912,7 +4912,7 @@ static void alert_render(nj_vm *vm, nj_gfx *g, nj_ref alert, ui_frame *uf)
     }
     if (img) {
         nj_image view;
-        if (img_view(vm, img, &view)) {
+        if (nj_midp_image_view(vm, img, &view)) {
             nj_gfx_draw_image(g, &view, UI_PAD, y, 0, 0, view.width, view.height);
             y += view.height + 2;
         }
@@ -6171,7 +6171,7 @@ static nj_status nj_midp_paint_body(nj_vm *vm)
             if (nj_midp_surface(vm, buf, &buf_surf)) {
                 nj_gfx blit;
                 nj_image view;
-                if (img_view(vm, buf, &view)) {
+                if (nj_midp_image_view(vm, buf, &view)) {
                     nj_midp_gfx_init(vm, &blit, scr);
                     nj_gfx_draw_image(&blit, &view, 0, 0, 0, 0, view.width,
                                       view.height);
@@ -6195,7 +6195,7 @@ static nj_status nj_midp_paint_body(nj_vm *vm)
             /* A Screen has no buffer field of its own - canvas_ensure_buffer
              * returns a fresh image for it - so the screen must be updated
              * here, before the temporary is dropped. */
-            if (img_view(vm, buf, &view)) {
+            if (nj_midp_image_view(vm, buf, &view)) {
                 nj_gfx blit;
                 nj_midp_gfx_init(vm, &blit, scr);
                 nj_gfx_draw_image(&blit, &view, 0, 0, 0, 0, view.width,
@@ -7035,7 +7035,7 @@ static int customitem_render(nj_vm *vm, nj_gfx *g, nj_ref item,
         a[4].i = selected ? 1 : 0;
         (void)nj_call(vm, item, NJ_C_CUSTOMITEM, "njDraw",
                       "(L" NJ_C_GRAPHICS ";IIIZ)I", a, NULL);
-        if (!vm->exception && img_view(vm, img, &view)) {
+        if (!vm->exception && nj_midp_image_view(vm, img, &view)) {
             nj_gfx_draw_image(g, &view, x, y + labelh, 0, 0, view.width,
                               view.height);
         }

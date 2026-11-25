@@ -1,0 +1,6 @@
+M("<init>", "(Z)V", NJ_ACC_PROTECTED, gc_init),
+M("getKeyStates", "()I", NJ_ACC_PUBLIC, gc_getKeyStates),
+M("flushGraphics", "()V", NJ_ACC_PUBLIC, gc_flushGraphics),
+M("flushGraphics", "(IIII)V", NJ_ACC_PUBLIC, gc_flushGraphics_rect),
+M("getGraphics", "()Ljavax/microedition/lcdui/Graphics;", NJ_ACC_PROTECTED, gc_getGraphics),
+M("paint", "(Ljavax/microedition/lcdui/Graphics;)V", NJ_ACC_PUBLIC | NJ_ACC_FINAL, gc_paint),

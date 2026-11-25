@@ -1350,6 +1350,21 @@ static void test_tiledlayer(nj_vm *vm)
                                            {.i = 1}, {.i = 1} }, NULL),
                  "IllegalArgumentException", "negative fillCells width");
 
+    /* An empty region still starts at a real cell, including on the last row. */
+    CHECK(nj_call(vm, t, NJ_C_TILEDLAYER, "fillCells", "(IIIII)V",
+                  (nj_value[]){ {.i=2}, {.i=1}, {.i=0}, {.i=0}, {.i=0} }, NULL) == NJ_OK &&
+          i2(vm, t, NJ_C_TILEDLAYER, "getCell", "(II)I", 2, 1) == 1,
+          "zero extent at the last cell succeeds without overwriting it");
+    expect_throw(vm, nj_call(vm, t, NJ_C_TILEDLAYER, "fillCells", "(IIIII)V",
+                             (nj_value[]){ {.i=3}, {.i=0}, {.i=0}, {.i=1}, {.i=0} }, NULL),
+                 "IndexOutOfBoundsException", "zero-width fill at column count");
+    expect_throw(vm, nj_call(vm, t, NJ_C_TILEDLAYER, "fillCells", "(IIII)V",
+                             (nj_value[]){ {.i=0}, {.i=2}, {.i=1}, {.i=0} }, NULL),
+                 "IndexOutOfBoundsException", "zero-height clear at row count");
+    expect_throw(vm, nj_call(vm, t, NJ_C_TILEDLAYER, "getAnimatedTile", "(I)I",
+                             &(nj_value){ .i = (-2147483647 - 1) }, NULL),
+                 "IndexOutOfBoundsException", "minimum int is not an animated tile");
+
     /* ---- paint(): the loop only visits the visible cells ---- */
     target = mk_image_fill(vm, 24, 24, C_SENT);
     g = mk_graphics(vm, target, 0, 0, 0, 0, 8, 24);   /* only column 0 */

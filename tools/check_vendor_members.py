@@ -28,6 +28,8 @@ import sys
 import zipfile
 from collections import defaultdict
 
+from api_audit import expand_game_tables
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LIMIT = 400
 
@@ -119,7 +121,7 @@ def parse_tables(paths):
                         r'#define\s+(NJ_C_\w+)\s+"([^"]+)"', header):
                     macros[name] = val
     for path in paths:
-        text = open(path, encoding="utf-8").read()
+        text = expand_game_tables(path, open(path, encoding="utf-8").read())
         sources.append(text)
         for inc in re.findall(r'#include\s+"(nj_[^"]+\.inc)"', text):
             inc_path = os.path.join(os.path.dirname(path), inc)

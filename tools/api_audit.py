@@ -65,6 +65,21 @@ def parse_rows(src, macros):
     return arrays
 
 
+def expand_game_tables(path, text):
+    """Inline the game's local .inc tables for the source-only audits."""
+    if os.path.basename(path) != "nj_lib_game.c":
+        return text
+
+    def expand(directory, source):
+        def include(match):
+            child = os.path.join(directory, match[1])
+            with open(child, encoding="utf-8") as f:
+                return expand(os.path.dirname(child), f.read())
+        return re.sub(r'^#include "([^"\n]+\.inc)"$', include, source, flags=re.M)
+
+    return expand(os.path.dirname(path), text)
+
+
 def read_files():
     """(path, text) for every .c and .h the runtime is built from."""
     out = []
@@ -74,7 +89,7 @@ def read_files():
                 if name.endswith((".c", ".h")):
                     path = os.path.join(dirpath, name)
                     with open(path, encoding="utf-8", errors="replace") as f:
-                        out.append((path, f.read()))
+                        out.append((path, expand_game_tables(path, f.read())))
     return out
 
 

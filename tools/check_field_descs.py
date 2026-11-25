@@ -24,6 +24,8 @@ import re
 import sys
 import pathlib
 
+from api_audit import expand_game_tables
+
 files = []
 for root in ("src", "include"):
     d = pathlib.Path(root)
@@ -71,7 +73,11 @@ class Unit:
         text = strip_comments(text)
         self.text = text
         self.str_macro = {}
-        for m in DEF_STR.finditer(text):
+        definitions = text
+        if path.name == "nj_lib_game.c":
+            # Resolve the class and field names before parsing the game tables.
+            definitions = path.with_name("nj_midp.h").read_text() + "\n" + text
+        for m in DEF_STR.finditer(definitions):
             self.str_macro[m.group(1)] = "".join(re.findall(r'"([^"]*)"', m.group(2)))
         self.call_macro = {}
         for m in DEF_CALL.finditer(text):
@@ -152,7 +158,7 @@ class Unit:
 GLOBAL_MACROS = {}
 units = []
 for path in files:
-    text = pathlib.Path(path).read_text(errors="replace")
+    text = expand_game_tables(path, path.read_text(errors="replace"))
     for m in DEF_STR.finditer(text):
         GLOBAL_MACROS.setdefault(m.group(1),
                                  "".join(re.findall(r'"([^"]*)"', m.group(2))))

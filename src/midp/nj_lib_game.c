@@ -249,14 +249,14 @@ static int imax(int a, int b) { return (a > b) ? a : b; }
 static int iabs(int a) { return (a < 0) ? -a : a; }
 
 /* nj_s8 inside: layer bounds and the default view window can be huge. */
-static int rects_overlap(int ax, int ay, int aw, int ah,
+static int rects_overlap(nj_s8 ax, nj_s8 ay, int aw, int ah,
                          int bx, int by, int bw, int bh)
 {
     if (aw <= 0 || ah <= 0 || bw <= 0 || bh <= 0) {
         return 0;
     }
-    return !((nj_s8)ax + aw <= bx || (nj_s8)bx + bw <= ax ||
-             (nj_s8)ay + ah <= by || (nj_s8)by + bh <= ay);
+    return !(ax + aw <= bx || (nj_s8)bx + bw <= ax ||
+             ay + ah <= by || (nj_s8)by + bh <= ay);
 }
 
 /* ------------------------------------------------------------------ */
@@ -333,115 +333,6 @@ static void trans_rect(int t, int fw, int fh, int x, int y, int w, int h,
     *oy = imin(ay, by);
     *ow = iabs(ax - bx) + 1;
     *oh = iabs(ay - by) + 1;
-}
-
-/* ------------------------------------------------------------------ */
-/* Binding an nj_gfx to a Java Graphics                                */
-/* ------------------------------------------------------------------ */
-/*
- * A Java Graphics is a serialised nj_gfx (nj_midp.h fixes the field names).
- * Drawing through it means: view the target surface, copy the transform state
- * across, run one nj_gfx call.  The LCDUI module does the same for its own
- * primitives, so a Sprite drawn from here and a line drawn from Java land in
- * the same place.
- *
- * THE CLIP.  nj_gfx_set_clip() takes USER coordinates and applies g->translate
- * itself (src/gfx/nj_gfx.c: "USER coordinates: offset by the translate"), and
- * the LCDUI module stores the Graphics clip fields in exactly that user space
- * (its gfx_store writes `clip_x - translate_x`).  So the fields are handed to
- * nj_gfx_set_clip unchanged and a Graphics with translate (tx,ty) and clip
- * (cx,cy,cw,ch) clips at device (cx+tx, cy+ty, cw, ch) - consistent with the
- * LayerManager, which stores its narrowed clip back in the same convention.
- * Graphics construction already seeds the full target clip.  Zero sizes are
- * therefore explicit empty clips and must stay empty, just as in gfx_load.
- */
-typedef struct njg_bind {
-    nj_surface  scratch;   /* storage when the target is an Image */
-    nj_surface *surf;      /* the surface nj_gfx draws into       */
-} njg_gfx_bind;
-
-static int njg_bind(nj_vm *vm, nj_ref gobj, njg_gfx_bind *b, nj_gfx *g)
-{
-    nj_ref target;
-    nj_s4 tx, ty, cx, cy, cw, ch;
-
-    b->surf = NULL;
-    if (!gobj) {
-        return 0;
-    }
-    target = fgr(vm, gobj, NJ_C_GRAPHICS, NJ_F_G_TARGET, D_IMAGE);
-    b->surf = nj_midp_surface(vm, target, &b->scratch);
-    if (!b->surf) {
-        return 0;
-    }
-    nj_midp_gfx_init(vm, g, b->surf);
-
-    tx = fgi(vm, gobj, NJ_C_GRAPHICS, NJ_F_G_TX, D_INT);
-    ty = fgi(vm, gobj, NJ_C_GRAPHICS, NJ_F_G_TY, D_INT);
-    g->translate_x = (int)tx;
-    g->translate_y = (int)ty;
-
-    cx = fgi(vm, gobj, NJ_C_GRAPHICS, NJ_F_G_CX, D_INT);
-    cy = fgi(vm, gobj, NJ_C_GRAPHICS, NJ_F_G_CY, D_INT);
-    cw = fgi(vm, gobj, NJ_C_GRAPHICS, NJ_F_G_CW, D_INT);
-    ch = fgi(vm, gobj, NJ_C_GRAPHICS, NJ_F_G_CH, D_INT);
-    nj_gfx_set_clip(g, (int)cx, (int)cy, (int)cw, (int)ch);
-
-    g->color = (nj_u4)fgi(vm, gobj, NJ_C_GRAPHICS, NJ_F_G_COLOR, D_INT);
-    {
-        nj_s4 blend = fgi(vm, gobj, NJ_C_GRAPHICS, NJ_F_G_BLEND, D_INT);
-        g->blend = (blend == NJ_BLEND_NONE) ? NJ_BLEND_NONE : NJ_BLEND_SRC_OVER;
-    }
-    {
-        nj_s4 stroke = fgi(vm, gobj, NJ_C_GRAPHICS, NJ_F_G_STROKE, D_INT);
-        g->stroke = (stroke == NJ_STROKE_DOTTED) ? NJ_STROKE_DOTTED
-                                                 : NJ_STROKE_SOLID;
-    }
-    if (fgi(vm, gobj, NJ_C_GRAPHICS, NJ_F_G_XOR, D_INT) != 0) {
-        nj_gfx_set_xor(g, (nj_u4)fgi(vm, gobj, NJ_C_GRAPHICS, NJ_F_G_XORCOLOR,
-                                     D_INT));
-    }
-    return 1;
-}
-
-/* ------------------------------------------------------------------ */
-/* Image views                                                         */
-/* ------------------------------------------------------------------ */
-/*
- * The blitters want an nj_image; the game package has an Image whose pixels are
- * a Java int[].  nj_midp_image_pixels() gives the store.  `has_alpha` used to
- * be measured here, over exactly the region about to be drawn, on the theory
- * that the rasterizer picked its fast path from it; the rasterizer decides per
- * pixel instead (it copies opaque pixels and blends the translucent ones), so
- * the scan was work nobody read - and a Sprite or TiledLayer paid it for every
- * rectangle it drew.
- */
-static int image_view(nj_vm *vm, nj_ref imgref, int ax, int ay, int aw, int ah,
-                      nj_image *out)
-{
-    int w = 0, h = 0;
-    nj_u4 *px;
-
-    (void)ax;
-    (void)ay;
-    (void)aw;
-    (void)ah;   /* kept: the caller's region, unused since the scan went away */
-    if (!imgref) {
-        return 0;
-    }
-    if (!nj_midp_image_size(vm, imgref, &w, &h) || w <= 0 || h <= 0) {
-        return 0;
-    }
-    px = nj_midp_image_pixels(vm, imgref);
-    if (!px) {
-        return 0;
-    }
-    out->width = w;
-    out->height = h;
-    out->format = NJ_PIXFMT_ARGB8888;
-    out->pixels = px;
-    out->has_alpha = 0;   /* see the comment above: nobody reads it */
-    return 1;
 }
 
 /* ------------------------------------------------------------------ */
@@ -1048,10 +939,10 @@ NJFN(sprite_paint)
     nj_ref self = NJ_THIS(args);
     nj_ref gobj = NJ_ARG_REF(args, 0);
     nj_ref imgref;
-    njg_gfx_bind b;
+    nj_surface scratch;
     nj_gfx g;
     nj_image view;
-    int iw = 0, ih = 0, sx, sy, sw, sh, t, dw, dh;
+    int sx, sy, sw, sh, t, dw, dh, x, y;
 
     if (!gobj) {
         NJ_THROW(vm, "java/lang/NullPointerException", "graphics is null");
@@ -1060,18 +951,18 @@ NJFN(sprite_paint)
         return NJ_OK;
     }
     imgref = fgr(vm, self, NJ_C_SPRITE, NJ_F_SP_IMAGE, D_IMAGE);
-    if (!imgref || !nj_midp_image_size(vm, imgref, &iw, &ih)) {
+    if (!nj_midp_image_view(vm, imgref, &view)) {
         return NJ_OK;
     }
     t = (int)SPG(vm, self, NJ_F_SP_TRANS, D_INT);
     if (!trans_ok(t)) {
         t = NJ_TRANS_NONE;
     }
-    sprite_frame_rect(vm, self, iw, ih, &sx, &sy, &sw, &sh);
+    sprite_frame_rect(vm, self, view.width, view.height, &sx, &sy, &sw, &sh);
     if (sw <= 0 || sh <= 0) {
         return NJ_OK;
     }
-    if (!njg_bind(vm, gobj, &b, &g)) {
+    if (!nj_midp_gfx_load(vm, gobj, &g, &scratch)) {
         return vm->exception ? NJ_ERR : NJ_OK;
     }
 
@@ -1081,13 +972,10 @@ NJFN(sprite_paint)
      * outside the visible region free.
      */
     trans_size(t, sw, sh, &dw, &dh);
-    if (g.clip_w > 0 && g.clip_h > 0 &&
-        !rects_overlap(lay_x(vm, self) + g.translate_x,
-                       lay_y(vm, self) + g.translate_y, dw, dh,
-                       g.clip_x, g.clip_y, g.clip_w, g.clip_h)) {
-        return NJ_OK;
-    }
-    if (!image_view(vm, imgref, sx, sy, sw, sh, &view)) {
+    x = lay_x(vm, self);
+    y = lay_y(vm, self);
+    if (!rects_overlap((nj_s8)x + g.translate_x, (nj_s8)y + g.translate_y,
+                       dw, dh, g.clip_x, g.clip_y, g.clip_w, g.clip_h)) {
         return NJ_OK;
     }
 
@@ -1095,7 +983,7 @@ NJFN(sprite_paint)
      * TRANSFORMED region's bounding box at (dx,dy), which is exactly the
      * sprite's visual bounds. */
     nj_gfx_draw_region(&g, &view, sx, sy, sw, sh, t, g.use_xor, g.xor_color,
-                       NULL, lay_x(vm, self), lay_y(vm, self), NJ_ROP_PAINT);
+                       NULL, x, y, NJ_ROP_PAINT);
     return NJ_OK;
 }
 
@@ -1421,7 +1309,7 @@ static int tl_anim_slot(nj_vm *vm, nj_ref t, int idx, int *slot)
     int n = (int)fgi(vm, t, NJ_C_TILEDLAYER, NJ_F_TL_ANIMN, D_INT);
 
     if (idx < 0) {
-        int s = -idx - 1;
+        int s = -(idx + 1);
         if (s >= 0 && s < n) {
             *slot = s;
             return 1;
@@ -1456,8 +1344,7 @@ static int tl_index_ok(nj_vm *vm, nj_ref t, int idx)
 typedef struct tl_view {
     nj_ref  cells;                  /* int[] cell -> tile index   */
     nj_ref  anim;                   /* int[] animated tile table  */
-    nj_u4  *px;                     /* tile atlas pixels          */
-    int     iw, ih;                 /* tile atlas size            */
+    nj_image atlas;                 /* borrowed once per native call */
     int     cols, rows;             /* grid size                  */
     int     cellw, cellh;           /* cell size                  */
     int     tilew, tileh;           /* source tile size           */
@@ -1475,12 +1362,8 @@ static void tl_load(nj_vm *vm, nj_ref t, tl_view *v)
 
     v->cells = fgr(vm, t, NJ_C_TILEDLAYER, NJ_F_TL_CELLS, D_INTARR);
     v->anim = fgr(vm, t, NJ_C_TILEDLAYER, NJ_F_TL_ANIM, D_INTARR);
-    v->px = NULL;
-    v->iw = v->ih = 0;
-    if (img) {
-        v->px = nj_midp_image_pixels(vm, img);
-        (void)nj_midp_image_size(vm, img, &v->iw, &v->ih);
-    }
+    v->atlas = (nj_image){0};
+    (void)nj_midp_image_view(vm, img, &v->atlas);
     v->cols = (int)fgi(vm, t, NJ_C_TILEDLAYER, NJ_F_TL_COLS, D_INT);
     v->rows = (int)fgi(vm, t, NJ_C_TILEDLAYER, NJ_F_TL_ROWS, D_INT);
     v->cellw = (int)fgi(vm, t, NJ_C_TILEDLAYER, NJ_F_TL_CELLW, D_INT);
@@ -1493,9 +1376,9 @@ static void tl_load(nj_vm *vm, nj_ref t, tl_view *v)
     v->lw = lay_w(vm, t);
     v->lh = lay_h(vm, t);
     v->visible = lay_visible(vm, t);
-    v->tpr = (v->tilew > 0) ? v->iw / v->tilew : 0;
-    v->nstatic = v->tpr * ((v->tileh > 0) ? v->ih / v->tileh : 0);
-    v->ok = (v->px != NULL && v->cells != NULL && v->cols > 0 &&
+    v->tpr = (v->tilew > 0) ? v->atlas.width / v->tilew : 0;
+    v->nstatic = v->tpr * ((v->tileh > 0) ? v->atlas.height / v->tileh : 0);
+    v->ok = (v->atlas.pixels != NULL && v->cells != NULL && v->cols > 0 &&
              v->rows > 0 && v->cellw > 0 && v->cellh > 0 &&
              v->tilew > 0 && v->tileh > 0 && v->tpr > 0);
 }
@@ -1512,7 +1395,7 @@ static int tl_resolve_in(const tl_view *v, int idx)
         return idx;
     }
     if (idx < 0) {
-        slot = -idx - 1;
+        slot = -(idx + 1);
     } else if (idx > v->nstatic) {
         slot = idx - v->nstatic - 1;
     } else {
@@ -1563,10 +1446,10 @@ static int tl_opaque(const tl_view *v, int wx, int wy)
     }
     tx = ((tile - 1) % v->tpr) * v->tilew + cx;
     ty = ((tile - 1) / v->tpr) * v->tileh + cy;
-    if (tx >= v->iw || ty >= v->ih) {
+    if (tx >= v->atlas.width || ty >= v->atlas.height) {
         return 0;
     }
-    p = v->px[(nj_size)ty * (nj_size)v->iw + (nj_size)tx];
+    p = v->atlas.pixels[(nj_size)ty * (nj_size)v->atlas.width + (nj_size)tx];
     return ((p >> 24) & 0xFFu) != 0u;
 }
 
@@ -1938,8 +1821,8 @@ static nj_status tiled_fill(nj_vm *vm, nj_ref self, int col, int row,
         return nj_throw(vm, "java/lang/IllegalArgumentException",
                         "negative cell count");
     }
-    if (col < 0 || row < 0 || (nj_s8)col + ncols > cols ||
-        (nj_s8)row + nrows > rows) {
+    if (col < 0 || col >= cols || row < 0 || row >= rows ||
+        ncols > cols - col || nrows > rows - row) {
         return nj_throw(vm, "java/lang/IndexOutOfBoundsException",
                         "cell region");
     }
@@ -2001,87 +1884,65 @@ NJFN(tiled_getRows)
     return NJ_OK;
 }
 
-/*
- * paint(): draw ONLY the cells that can appear inside the Graphics' clip.
- *
- * The layer puts its upper-left corner at (lX,lY) in the Graphics' user space,
- * so the clip - which lives in surface coordinates - maps back to user space by
- * subtracting the translate.  That rectangle, intersected with the layer's own
- * bounds, gives the range of columns and rows worth visiting: a 200x200 map
- * costs the cells on screen, not 40000 blits.  Partially visible cells are
- * still drawn whole and the rasterizer trims them, which is cheaper than
- * clipping every blit by hand.  The image view is rebuilt per cell so that
- * has_alpha describes exactly the tile being drawn.
- */
+/* Intersect a device clip with a translated grid axis. Return [first, end)
+ * in cells. The layer origin, translation and far edge can span two ints. */
+static int visible_cells(nj_s8 origin, int count, int size, int clip, int extent,
+                         int *first, int *end)
+{
+    nj_s8 lo = (nj_s8)clip - origin;
+    nj_s8 hi = lo + extent;
+    nj_s8 limit = (nj_s8)count * size;
+    if (lo < 0) lo = 0;
+    if (hi > limit) hi = limit;
+    if (hi <= lo) return 0;
+    *first = (int)(lo / size);
+    *end = (int)((hi - 1) / size) + 1;
+    return 1;
+}
+
 NJFN(tiled_paint)
 {
     nj_ref self = NJ_THIS(args);
     nj_ref gobj = NJ_ARG_REF(args, 0);
-    nj_ref imgref;
     tl_view v;
-    njg_gfx_bind b;
+    nj_surface scratch;
     nj_gfx g;
-    nj_image view;
-    int ux0, uy0, ux1, uy1, col0, col1, row0, row1, col, row;
+    nj_s8 origin_x, origin_y;
+    int col0, col_end, row0, row_end, col, row;
+    const nj_s4 *cells;
 
     if (!gobj) {
         NJ_THROW(vm, "java/lang/NullPointerException", "graphics is null");
     }
-    if (!lay_visible(vm, self)) {
-        return NJ_OK;
-    }
-    imgref = fgr(vm, self, NJ_C_TILEDLAYER, NJ_F_TL_IMAGE, D_IMAGE);
     tl_load(vm, self, &v);
-    if (!imgref || !v.ok) {
-        return NJ_OK;
-    }
-    if (!njg_bind(vm, gobj, &b, &g)) {
+    if (!v.visible || !v.ok) return NJ_OK;
+    if (!nj_midp_gfx_load(vm, gobj, &g, &scratch)) {
         return vm->exception ? NJ_ERR : NJ_OK;
     }
-
-    ux0 = g.clip_x - g.translate_x;
-    uy0 = g.clip_y - g.translate_y;
-    ux1 = ux0 + g.clip_w;
-    uy1 = uy0 + g.clip_h;
-
-    ux0 = imax(ux0, v.lx);
-    uy0 = imax(uy0, v.ly);
-    ux1 = imin(ux1, v.lx + v.cols * v.cellw);
-    uy1 = imin(uy1, v.ly + v.rows * v.cellh);
-    if (ux1 <= ux0 || uy1 <= uy0) {
+    origin_x = (nj_s8)v.lx + g.translate_x;
+    origin_y = (nj_s8)v.ly + g.translate_y;
+    if (!visible_cells(origin_x, v.cols, v.cellw, g.clip_x, g.clip_w, &col0, &col_end) ||
+        !visible_cells(origin_y, v.rows, v.cellh, g.clip_y, g.clip_h, &row0, &row_end)) {
         return NJ_OK;
     }
-    col0 = imax((ux0 - v.lx) / v.cellw, 0);
-    row0 = imax((uy0 - v.ly) / v.cellh, 0);
-    col1 = imin((ux1 - 1 - v.lx) / v.cellw, v.cols - 1);
-    row1 = imin((uy1 - 1 - v.ly) / v.cellh, v.rows - 1);
-    if (col1 < col0 || row1 < row0) {
-        return NJ_OK;
-    }
-
-    for (row = row0; row <= row1; row++) {
-        for (col = col0; col <= col1; col++) {
-            nj_u4 off = (nj_u4)(row * v.cols + col);
-            int idx, tile, tx, ty;
-
-            if (off >= nj_array_length(v.cells)) {
-                continue;
+    /* All visible tile origins fit device coordinates after clipping. The
+     * Java Graphics retains its translation. Only the local copy draws in
+     * device space, so even a layer near Integer.MAX_VALUE can scroll in. */
+    g.translate_x = g.translate_y = 0;
+    cells = (const nj_s4 *)nj_array_data(v.cells);
+    if (!cells || v.cells->aflags != NJ_ARRAY_T_INT ||
+        (nj_s8)v.rows * v.cols > nj_array_length(v.cells)) return NJ_OK;
+    for (row = row0; row < row_end; ++row) {
+        const nj_s4 *tiles = cells + (nj_size)row * v.cols;
+        int dy = (int)(origin_y + (nj_s8)row * v.cellh);
+        for (col = col0; col < col_end; ++col) {
+            int tile = tl_resolve_in(&v, tiles[col]);
+            if (tile > 0 && tile <= v.nstatic) {
+                int tx = ((tile - 1) % v.tpr) * v.tilew;
+                int ty = ((tile - 1) / v.tpr) * v.tileh;
+                int dx = (int)(origin_x + (nj_s8)col * v.cellw);
+                nj_gfx_draw_image(&g, &v.atlas, dx, dy, tx, ty, v.tilew, v.tileh);
             }
-            idx = nj_array_get_int(v.cells, off);
-            if (idx == 0) {
-                continue;
-            }
-            tile = tl_resolve_in(&v, idx);
-            if (tile < 1 || tile > v.nstatic) {
-                continue;
-            }
-            tx = ((tile - 1) % v.tpr) * v.tilew;
-            ty = ((tile - 1) / v.tpr) * v.tileh;
-            if (!image_view(vm, imgref, tx, ty, v.tilew, v.tileh, &view)) {
-                continue;
-            }
-            nj_gfx_draw_image(&g, &view, v.lx + col * v.cellw,
-                              v.ly + row * v.cellh, tx, ty, v.tilew, v.tileh);
         }
     }
     return NJ_OK;
@@ -2357,7 +2218,7 @@ NJFN(lm_paint)
 
         /*
          * Clip to the view-window rectangle, keeping the caller's clip as the
-         * outer bound.  The stored clip is user space (see njg_bind), so it is
+         * outer bound.  The stored clip is user space, so it is
          * brought into device space with the OLD translate, intersected with
          * the view window's device rectangle, and written back relative to the
          * NEW translate - exactly the convention the LCDUI module uses.
@@ -2692,7 +2553,7 @@ static void gc_blit(nj_vm *vm, nj_ref buf, nj_surface *dst,
 
         nj_midp_gfx_init(vm, &g, dst);
         nj_gfx_set_clip(&g, cx, cy, cw, ch);
-        if (!image_view(vm, buf, sx, sy, w, h, &view)) {
+        if (!nj_midp_image_view(vm, buf, &view)) {
             return;
         }
         nj_gfx_draw_image_rop(&g, &view, dx, dy, sx, sy, w, h, NJ_ROP_SET,
@@ -2740,10 +2601,10 @@ static void gc_flush_region(nj_vm *vm, nj_ref self, nj_ref gobj,
     }
     if (gobj) {
         /* paint(Graphics): honour the caller's translate and clip. */
-        njg_gfx_bind b;
+        nj_surface scratch;
         nj_gfx g;
 
-        if (!njg_bind(vm, gobj, &b, &g)) {
+        if (!nj_midp_gfx_load(vm, gobj, &g, &scratch)) {
             return;
         }
         if (fgr(vm, gobj, NJ_C_GRAPHICS, NJ_F_G_TARGET, D_IMAGE) == buf) {
@@ -2752,6 +2613,7 @@ static void gc_flush_region(nj_vm *vm, nj_ref self, nj_ref gobj,
         gc_blit(vm, buf, g.surf, x + g.translate_x, y + g.translate_y,
                 x, y, w, h, g.clip_x, g.clip_y, g.clip_w, g.clip_h);
     } else {
+        nj_m3g_flush_why(vm, NJ_M3G_FLUSH_GFX);
         gc_blit(vm, buf, dst, x, y, x, y, w, h, 0, 0, dst->width,
                 dst->height);
         /*
@@ -2848,325 +2710,4 @@ NJFN(gc_paint)
     return NJ_OK;
 }
 
-/* ------------------------------------------------------------------ */
-/* Tables                                                             */
-/* ------------------------------------------------------------------ */
-#define M(name, desc, flags) { name, desc, flags }
-#define F(name, desc, flags) { name, desc, flags }
-
-/* ---- Layer ---- */
-static const nj_builtin_field layer_fields[] = {
-    F(NJ_F_L_X, D_INT, NJ_ACC_PRIVATE),
-    F(NJ_F_L_Y, D_INT, NJ_ACC_PRIVATE),
-    F(NJ_F_L_W, D_INT, NJ_ACC_PRIVATE),
-    F(NJ_F_L_H, D_INT, NJ_ACC_PRIVATE),
-    F(NJ_F_L_VISIBLE, D_BOOL, NJ_ACC_PRIVATE)
-};
-
-static const nj_builtin_method layer_methods[] = {
-    M("<init>", "()V", NJ_ACC_PROTECTED),
-    M("getX", "()I", NJ_ACC_PUBLIC | NJ_ACC_FINAL),
-    M("getY", "()I", NJ_ACC_PUBLIC | NJ_ACC_FINAL),
-    M("getWidth", "()I", NJ_ACC_PUBLIC | NJ_ACC_FINAL),
-    M("getHeight", "()I", NJ_ACC_PUBLIC | NJ_ACC_FINAL),
-    M("setPosition", "(II)V", NJ_ACC_PUBLIC | NJ_ACC_FINAL),
-    M("move", "(II)V", NJ_ACC_PUBLIC | NJ_ACC_FINAL),
-    M("isVisible", "()Z", NJ_ACC_PUBLIC | NJ_ACC_FINAL),
-    M("setVisible", "(Z)V", NJ_ACC_PUBLIC | NJ_ACC_FINAL),
-    /*
-     * Abstract, deliberately without an implementation: a Layer subclass that
-     * forgets to override paint() must raise AbstractMethodError, not silently
-     * draw nothing.  A silent no-op is the hardest kind of bug to find in a
-     * game, and the VM's invoker already reports the error for a method flagged
-     * abstract that nothing overrides.
-     */
-    M("paint", "(Ljavax/microedition/lcdui/Graphics;)V",
-      NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT)
-};
-
-/* ---- Sprite ---- */
-static const nj_builtin_field sprite_fields[] = {
-    F(NJ_F_SP_IMAGE, D_IMAGE, NJ_ACC_PRIVATE),
-    F(NJ_F_SP_FRAMEW, D_INT, NJ_ACC_PRIVATE),
-    F(NJ_F_SP_FRAMEH, D_INT, NJ_ACC_PRIVATE),
-    F(NJ_F_SP_FRAMES, D_INT, NJ_ACC_PRIVATE),
-    F(NJ_F_SP_COLS, D_INT, NJ_ACC_PRIVATE),
-    F(NJ_F_SP_FRAME, D_INT, NJ_ACC_PRIVATE),
-    F(NJ_F_SP_TRANS, D_INT, NJ_ACC_PRIVATE),
-    F(NJ_F_SP_REFX, D_INT, NJ_ACC_PRIVATE),
-    F(NJ_F_SP_REFY, D_INT, NJ_ACC_PRIVATE),
-    F(NJ_F_SP_COLLIDE, D_BOOL, NJ_ACC_PRIVATE),
-    /* Additive state (see the header comment). */
-    F(SP_REFDX, D_INT, NJ_ACC_PRIVATE),
-    F(SP_REFDY, D_INT, NJ_ACC_PRIVATE),
-    F(SP_SEQ, D_INTARR, NJ_ACC_PRIVATE),
-    F(SP_SEQIDX, D_INT, NJ_ACC_PRIVATE),
-    F(SP_COLX, D_INT, NJ_ACC_PRIVATE),
-    F(SP_COLY, D_INT, NJ_ACC_PRIVATE),
-    F(SP_COLW, D_INT, NJ_ACC_PRIVATE),
-    F(SP_COLH, D_INT, NJ_ACC_PRIVATE)
-};
-
-static const nj_builtin_method sprite_methods[] = {
-    M("<init>", "(Ljavax/microedition/lcdui/Image;)V", NJ_ACC_PUBLIC),
-    M("<init>", "(Ljavax/microedition/lcdui/Image;II)V", NJ_ACC_PUBLIC),
-    M("<init>", "(Ljavax/microedition/lcdui/game/Sprite;)V", NJ_ACC_PUBLIC),
-    M("setImage", "(Ljavax/microedition/lcdui/Image;II)V", NJ_ACC_PUBLIC),
-    M("setImage", "(Ljavax/microedition/lcdui/Image;)V", NJ_ACC_PUBLIC),
-    M("getImage", "()Ljavax/microedition/lcdui/Image;", NJ_ACC_PUBLIC),
-    M("setFrame", "(I)V", NJ_ACC_PUBLIC),
-    M("getFrame", "()I", NJ_ACC_PUBLIC | NJ_ACC_FINAL),
-    M("getRawFrameCount", "()I", NJ_ACC_PUBLIC),
-    M("setFrameSequence", "([I)V", NJ_ACC_PUBLIC),
-    M("getFrameSequenceLength", "()I", NJ_ACC_PUBLIC),
-    M("getFrameSequenceIndex", "()I", NJ_ACC_PUBLIC),
-    M("nextFrame", "()V", NJ_ACC_PUBLIC),
-    M("prevFrame", "()V", NJ_ACC_PUBLIC),
-    /* Additive int-returning twins; see sprite_nextFrame_i. */
-    M("nextFrame", "()I", NJ_ACC_PUBLIC),
-    M("prevFrame", "()I", NJ_ACC_PUBLIC),
-    M("setTransform", "(I)V", NJ_ACC_PUBLIC),
-    M("getTransform", "()I", NJ_ACC_PUBLIC),
-    M("defineReferencePixel", "(II)V", NJ_ACC_PUBLIC),
-    M("setRefPixelPosition", "(II)V", NJ_ACC_PUBLIC),
-    M("getRefPixelX", "()I", NJ_ACC_PUBLIC),
-    M("getRefPixelY", "()I", NJ_ACC_PUBLIC),
-    M("defineCollisionRectangle", "(IIII)V", NJ_ACC_PUBLIC),
-    M("paint", "(Ljavax/microedition/lcdui/Graphics;)V",
-      NJ_ACC_PUBLIC | NJ_ACC_FINAL),
-    M("collidesWith", "(Ljavax/microedition/lcdui/game/Sprite;Z)Z",
-      NJ_ACC_PUBLIC | NJ_ACC_FINAL),
-    M("collidesWith", "(Ljavax/microedition/lcdui/game/Sprite;ZZ)Z",
-      NJ_ACC_PUBLIC | NJ_ACC_FINAL),
-    M("collidesWith", "(Ljavax/microedition/lcdui/game/TiledLayer;Z)Z",
-      NJ_ACC_PUBLIC | NJ_ACC_FINAL),
-    M("collidesWith", "(Ljavax/microedition/lcdui/game/TiledLayer;ZZ)Z",
-      NJ_ACC_PUBLIC | NJ_ACC_FINAL),
-    M("collidesWith", "(Ljavax/microedition/lcdui/Image;IIZ)Z",
-      NJ_ACC_PUBLIC | NJ_ACC_FINAL),
-    M("collidesWith", "(Ljavax/microedition/lcdui/game/Layer;Z)Z",
-      NJ_ACC_PUBLIC | NJ_ACC_FINAL),
-    M("collidesWith", "(Ljavax/microedition/lcdui/game/Layer;ZZ)Z",
-      NJ_ACC_PUBLIC | NJ_ACC_FINAL)
-};
-
-/* ---- TiledLayer ---- */
-static const nj_builtin_field tiled_fields[] = {
-    F(NJ_F_TL_IMAGE, D_IMAGE, NJ_ACC_PRIVATE),
-    F(NJ_F_TL_COLS, D_INT, NJ_ACC_PRIVATE),
-    F(NJ_F_TL_ROWS, D_INT, NJ_ACC_PRIVATE),
-    F(NJ_F_TL_CELLW, D_INT, NJ_ACC_PRIVATE),
-    F(NJ_F_TL_CELLH, D_INT, NJ_ACC_PRIVATE),
-    F(NJ_F_TL_TILEW, D_INT, NJ_ACC_PRIVATE),
-    F(NJ_F_TL_TILEH, D_INT, NJ_ACC_PRIVATE),
-    F(NJ_F_TL_CELLS, D_INTARR, NJ_ACC_PRIVATE),
-    F(NJ_F_TL_ANIM, D_INTARR, NJ_ACC_PRIVATE),
-    F(NJ_F_TL_ANIMN, D_INT, NJ_ACC_PRIVATE),
-    F(TL_ANIMCAP, D_INT, NJ_ACC_PRIVATE)
-};
-
-static const nj_builtin_method tiled_methods[] = {
-    M("<init>", "(IILjavax/microedition/lcdui/Image;II)V", NJ_ACC_PUBLIC),
-    M("setStaticTileSet", "(Ljavax/microedition/lcdui/Image;II)V",
-      NJ_ACC_PUBLIC),
-    M("setCell", "(III)V", NJ_ACC_PUBLIC),
-    M("getCell", "(II)I", NJ_ACC_PUBLIC),
-    M("createAnimatedTile", "(I)I", NJ_ACC_PUBLIC),
-    M("setAnimatedTile", "(II)V", NJ_ACC_PUBLIC),
-    M("getAnimatedTile", "(I)I", NJ_ACC_PUBLIC),
-    M("fillCells", "(IIIII)V", NJ_ACC_PUBLIC),
-    M("fillCells", "(IIII)V", NJ_ACC_PUBLIC),
-    M("getCellWidth", "()I", NJ_ACC_PUBLIC | NJ_ACC_FINAL),
-    M("getCellHeight", "()I", NJ_ACC_PUBLIC | NJ_ACC_FINAL),
-    M("getColumns", "()I", NJ_ACC_PUBLIC | NJ_ACC_FINAL),
-    M("getRows", "()I", NJ_ACC_PUBLIC | NJ_ACC_FINAL),
-    M("paint", "(Ljavax/microedition/lcdui/Graphics;)V",
-      NJ_ACC_PUBLIC | NJ_ACC_FINAL)
-};
-
-/* ---- LayerManager ---- */
-static const nj_builtin_field lm_fields[] = {
-    F(NJ_F_LM_LAYERS, D_OBJARR, NJ_ACC_PRIVATE),
-    F(LM_COUNT, D_INT, NJ_ACC_PRIVATE),
-    F(NJ_F_LM_VX, D_INT, NJ_ACC_PRIVATE),
-    F(NJ_F_LM_VY, D_INT, NJ_ACC_PRIVATE),
-    F(LM_VIEWW, D_INT, NJ_ACC_PRIVATE),
-    F(LM_VIEWH, D_INT, NJ_ACC_PRIVATE)
-};
-
-static const nj_builtin_method lm_methods[] = {
-    M("<init>", "()V", NJ_ACC_PUBLIC),
-    M("append", "(Ljavax/microedition/lcdui/game/Layer;)V", NJ_ACC_PUBLIC),
-    M("insert", "(Ljavax/microedition/lcdui/game/Layer;I)V", NJ_ACC_PUBLIC),
-    M("remove", "(Ljavax/microedition/lcdui/game/Layer;)V", NJ_ACC_PUBLIC),
-    M("getLayerAt", "(I)Ljavax/microedition/lcdui/game/Layer;", NJ_ACC_PUBLIC),
-    M("getSize", "()I", NJ_ACC_PUBLIC),
-    M("setViewWindow", "(IIII)V", NJ_ACC_PUBLIC),
-    M("getViewX", "()I", NJ_ACC_PUBLIC),
-    M("getViewY", "()I", NJ_ACC_PUBLIC),
-    M("getViewW", "()I", NJ_ACC_PUBLIC),
-    M("getViewH", "()I", NJ_ACC_PUBLIC),
-    M("paint", "(Ljavax/microedition/lcdui/Graphics;II)V", NJ_ACC_PUBLIC)
-};
-
-/* ---- GameCanvas ---- */
-static const nj_builtin_field gc_fields[] = {
-    F(NJ_F_GC_SUPPRESS, D_BOOL, NJ_ACC_PRIVATE),
-    /* Reserved for the LCDUI module's full-screen handling of a game canvas;
-     * this module neither reads nor writes it. */
-    F(NJ_F_GC_FULL, D_BOOL, NJ_ACC_PRIVATE)
-};
-
-static const nj_builtin_method gc_methods[] = {
-    M("<init>", "(Z)V", NJ_ACC_PROTECTED),
-    M("getKeyStates", "()I", NJ_ACC_PUBLIC),
-    M("flushGraphics", "()V", NJ_ACC_PUBLIC),
-    M("flushGraphics", "(IIII)V", NJ_ACC_PUBLIC),
-    M("getGraphics", "()Ljavax/microedition/lcdui/Graphics;", NJ_ACC_PROTECTED),
-    M("paint", "(Ljavax/microedition/lcdui/Graphics;)V",
-      NJ_ACC_PUBLIC | NJ_ACC_FINAL)
-};
-
-const nj_builtin_class nj_lib_game_classes[] = {
-    { NJ_C_LAYER, "java/lang/Object", NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT,
-      layer_fields,
-      (nj_u2)(sizeof(layer_fields) / sizeof(layer_fields[0])),
-      layer_methods,
-      (nj_u2)(sizeof(layer_methods) / sizeof(layer_methods[0])) },
-    { NJ_C_SPRITE, NJ_C_LAYER, NJ_ACC_PUBLIC,
-      sprite_fields,
-      (nj_u2)(sizeof(sprite_fields) / sizeof(sprite_fields[0])),
-      sprite_methods,
-      (nj_u2)(sizeof(sprite_methods) / sizeof(sprite_methods[0])) },
-    { NJ_C_TILEDLAYER, NJ_C_LAYER, NJ_ACC_PUBLIC,
-      tiled_fields,
-      (nj_u2)(sizeof(tiled_fields) / sizeof(tiled_fields[0])),
-      tiled_methods,
-      (nj_u2)(sizeof(tiled_methods) / sizeof(tiled_methods[0])) },
-    { NJ_C_LAYERMANAGER, "java/lang/Object", NJ_ACC_PUBLIC,
-      lm_fields,
-      (nj_u2)(sizeof(lm_fields) / sizeof(lm_fields[0])),
-      lm_methods,
-      (nj_u2)(sizeof(lm_methods) / sizeof(lm_methods[0])) },
-    { NJ_C_GAMECANVAS, NJ_C_CANVAS, NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT,
-      gc_fields,
-      (nj_u2)(sizeof(gc_fields) / sizeof(gc_fields[0])),
-      gc_methods,
-      (nj_u2)(sizeof(gc_methods) / sizeof(gc_methods[0])) }
-};
-const int nj_lib_game_class_count =
-    (int)(sizeof(nj_lib_game_classes) / sizeof(nj_lib_game_classes[0]));
-
-const nj_native_entry nj_lib_game_table[] = {
-    /* Layer */
-    { NJ_C_LAYER, "<init>", "()V", layer_init },
-    { NJ_C_LAYER, "getX", "()I", layer_getX },
-    { NJ_C_LAYER, "getY", "()I", layer_getY },
-    { NJ_C_LAYER, "getWidth", "()I", layer_getWidth },
-    { NJ_C_LAYER, "getHeight", "()I", layer_getHeight },
-    { NJ_C_LAYER, "setPosition", "(II)V", layer_setPosition },
-    { NJ_C_LAYER, "move", "(II)V", layer_move },
-    { NJ_C_LAYER, "isVisible", "()Z", layer_isVisible },
-    { NJ_C_LAYER, "setVisible", "(Z)V", layer_setVisible },
-    /* Sprite */
-    { NJ_C_SPRITE, "<init>", "(Ljavax/microedition/lcdui/Image;)V",
-      sprite_init_image },
-    { NJ_C_SPRITE, "<init>", "(Ljavax/microedition/lcdui/Image;II)V",
-      sprite_init_frames },
-    { NJ_C_SPRITE, "<init>", "(Ljavax/microedition/lcdui/game/Sprite;)V",
-      sprite_init_copy },
-    { NJ_C_SPRITE, "setImage", "(Ljavax/microedition/lcdui/Image;II)V",
-      sprite_setImage },
-    { NJ_C_SPRITE, "setImage", "(Ljavax/microedition/lcdui/Image;)V",
-      sprite_setImage_simple },
-    { NJ_C_SPRITE, "getImage", "()Ljavax/microedition/lcdui/Image;",
-      sprite_getImage },
-    { NJ_C_SPRITE, "setFrame", "(I)V", sprite_setFrame },
-    { NJ_C_SPRITE, "getFrame", "()I", sprite_getFrame },
-    { NJ_C_SPRITE, "getRawFrameCount", "()I", sprite_getRawFrameCount },
-    { NJ_C_SPRITE, "setFrameSequence", "([I)V", sprite_setFrameSequence },
-    { NJ_C_SPRITE, "getFrameSequenceLength", "()I",
-      sprite_getFrameSequenceLength },
-    { NJ_C_SPRITE, "getFrameSequenceIndex", "()I",
-      sprite_getFrameSequenceIndex },
-    { NJ_C_SPRITE, "nextFrame", "()V", sprite_nextFrame },
-    { NJ_C_SPRITE, "prevFrame", "()V", sprite_prevFrame },
-    { NJ_C_SPRITE, "nextFrame", "()I", sprite_nextFrame_i },
-    { NJ_C_SPRITE, "prevFrame", "()I", sprite_prevFrame_i },
-    { NJ_C_SPRITE, "setTransform", "(I)V", sprite_setTransform },
-    { NJ_C_SPRITE, "getTransform", "()I", sprite_getTransform },
-    { NJ_C_SPRITE, "defineReferencePixel", "(II)V",
-      sprite_defineReferencePixel },
-    { NJ_C_SPRITE, "setRefPixelPosition", "(II)V", sprite_setRefPixelPosition },
-    { NJ_C_SPRITE, "getRefPixelX", "()I", sprite_getRefPixelX },
-    { NJ_C_SPRITE, "getRefPixelY", "()I", sprite_getRefPixelY },
-    { NJ_C_SPRITE, "defineCollisionRectangle", "(IIII)V",
-      sprite_defineCollisionRectangle },
-    { NJ_C_SPRITE, "paint", "(Ljavax/microedition/lcdui/Graphics;)V",
-      sprite_paint },
-    { NJ_C_SPRITE, "collidesWith",
-      "(Ljavax/microedition/lcdui/game/Sprite;Z)Z", sprite_collidesWith_sprite },
-    { NJ_C_SPRITE, "collidesWith",
-      "(Ljavax/microedition/lcdui/game/Sprite;ZZ)Z",
-      sprite_collidesWith_sprite_ref },
-    { NJ_C_SPRITE, "collidesWith",
-      "(Ljavax/microedition/lcdui/game/TiledLayer;Z)Z",
-      sprite_collidesWith_tiled },
-    { NJ_C_SPRITE, "collidesWith",
-      "(Ljavax/microedition/lcdui/game/TiledLayer;ZZ)Z",
-      sprite_collidesWith_tiled_ref },
-    { NJ_C_SPRITE, "collidesWith",
-      "(Ljavax/microedition/lcdui/Image;IIZ)Z", sprite_collidesWith_image },
-    { NJ_C_SPRITE, "collidesWith",
-      "(Ljavax/microedition/lcdui/game/Layer;Z)Z", sprite_collidesWith_layer },
-    { NJ_C_SPRITE, "collidesWith",
-      "(Ljavax/microedition/lcdui/game/Layer;ZZ)Z",
-      sprite_collidesWith_layer_ref },
-    /* TiledLayer */
-    { NJ_C_TILEDLAYER, "<init>", "(IILjavax/microedition/lcdui/Image;II)V",
-      tiled_init },
-    { NJ_C_TILEDLAYER, "setStaticTileSet",
-      "(Ljavax/microedition/lcdui/Image;II)V", tiled_setStaticTileSet },
-    { NJ_C_TILEDLAYER, "setCell", "(III)V", tiled_setCell },
-    { NJ_C_TILEDLAYER, "getCell", "(II)I", tiled_getCell },
-    { NJ_C_TILEDLAYER, "createAnimatedTile", "(I)I", tiled_createAnimatedTile },
-    { NJ_C_TILEDLAYER, "setAnimatedTile", "(II)V", tiled_setAnimatedTile },
-    { NJ_C_TILEDLAYER, "getAnimatedTile", "(I)I", tiled_getAnimatedTile },
-    { NJ_C_TILEDLAYER, "fillCells", "(IIIII)V", tiled_fillCells },
-    { NJ_C_TILEDLAYER, "fillCells", "(IIII)V", tiled_fillCells_empty },
-    { NJ_C_TILEDLAYER, "getCellWidth", "()I", tiled_getCellWidth },
-    { NJ_C_TILEDLAYER, "getCellHeight", "()I", tiled_getCellHeight },
-    { NJ_C_TILEDLAYER, "getColumns", "()I", tiled_getColumns },
-    { NJ_C_TILEDLAYER, "getRows", "()I", tiled_getRows },
-    { NJ_C_TILEDLAYER, "paint", "(Ljavax/microedition/lcdui/Graphics;)V",
-      tiled_paint },
-    /* LayerManager */
-    { NJ_C_LAYERMANAGER, "<init>", "()V", lm_init },
-    { NJ_C_LAYERMANAGER, "append", "(Ljavax/microedition/lcdui/game/Layer;)V",
-      lm_append },
-    { NJ_C_LAYERMANAGER, "insert",
-      "(Ljavax/microedition/lcdui/game/Layer;I)V", lm_insert },
-    { NJ_C_LAYERMANAGER, "remove", "(Ljavax/microedition/lcdui/game/Layer;)V",
-      lm_remove },
-    { NJ_C_LAYERMANAGER, "getLayerAt",
-      "(I)Ljavax/microedition/lcdui/game/Layer;", lm_getLayerAt },
-    { NJ_C_LAYERMANAGER, "getSize", "()I", lm_getSize },
-    { NJ_C_LAYERMANAGER, "setViewWindow", "(IIII)V", lm_setViewWindow },
-    { NJ_C_LAYERMANAGER, "getViewX", "()I", lm_getViewX },
-    { NJ_C_LAYERMANAGER, "getViewY", "()I", lm_getViewY },
-    { NJ_C_LAYERMANAGER, "getViewW", "()I", lm_getViewW },
-    { NJ_C_LAYERMANAGER, "getViewH", "()I", lm_getViewH },
-    { NJ_C_LAYERMANAGER, "paint",
-      "(Ljavax/microedition/lcdui/Graphics;II)V", lm_paint },
-    /* GameCanvas */
-    { NJ_C_GAMECANVAS, "<init>", "(Z)V", gc_init },
-    { NJ_C_GAMECANVAS, "getKeyStates", "()I", gc_getKeyStates },
-    { NJ_C_GAMECANVAS, "flushGraphics", "()V", gc_flushGraphics },
-    { NJ_C_GAMECANVAS, "flushGraphics", "(IIII)V", gc_flushGraphics_rect },
-    { NJ_C_GAMECANVAS, "getGraphics", "()Ljavax/microedition/lcdui/Graphics;",
-      gc_getGraphics },
-    { NJ_C_GAMECANVAS, "paint", "(Ljavax/microedition/lcdui/Graphics;)V",
-      gc_paint }
-};
-const int nj_lib_game_count =
-    (int)(sizeof(nj_lib_game_table) / sizeof(nj_lib_game_table[0]));
+#include "game/registration.inc"
