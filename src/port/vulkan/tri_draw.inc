@@ -180,8 +180,15 @@ static void upload_geometry(nj_vk_renderer *r, const nj_gfx_triangles *p, const 
         const texture_view *v = &info->views[j];
         uint32_t *texels = (uint32_t *)r->textures.map + v->offset;
         const uint8_t *src = v->pixels;
-        int k;
-        for (k = 0; k < v->width * v->height; ++k, src += v->bpp)
+        const uint32_t one = 1;
+        size_t count = (size_t)v->width * v->height;
+        /* RGBA byte order already matches the shader's packed uint on LE.
+         * Always copy the current contents, even when the pointer repeats. */
+        if (v->bpp == 4 && *(const uint8_t *)&one) {
+            memcpy(texels, src, count * sizeof *texels);
+            continue;
+        }
+        for (size_t k = 0; k < count; ++k, src += v->bpp)
             texels[k] = src[0] | ((uint32_t)src[1] << 8) | ((uint32_t)src[2] << 16) |
                         ((v->bpp == 4 ? (uint32_t)src[3] : 255u) << 24);
     }

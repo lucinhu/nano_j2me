@@ -342,6 +342,44 @@ static void bench(nj_vk_renderer *r) {
     free(keys);
     free(t);
 }
+/* A mutable atlas reused at the same unaligned address. Time the complete
+ * synchronous packet with a small ROI so texture upload cost is visible. */
+static void bench_atlas(nj_vk_renderer *r, int side) {
+    enum { REPS = 50 };
+    fixture f;
+    size_t bytes = (size_t)side * side * 4;
+    uint8_t *storage = malloc(bytes + 1);
+    double samples[REPS];
+    CHECK(storage);
+    uint8_t *rgba = storage + 1;
+    memset(rgba, 0x6a, bytes);
+    init(&f);
+    f.t[0].depth_test = f.t[0].depth_write = 0;
+    f.t[0].texture = rgba;
+    f.t[0].texture_width = f.t[0].texture_height = side;
+    f.t[0].texture_bpp = 4;
+    f.t[0].texture_function = 228;
+    f.t[0].wrap_s = f.t[0].wrap_t = 240;
+    f.t[0].filter = 208;
+    for (int i = 0; i < REPS + 5; ++i) {
+        int x = (29 * i) % side, y = (103 * i) % side;
+        uint8_t *texel = rgba + ((size_t)y * side + x) * 4;
+        texel[0] = (uint8_t)i;
+        for (int j = 0; j < 3; ++j) {
+            f.t[0].vertices[j].u = ((float)x + 0.5f) / side;
+            f.t[0].vertices[j].v = ((float)y + 0.5f) / side;
+        }
+        double start = millis();
+        submit(r, &f);
+        if (i >= 5) samples[i - 5] = millis() - start;
+        CHECK(f.colors[4][4] == (0x6a006a6au | ((nj_u4)i << 16)));
+    }
+    qsort(samples, REPS, sizeof *samples, compare_double);
+    printf("%dx%d mutable RGBA atlas, %d synchronous calls: median %.3f ms, p95 %.3f ms\n",
+           side, side, REPS, samples[REPS / 2], samples[47]);
+    free(storage);
+}
+
 int main(int argc, char **argv) {
     nj_vk_renderer *r = nj_vk_renderer_create();
     if (!r) {
@@ -364,6 +402,10 @@ int main(int argc, char **argv) {
          "atomic declines passed");
     if (argc > 1 && !strcmp(argv[1], "--bench"))
         bench(r);
+    if (argc > 1 && !strcmp(argv[1], "--bench-atlas")) {
+        bench_atlas(r, 256);
+        bench_atlas(r, 1024);
+    }
     nj_vk_renderer_destroy(r);
 #if NJ_ENABLE_GFX_ACCEL
     {
