@@ -29,8 +29,12 @@ file(GLOB NJ_ANDROID_RUNTIME_SOURCES CONFIGURE_DEPENDS
 add_library(nj2me SHARED
     ${NJ_ANDROID_RUNTIME_SOURCES}
     ${NJ_ROOT}/src/runner/nj_run.c
+    ${NJ_ROOT}/src/port/common/nj_system_amr.c
     ${NJ_ROOT}/src/port/android/nj_port_android.c
 )
+
+include(${NJ_ROOT}/cmake/NjFsr2.cmake)
+nj_enable_fsr2(nj2me)
 
 target_include_directories(nj2me PRIVATE
     ${NJ_ROOT}/include

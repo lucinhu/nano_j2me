@@ -56,16 +56,16 @@ final class GlyphSource {
      *
      * render() runs on the VM thread, while the settings rows and the subset
      * row run on the UI thread - and both of them change what a cache entry
-     * means.  The lock is only taken on a miss (an LruCache hit is a plain
-     * get), so a screen of cached text never contends for it.
+     * means.  A native cache hit avoids JNI entirely. Java accesses use this lock so
+     * the bitmap, its key and the selected paint describe one setting.
      */
     private static final Object LOCK = new Object();
 
     private static final LruCache<Integer, byte[]> CACHE =
-            new LruCache<Integer, byte[]>(CACHE_GLYPHS) {
+            new LruCache<Integer, byte[]>(CACHE_GLYPHS * 512) {
                 @Override
                 protected int sizeOf(Integer key, byte[] value) {
-                    return 1;
+                    return Math.max(512, value.length);
                 }
             };
 
@@ -192,31 +192,29 @@ final class GlyphSource {
      *               the runtime's face reports it: the bitmap has to place its
      *               ink against that row, and the same row for every glyph
      */
-    static byte[] render(int cp, int px, int bold, int ascent) {
-        if (px <= 0 || px > 32) {
-            return null;
+    static byte[] render(int cp, int cell, int bold, int ascent, int scale) {
+        if (cell <= 0 || cell > 32 || scale < 1 || scale > 8 || cell * scale > 255) {
+            return null;  // The wire format uses unsigned byte dimensions.
         }
-        boolean b = bold != 0;
-        boolean aa = antiAlias;
-        Integer key = Integer.valueOf(FontKit.cacheKey(cp, px, b, aa));
         synchronized (LOCK) {
+            boolean b = bold != 0;
+            boolean aa = antiAlias;
+            Integer key = Integer.valueOf(FontKit.cacheKey(cp, cell, scale, b, aa));
+            if (USED.size() < FontKit.MAX_USED) USED.add(Integer.valueOf(cp));
             byte[] hit = CACHE.get(key);
             if (hit != null) {
                 return hit;
             }
-            byte[] made = rasterise(cp, px, b, aa, ascent);
+            byte[] made = rasterise(cp, cell * scale, b, aa, ascent, 16 * scale);
             if (made != null) {
                 CACHE.put(key, made);
-                if (USED.size() < FontKit.MAX_USED) {
-                    USED.add(Integer.valueOf(cp));
-                }
             }
             return made;
         }
     }
 
     private static byte[] rasterise(int cp, int px, boolean bold, boolean aa,
-                                    int ascent) {
+                                    int ascent, int maxWidth) {
         if (!Character.isValidCodePoint(cp)) {
             return null;
         }
@@ -230,8 +228,8 @@ final class GlyphSource {
         if (w <= 0) {
             w = px;
         }
-        if (w > 16) {
-            w = 16;
+        if (w > maxWidth) {
+            w = maxWidth;
         }
         int h = px;
 

@@ -27,6 +27,7 @@
  */
 #include "nj2me/nj_port.h"
 #include "nj2me/nj_types.h"
+#include "nj2me/nj_gfx.h"
 #include "nj2me/nj.h"
 #include "nj_posix_clock.h"
 #include "nj_posix_dir.h"
@@ -723,7 +724,7 @@ static int hl_display_init(void *ud, int *w, int *h, int *stride, void **pixels)
     return NJ_PIXFMT;
 }
 
-static void ppm_dump(nj_headless_state *s, const char *path)
+static void ppm_dump(nj_headless_state *s, const nj_surface *hd, const char *path)
 {
 #if defined(_WIN32)
     FILE *f = nj_win32_fopen(path, "wb");
@@ -733,6 +734,19 @@ static void ppm_dump(nj_headless_state *s, const char *path)
     int x, y;
 
     if (!f) {
+        return;
+    }
+    if (hd) {
+        fprintf(f, "P6\n%d %d\n255\n", hd->width, hd->height);
+        for (y = 0; y < hd->height; ++y) {
+            const nj_u4 *row = (const nj_u4 *)((const nj_u1 *)hd->pixels + (size_t)y * hd->stride);
+            for (x = 0; x < hd->width; ++x) {
+                nj_u4 c = row[x];
+                unsigned char rgb[3] = {(unsigned char)(c >> 16), (unsigned char)(c >> 8), (unsigned char)c};
+                fwrite(rgb, 1, sizeof(rgb), f);
+            }
+        }
+        fclose(f);
         return;
     }
     fprintf(f, "P6\n%d %d\n255\n", s->width, s->height);
@@ -760,12 +774,11 @@ static void ppm_dump(nj_headless_state *s, const char *path)
     fclose(f);
 }
 
-static void hl_display_present(void *ud, int x, int y, int w, int h)
+static void hl_display_frame(void *ud, const nj_surface *hd)
 {
     nj_headless_state *s = HS(ud);
     char path[256];
 
-    (void)x; (void)y; (void)w; (void)h;
     s->frame++;
     if (s->dump_every > 0 && (s->frame % s->dump_every) == 0 && s->dump_prefix) {
         /*
@@ -789,8 +802,14 @@ static void hl_display_present(void *ud, int x, int y, int w, int h)
         } else {
             snprintf(path, sizeof(path), "%s%05d.ppm", p, s->frame);
         }
-        ppm_dump(s, path);
+        ppm_dump(s, hd, path);
     }
+}
+
+static void hl_display_present(void *ud, int x, int y, int w, int h)
+{
+    (void)x; (void)y; (void)w; (void)h;
+    hl_display_frame(ud, NULL);
 }
 
 /* ------------------------------------------------------------------ */
@@ -1293,6 +1312,7 @@ nj_status nj_port_headless_ex(nj_port *out, int width, int height,
     out->log = hl_log;
     out->display_init = hl_display_init;
     out->display_present = hl_display_present;
+    out->display_hd = hl_display_frame;
     out->input_poll = hl_input_poll;
     out->shutdown = hl_shutdown;
     out->scale = 1;

@@ -704,6 +704,8 @@ void nj_midp_present(nj_vm *vm)
             return;
         }
     }
+    if ((vm->render_quality.scale > 1 || vm->render_quality.ssaa > 1) &&
+        nj_midp_hd_present(vm)) return;
     if (vm->port && vm->port->display_present && vm->screen.pixels) {
         vm->port->display_present(vm->port->ud, 0, 0, vm->screen.width,
                                   vm->screen.height);
@@ -2022,22 +2024,64 @@ NJFN(g_drawRGB)
     return st;
 }
 
+/* Stage one visible scanline. Vertical traversal follows memmove order so
+ * scrolling overlapping areas preserves unread source rows on both grids. */
+static int copy_area_rows(nj_vm *vm, const nj_gfx *g, nj_s8 sx, nj_s8 sy,
+                          nj_s8 w, nj_s8 h, nj_s8 dx, nj_s8 dy)
+{
+    nj_gfx dst = *g;
+    nj_s8 left = dx, top = dy, right = dx + w, bottom = dy + h;
+    nj_s8 clip_right = (nj_s8)g->clip_x + g->clip_w;
+    nj_s8 clip_bottom = (nj_s8)g->clip_y + g->clip_h;
+    nj_image row;
+    int y, step = dy > sy ? -1 : 1;
+
+    if (left < g->clip_x) left = g->clip_x;
+    if (top < g->clip_y) top = g->clip_y;
+    if (right > clip_right) right = clip_right;
+    if (bottom > clip_bottom) bottom = clip_bottom;
+    if (left >= right || top >= bottom) return 1;
+    row.width = (int)(right - left);
+    row.height = 1;
+    row.format = NJ_PIXFMT_ARGB8888;
+    row.has_alpha = 1;
+    row.pixels = nj_host_alloc(vm, (nj_size)row.width * sizeof(*row.pixels));
+    if (!row.pixels) return 0;
+    dst.translate_x = dst.translate_y = 0;
+    dst.mirror = NULL;
+    sx += left - dx;
+    for (y = (int)(step < 0 ? bottom - 1 : top); y >= top && y < bottom; y += step) {
+        nj_s8 source_y = sy + (y - dy);
+        if (g->surf->format == NJ_PIXFMT_ARGB8888 && sx >= 0 &&
+            sx + row.width <= g->surf->width && source_y >= 0 && source_y < g->surf->height) {
+            const nj_u1 *source = (const nj_u1 *)g->surf->pixels + (nj_size)source_y * g->surf->stride;
+            memcpy(row.pixels, source + (nj_size)sx * 4, (nj_size)row.width * 4);
+        } else {
+            for (int x = 0; x < row.width; ++x) {
+                nj_s8 source_x = sx + x;
+                row.pixels[x] = source_x >= 0 && source_x < g->surf->width &&
+                    source_y >= 0 && source_y < g->surf->height ?
+                    nj_surface_get(g->surf, (int)source_x, (int)source_y) : 0;
+            }
+        }
+        nj_gfx_draw_image(&dst, &row, (int)left, y, 0, 0, row.width, 1);
+    }
+    nj_host_free(vm, row.pixels);
+    return 1;
+}
+
 NJFN(g_copyArea)
 {
     /* copyArea(int x_src, int y_src, int width, int height, int x_dest,
      *          int y_dest, int anchor) */
     nj_ref self = NJ_THIS(args);
-    nj_s4 xs = NJ_ARG_INT(args, 0);
-    nj_s4 ys = NJ_ARG_INT(args, 1);
-    nj_s4 w = NJ_ARG_INT(args, 2);
-    nj_s4 h = NJ_ARG_INT(args, 3);
-    nj_s4 xd = NJ_ARG_INT(args, 4);
-    nj_s4 yd = NJ_ARG_INT(args, 5);
+    nj_s8 xs = NJ_ARG_INT(args, 0), ys = NJ_ARG_INT(args, 1);
+    nj_s4 w = NJ_ARG_INT(args, 2), h = NJ_ARG_INT(args, 3);
+    nj_s8 xd = NJ_ARG_INT(args, 4), yd = NJ_ARG_INT(args, 5);
     nj_s4 anchor = NJ_ARG_INT(args, 6);
-    nj_gfx g;
+    nj_gfx g, physical;
     nj_surface sc;
-    nj_u4 *tmp;
-    nj_status st = NJ_OK;
+    int scale;
 
     if (w < 0 || h < 0) {
         return nj_throw(vm, "java/lang/IllegalArgumentException",
@@ -2062,38 +2106,17 @@ NJFN(g_copyArea)
     if (!gfx_load(vm, self, &g, &sc)) {
         return NJ_ERR;
     }
-    /*
-     * The source and destination overlap (that is the whole point of
-     * copyArea), so the region is staged through a scratch buffer.  It is
-     * allocated from the host registry and freed on every path out.
-     */
-    tmp = (nj_u4 *)nj_host_alloc(vm, (nj_size)w * (nj_size)h * sizeof(nj_u4));
-    if (!tmp) {
-        return nj_throw_oom(vm);
-    }
-    {
-        int row, col;
-        for (row = 0; row < h; row++) {
-            for (col = 0; col < w; col++) {
-                int sxp = (int)xs + col + g.translate_x;
-                int syp = (int)ys + row + g.translate_y;
-                tmp[(nj_size)row * (nj_size)w + (nj_size)col] =
-                    nj_surface_get(g.surf, sxp, syp);
-            }
-        }
-    }
-    {
-        nj_image view;
-        view.width = (int)w;
-        view.height = (int)h;
-        view.format = NJ_PIXFMT_ARGB8888;
-        view.pixels = tmp;
-        view.has_alpha = 1;
-        nj_gfx_draw_image(&g, &view, (int)xd, (int)yd, 0, 0, (int)w, (int)h);
+    xs += g.translate_x; ys += g.translate_y;
+    xd += g.translate_x; yd += g.translate_y;
+    if (!copy_area_rows(vm, &g, xs, ys, w, h, xd, yd)) return nj_throw_oom(vm);
+    scale = nj_gfx_mirror_context(&g, &physical);
+    if (scale && !copy_area_rows(vm, &physical, xs * scale, ys * scale,
+                                 (nj_s8)w * scale, (nj_s8)h * scale,
+                                 xd * scale, yd * scale)) {
+        nj_midp_hd_invalidate(vm, g.surf);
     }
     gfx_store(vm, self, &g);
-    nj_host_free(vm, tmp);
-    return st;
+    return NJ_OK;
 }
 
 /* ================================================================== */
@@ -2175,8 +2198,8 @@ NJFN(img_createImage_img)
     nj_s4 transform = NJ_ARG_INT(args, 5);
     nj_image view;
     nj_ref out;
-    nj_u4 *dst;
-    nj_s4 i, j;
+    nj_surface dest;
+    nj_gfx g;
     nj_s4 dw, dh;
     int rotated;
 
@@ -2195,7 +2218,7 @@ NJFN(img_createImage_img)
         return nj_throw(vm, "java/lang/IllegalArgumentException",
                         "source image has no pixels");
     }
-    if (x + w > view.width || y + h > view.height) {
+    if (w > view.width - x || h > view.height - y) {
         return nj_throw(vm, "java/lang/IllegalArgumentException",
                         "source region outside the image");
     }
@@ -2219,35 +2242,13 @@ NJFN(img_createImage_img)
     if (!out) {
         return vm->exception ? NJ_ERR : nj_throw_oom(vm);
     }
-    dst = nj_midp_image_pixels(vm, out);
-    if (!dst) {
-        return nj_throw(vm, "java/lang/InternalError",
-                        "created image has no pixel store");
-    }
-    /*
-     * For the rotated transforms the *destination* is (h x w) and (i,j) runs
-     * over that rotated space; untransform() maps it back into the source
-     * region exactly like the rasterizer's blitter does.
-     */
-    for (j = 0; j < dh; j++) {
-        for (i = 0; i < dw; i++) {
-            nj_s4 ux = i, uy = j;
-            nj_u4 p;
-            switch ((int)transform) {
-            case NJ_TRANS_ROT90:         ux = j;              uy = h - 1 - i; break;
-            case NJ_TRANS_ROT180:        ux = w - 1 - i;      uy = h - 1 - j; break;
-            case NJ_TRANS_ROT270:        ux = w - 1 - j;      uy = i;         break;
-            case NJ_TRANS_MIRROR:        ux = w - 1 - i;      uy = j;         break;
-            case NJ_TRANS_MIRROR_ROT90:  ux = w - 1 - j;      uy = h - 1 - i; break;
-            case NJ_TRANS_MIRROR_ROT180: ux = i;              uy = h - 1 - j; break;
-            case NJ_TRANS_MIRROR_ROT270: ux = j;              uy = i;         break;
-            default:                     ux = i;              uy = j;         break;
-            }
-            p = view.pixels[(nj_size)(y + uy) * (nj_size)view.width +
-                            (nj_size)(x + ux)];
-            dst[(nj_size)j * (nj_size)dw + (nj_size)i] = p;
-        }
-    }
+    if (!nj_midp_surface(vm, out, &dest)) return NJ_ERR;
+    nj_m3g_flush_why(vm, NJ_M3G_FLUSH_READBACK);
+    nj_gfx_init(&g, &dest);
+    /* Bitmap assets need only their original pixels. A drawn source also
+     * carries its physical samples through the same sprite transformation. */
+    if (nj_midp_hd_source(vm, &view)) g.mirror = nj_midp_hd_target(vm, &dest);
+    nj_gfx_draw_image_rop(&g, &view, 0, 0, x, y, w, h, NJ_ROP_SET, transform);
     ret->r = out;
     return NJ_OK;
 }
@@ -6074,6 +6075,7 @@ static nj_status nj_midp_paint_body(nj_vm *vm)
     d = nj_midp_current(vm);
     if (!d) {
         nj_surface_fill(scr, 0xFF000000u);
+        nj_midp_hd_invalidate(vm, scr);
         return NJ_OK;
     }
     w = scr->width;

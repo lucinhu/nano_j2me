@@ -462,6 +462,7 @@ void nj_android_gles2_start_mode(nj_android_gles2 *s, int mode)
     backend_config.is_current = is_current;
     backend_config.ud = s;
     s->backend = nj_gles2_create(&backend_config);
+    s->applied_sharp = 0.0f;
     if (!s->backend) {
         failed(s, "GLES2 backend initialization failed", eglGetError());
         goto fail;
@@ -571,7 +572,7 @@ int nj_android_gles2_set_window(nj_android_gles2 *s, void *native_window)
 }
 
 int nj_android_gles2_present(nj_android_gles2 *s, const nj_surface *src,
-                             int mode, int vp_x, int vp_y, int vp_w, int vp_h)
+                             int mode, float sharp, int vp_x, int vp_y, int vp_w, int vp_h)
 {
     int ok = 0;
     if (!s || src == NULL) return 0;
@@ -588,6 +589,10 @@ int nj_android_gles2_present(nj_android_gles2 *s, const nj_surface *src,
                 int gl_h = (s->surface_h > 0) ? s->surface_h : (vp_y + vp_h);
                 int gl_y = gl_h - (vp_y + vp_h);
                 if (gl_y < 0) gl_y = 0;
+                if (mode == 5 && s->applied_sharp != sharp) {
+                    nj_gles2_present_set_sharp(s->backend, sharp);
+                    s->applied_sharp = sharp;
+                }
                 ok = nj_gles2_present_onscreen(s->backend, src, mode,
                                                vp_x, gl_y, vp_w, vp_h);
             }

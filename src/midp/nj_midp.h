@@ -203,11 +203,20 @@
  */
 nj_surface *nj_midp_surface(nj_vm *vm, nj_ref image_obj, nj_surface *scratch);
 
-/* Bind optional per-port drawing acceleration for both screen and mutable
- * Image targets. The software-only build reduces to nj_gfx_init(). */
+/* Logical pixels remain authoritative for Java. Only the physical companion
+ * is sampled by the display and by subsequent physical image draws. */
+nj_render_mirror *nj_midp_hd_target(nj_vm *vm, const nj_surface *logical);
+const nj_surface *nj_midp_hd_source(nj_vm *vm, const nj_image *image);
+void nj_midp_hd_invalidate(nj_vm *vm, const nj_surface *logical);
+int nj_midp_hd_present(nj_vm *vm);
+
+/* Bind optional visual and hardware targets for the same logical Graphics. */
 static inline void nj_midp_gfx_init(nj_vm *vm, nj_gfx *g, nj_surface *surface)
 {
     nj_gfx_init(g, surface);
+    if (vm && (vm->render_quality.scale > 1 || vm->render_quality.ssaa > 1)) {
+        g->mirror = nj_midp_hd_target(vm, surface);
+    }
 #if NJ_ENABLE_GFX_ACCEL
     if (vm && vm->port) {
         nj_gfx_set_accel(g, vm->port->gfx_accel, vm->port->gfx_accel_ud);

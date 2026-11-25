@@ -35,17 +35,23 @@ public final class FontKitTest {
         Check.eq("no extension gets .ttf", FontKit.storeName("font"), "custom.ttf");
 
         Check.section("one cache key carries the character and both switches");
-        int plain = FontKit.cacheKey('A', 12, false, true);
+        int plain = FontKit.cacheKey('A', 12, 1, false, true);
         Check.eq("the code point comes back", FontKit.cacheCodePoint(plain), (int) 'A');
         Check.isTrue("bold is different ink",
-                FontKit.cacheKey('A', 12, true, true) != plain);
+                FontKit.cacheKey('A', 12, 1, true, true) != plain);
         Check.isTrue("hard edges are different ink",
-                FontKit.cacheKey('A', 12, false, false) != plain);
+                FontKit.cacheKey('A', 12, 1, false, false) != plain);
         Check.isTrue("a size is different ink",
-                FontKit.cacheKey('A', 14, false, true) != plain);
+                FontKit.cacheKey('A', 14, 1, false, true) != plain);
         Check.eq("a hanzi survives the packing",
-                FontKit.cacheCodePoint(FontKit.cacheKey(0x4e2d, 16, true, false)), 0x4e2d);
+                FontKit.cacheCodePoint(FontKit.cacheKey(0x4e2d, 16, 1, true, false)), 0x4e2d);
 
+        for (int scale = 1; scale <= 8; ++scale) {
+            int key = FontKit.cacheKey(0x10ffff, 20, scale, true, true);
+            Check.eq("trim decodes Unicode at every scale", FontKit.cacheCodePoint(key), 0x10ffff);
+            if (scale > 1) Check.isTrue("physical size has a separate cache entry",
+                    key != FontKit.cacheKey(0x10ffff, 20, scale - 1, true, true));
+        }
         Check.section("sizes a player can read");
         Check.eq("bytes", FontKit.size(512), "512 B");
         Check.eq("kilobytes", FontKit.size(40 * 1024), "40.0 KB");

@@ -272,6 +272,10 @@ static void work_and_failure_cases(void)
     assert(fill(&f) == NJ_GFX_ACCEL_DECLINE); nj_gfx_clear_xor(&f.gfx);
     assert(!memcmp(saved, f.pixels, sizeof saved));
     expect(&f.state, 2, 1, 1, 1, 1, 1); /* an ordinary decline is not a failed run */
+    /* Successful packets reuse the owner thread's current context. Exercise
+     * the failure on the next real bind, after releasing the cached one. */
+    assert(eglMakeCurrent(f.state.display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT));
+    f.state.current = 0;
     fail_make = 1; assert(fill(&f) == NJ_GFX_ACCEL_DECLINE); fail_make = 0;
     assert(!memcmp(saved, f.pixels, sizeof saved));
     expect(&f.state, 3, 1, 1, 1, 1, 2); foreign_snapshot_with_gl_lock(&f.state);

@@ -47,12 +47,12 @@
 /* ------------------------------------------------------------------ */
 typedef struct glyph {
     const nj_u1 *bits;   /* 1bpp rows, packed 2bpp, or 8bpp coverage  */
-    const nj_font *src;  /* the face that supplied `bits`           */
     int w;
     int h;
     int advance;         /* how far the pen moves after this glyph   */
     int coverage;        /* 0 = 1bpp, 2 = packed 2bpp, 1 = 8bpp      */
     int ascent;          /* baseline row of the resolved bitmap      */
+    const nj_font *outline; /* provider for a physical-size raster, if any */
 } glyph;
 
 /* Bytes per glyph row in the FIXED table, which is 1bpp (coverage 0) or
@@ -67,17 +67,14 @@ static int f_row_bytes(int w, int coverage)
 /*
  * Resolve one character to its bitmap.
  *
- * Characters inside [first_char, last_char] come from the fixed table.  For
- * anything else the font's glyph_lookup hook is consulted, which is how a CJK
- * provider or a proportional face plugs in; when there is none, the fallback
- * font is followed.  A character that nothing can render becomes a blank of
- * the font's own width, so a missing glyph shifts the layout by the right
- * amount instead of piling the rest of the string on top of itself.
+ * A provider may override even a character present in the fixed table.
+ * Try the provider, the fixed table, then the fallback face. If every face
+ * misses, the last face supplies a blank cell.
  */
 static void glyph_lookup(const nj_font *f, nj_u2 ch, glyph *out, int depth)
 {
     out->bits = NULL;
-    out->src = f;
+    out->outline = NULL;
     out->w = f->glyph_w;
     out->h = f->glyph_h;
     out->advance = f->glyph_w;
@@ -89,6 +86,7 @@ static void glyph_lookup(const nj_font *f, nj_u2 ch, glyph *out, int depth)
         const nj_u1 *bits = f->glyph_lookup(f->glyph_ud, ch, &w, &h);
         if (bits && w > 0 && h > 0) {
             out->bits = bits;
+            out->outline = f->scaled_face ? f : NULL;
             out->ascent = f->glyph_ascent ? f->glyph_ascent : f->ascent;
             out->w = w;
             out->h = h;
@@ -204,6 +202,26 @@ static void blit_glyph(nj_gfx *g, const glyph *gl,
     }
 }
 
+/* Place a physical glyph at the scaled logical pen and baseline. Using
+ * device coordinates here also lets us reject off-screen wide products
+ * before narrowing them to the rasteriser's int coordinates. */
+static int blit_outline(nj_gfx *physical, const nj_gfx *logical, const nj_font *f,
+                        nj_u2 ch, int pen, int baseline, int scale)
+{
+    nj_s8 x = ((nj_s8)pen + logical->translate_x) * scale;
+    nj_s8 y = ((nj_s8)baseline + logical->translate_y) * scale;
+    const nj_font *face = f->scaled_face(f->glyph_ud, scale);
+    glyph gl;
+    if (!face) return 0;
+    glyph_lookup(face, ch, &gl, 0);
+    if (!gl.bits) return 0;
+    if (x + gl.w > 0 && x < physical->surf->width &&
+        y - gl.ascent + gl.h > 0 && y - gl.ascent < physical->surf->height) {
+        blit_glyph(physical, &gl, (int)x, (int)y);
+    }
+    return 1;
+}
+
 /* ------------------------------------------------------------------ */
 /* Public entry points                                                 */
 /* ------------------------------------------------------------------ */
@@ -211,12 +229,14 @@ void nj_gfx_draw_text(nj_gfx *g, const nj_u2 *s, int len, int x, int y,
                       int anchor)
 {
     const nj_font *f;
-    int w;
+    int w = 0;
     int i;
     int pen;
     int baseline;
     int horiz;
     int vert;
+    int scale = 0;
+    nj_gfx physical, logical;
 
     if (!g || !s) {
         return;
@@ -238,10 +258,13 @@ void nj_gfx_draw_text(nj_gfx *g, const nj_u2 *s, int len, int x, int y,
         return;
     }
 
-    w = nj_font_string_width(f, s, len);
-
     /* ---- horizontal placement ---- */
-    horiz = anchor & (NJ_ANCHOR_LEFT | NJ_ANCHOR_HCENTER | NJ_ANCHOR_RIGHT);
+    horiz = anchor & (NJ_ANCHOR_HCENTER | NJ_ANCHOR_RIGHT);
+    /* Underline uses the measured width, which can differ from pen travel
+     * when a provider overrides a fixed-table glyph. */
+    if (horiz || (f->style & NJ_FONT_STYLE_UNDERLINED)) {
+        w = nj_font_string_width(f, s, len);
+    }
     if (horiz & NJ_ANCHOR_RIGHT) {
         pen = x - w;
     } else if (horiz & NJ_ANCHOR_HCENTER) {
@@ -264,10 +287,23 @@ void nj_gfx_draw_text(nj_gfx *g, const nj_u2 *s, int len, int x, int y,
         baseline = y;               /* BASELINE, and the default */
     }
 
+    if (g->mirror) {
+        scale = nj_gfx_mirror_context(g, &physical);
+        if (scale) {
+            physical.translate_x = physical.translate_y = 0;
+            logical = *g;
+            logical.mirror = NULL;
+        }
+    }
     for (i = 0; i < len; i++) {
         glyph gl;
         glyph_lookup(f, s[i], &gl, 0);
-        blit_glyph(g, &gl, pen, baseline);
+        nj_gfx *target = g;
+        if (scale && gl.outline && blit_outline(&physical, g, gl.outline,
+                                                s[i], pen, baseline, scale)) {
+            target = &logical;
+        }
+        blit_glyph(target, &gl, pen, baseline);
         pen += gl.advance;
     }
 
@@ -280,10 +316,5 @@ void nj_gfx_draw_text(nj_gfx *g, const nj_u2 *s, int len, int x, int y,
 
 void nj_gfx_draw_char(nj_gfx *g, nj_u2 ch, int x, int y)
 {
-    nj_u2 buf[2];
-
-    buf[0] = ch;
-    buf[1] = 0u;
-    /* The documented default anchor is LEFT | BASELINE. */
-    nj_gfx_draw_text(g, buf, 1, x, y, NJ_ANCHOR_LEFT);
+    nj_gfx_draw_text(g, &ch, 1, x, y, NJ_ANCHOR_LEFT);
 }

@@ -65,7 +65,7 @@
         (nm), (hv), (av), (dv), (lv), (styv), (szv), 0,        \
         (nj_u2)NJ_FONT_DATA_FIRST, (nj_u2)NJ_FONT_DATA_LAST,   \
         (wv), (hv), (bmp), (cov),                              \
-        wide                                                  \
+        wide, NULL                                            \
     }
 
 /*

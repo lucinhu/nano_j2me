@@ -97,6 +97,10 @@ nj_ttf *nj_ttf_open(void *mem, nj_size mem_bytes,
  */
 int nj_ttf_font(nj_ttf *t, nj_font *out, int style, int size);
 
+/* Enable lazy physical-size rerasterisation in nj_font instances produced
+ * by subsequent nj_ttf_font calls. The allocator owns the cached face. */
+void nj_ttf_enable_scaled_face(nj_ttf *t, nj_font_alloc_fn alloc, void *ud);
+
 #ifdef __cplusplus
 }
 #endif

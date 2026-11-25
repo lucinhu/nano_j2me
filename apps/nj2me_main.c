@@ -186,6 +186,10 @@ static void usage(const char *argv0)
 "  --heap <mb>          initial Java heap MB (saved setting; runtime default: %u)\n"
 "  --heap-grow          expand after GC when needed, up to 128 MB or --heap\n"
 "  --no-heap-grow       keep the Java heap fixed (overrides the saved switch)\n"
+"  --render-scale <1..4>  rasterize geometry and outlines at this output scale\n"
+"  --ssaa <1|2>           samples per axis before resolving the physical frame\n"
+"  --subdivide            split M3G triangles during HD drawing\n"
+"  --fsr2                 request temporal M3G rendering (Vulkan build)\n"
 "  --scale <n>          integer upscale for the window (sdl2, default: auto)\n"
 "  --size <WxH>         screen size, e.g. 240x320 (default: %dx%d)\n"
 "  --rms-dir <path>     where RecordStore files are kept\n"
@@ -318,6 +322,7 @@ typedef struct cli {
     const char *dump_dir;
     int         dump_every;
     int         scale;
+    int         render_scale, ssaa, subdivide, fsr2;
     int         fps;
     int         width;
     int         height;
@@ -628,6 +633,10 @@ static int setup_port(const cli *c, nj_port *port,
         }
     }
 
+    port->render_scale = c->fsr2 && c->render_scale < 2 ? 2 : c->render_scale;
+    port->render_ssaa = c->ssaa;
+    port->render_subdivide = c->subdivide;
+    port->render_fsr2 = c->fsr2;
     port->width = c->width;
     port->height = c->height;
     if (c->fps >= 0) {
@@ -706,6 +715,10 @@ static int run_client_mode(const cli *c, const nj_run_opts *opts)
     co.fs_dir = c->fs_dir;
     co.heap_grow_override = c->grow_given ? (c->heap_grow ? 1 : -1) : 0;
     co.graphics_mode = c->graphics_mode + 1;
+    co.render_scale = c->fsr2 && c->render_scale < 2 ? 2 : c->render_scale;
+    co.render_ssaa = c->ssaa;
+    co.render_subdivide = c->subdivide;
+    co.render_fsr2 = c->fsr2;
     st = nj_client_run(&co);
     if (c->stats) {
         fprintf(stderr, "nano_j2me: exit status %d\n", (int)st);
@@ -874,6 +887,24 @@ int main(int argc, char **argv)
         } else if (strcmp(a, "--no-heap-grow") == 0) {
             c.heap_grow = 0;
             c.grow_given = 1;
+        } else if (strcmp(a, "--render-scale") == 0 || strcmp(a, "--ssaa") == 0) {
+            int samples = strcmp(a, "--ssaa") == 0;
+            if (++i >= argc || argv[i][0] < '1' || argv[i][0] > (samples ? '2' : '4') ||
+                argv[i][1] != '\0') {
+                fprintf(stderr, "%s expects an integer from 1 to %d\n", a, samples ? 2 : 4);
+                return 2;
+            }
+            if (samples) c.ssaa = argv[i][0] - '0';
+            else c.render_scale = argv[i][0] - '0';
+        } else if (strcmp(a, "--subdivide") == 0) {
+            c.subdivide = 1;
+        } else if (strcmp(a, "--fsr2") == 0) {
+#if NJ_ENABLE_FSR2
+            c.fsr2 = 1;
+#else
+            fprintf(stderr, "--fsr2 requires a build with NJ_ENABLE_FSR2=ON\n");
+            return 2;
+#endif
         } else if (strcmp(a, "--scale") == 0 && i + 1 < argc) {
             c.scale = atoi(argv[++i]);
         } else if (strcmp(a, "--upscale") == 0 && i + 1 < argc) {

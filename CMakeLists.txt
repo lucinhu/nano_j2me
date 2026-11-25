@@ -275,6 +275,7 @@ set(NJ_SOURCES
   src/midp/nj_lib_sensor.c
   src/midp/nj_lib_bt.c
   src/midp/nj_lib_lcdui.c
+  src/midp/nj_hd_surfaces.c
   src/midp/nj_lib_game.c
   src/midp/nj_lib_rms.c
   src/midp/nj_lib_midlet.c
@@ -326,6 +327,8 @@ set(NJ_SOURCES
 
 add_library(nj2me STATIC ${NJ_SOURCES})
 add_library(nj2me::nj2me ALIAS nj2me)
+include(cmake/NjFsr2.cmake)
+nj_enable_fsr2(nj2me)
 
 target_include_directories(nj2me
   PUBLIC  ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -772,6 +775,12 @@ endif()
 # ---------------------------------------------------------------------
 if(NJ_BUILD_TESTS)
   enable_testing()
+  if(NJ_ENABLE_FSR2)
+    add_executable(test_fsr2 tests/test_fsr2.c)
+    target_link_libraries(test_fsr2 PRIVATE nj_fsr2_backend)
+    add_test(NAME test_fsr2 COMMAND test_fsr2)
+    set_tests_properties(test_fsr2 PROPERTIES SKIP_RETURN_CODE 77)
+  endif()
 
   # ---- fixtures the tests need, generated at build time ----
   #
@@ -1063,6 +1072,14 @@ if(NJ_BUILD_TESTS)
   nj_add_test(test_natives   tests/test_natives.c)
   nj_add_test(test_m3g       tests/test_m3g.c)
   nj_add_test(test_m3g_targets tests/test_m3g_targets.c)
+  if(NJ_ENABLE_M3G)
+    nj_add_test(test_m3g_hd tests/test_m3g_hd.c)
+  endif()
+  if(NJ_ENABLE_M3G AND NJ_ENABLE_FSR2 AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    nj_add_test(test_m3g_temporal tests/test_m3g_temporal.c)
+    target_link_options(test_m3g_temporal PRIVATE -Wl,--wrap=nj_fsr2_dispatch)
+    set_tests_properties(test_m3g_temporal PROPERTIES SKIP_RETURN_CODE 77)
+  endif()
   nj_add_test(test_m3g_accel tests/test_m3g_accel.c)
   nj_add_test(test_m3g_triangles tests/test_m3g_triangles.c)
   add_executable(test_gfx_triangles tests/test_gfx_triangles.c src/gfx/nj_gfx_triangles.c)
@@ -1998,13 +2015,14 @@ nj_add_test(test_clip tests/test_clip.c)
     add_test(NAME test_gfx COMMAND test_gfx)
     set_tests_properties(test_gfx PROPERTIES
       WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
-    add_executable(test_gfx_fill tests/test_gfx_fill.c src/gfx/nj_gfx.c tests/stub_font.c)
-    target_include_directories(test_gfx_fill PRIVATE
-      ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src/core
-      ${CMAKE_CURRENT_SOURCE_DIR}/src/gfx)
-    target_link_libraries(test_gfx_fill PRIVATE m)
-    target_compile_options(test_gfx_fill PRIVATE -UNDEBUG)
-    add_test(NAME test_gfx_fill COMMAND test_gfx_fill)
+    foreach(raster_test IN ITEMS test_gfx_fill test_gfx_hd)
+      add_executable(${raster_test} tests/${raster_test}.c src/gfx/nj_gfx.c tests/stub_font.c)
+      target_include_directories(${raster_test} PRIVATE include src/core src/gfx)
+      target_link_libraries(${raster_test} PRIVATE m)
+      target_compile_options(${raster_test} PRIVATE -UNDEBUG)
+      add_test(NAME ${raster_test} COMMAND ${raster_test})
+    endforeach()
+    nj_add_test(test_hd_surfaces tests/test_hd_surfaces.c)
     # Compile both ABI layouts independently, regardless of the library option.
     foreach(accel IN ITEMS 0 1)
       add_executable(test_gfx_accel_${accel} tests/test_gfx_accel.c
@@ -2144,6 +2162,7 @@ nj_add_test(test_clip tests/test_clip.c)
   if(NJ_ENABLE_TTF
      AND EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_ttf.c
      AND EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/ttf)
+    nj_add_test(test_hd_font tests/test_hd_font.c)
     nj_add_test(test_ttf tests/test_ttf.c)
     nj_add_test(test_vm_font_data tests/test_vm_font_data.c)
   endif()

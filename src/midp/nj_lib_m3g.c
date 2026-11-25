@@ -4038,12 +4038,22 @@ static int m3g_target_bounds(nj_vm *vm, nj_ref self, const nj_surface *s,
 
 
 
+#include "nj_m3g_hd.inc"
+
+#if NJ_ENABLE_FSR2
+static void m3g_temporal_bind(nj_vm *, const void *, int, int, int, int, nj_u8);
+static void m3g_temporal_clear(nj_vm *, const nj_surface *, int);
+static void m3g_temporal_invalidate(nj_vm *);
+static int m3g_temporal_release(nj_vm *, const void *, nj_surface *);
+#endif
+
 NJFN(m3g_bindTarget)
 {
     nj_ref self = NJ_THIS(args);
     nj_ref target = NJ_ARG_REF(args, 0);
     int w = 0, h = 0;
 
+    m3g_hd_depth_release(vm, self);
     nj_m3g_flush_why(vm, NJ_M3G_FLUSH_BIND);   /* queued draws belong to the old target */
     nj_rput(vm, self,
             nj_field_lookup(vm, NJ_C_G3D, "_nj_target", "Ljava/lang/Object;", 0),
@@ -4070,6 +4080,15 @@ NJFN(m3g_bindTarget)
        slot as a validity marker: negative needs initialization, nonnegative
        is valid. Host presents can occur between draws on the same target. */
     nj_iput(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_zframe", "I"), -1);
+#if NJ_ENABLE_FSR2
+    if (vm->render_quality.fsr2) {
+        nj_surface scratch, *s = m3g_target_surface(vm, target, &scratch);
+        nj_render_mirror *m = s ? nj_midp_hd_target(vm,s) : NULL;
+        if (m) m3g_temporal_bind(vm, s->pixels, s->width, s->height, m->target->width,
+                                 m->target->height, vm->frames);
+        else m3g_temporal_invalidate(vm);
+    }
+#endif
     return NJ_OK;
 }
 
@@ -4093,6 +4112,17 @@ NJFN(m3g_releaseTarget)
      * clear, rebind or present flushes it before anything observes the target.
      * This removes the per-section readback/seed round trip. */
     nj_m3g_pump(vm);
+#if NJ_ENABLE_FSR2
+    if (vm->render_quality.fsr2) {
+        nj_ref self = NJ_THIS(args);
+        nj_ref target = nj_rget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_target", "Ljava/lang/Object;"));
+        nj_surface scratch, *s = m3g_target_surface(vm, target, &scratch);
+        nj_render_mirror *m = s ? nj_midp_hd_target(vm,s) : NULL;
+        if (m) (void)m3g_temporal_release(vm, s->pixels, m->target);
+        else m3g_temporal_invalidate(vm);
+    }
+#endif
+    m3g_hd_depth_release(vm, NJ_THIS(args));
     nj_rput(vm, NJ_THIS(args),
             nj_field_lookup(vm, NJ_C_G3D, "_nj_target", "Ljava/lang/Object;", 0), 0);
     return NJ_OK;
@@ -4140,7 +4170,8 @@ NJFN(m3g_setCamera)
 /* The Background image covers the viewport through its crop rectangle.
    BORDER uses the clear colour outside the image; REPEAT wraps each axis. */
 static void m3g_background_image(nj_vm *vm, nj_ref self, nj_ref bg, nj_ref target,
-                                  int vx, int vy, int vw, int vh)
+                                  nj_s8 vx, nj_s8 vy, nj_s8 vw, nj_s8 vh,
+                                  const nj_render_mirror *mirror)
 {
     nj_ref image = nj_rget(vm, bg, m3g_fof(vm, NJ_C_BG, "_nj_img", "L" NJ_C_IMAGE2D ";"));
     nj_ref pixels;
@@ -4162,6 +4193,12 @@ static void m3g_background_image(nj_vm *vm, nj_ref self, nj_ref bg, nj_ref targe
     if (!surface || !m3g_target_bounds(vm, self, surface, &x0, &y0, &x1, &y1)) return;
     vx += nj_iget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_btx", "I"));
     vy += nj_iget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_bty", "I"));
+    if (mirror) {
+        int k = mirror->scale;
+        surface = mirror->target;
+        x0 *= k; y0 *= k; x1 *= k; y1 *= k;
+        vx *= k; vy *= k; vw *= k; vh *= k;
+    }
     dst_bpp = surface->format == NJ_PIXFMT_RGB565 ? 2 :
               surface->format == NJ_PIXFMT_RGB888 ? 3 : 4;
     cx = nj_iget(vm, bg, m3g_fof(vm, NJ_C_BG, "_nj_cropX", "I"));
@@ -4217,6 +4254,7 @@ NJFN(m3g_clear)
     nj_surface scratch, *surface;
     int x0, y0, x1, y1;
     nj_s4 vx, vy, vw, vh;
+    nj_render_mirror *mirror;
     nj_m3g_flush_why(vm, NJ_M3G_FLUSH_CLEAR);   /* queued draws must land before the clear */
     target = nj_rget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_target", "Ljava/lang/Object;"));
     if (!target) {
@@ -4225,12 +4263,17 @@ NJFN(m3g_clear)
     surface = m3g_target_surface(vm, target, &scratch);
     if (!surface || !m3g_target_bounds(vm, self, surface, &x0, &y0, &x1, &y1))
         return NJ_OK;
+    mirror = nj_midp_hd_target(vm, surface);
     /* Null means the default Background: clear both buffers to black/far. */
     if (!bg || nj_iget(vm, bg, m3g_fof(vm, NJ_C_BG, "_nj_dclear", "Z"))) {
         nj_ref a = nj_rget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_zbuf", "[I"));
         int zw = nj_iget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_zw", "I"));
         int zh = nj_iget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_zh", "I"));
         nj_s4 valid = nj_iget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_zframe", "I"));
+        if (mirror) {
+            int k = mirror->scale;
+            m3g_hd_clear_depth(vm, self, x0*k, y0*k, x1*k, y1*k, mirror);
+        }
         if (a && zw == surface->width && zh == surface->height &&
             (nj_size)zw * zh <= nj_array_length(a)) {
             nj_s4 *z = (nj_s4 *)nj_array_data(a);
@@ -4247,11 +4290,23 @@ NJFN(m3g_clear)
             nj_iput(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_zframe", "I"), -1);
         }
     }
-    if (bg && !nj_iget(vm, bg, m3g_fof(vm, NJ_C_BG, "_nj_cclear", "Z"))) return NJ_OK;
+    if (bg && !nj_iget(vm, bg, m3g_fof(vm, NJ_C_BG, "_nj_cclear", "Z"))) {
+#if NJ_ENABLE_FSR2
+        if (vm->render_quality.fsr2) m3g_temporal_invalidate(vm);
+#endif
+        return NJ_OK;
+    }
     {
         nj_u4 colour = bg ? (nj_u4)nj_iget(vm, bg, m3g_fof(vm, NJ_C_BG, "_nj_color", "I")) : 0;
         int bpp = surface->format == NJ_PIXFMT_RGB565 ? 2 :
                   surface->format == NJ_PIXFMT_RGB888 ? 3 : 4;
+        if (mirror) {
+            nj_gfx hg;
+            int k = mirror->scale;
+            nj_gfx_init(&hg, mirror->target);
+            nj_gfx_set_color(&hg, colour | 0xff000000u);
+            nj_gfx_fill_rect(&hg, x0*k, y0*k, (x1-x0)*k, (y1-y0)*k);
+        }
         if ((bpp == 2 || bpp == 4) && x1 > x0 && y1 > y0) {
             /* Opaque solid clear: the same bytes nj_gfx_fill_rect() would
              * write through nj_span() row by row, but without re-entering the
@@ -4298,7 +4353,18 @@ NJFN(m3g_clear)
     vy = nj_iget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_vy", "I"));
     vw = nj_iget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_vw", "I"));
     vh = nj_iget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_vh", "I"));
-    if (bg) m3g_background_image(vm, self, bg, target, vx, vy, vw, vh);
+    if (bg) {
+        m3g_background_image(vm, self, bg, target, vx, vy, vw, vh, NULL);
+        if (mirror) m3g_background_image(vm, self, bg, target, vx, vy, vw, vh, mirror);
+    }
+#if NJ_ENABLE_FSR2
+    if (vm->render_quality.fsr2) {
+        int complete = mirror &&
+            x0 == 0 && y0 == 0 && x1 == surface->width && y1 == surface->height &&
+            (!bg || nj_iget(vm, bg, m3g_fof(vm, NJ_C_BG, "_nj_dclear", "Z")));
+        m3g_temporal_clear(vm, surface, complete);
+    }
+#endif
     return NJ_OK;
 }
 
@@ -13158,6 +13224,11 @@ typedef struct {
     nj_u4 dif;
     nj_u4 default_colour;
     nj_u4 drawn;
+    int hd_scale;               /* positive only in the companion geometry walk */
+    nj_ref hd_self;
+#if NJ_ENABLE_FSR2
+    nj_ref hd_vb, hd_ib, hd_node;
+#endif
 #if NJ_ENABLE_GFX_ACCEL
     m3g_triangle_collect *triangles;
 #endif
@@ -13632,6 +13703,9 @@ typedef struct {
     float ne[3];
     nj_u4 rgb;                     /* front-face lit colour */
     nj_u4 rgb2;                    /* back-face lit colour (two-sided only) */
+#if NJ_ENABLE_FSR2
+    nj_u4 source_index;
+#endif
 } jr_vtx;
 
 static int jr_fetch(m3g_jr *r, nj_u4 v, jr_vtx *o)
@@ -13640,6 +13714,9 @@ static int jr_fetch(m3g_jr *r, nj_u4 v, jr_vtx *o)
     nj_u4 argb, alpha, vc;
 
     o->xy[0] = o->xy[1] = 0.0f;
+#if NJ_ENABLE_FSR2
+    o->source_index = v;
+#endif
     o->inv = o->ndc_z = 0.0f;
     o->st[0] = o->st[1] = 0.0f;
     o->pe[0] = o->pe[1] = o->pe[2] = 0.0f;
@@ -13695,6 +13772,9 @@ static void jr_blend(m3g_jr *r, const jr_vtx *a, const jr_vtx *b, float t,
 {
     float c0[3], c1[3];
     int i;
+#if NJ_ENABLE_FSR2
+    o->source_index = UINT32_MAX; /* camera-space clipping creates a new vertex */
+#endif
 
     for (i = 0; i < 2; i++) {
         o->st[i] = a->st[i] + (b->st[i] - a->st[i]) * t;
@@ -13832,6 +13912,64 @@ static void jr_collect_triangle(m3g_jr *r, const float xy[6], const float inv[3]
 }
 #endif
 
+/* Linear surface subdivision. Split each edge at its projected midpoint.
+ * Attributes in the rasterizer's affine domain (Z/w, 1/w and Gouraud
+ * colors) use their ordinary midpoint. UV is linear in object space, so
+ * interpolate UV/w before dividing by the midpoint 1/w. */
+static nj_u4 jr_hd_color_mid(nj_u4 a, nj_u4 b)
+{
+    return (a & b) + (((a ^ b) & 0xfefefefeu) >> 1);
+}
+
+static void jr_hd_raster(m3g_jr *r, const float xy[6], const float inv[3],
+                         const double depth[3], const float st[6], int textured,
+                         const nj_u4 rgb[3], const nj_u4 rgb2[3])
+{
+    float x[6][2], uv[6][2], iw[6];
+    double z[6];
+    nj_u4 colors[6], back[6];
+    static const unsigned char order[4][3] = {{0,3,5},{3,1,4},{5,4,2},{3,4,5}};
+    /* Coverage along interior edges of a blended face must be evaluated
+     * once. Preserve a single primitive for those modes and for sprites. */
+    int split = r->vm->render_quality.subdivide && !r->sw.sprite &&
+                (r->sw.blend == 68 || (r->sw.blend == 64 &&
+                 (!textured || r->sw.tex_no_alpha) &&
+                 ((rgb[0] & rgb[1] & rgb[2]) >> 24) == 255u));
+    if (!split || !(inv[0] > 0 && inv[1] > 0 && inv[2] > 0)) {
+        sw_tri_band(&r->sw, xy, inv, depth, st, textured, rgb, rgb2, r->twosided, -1);
+        return;
+    }
+    for (int i=0; i<3; ++i) {
+        int j = (i+1)%3;
+        double a = inv[i], b = inv[j];
+        iw[i] = inv[i]; iw[i+3] = (float)((a+b)*0.5);
+        z[i] = depth[i]; z[i+3] = (depth[i]+depth[j])*0.5;
+        colors[i] = rgb[i]; colors[i+3] = jr_hd_color_mid(rgb[i],rgb[j]);
+        back[i] = rgb2[i]; back[i+3] = jr_hd_color_mid(rgb2[i],rgb2[j]);
+        for (int k=0; k<2; ++k) {
+            x[i][k] = xy[2*i+k];
+            x[i+3][k] = (float)(((double)xy[2*i+k]+xy[2*j+k])*0.5);
+            uv[i][k] = st[2*i+k];
+            uv[i+3][k] = (float)((a*st[2*i+k]+b*st[2*j+k])/(a+b));
+        }
+    }
+    for (int face=0; face<4; ++face) {
+        float fx[6], fst[6], fi[3];
+        nj_u4 fc[3], fb[3];
+        double fz[3];
+        for (int k=0; k<3; ++k) {
+            int i = order[face][k];
+            memcpy(fx+k*2,x[i],sizeof(x[i])); memcpy(fst+k*2,uv[i],sizeof(uv[i]));
+            fi[k]=iw[i]; fz[k]=z[i]; fc[k]=colors[i]; fb[k]=back[i];
+        }
+        sw_tri_band(&r->sw,fx,fi,fz,fst,textured,fc,fb,r->twosided,-1);
+    }
+}
+
+#if NJ_ENABLE_FSR2
+#include "nj_m3g_temporal.inc"
+#endif
+
 static void jr_emit(m3g_jr *r, const jr_vtx *v0, const jr_vtx *v1,
                     const jr_vtx *v2)
 {
@@ -13884,6 +14022,7 @@ static void jr_emit(m3g_jr *r, const jr_vtx *v0, const jr_vtx *v1,
             if (sa < 0.0f) { sa = -sa; }
             if (ta < 0.0f) { ta = -ta; }
             sa *= 0.5f;
+            if (r->hd_scale) sa *= (float)(r->hd_scale * r->hd_scale);
             ta *= 0.5f * (float)(r->sw.mip_w * r->sw.mip_h);
             ratio = ta / (sa > 0.25f ? sa : 0.25f);
             lv = 0;
@@ -13906,6 +14045,16 @@ static void jr_emit(m3g_jr *r, const jr_vtx *v0, const jr_vtx *v1,
             return; /* Including failed collection: never write part of a batch. */
         }
 #endif
+        if (r->hd_scale) {
+#if NJ_ENABLE_FSR2
+            if (r->vm->render_quality.fsr2)
+                m3g_temporal_triangle(r, v0, v1, v2, xy, inv, depth, st, rgb, rgb2);
+#endif
+            for (int i = 0; i < 6; ++i) xy[i] *= (float)r->hd_scale;
+            jr_hd_raster(r, xy, inv, depth, st,
+                         r->sw.tex && (r->tpos || r->sw.sprite), rgb, rgb2);
+            return;
+        }
         /* The rasteriser writes the pixels: depth, texture, culling. */
         if (sw_tri(r->vm, &r->sw, xy, inv, depth, st,
                    r->sw.tex != NULL && (r->tpos != NULL || r->sw.sprite),
@@ -14477,6 +14626,10 @@ static int jr_setup(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref ib, nj_ref app,
     }
     f = fc;
     r.vm = f->vm;
+    r.hd_self = self;
+#if NJ_ENABLE_FSR2
+    r.hd_vb = vb; r.hd_ib = ib;
+#endif
     r.vx = f->vx; r.vy = f->vy; r.vw = f->vw; r.vh = f->vh;
     r.hw = 0.5f * (float)r.vw;
     r.hh = 0.5f * (float)r.vh;
@@ -16053,8 +16206,62 @@ static int jr_draw_accel(m3g_jr *r)
 }
 #endif
 
+/* The companion walks the same clipped geometry once, independently of
+ * native collection/decline/queue replay. Leave the authoritative counters,
+ * borrowed logical depth and CPU/native target untouched. */
+static int jr_hd_target(m3g_jr *r, m3g_jr *hd)
+{
+    nj_render_mirror *m;
+    m3g_hd_depth *d;
+    if (!r->sw.surf || !r->sw.z || !(m = nj_midp_hd_target(r->vm, r->sw.surf))) return 0;
+    d = m3g_hd_depth_get(r->vm, r->hd_self, m->target);
+    if (!d) {
+        nj_midp_hd_invalidate(r->vm, r->sw.surf);
+        return 0;
+    }
+    if (d->fresh) {
+        /* Enabling or recovering a mirror midway through a binding must
+         * preserve occlusion from geometry already present in logical Z. */
+        int k = m->scale;
+        for (int y = 0; y < r->sw.surf->height; ++y) {
+            nj_s4 *row = d->keys + (nj_size)y * k * d->width;
+            const nj_s4 *z = r->sw.z + (nj_size)y * r->sw.surf->width;
+            for (int x = 0; x < r->sw.surf->width; ++x)
+                for (int i = 0; i < k; ++i) row[x*k+i] = z[x];
+            for (int i = 1; i < k; ++i)
+                memcpy(row + (nj_size)i*d->width, row, (nj_size)d->width * sizeof(*row));
+        }
+        d->fresh = 0;
+    }
+    *hd = *r;
+    hd->sw.surf = m->target;
+    hd->sw.z = d->keys;
+    hd->hd_scale = m->scale;
+    hd->sw.vx *= m->scale; hd->sw.vy *= m->scale;
+    hd->sw.vw *= m->scale; hd->sw.vh *= m->scale;
+    /* Depth offset is specified in logical viewport pixels. */
+    hd->sw.depth_factor *= (float)m->scale;
+    return 1;
+}
+
+static void jr_hd_mesh(m3g_jr *r)
+{
+    m3g_jr hd;
+    if (jr_hd_target(r, &hd)) {
+#if NJ_ENABLE_FSR2
+        if (r->vm->render_quality.fsr2) m3g_temporal_mesh(&hd);
+#endif
+        jr_draw_walk(&hd);
+    }
+#if NJ_ENABLE_FSR2
+    else if (r->vm->render_quality.fsr2) m3g_temporal_invalidate(r->vm);
+#endif
+}
+
 static nj_u4 jr_draw(m3g_jr *r)
 {
+    if (r->vm->render_quality.scale > 1 || r->vm->render_quality.ssaa > 1 ||
+        r->vm->render_quality.fsr2) jr_hd_mesh(r);
 #if NJ_ENABLE_GFX_ACCEL
     if (!jr_draw_accel(r)) {
         /* A journaled frame must stay ordered: commit queued draws before the
@@ -16187,6 +16394,9 @@ static nj_u4 jr_sprite(nj_vm *vm, nj_ref self, nj_ref sprite, nj_ref world,
     double u0, u1, t0, t1;
     int k, scaled, flipx, flipy;
 
+#if NJ_ENABLE_FSR2
+    if (vm->render_quality.fsr2) m3g_temporal_invalidate(vm);
+#endif
     if (!image || !app) { return 0u; }
     iw = nj_iget(vm, image, m3g_fof(vm, NJ_C_IMAGE2D, "_nj_w", "I"));
     ih = nj_iget(vm, image, m3g_fof(vm, NJ_C_IMAGE2D, "_nj_h", "I"));
@@ -16294,6 +16504,13 @@ static nj_u4 jr_sprite(nj_vm *vm, nj_ref self, nj_ref sprite, nj_ref world,
         v[k].st[1] = (float)(t0 + (t1-t0) * ((y-y0)/(y1-y0)));
         memcpy(v[k].pe, origin, sizeof(origin));
         v[k].rgb = 0xFFFFFFFFu;
+    }
+    if (vm->render_quality.scale > 1 || vm->render_quality.ssaa > 1 || vm->render_quality.fsr2) {
+        m3g_jr hd;
+        if (jr_hd_target(&r, &hd)) {
+            jr_triangle_v(&hd, &v[0], &v[1], &v[2]);
+            jr_triangle_v(&hd, &v[0], &v[2], &v[3]);
+        }
     }
     jr_triangle_v(&r, &v[0], &v[1], &v[2]);
     jr_triangle_v(&r, &v[0], &v[2], &v[3]);
@@ -16627,6 +16844,9 @@ static nj_u4 m3g_world_draw(nj_vm *vm, nj_ref self, nj_ref root,
                         r.posed_nrm = posed_nrm;
                         r.posed_n = posed_n;
                     }
+#if NJ_ENABLE_FSR2
+                    r.hd_node = meshes[i];
+#endif
                     drawn += jr_draw(&r);
                 }
             }
@@ -17561,6 +17781,9 @@ const int nj_lib_m3g_count =
 
 #else  /* !NJ_ENABLE_M3G */
 
+void nj_m3g_hd_dispose(nj_vm *vm) { (void)vm; }
+void nj_m3g_hd_collect(nj_vm *vm) { (void)vm; }
+
 const nj_builtin_class nj_lib_m3g_classes[] = {
     { NULL, NULL, 0u, NULL, 0u, NULL, 0u }
 };
@@ -17587,6 +17810,13 @@ nj_status nj_m3g_late_init(nj_vm *vm)
  */
 void nj_m3g_flush_why(nj_vm *vm, int why)
 {
+#if NJ_ENABLE_M3G && NJ_ENABLE_FSR2
+    /* A 2D writer or presentation between clear and release invalidates
+     * opaque-only reconstruction. After release the producer is inactive. */
+    if (vm && vm->m3g_hd_state && vm->render_quality.fsr2 &&
+        (why == NJ_M3G_FLUSH_GFX || why == NJ_M3G_FLUSH_PRESENT))
+        m3g_temporal_invalidate(vm);
+#endif
 #if NJ_ENABLE_M3G && NJ_ENABLE_GFX_ACCEL
 #if NJ_M3G_PROFILE
     double t0 = m3g_now();

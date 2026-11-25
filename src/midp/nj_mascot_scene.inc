@@ -251,10 +251,12 @@ typedef struct m3_qv {
 } m3_qv;
 typedef struct m3_qprim {
     m3_qv v[3];
+    /* Projection residuals occupy the queue format's three padding bytes. */
+    nj_u1 sub01[2];
     nj_s4 z;
     nj_u4 color, toon;
     nj_u2 material, texture, environment;
-    nj_u1 kind, pad;
+    nj_u1 kind, sub2;
 } m3_qprim;
 /* A transformed vertex: where it is, and how much light it takes.  The figure
  * path caches one of these per model vertex and fills the texture coordinates
@@ -271,7 +273,8 @@ typedef struct m3_scene {
     nj_s4 cx, cy, kx, ky, near_z, far_z;
     nj_s4 width, height;
     nj_s4 light[3], ambient, diffuse;
-    int perspective, lit, semi;
+    int perspective, lit, semi, hd_scale;
+    nj_u1 sprite_sub; /* shared centre offset for screen-projected sprite corners */
     nj_u4 toon;
     nj_u2 environment;
 } m3_scene;
@@ -339,6 +342,7 @@ static int m3_scene_setup(m3_scene *sc, nj_vm *vm, nj_ref self,
     if (!layout || !effect) { nj_throw(vm, "java/lang/NullPointerException", "layout/effect"); return 0; }
     if (!nj_midp_gfx_load(vm, g, &gfx, &surface) || !gfx.surf) return 0;
     sc->width = gfx.surf->width; sc->height = gfx.surf->height;
+    sc->hd_scale = gfx.mirror && gfx.mirror->scale <= 8 ? gfx.mirror->scale : 0;
     xf = m3_ref(vm, layout, "_xf", "L" NJ_C_XF ";");
     if (xf) xf_read(vm, xf, sc->matrix); else xf_identity(sc->matrix);
     sc->cx = (nj_s4)((nj_u4)m3_get(vm, layout, "_cx") + (nj_u4)x);
@@ -476,15 +480,31 @@ static void m3_transform_vertex(const nj_s4 m[12], const nj_s4 xyz[3], nj_s4 *v)
     v[0] = (nj_s4)out.x; v[1] = (nj_s4)out.y; v[2] = (nj_s4)out.z;
     v[3] = 4095; v[4] = 0; v[5] = 0;
 }
-static void m3_project_vertex(const m3_scene *sc, const m3_sv *v, m3_qv *out)
+/* Return the signed remainder on the sample grid. Perspective truncates
+ * toward zero, whereas parallel projection floors its 12.12 coordinates. */
+static int m3_residual(nj_s8 product, nj_s4 divisor, nj_s8 projected,
+                       nj_s4 center, int scale)
 {
-    nj_s8 x, y;
-    if (sc->perspective) {
-        x = (nj_s8)v->x * sc->kx / (v->z ? v->z : 1);
-        y = (nj_s8)v->y * sc->ky / (v->z ? v->z : 1);
-    } else {
-        x = m3_shr12((nj_s8)v->x * sc->kx);
-        y = m3_shr12((nj_s8)v->y * sc->ky);
+    if (projected + center < -32768 || projected + center > 32767) return 0;
+    return (int)((product - projected * divisor) * scale / divisor);
+}
+
+static int m3_subcoord(int nibble)
+{
+    return ((nibble & 15) ^ 8) - 8;
+}
+
+static nj_u1 m3_project_vertex(const m3_scene *sc, const m3_sv *v, m3_qv *out)
+{
+    nj_s8 px = (nj_s8)v->x * sc->kx, py = (nj_s8)v->y * sc->ky;
+    nj_s4 divisor = sc->perspective ? (v->z ? v->z : 1) : 4096;
+    nj_s8 x = sc->perspective ? px / divisor : m3_shr12(px);
+    nj_s8 y = sc->perspective ? py / divisor : m3_shr12(py);
+    nj_u1 sub = 0;
+    if (sc->hd_scale > 1) {
+        int dx = m3_residual(px, divisor, x, sc->cx, sc->hd_scale);
+        int dy = m3_residual(py, divisor, y, sc->cy, sc->hd_scale);
+        sub = (nj_u1)((dx & 15) | ((dy & 15) << 4));
     }
     x += sc->cx; y += sc->cy;
     if (x < -32768) x = -32768;
@@ -494,6 +514,7 @@ static void m3_project_vertex(const m3_scene *sc, const m3_sv *v, m3_qv *out)
     out->x = (nj_s2)x; out->y = (nj_s2)y;
     out->u = (nj_u2)v->u; out->v = (nj_u2)v->v;
     out->light = (nj_s2)v->light; out->eu = (nj_s2)v->eu; out->ev = (nj_s2)v->ev;
+    return sc->sprite_sub ? sc->sprite_sub : sub;
 }
 
 static int m3_queue(m3_scene *sc, const m3_sv *a, const m3_sv *b, const m3_sv *c,
@@ -504,9 +525,9 @@ static int m3_queue(m3_scene *sc, const m3_sv *a, const m3_sv *b, const m3_sv *c
     nj_ref data;
     nj_u4 count = (nj_u4)m3_get(vm, sc->self, "_count");
     memset(&q, 0, sizeof(q));
-    m3_project_vertex(sc, a, &q.v[0]);
-    if (kind >= 2) m3_project_vertex(sc, b, &q.v[1]);
-    if (kind >= 3) m3_project_vertex(sc, c, &q.v[2]);
+    q.sub01[0] = m3_project_vertex(sc, a, &q.v[0]);
+    if (kind >= 2) q.sub01[1] = m3_project_vertex(sc, b, &q.v[1]);
+    if (kind >= 3) q.sub2 = m3_project_vertex(sc, c, &q.v[2]);
     if (kind == 3) {
         int x0=q.v[0].x,x1=q.v[1].x,x2=q.v[2].x;
         int y0=q.v[0].y,y1=q.v[1].y,y2=q.v[2].y;
@@ -792,7 +813,7 @@ static nj_status m3_scene_primitives(nj_vm *vm, const nj_value *args)
             nj_s4 sn=m3_sin(p[2]),cs=m3_cos(p[2]);
             int uvx[4]={0,1,0,1},uvy[4]={0,0,1,1};
             if((sc.perspective&&(v[0].z<sc.near_z||v[0].z>sc.far_z))||p[5]<=p[3]||p[6]<=p[4])continue;
-            m3_project_vertex(&sc,&v[0],&center);
+            screen.sprite_sub = m3_project_vertex(&sc,&v[0],&center);
             if(!(p[7]&1)) {
                 if(sc.perspective&&!(p[7]&2)) {w=w*sc.kx/v[0].z;h=h*sc.ky/v[0].z;}
                 else {w=m3_shr12(w*sc.kx);h=m3_shr12(h*sc.ky);}
@@ -901,6 +922,9 @@ NJFN(mascot_scene_flush)
     nj_surface surface;
     nj_u8 clip;
     nj_s4 x1,y1,x2,y2;
+    nj_render_mirror *mirror;
+    nj_surface *hd = NULL;
+    int scale = 1;
     if(!g)return nj_throw(vm,"java/lang/IllegalStateException","no Graphics bound");
     if(!n){m3_scene_reset(vm,self);return NJ_OK;}
     if(!nj_midp_gfx_load(vm,g,&gfx,&surface)||!gfx.surf){m3_scene_reset(vm,self);return NJ_OK;}
@@ -911,6 +935,15 @@ NJFN(mascot_scene_flush)
     if(!iref)return NJ_ERR;
     qref=m3_ref(vm,self,"_queue","[B");refs=m3_ref(vm,self,"_textures","[Ljava/lang/Object;");
     queue=(const m3_qprim *)nj_array_data(qref);order=(nj_u4 *)nj_array_data(iref);
+    /* Obtain the companion before the first logical pixel changes: a newly
+     * created target may need to seed its background from the logical image. */
+    mirror = gfx.mirror;
+    if (mirror && mirror->target && mirror->scale > 1 && mirror->scale <= 8 &&
+        (nj_s8)gfx.surf->width * mirror->scale == mirror->target->width &&
+        (nj_s8)gfx.surf->height * mirror->scale == mirror->target->height) {
+        hd = mirror->target;
+        scale = mirror->scale;
+    }
     m3_order_sort(order,n,queue);
     for(i=0;i<n;++i) {
         const m3_qprim *q=&queue[order[i]];
@@ -953,7 +986,25 @@ NJFN(mascot_scene_flush)
                 m3_scene_reset(vm,self);
                 return nj_throw(vm,"java/lang/IllegalStateException","invalid Micro3D texture storage");
             }
+            if (hd) {
+                /* Replay the projected polygon, including indexed texture, light,
+                 * colour key and blend. Sprite quads already use this path. */
+                for (k = 0; k < 3; ++k) {
+                    int sub = k == 2 ? q->sub2 : q->sub01[k];
+                    v[k].x = v[k].x * scale + m3_subcoord(sub);
+                    v[k].y = v[k].y * scale + m3_subcoord(sub >> 4);
+                }
+                nj_mascot_raster_draw(hd,x1*scale,y1*scale,x2*scale,y2*scale,v,&mat);
+            }
             vm->tris++;
+        }
+        if (hd && q->kind <= 2) {
+            int b = q->kind - 1;
+            nj_mascot_raster_stroke(hd, scale, x1*scale, y1*scale, x2*scale, y2*scale,
+                q->v[0].x * scale + m3_subcoord(q->sub01[0]),
+                q->v[0].y * scale + m3_subcoord(q->sub01[0] >> 4),
+                q->v[b].x * scale + m3_subcoord(q->sub01[b]),
+                q->v[b].y * scale + m3_subcoord(q->sub01[b] >> 4), q->color, blend);
         }
     }
     m3_scene_reset(vm,self);

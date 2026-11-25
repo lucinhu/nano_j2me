@@ -41,6 +41,7 @@ idf_component_register(
         "${NJ_ROOT}/src/midp/nj_lib_util.c"
         "${NJ_ROOT}/src/midp/nj_lib_io.c"
         "${NJ_ROOT}/src/midp/nj_lib_lcdui.c"
+        "${NJ_ROOT}/src/midp/nj_hd_surfaces.c"
         "${NJ_ROOT}/src/midp/nj_lib_game.c"
         "${NJ_ROOT}/src/midp/nj_lib_rms.c"
         "${NJ_ROOT}/src/midp/nj_lib_midlet.c"

@@ -20,6 +20,7 @@
 #include "nj2me/nj_vm.h"
 #include "nj2me/nj_config.h"
 #include "nj_internal.h"
+#include "../src/midp/nj_midp.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -1642,6 +1643,64 @@ static void test_gc_lifetime(nj_vm *vm)
     }
 }
 
+/* Exercise both targets through the Java-facing deferred queue. */
+static void test_hd_scene(nj_vm *vm)
+{
+    const nj_u4 white = 0xffffffffu, red = 0xffff0000u, pink = 0xffff7f7fu;
+    nj_u4 reference[64 * 64];
+    int pass;
+    for (pass = 0; pass < 2; ++pass) {
+        nj_ref img, g, g3, fl, fx, tex, quv, quad, point, line, sprite, sprite_uv;
+        nj_ref red_arg, black_arg;
+        nj_s4 p[3] = {4, 4, 0}, l[6] = {-124, -124, 0, -60, -92, 0};
+        nj_s4 q[12] = {-64,-64,40, 64,-64,40, 64,64,40, -64,64,40};
+        nj_s4 uv[8] = {0,0, 8,0, 8,8, 0,8}, col[1] = {0xff0000};
+        nj_s4 sp[3] = {100, 100, 0}, suv[8] = {8,8,0,0,0,8,8,1};
+        nj_s4 tv[9] = {-212,132,0, -148,132,0, -212,196,0};
+        nj_ref tri, keyed;
+        nj_surface scratch, *logical;
+        nj_render_mirror *m;
+        if (pass) { vm->render_quality.scale = 2; vm->render_quality.ssaa = 2; }
+        g3 = scene_setup(vm, &img, &g);
+        fl = centre_layout(vm); fx = default_effect(vm); tex = texture(vm, 0, 1);
+        red_arg = ints(vm, col, 1); col[0] = 0; black_arg = ints(vm, col, 1);
+        point = ints(vm,p,3); line = ints(vm,l,6); quad = ints(vm,q,12); quv = ints(vm,uv,8);
+        tri = ints(vm,tv,9); keyed = colorkey_texture(vm);
+        sprite = ints(vm,sp,3); sprite_uv = ints(vm,suv,8);
+        /* Submit nearer translucent point first, then a farther red quad. */
+        check(render_prims(vm,g3,0,fl,fx,CMD_POINT_COLOUR | 0x20,1,point,0,0,black_arg,0,0) == NJ_OK &&
+              render_prims(vm,g3,tex,fl,fx,CMD_QUAD_TEXTURE,1,quad,0,quv,0,0,0) == NJ_OK &&
+              render_prims(vm,g3,0,fl,fx,0x02000420,1,line,0,0,red_arg,0,0) == NJ_OK &&
+              render_prims(vm,g3,0,fl,fx,CMD_TRI_COLOUR,1,tri,0,0,red_arg,0,0) == NJ_OK &&
+              render_prims(vm,g3,keyed,fl,fx,0x05001010,1,sprite,0,sprite_uv,0,0,0) == NJ_OK &&
+              flush_g3(vm,g3) == NJ_OK, "textured quad, sprite, translucent point and line flush");
+        logical = nj_midp_surface(vm,img,&scratch);
+        m = nj_midp_hd_target(vm,logical);
+        if (!pass) {
+            check(!m && !vm->hd_store, "default Mascot draws allocate no HD target");
+            memcpy(reference,logical->pixels,sizeof reference);
+        } else {
+            check(!memcmp(reference,logical->pixels,sizeof reference), "all 4096 logical pixels match default rendering");
+            check(m && m->scale == 4, "2x output with 2x SSAA has a 4x raster grid");
+            if (m) {
+                nj_surface *s = m->target;
+                check(nj_surface_get(s,100,100) == red && nj_surface_get(s,156,156) == red,
+                      "both triangles of the textured quad sample red texels");
+                check(nj_surface_get(s,129,130) == red && nj_surface_get(s,130,130) == 0xff7f0000u &&
+                      nj_surface_get(s,133,133) == 0xff7f0000u && nj_surface_get(s,134,133) == red,
+                      "a half-pixel point blends exactly once over its farther quad");
+                check(nj_surface_get(s,65,66) == white && nj_surface_get(s,66,66) == pink &&
+                      nj_surface_get(s,70,66) == white && nj_surface_get(s,70,67) == pink,
+                      "half-pixel diagonal has distinct coverage within a logical pixel");
+                check(nj_surface_get(s,24,222) == red && nj_surface_get(s,27,222) == white,
+                      "a projected triangle splits a single logical pixel across its diagonal");
+                check(nj_surface_get(s,161,162) == white && nj_surface_get(s,162,162) == red &&
+                      nj_surface_get(s,192,192) == white, "sprite retains fractional centre and transparent texels");
+            }
+        }
+    }
+}
+
 int main(void)
 {
     nj_port port;
@@ -1663,6 +1722,7 @@ int main(void)
     test_textured_primitive(vm);
     test_line_clip_depth(vm);
     test_gc_lifetime(vm);
+    test_hd_scene(vm);
 
     nj_vm_destroy(vm);
     nj_port_shutdown(&port);

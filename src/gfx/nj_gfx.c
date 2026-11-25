@@ -81,6 +81,8 @@
 
 #include "nj2me/nj_gfx.h"
 
+#include <limits.h>
+#include <math.h>
 #include <string.h>   /* memcpy: alignment-safe 16/32-bit pixel access */
 
 #ifdef NJ_GFX_2D_STATS
@@ -567,6 +569,7 @@ void nj_gfx_init(nj_gfx *g, nj_surface *surf)
     if (!g) {
         return;
     }
+    g->mirror = NULL;
     g->surf = surf;
     g->color = 0xFF000000u;            /* opaque black */
     g->translate_x = 0;
@@ -861,6 +864,8 @@ static int nj_in_clip(const nj_gfx *g, int x, int y)
 static void nj_plot(nj_gfx *g, int x, int y, nj_u4 argb);
 static void nj_span(nj_gfx *g, int x0, int x1, int y, nj_u4 argb);
 
+#include "nj_gfx_hd.inc"
+
 /* Must only be called with a point inside the clip. */
 static void nj_plot(nj_gfx *g, int x, int y, nj_u4 argb)
 {
@@ -918,6 +923,7 @@ void nj_gfx_blend_coverage(nj_gfx *g, int x, int y, int coverage)
     if (!nj_in_clip(g, x, y)) {
         return;
     }
+    if (g->mirror) hd_block(g, x, y, 1, 1, coverage);
     if (coverage >= 255) {
         nj_plot(g, x, y, g->color);
         return;
@@ -1272,6 +1278,10 @@ void nj_gfx_clear(nj_gfx *g, nj_u4 argb)
         return;
     }
     NJ2D_OP(NJ2D_CLEAR, 1);
+    if (g->mirror) {
+        nj_gfx p;
+        if (nj_gfx_mirror_context(g, &p)) nj_surface_fill(p.surf, argb);
+    }
     nj_surface_fill(g->surf, argb);
 }
 
@@ -1288,6 +1298,7 @@ void nj_gfx_pixel(nj_gfx *g, int x, int y)
     if (!nj_in_clip(g, dx, dy)) {
         return;
     }
+    if (g->mirror) hd_block(g, dx, dy, 1, 1, 255);
     nj_plot(g, dx, dy, g->color);
 }
 
@@ -1299,6 +1310,7 @@ void nj_gfx_line(nj_gfx *g, int x1, int y1, int x2, int y2)
         return;
     }
     NJ2D_OP(NJ2D_LINE, nj2d_opaque(g));
+    if (g->mirror) hd_polygon(g, x1, y1, x2, y2, x2, y2, 2, 0);
     nj_line_impl(g, x1, y1, x2, y2, &phase);
 }
 
@@ -1318,6 +1330,8 @@ void nj_gfx_rect(nj_gfx *g, int x, int y, int w, int h)
     y0 = (nj_s8)y + g->translate_y;
     x1 = x0 + w;                         /* draw covers (w+1) x (h+1) */
     y1 = y0 + h;
+
+    if (g->mirror) hd_curve(g, x, y, w, h, 0, 0, 0, 360, 0, 0);
 
     /* Perimeter order, corners plotted exactly once. */
     nj_run(g, x0, y0, x1, y0, &phase);
@@ -1343,12 +1357,20 @@ void nj_gfx_fill_rect(nj_gfx *g, int x, int y, int w, int h)
     if (!nj_box_from_user(g, x, y, w, h, &bx0, &by0, &bx1, &by1)) {
         return;
     }
+    if (g->mirror) hd_block(g, (int)bx0, (int)by0, (int)(bx1-bx0+1),
+                            (int)(by1-by0+1), 255);
 #if NJ_ENABLE_GFX_ACCEL
-    if (g->accel && g->accel->fill_rect &&
-        g->accel->fill_rect(g->accel_ud, g, (int)bx0, (int)by0,
-                            (int)(bx1-bx0+1), (int)(by1-by0+1))
-            == NJ_GFX_ACCEL_DONE) {
-        return;
+    if (g->accel && g->accel->fill_rect) {
+        nj_gfx logical;
+        const nj_gfx *backend = g;
+        if (g->mirror) {
+            logical = *g;
+            logical.mirror = NULL;
+            backend = &logical;
+        }
+        if (g->accel->fill_rect(g->accel_ud, backend, (int)bx0, (int)by0,
+                                (int)(bx1-bx0+1), (int)(by1-by0+1))
+            == NJ_GFX_ACCEL_DONE) return;
     }
 #endif
     if (g->fill_rect && !g->use_xor &&
@@ -1481,6 +1503,8 @@ void nj_gfx_arc(nj_gfx *g, int x, int y, int w, int h, int start, int extent)
     if (w < 0 || h < 0 || extent == 0) {
         return;
     }
+    start %= 360;
+    if (g->mirror) hd_curve(g, x, y, w, h, w, h, start, extent, 1, 0);
     e.c2x = 2 * ((nj_s8)x + g->translate_x) + w + 1;
     e.c2y = 2 * ((nj_s8)y + g->translate_y) + h + 1;
     e.a2 = (nj_s8)w + 1;
@@ -1555,6 +1579,8 @@ void nj_gfx_fill_arc(nj_gfx *g, int x, int y, int w, int h, int start,
     if (w <= 0 || h <= 0 || extent == 0) {
         return;
     }
+    start %= 360;
+    if (g->mirror) hd_curve(g, x, y, w, h, w, h, start, extent, 1, 1);
     e.c2x = 2 * ((nj_s8)x + g->translate_x) + w;
     e.c2y = 2 * ((nj_s8)y + g->translate_y) + h;
     e.a2 = w;
@@ -1624,6 +1650,7 @@ void nj_gfx_round_rect(nj_gfx *g, int x, int y, int w, int h, int rw, int rh)
         return;
     }
 
+    if (g->mirror) hd_curve(g, x, y, w, h, rw, rh, 0, 360, 0, 0);
     X = (nj_s8)x + g->translate_x;
     Y = (nj_s8)y + g->translate_y;
 
@@ -1698,6 +1725,7 @@ void nj_gfx_fill_round_rect(nj_gfx *g, int x, int y, int w, int h, int rw,
         return;
     }
 
+    if (g->mirror) hd_curve(g, x, y, w, h, rw, rh, 0, 360, 0, 1);
     X = (nj_s8)x + g->translate_x;
     Y = (nj_s8)y + g->translate_y;
 
@@ -1794,7 +1822,14 @@ void nj_gfx_triangle(nj_gfx *g, int x1, int y1, int x2, int y2, int x3, int y3,
         return;
     }
     NJ2D_OP(NJ2D_TRI, nj2d_opaque(g));
+    if (g->mirror) hd_polygon(g, x1, y1, x2, y2, x3, y3, 3, filled);
     if (!filled) {
+        nj_gfx logical;
+        if (g->mirror) {
+            logical = *g;
+            logical.mirror = NULL;
+            g = &logical;
+        }
         nj_gfx_line(g, x1, y1, x2, y2);
         nj_gfx_line(g, x2, y2, x3, y3);
         nj_gfx_line(g, x3, y3, x1, y1);
@@ -2128,7 +2163,100 @@ static void nj_565_row_from_argb(nj_u1 *dp, const nj_u1 *sp, int n, int bpp)
     }
 }
 
+/* Image mirrors are borrowed for this call only. In particular drawRGB's
+ * transient buffer never enters the mutable-image lookup. */
+static const nj_surface *hd_image(const nj_gfx *g, const void *pixels, int w, int h)
+{
+    nj_render_mirror *m = g->mirror;
+    const nj_surface *s;
+    if (!pixels || w <= 0 || h <= 0 || !m->lookup) return NULL;
+    s = m->lookup(m->ud, pixels, w, h);
+    if (!hd_surface_ok(s) || (nj_s8)w * m->scale != s->width ||
+        (nj_s8)h * m->scale != s->height || s->pixels == m->target->pixels) return NULL;
+    return s;
+}
+
+static void hd_blit_span(nj_gfx *p, int x, int last, int y, nj_u4 src,
+                         int rop, int opaque, int xor_on, nj_u4 xor_argb, int alpha)
+{
+    if (opaque) src |= 0xff000000u;
+    if (rop != NJ_ROP_SET) {
+        int weight = ((int)(src >> 24) * alpha + 127) / 255;
+        if (!weight) return;
+        if (!xor_on) src = (src & 0xffffffu) | ((nj_u4)weight << 24);
+    }
+    p->xor_color = src ^ xor_argb;
+    nj_span(p, x, last, y, src);
+}
+
 static void nj_region_draw(nj_gfx *g, const nj_u1 *src, nj_s8 src_stride_bytes,
+                           int image_height,
+                           int src_format, const nj_u1 *mask,
+                           int mask_stride, int mask_height,
+                           int sx, int sy, int sw, int sh,
+                           int transform, int rop, int xor_on, nj_u4 xor_argb,
+                           int dx, int dy, int alpha);
+
+/* Walk clipped logical destination cells and transform their physical samples
+ * inside the cell separately. Thus even a rotated 1x1 HD source region keeps
+ * all of its detail. Masks remain anchored to the destination. */
+static void hd_blit(nj_gfx *g, const nj_u1 *src, nj_s8 stride, int format,
+                    int img_height, const nj_u1 *mask, int mw, int mh,
+                    int sx, int sy, int sw, int sh, int transform, int rop,
+                    int opaque, int xor_on, nj_u4 xor_argb, int alpha,
+                    nj_s8 dx, nj_s8 dy, int x0, int y0, int x1, int y1)
+{
+    nj_gfx p;
+    int k = nj_gfx_mirror_context(g, &p), bpp = nj_image_bpp(format);
+    const nj_surface *image, *mask_image;
+    int x,y;
+    if (!k) return;
+    image = img_height ? hd_image(g, src, (int)(stride/bpp), img_height) : NULL;
+    if (image && !mask) {
+        /* A mutable back buffer may cover the whole display every frame.
+         * Reuse the physical row-copy, transform and alpha fast paths. The
+         * visible intersection and validated image dimensions bound dx*k. */
+        p.translate_x = p.translate_y = 0;
+        nj_region_draw(&p, (const nj_u1 *)image->pixels, image->stride, 0,
+                       image->format, NULL, 0, 0, sx*k, sy*k, sw*k, sh*k,
+                       transform, opaque ? NJ_ROP_OPAQUE : rop, xor_on,
+                       xor_argb, (int)(dx*k), (int)(dy*k), alpha);
+        return;
+    }
+    mask_image = hd_image(g, mask, mw, mh);
+    p.use_xor = xor_on;
+    p.blend = rop == NJ_ROP_SET ? NJ_BLEND_NONE : NJ_BLEND_SRC_OVER;
+    for (y=y0; y<=y1; y++) {
+        int j=(int)(y-dy);
+        for (x=x0; x<=x1; x++) {
+            int i=(int)(x-dx), u,v, px,py;
+            nj_u4 color = 0;
+            if (mask && !mask_image && !(nj_word_get(mask,(nj_s8)j*mw+i)>>24)) continue;
+            nj_trans_inverse(transform,i,j,sw,sh,&u,&v);
+            if (!image) color = nj_src_pixel(src, ((nj_s8)sy+v)*stride + ((nj_s8)sx+u)*bpp, format);
+            for (py=0; py<k; py++) {
+                int yy=y*k+py;
+                if (!image && !mask_image) {
+                    hd_blit_span(&p,x*k,(x+1)*k-1,yy,color,rop,opaque,xor_on,xor_argb,alpha);
+                    continue;
+                }
+                for (px=0; px<k; px++) {
+                    int xx=x*k+px;
+                    if (mask_image && !(nj_raw_get(mask_image,i*k+px,j*k+py,4)>>24)) continue;
+                    if (image) {
+                        int subx,suby;
+                        nj_trans_inverse(transform,px,py,k,k,&subx,&suby);
+                        color = nj_raw_get(image,(sx+u)*k+subx,(sy+v)*k+suby,4);
+                    }
+                    hd_blit_span(&p,xx,xx,yy,color,rop,opaque,xor_on,xor_argb,alpha);
+                }
+            }
+        }
+    }
+}
+
+static void nj_region_draw(nj_gfx *g, const nj_u1 *src, nj_s8 src_stride_bytes,
+                           int image_height,
                            int src_format, const nj_u1 *mask,
                            int mask_stride, int mask_height,
                            int sx, int sy, int sw, int sh,
@@ -2182,6 +2310,12 @@ static void nj_region_draw(nj_gfx *g, const nj_u1 *src, nj_s8 src_stride_bytes,
         return;
     }
 
+    if (g->mirror) {
+        hd_blit(g, src, src_stride_bytes, src_format, image_height, mask,
+                mask_stride, mask_height, sx, sy, sw, sh, transform, rop,
+                opaque, xor_on, xor_argb, alpha, X0, Y0, (int)cx0, (int)cy0,
+                (int)cx1, (int)cy1);
+    }
 #if NJ_ENABLE_GFX_ACCEL
     if (g->accel && g->accel->blit) {
         nj_gfx_blit command;
@@ -2206,7 +2340,14 @@ static void nj_region_draw(nj_gfx *g, const nj_u1 *src, nj_s8 src_stride_bytes,
         command.clip_y = (int)cy0;
         command.clip_w = (int)(cx1-cx0+1);
         command.clip_h = (int)(cy1-cy0+1);
-        if (g->accel->blit(g->accel_ud, g, &command) == NJ_GFX_ACCEL_DONE) {
+        nj_gfx logical;
+        const nj_gfx *backend = g;
+        if (g->mirror) {
+            logical = *g;
+            logical.mirror = NULL;
+            backend = &logical;
+        }
+        if (g->accel->blit(g->accel_ud, backend, &command) == NJ_GFX_ACCEL_DONE) {
             return;
         }
     }
@@ -2762,10 +2903,11 @@ void nj_gfx_blit_software(const nj_gfx *g, const nj_gfx_blit *blit)
         return;
     }
     software = *g;
+    software.mirror = NULL; /* backend replay of an already mirrored blit */
     nj_gfx_set_accel(&software, NULL, NULL);
     software.fill_rect = NULL;
     software.fill_ud = NULL;
-    nj_region_draw(&software, blit->pixels, blit->stride, blit->format,
+    nj_region_draw(&software, blit->pixels, blit->stride, 0, blit->format,
                    blit->mask, blit->mask_width, blit->mask_height,
                    blit->sx, blit->sy, blit->width, blit->height,
                    blit->transform, blit->rop, blit->xor_enabled,
@@ -2826,7 +2968,7 @@ void nj_gfx_draw_image(nj_gfx *g, const nj_image *img, int dx, int dy,
      * alone, partially transparent pixels are composited. */
     rop = (g->blend == NJ_BLEND_SRC_OVER) ? NJ_ROP_PAINT : NJ_ROP_SET;
     nj_region_draw(g, (const nj_u1 *)img->pixels,
-                   (nj_s8)img->width * nj_image_bpp(fmt), fmt,
+                   (nj_s8)img->width * nj_image_bpp(fmt), img->height, fmt,
                    NULL, 0, 0, sx, sy, sw, sh, NJ_TRANS_NONE, rop,
                    g->use_xor, g->xor_color, dx, dy, 255);
 }
@@ -2844,7 +2986,7 @@ void nj_gfx_draw_image_rop(nj_gfx *g, const nj_image *img, int dx, int dy,
             && (rop == NJ_ROP_SET || (!img->has_alpha && rop == NJ_ROP_PAINT)));
     fmt = nj_image_format(img);
     nj_region_draw(g, (const nj_u1 *)img->pixels,
-                   (nj_s8)img->width * nj_image_bpp(fmt), fmt,
+                   (nj_s8)img->width * nj_image_bpp(fmt), img->height, fmt,
                    NULL, 0, 0, sx, sy, sw, sh, transform, rop,
                    g->use_xor, g->xor_color, dx, dy, 255);
 }
@@ -2863,7 +3005,7 @@ void nj_gfx_draw_rgb(nj_gfx *g, const nj_u1 *rgb, int scanlen, int alpha,
     }
     NJ2D_OP(NJ2D_RGB, !g->use_xor && transform == 0
             && (rop == NJ_ROP_SET || (alpha == 255 && rop == NJ_ROP_PAINT)));
-    nj_region_draw(g, rgb, scanlen, NJ_PIXFMT_RGB888, NULL, 0, 0,
+    nj_region_draw(g, rgb, scanlen, 0, NJ_PIXFMT_RGB888, NULL, 0, 0,
                    sx, sy, sw, sh, transform, rop,
                    g->use_xor, g->xor_color, dx, dy, alpha);
 }
@@ -2894,7 +3036,7 @@ void nj_gfx_draw_region(nj_gfx *g, const nj_image *src, int sx, int sy, int sw,
             && !src->has_alpha && rop == NJ_ROP_PAINT);
     fmt = nj_image_format(src);
     nj_region_draw(g, (const nj_u1 *)src->pixels,
-                   (nj_s8)src->width * nj_image_bpp(fmt), fmt,
+                   (nj_s8)src->width * nj_image_bpp(fmt), src->height, fmt,
                    mask, mask_stride, mask_height, sx, sy, sw, sh, transform, rop,
                    xor_on, is_xor ? xor_argb : g->xor_color, dx, dy, 255);
 }

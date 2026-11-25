@@ -879,6 +879,13 @@ typedef struct nj_port {
      * exactly as configured. Pure software ports never calibrate. */
     int gfx_triangles_auto;
 #endif
+
+    /* Optional high-resolution output. Zero-initialized ports use the logical
+     * framebuffer. scale is 1..4, ssaa is 1 or 2 samples per axis. The port
+     * consumes this complete ARGB8888 frame synchronously in place of
+     * display_present. Input coordinates and display_init remain logical. */
+    int render_scale, render_ssaa, render_subdivide, render_fsr2;
+    void (*display_hd)(void *ud, const nj_surface *frame);
 } nj_port;
 
 /* ------------------------------------------------------------------ */

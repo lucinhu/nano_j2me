@@ -137,6 +137,14 @@ struct nj_ttf {
     int px_size;
     int upem;
 
+    /* Optional, installed by the font registry. One reusable physical face
+     * per logical face keeps scale changes bounded over the VM lifetime. */
+    nj_font_alloc_fn hd_alloc;
+    void *hd_alloc_ud;
+    void *hd_mem;
+    nj_font hd_font;
+    int hd_scale;
+
     int ascent;
     int descent;
     int leading;
@@ -2056,6 +2064,32 @@ nj_ttf *nj_ttf_open(void *mem, nj_size mem_bytes,
     return t;
 }
 
+/* Allocate lazily, then reuse the same cache storage at every scale. The
+ * outline bytes are borrowed from the logical face for the same lifetime. */
+static const nj_font *ttf_scaled_face(void *ud, int scale)
+{
+    nj_ttf *t = (nj_ttf *)ud;
+    nj_size bytes = nj_ttf_sizeof(512);
+    nj_ttf *physical;
+    if (scale < 2 || scale > NJ_TTF_MAX_H / t->px_size) return NULL;
+    if (t->hd_scale == scale && t->hd_font.style == t->style) return &t->hd_font;
+    if (t->hd_mem == NULL) {
+        t->hd_mem = t->hd_alloc(t->hd_alloc_ud, bytes);
+        if (t->hd_mem == NULL) return NULL;
+    }
+    t->hd_scale = 0;
+    physical = nj_ttf_open(t->hd_mem, bytes, t->data, t->len, t->px_size * scale);
+    if (!nj_ttf_font(physical, &t->hd_font, t->style, NJ_FONT_SIZE_MEDIUM)) return NULL;
+    t->hd_scale = scale;
+    return &t->hd_font;
+}
+
+void nj_ttf_enable_scaled_face(nj_ttf *t, nj_font_alloc_fn alloc, void *ud)
+{
+    t->hd_alloc = alloc;
+    t->hd_alloc_ud = ud;
+}
+
 int nj_ttf_font(nj_ttf *t, nj_font *out, int style, int size)
 {
     if (t == NULL || out == NULL) {
@@ -2082,6 +2116,7 @@ int nj_ttf_font(nj_ttf *t, nj_font *out, int style, int size)
     out->glyph_lookup = ttf_glyph_lookup;
     out->coverage = 1;
     out->glyph_ud = t;
+    out->scaled_face = t->hd_alloc ? ttf_scaled_face : NULL;
     out->glyph_advance = ttf_glyph_advance;
     out->fallback = NULL;
     return 1;

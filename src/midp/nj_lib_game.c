@@ -2679,7 +2679,8 @@ static void gc_blit(nj_vm *vm, nj_ref buf, nj_surface *dst,
         return;
     }
 
-    if (src->format == dst->format && src->bpp == dst->bpp &&
+    if (vm->render_quality.scale <= 1 && vm->render_quality.ssaa <= 1 &&
+        src->format == dst->format && src->bpp == dst->bpp &&
         src->format == NJ_PIXFMT_ARGB8888) {
         gc_copy_region(dst, src, dx, dy, sx, sy, w, h, cx, cy, cw, ch);
         return;

@@ -110,6 +110,7 @@ typedef struct nj_font {
      * use ascent. Allows wide cells to preserve descenders without changing
      * the MIDP line height or the baseline of Latin text. */
     int   glyph_ascent;
+    const struct nj_font *(*scaled_face)(void *ud, int scale);
 } nj_font;
 
 #define NJ_FONT_STYLE_PLAIN  0
@@ -205,6 +206,8 @@ const nj_font *nj_font_builtin(int size, int style);
  * `data`/`len` is the whole font file and must stay valid for as long as the
  * font set uses it - the faces borrow it and do not copy it, so a caller
  * holding the file in a heap block must keep that block alive.  `alloc`
+ * and `ud` must remain usable while the font set is in use, including when
+ * physical-size faces are created lazily. The allocator
  * supplies each face's memory including its glyph cache; the emulator passes
  * the VM's host allocator, so every block is released by nj_vm_destroy() and
  * nothing here needs a matching teardown.  Two emulator instances in one
@@ -253,6 +256,14 @@ int nj_font_chars_that_fit(const nj_font *f, const nj_u2 *s, int len, int avail)
 /* ------------------------------------------------------------------ */
 /* Graphics state                                                      */
 /* ------------------------------------------------------------------ */
+typedef struct nj_render_mirror {
+    nj_surface *target; /* ARGB8888 physical target */
+    int scale;          /* render_scale * ssaa */
+    void *ud;
+    /* Borrow an existing physical image. A miss never allocates. */
+    const nj_surface *(*lookup)(void *ud, const void *pixels, int w, int h);
+} nj_render_mirror;
+
 struct nj_gfx_accel;
 
 typedef struct nj_gfx {
@@ -272,7 +283,11 @@ typedef struct nj_gfx {
     const struct nj_gfx_accel *accel;
     void *accel_ud;
 #endif
+    nj_render_mirror *mirror;
 } nj_gfx;
+
+/* Build a non-recursive physical context. Returns its integer scale, or 0. */
+int nj_gfx_mirror_context(const nj_gfx *g, nj_gfx *physical);
 
 /* Per-context backend; NULL or an unknown version selects software. With
  * NJ_ENABLE_GFX_ACCEL=0 this is a no-op and nj_gfx has no backend fields. */

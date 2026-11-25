@@ -779,6 +779,11 @@ struct nj_vm {
      * MIDlet be started, stopped and restarted in one process. */
     nj_fontset    fonts;          /* mutable font registry (see nj_gfx.h)  */
     nj_surface    screen;         /* view of the UI framebuffer            */
+    struct {
+        int scale, ssaa, subdivide, fsr2;
+    } render_quality;
+    struct nj_hd_store *hd_store; /* presentation-only companions to logical images */
+    void *m3g_hd_state;          /* M3G physical depth and temporal resources */
     nj_u1        *screen_pixels;  /* the framebuffer itself, host-allocated */
     nj_u4         midp_flags;     /* NJ_MIDP_* capability bits             */
     nj_u1         repaint_pending;
@@ -1036,6 +1041,12 @@ struct nj_vm {
     nj_size    heap_capacity;
     nj_size    heap_limit;
 };
+
+/* Presentation-only allocations carry weak references into the Java arena. */
+void nj_midp_hd_collect(nj_vm *vm);
+void nj_midp_hd_dispose(nj_vm *vm);
+void nj_m3g_hd_collect(nj_vm *vm);
+void nj_m3g_hd_dispose(nj_vm *vm);
 
 /* VM states */
 #define NJ_VM_READY     0

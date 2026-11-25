@@ -5,7 +5,11 @@
 #     tools/build_android.sh [--abi arm64-v8a] [--api 21] [--out DIR] [--no-midi]
 #                              [--opt 0|1|2|3|s|g|z] [--no-png] [--no-jpeg]
 #                              [--no-gif] [--no-inflate] [--no-wav] [--no-amr]
-#                              [--gles2]
+#                              [--gles2] [--fsr2-sdk PREFIX]
+#
+# --fsr2-sdk enables AMD FSR2 for --abi arm64-v8a --api 28 (or later).
+# Supply a prefix cross-compiled with the same NDK and target. Package both
+# libnj2me.so and the accompanying libc++_shared.so from the ABI directory.
 #
 # --gles2 builds the optional 2D backend. At runtime set the Android property
 # debug.nj2me.gles2=1 before launching a game; default remains software.
@@ -39,6 +43,7 @@ NO_MIDI=0     # 1 drops the built-in MIDI renderer (see --no-midi below)
 NO_CODECS=""  # space-separated codec names to cut (see --no-<codec> below)
 OPT="s"       # -O<n> for the native compile; see --opt below
 GLES2=0       # optional private EGL context for synchronous 2D acceleration
+FSR2_SDK=""   # optional prefix compiled for the requested Android target
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -49,6 +54,9 @@ while [ $# -gt 0 ]; do
         --opt)  OPT="${2#-O}"; shift 2 ;;
         --no-midi) NO_MIDI=1; shift ;;
         --gles2) GLES2=1; shift ;;
+        --fsr2-sdk)
+            if [ -z "${2:-}" ]; then echo "--fsr2-sdk needs an SDK prefix" >&2; exit 2; fi
+            FSR2_SDK="$2"; shift 2 ;;
         --no-png|--no-jpeg|--no-gif|--no-inflate|--no-wav|--no-amr)
             NO_CODECS="$NO_CODECS ${1#--no-}"; shift ;;
         -h|--help) sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
@@ -94,6 +102,19 @@ SOURCES="$(cd "$ROOT" && ls src/core/*.c src/midp/*.c src/gfx/*.c src/zip/*.c)"
 # fails to dlopen on the device with UnsatisfiedLinkError.  --no-undefined below
 # is what turns that runtime crash into a link error.
 SOURCES="$SOURCES src/runner/nj_run.c src/port/android/nj_port_android.c src/port/common/nj_system_amr.c"
+
+if [ -n "$FSR2_SDK" ]; then
+    if [ "$ABIS" != arm64-v8a ] || [ "$API" -lt 28 ]; then
+        echo "--fsr2-sdk requires --abi arm64-v8a and --api 28 or later" >&2
+        exit 2
+    fi
+    if [ ! -f "$FSR2_SDK/include/ffx_fsr2.h" ] || [ ! -f "$FSR2_SDK/lib/libffx_fsr2_vk.a" ]; then
+        echo "Missing FSR2 headers or library under $FSR2_SDK" >&2
+        exit 2
+    fi
+else
+    SOURCES="$SOURCES src/port/fsr2/nj_fsr2_stub.c"
+fi
 
 GLES2_LIBS=""
 if [ "$GLES2" -eq 1 ]; then
@@ -155,6 +176,9 @@ FEATURE_DEFS="-DNJ_PIXFMT=NJ_PIXFMT_RGB565 \
 -DNJ_ENABLE_WAV=1 -DNJ_ENABLE_MEDIA=1 -DNJ_ENABLE_AMR=1 -DNJ_ENABLE_RMS=1 -DNJ_ENABLE_IO=1 \
 -DNJ_ENABLE_FLOAT=1 -DNJ_ENABLE_M3G=1 -DNJ_ENABLE_MASCOT=1 -DNJ_ENABLE_TTF=1 \
 -DNJ_ENABLE_FONT_CJK=0"
+if [ -n "$FSR2_SDK" ]; then
+    FEATURE_DEFS="$FEATURE_DEFS -DNJ_ENABLE_FSR2=1"
+fi
 if [ "$GLES2" -eq 1 ]; then
     FEATURE_DEFS="$FEATURE_DEFS -DNJ_ENABLE_GFX_ACCEL=1 -DNJ_ANDROID_GLES2=1"
 fi
@@ -253,6 +277,21 @@ for abi in $ABIS; do
     done
     [ "$built" -eq 1 ] || continue
 
+    link_cc="$cc"
+    fsr_link=()
+    if [ -n "$FSR2_SDK" ]; then
+        link_cc="$cc++"
+        o="$dir/nj_fsr2_vk.o"
+        if ! "$link_cc" -std=c++17 -fno-exceptions "$OPT_FLAG" -fPIC -ffunction-sections -fdata-sections \
+                -DFFX_GCC=1 -isystem "$FSR2_SDK/include" \
+                -c "$ROOT/src/port/fsr2/nj_fsr2_vk.cpp" -o "$o"; then
+            fail=1
+            continue
+        fi
+        objs="$objs $o"
+        fsr_link=("$FSR2_SDK/lib/libffx_fsr2_vk.a" -lvulkan -lc++_shared)
+    fi
+
     # -shared, and the three system libraries the port actually calls: log for
     # __android_log_write, android for ANativeWindow, and OpenSLES for the
     # mixer on phones that predate AAudio (libaaudio.so is dlopen()ed, not
@@ -262,9 +301,9 @@ for abi in $ABIS; do
     # unresolved symbols, so a missing source file produces a .so that builds,
     # signs, installs and then fails at dlopen with UnsatisfiedLinkError on the
     # device - which is exactly what happened with src/runner/nj_run.c.
-    if ! "$cc" -shared -Wl,--gc-sections -Wl,--no-undefined \
+    if ! "$link_cc" -shared -Wl,--gc-sections -Wl,--no-undefined \
             -Wl,-soname,libnj2me.so \
-            -o "$dir/libnj2me.so" $objs -llog -landroid -lOpenSLES -lz -ldl -lm $GLES2_LIBS 2>"$dir/err"; then
+            -o "$dir/libnj2me.so" $objs "${fsr_link[@]}" -llog -landroid -lOpenSLES -lz -ldl -lm $GLES2_LIBS 2>"$dir/err"; then
         echo "  $abi: link failed"
         head -5 "$dir/err"
         fail=1
@@ -290,6 +329,11 @@ for abi in $ABIS; do
     if [ "${n:-0}" -ne 0 ]; then
         echo "  $abi: WRITABLE STATIC STATE: $n bytes in .data/.bss"
         fail=1
+        continue
+    fi
+    if [ -n "$FSR2_SDK" ]; then
+        runtime="$BIN/../sysroot/usr/lib/$triple/libc++_shared.so"
+        cp "$runtime" "$dir/libc++_shared.so" || { fail=1; continue; }
     fi
 
     printf '  %-12s %9s bytes .so   data+bss=0   .data.rel.ro=%s (read-only after relocation)\n' \

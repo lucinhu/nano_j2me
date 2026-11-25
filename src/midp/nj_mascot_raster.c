@@ -311,6 +311,58 @@ void nj_mascot_raster_line(nj_surface *dst,
     }
 }
 
+/* The logical Bresenham stroke covers one pixel per major-axis step. On the
+ * sample grid, intersect the continuous centre line with each major-axis
+ * sample and paint a band one logical pixel wide. The two half-pixel caps
+ * keep the endpoints inclusive. Each sample is blended exactly once. */
+void nj_mascot_raster_stroke(nj_surface *dst, nj_s4 scale,
+                             nj_s4 x1, nj_s4 y1, nj_s4 x2, nj_s4 y2,
+                             nj_s4 ax, nj_s4 ay, nj_s4 bx, nj_s4 by,
+                             nj_u4 argb, nj_s4 blend)
+{
+    int dx = (int)bx - ax, dy = (int)by - ay;
+    int steep = (dy < 0 ? -dy : dy) > (dx < 0 ? -dx : dx);
+    int a = steep ? ay : ax, b = steep ? by : bx;
+    int c = steep ? ax : ay, d = steep ? bx : by;
+    nj_s8 first, end, lo, hi, p, span;
+
+    if (!mr_surface_ok(dst) || scale <= 0 || scale > 8) return;
+    if (x1 < 0) x1 = 0;
+    if (y1 < 0) y1 = 0;
+    if (x2 > dst->width) x2 = dst->width;
+    if (y2 > dst->height) y2 = dst->height;
+    if (x1 >= x2 || y1 >= y2) return;
+    if (a > b) {
+        int t = a; a = b; b = t;
+        t = c; c = d; d = t;
+    }
+    first = a;
+    end = (nj_s8)b + scale;
+    lo = steep ? y1 : x1;
+    hi = steep ? y2 : x2;
+    if (lo < first) lo = first;
+    if (hi > end) hi = end;
+    span = 2 * (b - a);
+    for (p = lo; p < hi; ++p) {
+        nj_s8 t = 2 * (p - first) + 1 - scale;
+        nj_s8 start = c, stop, q;
+        if (t > span) t = span;
+        if (t > 0) {
+            nj_s8 rise = t * (d - c);
+            start += (rise + (rise < 0 ? -span : span) / 2) / span;
+        }
+        stop = start + scale;
+        if (start < (steep ? x1 : y1)) start = steep ? x1 : y1;
+        if (stop > (steep ? x2 : y2)) stop = steep ? x2 : y2;
+        for (q = start; q < stop; ++q) {
+            nj_s4 x = (nj_s4)(steep ? q : p), y = (nj_s4)(steep ? p : q);
+            nj_u4 color = blend == NJ_MR_BLEND_REPLACE ? argb
+                           : mr_blend(argb, mr_pixel_get(dst, x, y), blend);
+            mr_pixel_put(dst, x, y, color);
+        }
+    }
+}
+
 /* ------------------------------------------------------------------ */
 /* Indexed BMP decode                                                  */
 /* ------------------------------------------------------------------ */

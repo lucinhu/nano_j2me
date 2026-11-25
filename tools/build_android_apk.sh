@@ -7,6 +7,10 @@
 #                                [--push FILE.jar] [--no-midi]
 #                                [--no-png] [--no-jpeg] [--no-gif]
 #                                [--no-inflate] [--no-wav] [--no-amr] [--gles2]
+#                                [--fsr2-sdk PREFIX] [--out DIR]
+#
+# --fsr2-sdk builds an arm64-v8a APK for API 28+ using an Android SDK prefix
+# produced by tools/build_fsr2_sdk.py. It bundles libc++ and both SDK licenses.
 #
 # --opt is the native optimisation level, forwarded to tools/build_android.sh.
 # Both scripts default to -Os; see docs/notes/2026-10-30-android-optimisation-
@@ -37,7 +41,9 @@ PKG=com.lucinhu.nj2me
 VERSION="$(sed -n 's/^project(nano_j2me VERSION \([0-9][0-9.]*\).*/\1/p' "$ROOT/CMakeLists.txt" | head -1)"
 [ -n "$VERSION" ] || VERSION=0.0.0
 VERSION_CODE="${VERSION//./}"
-ABIS="arm64-v8a armeabi-v7a x86 x86_64"
+ABIS=""
+FSR2_SDK=""
+MIN_API=21
 SCREEN=""
 INSTALL=0
 PUSH=""
@@ -49,6 +55,9 @@ OPT_FLAG=""    # --opt LEVEL, forwarded to tools/build_android.sh
 while [ $# -gt 0 ]; do
     case "$1" in
         --abi) ABIS="$2"; shift 2 ;;
+        --fsr2-sdk)
+            [ -n "${2:-}" ] || { echo "--fsr2-sdk needs an SDK prefix" >&2; exit 2; }
+            FSR2_SDK="$2"; shift 2 ;;
         --screen) SCREEN="$2"; shift 2 ;;
         --out) OUT="$2"; shift 2 ;;
         --opt) OPT_FLAG="--opt $2"; shift 2 ;;
@@ -61,6 +70,18 @@ while [ $# -gt 0 ]; do
         *) echo "unknown option: $1" >&2; exit 2 ;;
     esac
 done
+
+if [ -n "$FSR2_SDK" ]; then
+    ABIS="${ABIS:-arm64-v8a}"
+    [ "$ABIS" = arm64-v8a ] || { echo "--fsr2-sdk supports arm64-v8a" >&2; exit 2; }
+    MIN_API=28
+    for package in fsr2 vulkan-headers; do
+        notice="$FSR2_SDK/share/licenses/$package/LICENSE.txt"
+        [ -s "$notice" ] || { echo "missing SDK license $notice" >&2; exit 2; }
+    done
+else
+    ABIS="${ABIS:-arm64-v8a armeabi-v7a x86 x86_64}"
+fi
 
 SDK="${ANDROID_HOME:-$HOME/Android/Sdk}"
 BT="$(ls -d "$SDK"/build-tools/*/ 2>/dev/null | sort -V | tail -1)"; BT="${BT%/}"
@@ -98,13 +119,15 @@ for abi in $ABIS; do
     MIDI_FLAG=""
     [ "$NO_MIDI" = "1" ] && MIDI_FLAG="--no-midi"
     MIDI_FLAG="$MIDI_FLAG $NO_CODECS $OPT_FLAG"
-    if [ -n "$SCREEN" ]; then
-        "$ROOT/tools/build_android.sh" --abi "$abi" --out "$OUT" --screen "$SCREEN" $MIDI_FLAG || exit 1
-    else
-        "$ROOT/tools/build_android.sh" --abi "$abi" --out "$OUT" $MIDI_FLAG || exit 1
-    fi
+    native_args=(--abi "$abi" --api "$MIN_API" --out "$OUT")
+    [ -n "$SCREEN" ] && native_args+=(--screen "$SCREEN")
+    [ -n "$FSR2_SDK" ] && native_args+=(--fsr2-sdk "$FSR2_SDK")
+    "$ROOT/tools/build_android.sh" "${native_args[@]}" $MIDI_FLAG || exit 1
     mkdir -p "$W/lib/$abi"
-    cp "$OUT/$abi/libnj2me.so" "$W/lib/$abi/"
+    cp "$OUT/$abi/libnj2me.so" "$W/lib/$abi/" || exit 1
+    if [ -n "$FSR2_SDK" ]; then
+        cp "$OUT/$abi/libc++_shared.so" "$W/lib/$abi/" || exit 1
+    fi
 done
 
 # 2. Java -> .class -> .dex.  Compiled against android.jar as the boot class
@@ -115,7 +138,7 @@ find "$ROOT/src/port/android/java" -name '*.java' > "$W/sources.txt"
 "$JAVA_HOME_DIR/bin/javac" -source 8 -target 8 -nowarn -Xlint:-options \
     -bootclasspath "$PLATFORM/android.jar" -classpath "$PLATFORM/android.jar" \
     -d "$W/classes" @"$W/sources.txt" || exit 1
-"$BT/d8" --lib "$PLATFORM/android.jar" --min-api 21 --output "$W/dex" \
+"$BT/d8" --lib "$PLATFORM/android.jar" --min-api "$MIN_API" --output "$W/dex" \
     $(find "$W/classes" -name '*.class') || exit 1
 
 # 3. Resources, then manifest + resources -> an unsigned APK.
@@ -127,18 +150,25 @@ echo "== resources"
 "$BT/aapt2" link -o "$W/base.apk" \
     --manifest "$ROOT/src/port/android/manifest/AndroidManifest.xml" \
     -I "$PLATFORM/android.jar" -R "$W/res.zip" --auto-add-overlay \
-    --min-sdk-version 21 --target-sdk-version 34 \
+    --min-sdk-version "$MIN_API" --target-sdk-version 34 \
     --version-code "$VERSION_CODE" --version-name "$VERSION" --no-version-vectors || exit 1
 
 # dex/, lib/<abi>/ and assets/ are added with Python's zipfile rather than the
 # zip(1) command: zip is not installed everywhere and is not worth a dependency
 # for a handful of entries.  aapt2 produced a valid APK; this appends to it.
-python3 - "$W" "$ABIS" <<'PY' || exit 1
+python3 - "$W" "$ABIS" "$FSR2_SDK" <<'PY' || exit 1
 import os, sys, zipfile
-w, abis = sys.argv[1], sys.argv[2].split()
+w, abis, sdk = sys.argv[1], sys.argv[2].split(), sys.argv[3]
 add = [(os.path.join(w, "dex", "classes.dex"), "classes.dex")]
 for abi in abis:
-    add.append((os.path.join(w, "lib", abi, "libnj2me.so"), "lib/%s/libnj2me.so" % abi))
+    libraries = ["libnj2me.so", "libc++_shared.so"] if sdk else ["libnj2me.so"]
+    for name in libraries:
+        path = os.path.join("lib", abi, name)
+        add.append((os.path.join(w, path), path))
+if sdk:
+    for package in ("fsr2", "vulkan-headers"):
+        path = os.path.join("licenses", package, "LICENSE.txt")
+        add.append((os.path.join(sdk, "share", path), os.path.join("assets", path)))
 with zipfile.ZipFile(os.path.join(w, "base.apk"), "a", zipfile.ZIP_DEFLATED) as z:
     for src, dst in add:
         if not os.path.exists(src):

@@ -621,6 +621,57 @@ static void test_translated_text(tctx *t)
     }
 }
 
+static const nj_u1 *layout_lookup(void *ud, nj_u2 ch, int *w, int *h)
+{
+    static const nj_u1 ink = 0x80;
+    (void)ch;
+    ++*(int *)ud;
+    *w = *h = 1;
+    return &ink;
+}
+
+static int layout_advance(void *ud, nj_u2 ch)
+{
+    (void)ud;
+    return ch == 'A' ? 3 : 5;
+}
+
+static void test_layout_width(tctx *t)
+{
+    static const nj_u2 text[] = { 'A', 0x3400, 0 };
+    static const int anchors[] = { 0, NJ_ANCHOR_LEFT, NJ_ANCHOR_HCENTER,
+                                  NJ_ANCHOR_RIGHT, NJ_ANCHOR_HCENTER | NJ_ANCHOR_RIGHT };
+    static const int origins[] = { 12, 12, 9, 5, 5 };
+    int calls = 0;
+    nj_font f = { .ascent = 1, .first_char = 'A', .last_char = 'A', .glyph_w = 2,
+                  .glyph_lookup = layout_lookup, .glyph_advance = layout_advance,
+                  .glyph_ud = &calls };
+    tsurf ts;
+    nj_gfx g;
+    ts_init(&ts, 24, 8, NJ_PIXFMT_ARGB8888, 0, C_WHITE);
+    nj_gfx_init(&g, &ts.s);
+    nj_gfx_set_font(&g, &f);
+    nj_gfx_set_color(&g, C_BLACK);
+
+    /* Fixed-range A measures 2, but the provider advances by 3. The whole
+     * run measures 7 and the pen travels 8, including the wide character. */
+    for (int underline = 0; underline <= 1; ++underline) {
+        f.style = underline ? NJ_FONT_STYLE_UNDERLINED : NJ_FONT_STYLE_PLAIN;
+        for (size_t a = 0; a < sizeof anchors / sizeof *anchors; ++a) {
+            int start = origins[a];
+            nj_surface_fill(&ts.s, C_WHITE);
+            calls = 0;
+            nj_gfx_draw_text(&g, text, -1, 12, 4, anchors[a]);
+            if (!underline && start == 12) CHECK(t, calls == 2);
+            for (int x = 0; x < ts.s.width; ++x) {
+                CHECK(t, px(&ts, x, 3) == ((x == start || x == start + 3) ? C_BLACK : C_WHITE));
+                CHECK(t, px(&ts, x, 5) == ((underline && x >= start + 1 && x < start + 8) ? C_BLACK : C_WHITE));
+            }
+        }
+    }
+    ts_free(&ts);
+}
+
 /* ------------------------------------------------------------------ */
 int main(void)
 {
@@ -637,6 +688,7 @@ int main(void)
     test_provider_baseline(&t);
     test_packed_coverage(&t);
     test_translated_text(&t);
+    test_layout_width(&t);
 
     printf("\ntest_font_coverage: %u assertions, %u failures -> %s\n",
            t.checks, t.fails, t.fails == 0u ? "PASS" : "FAIL");

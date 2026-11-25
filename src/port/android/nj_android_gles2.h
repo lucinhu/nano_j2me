@@ -63,6 +63,7 @@ typedef struct nj_android_gles2 {
     int surface_w;                 /* last eglQuerySurface window width */
     int surface_h;                 /* last eglQuerySurface window height */
     nj_gles2 *backend;
+    float applied_sharp;           /* zero until first FSR1 draw on this backend */
     unsigned int (*reset_status)(void);
     nj_gles2_stats stats;
     /* One-shot presentation debug dump: when debug.nj2me.gldump names a path
@@ -98,9 +99,9 @@ int nj_android_gles2_dispose(nj_android_gles2 *state);
  * is ready.  A NULL window detaches. */
 int nj_android_gles2_set_window(nj_android_gles2 *state, void *native_window);
 /* Run-thread only: present one CPU framebuffer through the on-screen
- * presentation shader (mode 0-4) inside the given viewport.  Fails (0) when
+ * presentation shader (mode 0-6) inside the given viewport.  Fails (0) when
  * the window/backend is unavailable so the caller can use software. */
 int nj_android_gles2_present(nj_android_gles2 *state, const nj_surface *src,
-                             int mode, int vp_x, int vp_y, int vp_w, int vp_h);
+                             int mode, float sharp, int vp_x, int vp_y, int vp_w, int vp_h);
 #endif
 #endif

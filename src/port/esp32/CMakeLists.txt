@@ -32,6 +32,7 @@ idf_component_register(
         "../../midp/nj_lib_util.c"
         "../../midp/nj_lib_io.c"
         "../../midp/nj_lib_lcdui.c"
+        "../../midp/nj_hd_surfaces.c"
         "../../midp/nj_lib_game.c"
         "../../midp/nj_lib_rms.c"
         "../../midp/nj_lib_midlet.c"

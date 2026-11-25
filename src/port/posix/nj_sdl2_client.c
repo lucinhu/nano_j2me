@@ -614,6 +614,10 @@ static nj_status client_run_game(const nj_client_run_options *options,
     (void)nj_client_apply_game_settings(&port, settings);
     port.width = width;
     port.height = height;
+    port.render_scale = options->render_scale;
+    port.render_ssaa = options->render_ssaa;
+    port.render_subdivide = options->render_subdivide;
+    port.render_fsr2 = options->render_fsr2;
     if (options->scale > 0) {
         port.scale = options->scale;
     } else if (settings->game_scale > 0) {

@@ -2323,6 +2323,7 @@ static int nj_load_blob(nj_vm *vm, const nj_u1 *blob, nj_size buffer_len,
     vm->heap.external = 0u;               /* the arena is ours to free now */
     vm->heap_capacity = new_capacity;
     installed = 1;
+    nj_midp_hd_dispose(vm);
     /*
      * The memo tables and the fresh VM's own refs point into the heap that was
      * just replaced, so they go now - BEFORE anything is restored from the

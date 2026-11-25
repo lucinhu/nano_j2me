@@ -188,6 +188,7 @@ int nj_fontset_use_ttf(nj_fontset *fs, const nj_u1 *data, nj_u4 len,
                                              style_const[slot]);
         nj_font *dst = &fs->fonts[slot];
 
+        nj_ttf_enable_scaled_face(faces[slot], alloc, ud);
         if (!nj_ttf_font(faces[slot], dst, style_const[slot],
                          size_const[slot])) {
             /* Cannot happen for a face that opened, but a half-written slot

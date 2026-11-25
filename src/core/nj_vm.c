@@ -128,6 +128,11 @@ static nj_status vm_setup(nj_vm *vm, const nj_port *port, nj_size heap_bytes)
     nj_size hs;
 
     vm->port = port;
+    vm->render_quality.scale = port && port->display_hd && port->render_scale >= 2 &&
+                               port->render_scale <= 4 ? port->render_scale : 1;
+    vm->render_quality.ssaa = port && port->display_hd && port->render_ssaa == 2 ? 2 : 1;
+    vm->render_quality.subdivide = port && port->render_subdivide != 0;
+    vm->render_quality.fsr2 = port && port->render_fsr2 && vm->render_quality.scale >= 2;
     vm->state = NJ_VM_READY;
     vm->hash_seed = 0x9E3779B9u;
 
@@ -260,6 +265,7 @@ nj_u4 nj_vm_destroy(nj_vm *vm)
         return 0u;
     }
     port = vm->port;
+    nj_midp_hd_dispose(vm);
     vm->running = 0u;
     vm->state = NJ_VM_DEAD;
 #if NJ_ENABLE_JIT

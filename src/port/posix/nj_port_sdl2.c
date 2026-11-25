@@ -31,6 +31,7 @@
 #define _POSIX_C_SOURCE 200809L
 #endif
 #include "nj2me/nj_port.h"
+#include "nj2me/nj_gfx.h"
 
 #include "nj_posix_clock.h"
 #include "nj_posix_dir.h"
@@ -673,6 +674,8 @@ typedef struct sdl_state {
 #if NJ_SDL2_GLES2
     sdl2_gles2 gfx;
 #endif
+    SDL_Texture *hd_texture;
+    int hd_width, hd_height;
     nj_sdl2_dpi dpi;
     int dpi_dirty;
 
@@ -2679,7 +2682,7 @@ static void sdl2_gles2_present_frame(sdl2_gles2 *s, SDL_Renderer *renderer,
 }
 #endif /* NJ_SDL2_GLES2 */
 
-static void sdl_display_present(void *ud, int x, int y, int w, int h)
+static void sdl_display_frame(void *ud, int x, int y, int w, int h, const nj_surface *hd)
 {
     sdl_state *s = SS(ud);
     SDL_Rect r;
@@ -3189,9 +3192,10 @@ static void sdl_display_present(void *ud, int x, int y, int w, int h)
 #if NJ_SDL2_GLES2
     sdl2_gles2_flush_frame(&s->gfx);
     sdl2_gles2_yield(&s->gfx);
-    sdl2_gles2_present_frame(&s->gfx, s->renderer, s->width, s->height, s->stride,
-                             s->format, s->pixels, s->game_dst.w,
-                             s->game_dst.h);
+    sdl2_gles2_present_frame(&s->gfx, s->renderer, hd ? hd->width : s->width,
+                             hd ? hd->height : s->height, hd ? hd->stride : s->stride,
+                             hd ? hd->format : s->format, hd ? hd->pixels : s->pixels,
+                             s->game_dst.w, s->game_dst.h);
 #endif
 #if NJ_SDL2_GLES2
     if (s->gfx.present_ok) {
@@ -3204,13 +3208,24 @@ static void sdl_display_present(void *ud, int x, int y, int w, int h)
     } else
 #endif
     {
-        SDL_UpdateTexture(s->texture, &r,
-                          (const nj_u1 *)s->pixels + (size_t)r.y * (size_t)s->stride
-                              + (size_t)r.x * (size_t)sdl_bytes_per_pixel(s->format),
-                          s->stride);
+        SDL_Texture *active = s->texture;
+        if (hd && (!s->hd_texture || s->hd_width != hd->width || s->hd_height != hd->height)) {
+            SDL_DestroyTexture(s->hd_texture);
+            s->hd_texture = SDL_CreateTexture(s->renderer, SDL_PIXELFORMAT_ARGB8888,
+                                              SDL_TEXTUREACCESS_STREAMING, hd->width, hd->height);
+            s->hd_width = hd->width;
+            s->hd_height = hd->height;
+        }
+        if (hd && s->hd_texture && SDL_UpdateTexture(s->hd_texture, NULL, hd->pixels, hd->stride) == 0) {
+            active = s->hd_texture;
+        } else {
+            SDL_UpdateTexture(active, &r,
+                (const nj_u1 *)s->pixels + (size_t)r.y * s->stride +
+                (size_t)r.x * sdl_bytes_per_pixel(s->format), s->stride);
+        }
         sdl_layout(s);
         SDL_RenderClear(s->renderer);
-        SDL_RenderCopy(s->renderer, s->texture, NULL, &s->game_dst);
+        SDL_RenderCopy(s->renderer, active, NULL, &s->game_dst);
     }
     sdl_draw_filter(s);
     sdl_draw_keys(s);
@@ -3274,6 +3289,17 @@ static void sdl_display_present(void *ud, int x, int y, int w, int h)
 capture_done: ;
 
     SDL_RenderPresent(s->renderer);
+}
+
+static void sdl_display_present(void *ud, int x, int y, int w, int h)
+{
+    sdl_display_frame(ud, x, y, w, h, NULL);
+}
+
+static void sdl_display_hd(void *ud, const nj_surface *frame)
+{
+    sdl_state *s = SS(ud);
+    sdl_display_frame(ud, 0, 0, s->width, s->height, frame);
 }
 
 /* ------------------------------------------------------------------ */
@@ -3905,6 +3931,7 @@ static void sdl_shutdown(void *ud)
         sdl2_gles2_close(&s->gfx);
     }
 #endif
+    SDL_DestroyTexture(s->hd_texture);
     if (s->texture) {
         SDL_DestroyTexture(s->texture);
     }
@@ -4340,6 +4367,7 @@ nj_status nj_port_sdl2_ex(nj_port *out, const char *title, int graphics_mode)
     out->log = sdl_log;
     out->display_init = sdl_display_init;
     out->display_present = sdl_display_present;
+    out->display_hd = sdl_display_hd;
     out->input_poll = sdl_input_poll;
     out->input_push = sdl_input_push;
     out->text_input = sdl_text_input;

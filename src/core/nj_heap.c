@@ -965,6 +965,7 @@ nj_status nj_gc_run(nj_vm *vm)
     vm->gc_requested = 0u;
     nj_gc_mark_roots(vm);
     nj_gc_clear_weak(vm);
+    if (vm->hd_store || vm->m3g_hd_state) nj_midp_hd_collect(vm);
     nj_gc_sweep(vm);
     vm->heap.gc_count++;
     vm->heap.allocs_since_gc = 0u;

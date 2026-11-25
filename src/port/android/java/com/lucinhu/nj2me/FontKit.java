@@ -84,12 +84,12 @@ final class FontKit {
      * this one, so the two must be invalidated together - which is why the
      * settings rows clear both.)
      */
-    static int cacheKey(int cp, int px, boolean bold, boolean antiAlias) {
-        return (cp << 8) | ((px & 0x3f) << 2) | (bold ? 2 : 0) | (antiAlias ? 1 : 0);
+    static int cacheKey(int cp, int cell, int scale, boolean bold, boolean antiAlias) {
+        return (cp << 11) | (cell << 5) | ((scale - 1) << 2) | (bold ? 2 : 0) | (antiAlias ? 1 : 0);
     }
 
     /** The code point a {@link #cacheKey} was built from. */
     static int cacheCodePoint(int key) {
-        return key >>> 8;
+        return key >>> 11;
     }
 }

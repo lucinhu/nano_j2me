@@ -263,7 +263,8 @@ typedef struct android_glyph_slot {
     int   cell;
     int   bold;                    /* the style the glyph was drawn in */
     int   w, h;
-    nj_u1 rows[ANDROID_GLYPH_CELL_MAX * ANDROID_GLYPH_CELL_MAX];
+    int scale;
+    nj_u1 *rows;
 } android_glyph_slot;
 
 typedef struct android_glyph_cache {
@@ -275,7 +276,7 @@ typedef struct android_glyph_cache {
 typedef struct android_glyph_face {
     nj_font face;                  /* borrowed by the runtime, never freed */
     struct android_state *state;
-    int   cell;                    /* the cell Java is asked to fill */
+    int   cell, scale;             /* logical cell and physical raster scale */
     int   bold;                    /* this slot is the bold style */
     int   last_w;                  /* what the last lookup returned */
 } android_glyph_face;
@@ -291,6 +292,13 @@ typedef struct android_glyph_face {
 #define BT_DEV_MAX  16
 #define BT_SVC_MAX  8
 
+#if NJ_ANDROID_GLES2 && !NJ_ANDROID_LEGACY
+typedef struct android_gl_settings {
+    int enabled, mode, scale;
+    float sharp;
+} android_gl_settings;
+#endif
+
 typedef struct android_state {
 #if NJ_ANDROID_GLES2 && !NJ_ANDROID_LEGACY
     nj_android_gles2 gles2;   /* stable callback userdata; EGL belongs to run thread */
@@ -299,10 +307,9 @@ typedef struct android_state {
      * CPU framebuffer through the presentation shaders into the SurfaceView
      * window instead of blitting it with ANativeWindow_lock.  Default off;
      * every failure falls through to the software path in display_present(). */
-    int gl_present;
-    int gl_present_mode;   /* 0 nearest, 2 scanline, 3 LCD, 4 CRT, 5 FSR1, 6 bicubic */
-    int gl_present_scale;  /* integer picture scale cap (1..4) */
-    int gl_present_logged; /* one-shot diagnostic for the GL present path */
+    android_gl_settings gl_present; /* copied with the window under lock */
+    int gl_present_logged;          /* run-thread one-shot diagnostic */
+    int gl_present_log_reset;       /* consumed with the settings snapshot */
 #endif
 #if !NJ_ANDROID_LEGACY
     ANativeWindow *window;
@@ -531,6 +538,12 @@ typedef struct android_state {
     android_glyph_face  faces[NJ_FONTSET_SLOTS];
     const nj_font      *face_ptrs[NJ_FONTSET_SLOTS];
     android_glyph_cache *glyph_cache;
+#if !NJ_ANDROID_LEGACY
+    /* A physical lookup happens while nj_text still borrows the logical rows. */
+    android_glyph_slot hd_slots[8];
+    int hd_next;
+    android_glyph_face physical_face;
+#endif
     jclass    glyph_class;
     jmethodID glyph_mid;
     JNIEnv   *run_env;         /* the run thread's env, attached on first use */
@@ -904,16 +917,25 @@ static int android_display_init(void *ud, int *w, int *h, int *stride, void **px
  * tools/make_colordemo_jar.sh paints pure primaries left to right so that this
  * is a measurement (tools/sample_screenshot.py) instead of an opinion.
  */
-static nj_u4 android_pixel(const android_state *s, int wide, int lx, int ly)
+static nj_surface android_screen_surface(const android_state *s)
 {
-    const nj_u1 *src = s->shadow + (size_t)ly * (size_t)s->stride;
+    nj_surface frame = {s->shadow, s->width, s->height, s->stride, s->format,
+                        s->format == NJ_PIXFMT_ARGB8888 ? 4 : s->format == NJ_PIXFMT_RGB888 ? 3 : 2};
+    return frame;
+}
+
+static nj_u4 android_pixel(const nj_surface *frame, int wide, int lx, int ly)
+{
+    const nj_u1 *src = (const nj_u1 *)frame->pixels + (size_t)ly * frame->stride;
     nj_u4 r, g, b;
 
-    if (s->format == NJ_PIXFMT_ARGB8888) {
+    if (frame->format == NJ_PIXFMT_ARGB8888) {
         nj_u4 c4 = ((const nj_u4 *)src)[lx];
         r = (c4 >> 16) & 0xffu;
         g = (c4 >> 8) & 0xffu;
         b = c4 & 0xffu;
+    } else if (frame->format == NJ_PIXFMT_RGB888) {
+        r = src[lx * 3]; g = src[lx * 3 + 1]; b = src[lx * 3 + 2];
     } else {
         nj_u2 c = ((const nj_u2 *)src)[lx];
         nj_u4 r5 = (nj_u4)((c >> 11) & 0x1fu);
@@ -982,7 +1004,7 @@ static nj_u4 android_pack(int wide, nj_u4 r, nj_u4 g, nj_u4 b)
  * usual convention, so a 1:1 stretch is the identity and turning the switch on
  * with a whole-number scale (which never reaches here) would change nothing.
  */
-static nj_u4 android_sample_linear(const android_state *s, int wide,
+static nj_u4 android_sample_linear(const nj_surface *frame, int wide,
                                    float fx, float fy, int sx0, int sy0,
                                    int sw, int sh)
 {
@@ -1028,10 +1050,10 @@ static nj_u4 android_sample_linear(const android_state *s, int wide,
         wy = 255;
     }
 
-    android_channels(android_pixel(s, wide, x0, y0), wide, &r00, &g00, &b00);
-    android_channels(android_pixel(s, wide, x1, y0), wide, &r10, &g10, &b10);
-    android_channels(android_pixel(s, wide, x0, y1), wide, &r01, &g01, &b01);
-    android_channels(android_pixel(s, wide, x1, y1), wide, &r11, &g11, &b11);
+    android_channels(android_pixel(frame, wide, x0, y0), wide, &r00, &g00, &b00);
+    android_channels(android_pixel(frame, wide, x1, y0), wide, &r10, &g10, &b10);
+    android_channels(android_pixel(frame, wide, x0, y1), wide, &r01, &g01, &b01);
+    android_channels(android_pixel(frame, wide, x1, y1), wide, &r11, &g11, &b11);
 
     rt = (r00 * (nj_u4)(256 - wx) + r10 * (nj_u4)wx) >> 8;
     gt = (g00 * (nj_u4)(256 - wx) + g10 * (nj_u4)wx) >> 8;
@@ -1179,9 +1201,15 @@ static void android_glyph_cache_flush(android_state *s)
         return;
     }
     for (i = 0; i < ANDROID_GLYPH_CACHE; i++) {
+        free(c->slot[i].rows);
         memset(&c->slot[i], 0, sizeof c->slot[i]);
     }
     c->next = 0;
+#if !NJ_ANDROID_LEGACY
+    for (i = 0; i < 8; i++) free(s->hd_slots[i].rows);
+    memset(s->hd_slots, 0, sizeof s->hd_slots);
+    s->hd_next = 0;
+#endif
 }
 
 #if NJ_ANDROID_LEGACY
@@ -1242,18 +1270,11 @@ static int android_legacy_present(android_state *s)
                 return 0;
             }
         }
+        nj_surface frame = android_screen_surface(s);
         for (row = 0; row < s->height; row++) {
             for (col = 0; col < s->width; col++) {
-                nj_u4 c;
-                if (s->format == NJ_PIXFMT_RGB888) {
-                    const nj_u1 *p = s->shadow + (size_t)row * s->stride
-                                              + (size_t)col * 3u;
-                    c = ((nj_u4)(p[0] >> 3) << 11)
-                      | ((nj_u4)(p[1] >> 2) << 5) | (nj_u4)(p[2] >> 3);
-                } else {
-                    c = android_pixel(s, 0, col, row);
-                }
-                s->frame_rgb565[(size_t)row * s->width + col] = (nj_u2)c;
+                s->frame_rgb565[(size_t)row * s->width + col] =
+                        (nj_u2)android_pixel(&frame, 0, col, row);
             }
         }
         pixels = (const jshort *)s->frame_rgb565;
@@ -1481,58 +1502,20 @@ static void android_rewind_configure(android_state *s, int interval_frames,
 
 
 #if !NJ_ANDROID_LEGACY
-/*
- * Experimental GL presentation: upload the logical screen through the
- * presentation shaders and present it into the SurfaceView window with the
- * same integer-fit letterbox the software path uses.  Runs on the frame
- * thread inside display_present(); returns 0 (caller falls back to
- * ANativeWindow_lock) when the path is disabled or anything is unsupported.
- */
-static int android_gl_present_frame(android_state *s)
-{
-    nj_surface surf;
-    int sx0 = 0, sy0 = 0, sw, sh, dw, dh, ox, oy, bpp, bw, bh;
+typedef struct android_viewport {
+    int sx, sy, sw, sh; /* game coordinates */
+    int x, y, w, h;     /* window pixels */
     float scale;
+} android_viewport;
 
-    if (!s->gl_present) return 0;
-    if (!s->gles2_bound || !s->window || !s->shadow) {
-        if (!s->gl_present_logged) { s->gl_present_logged = 1; __android_log_print(ANDROID_LOG_INFO, LOG_TAG,
-            "present: GL path waiting (bound=%d window=%p shadow=%p)", s->gles2_bound,
-            (void *)s->window, (void *)s->shadow); }
-        return 0;
-    }
-    if (s->width <= 0 || s->height <= 0) return 0;
-    /* The GL present switch is independent from the 3D accelerator toggle: a
-     * 2D-only game still needs the private EGL context here.  Start it lazily
-     * on the run thread the first time the setting is on. */
-    if (!s->gles2.initialized) {
-        nj_android_gles2_start_mode(&s->gles2, 1);
-        if (!s->gles2.initialized) {
-            if (!s->gl_present_logged) { s->gl_present_logged = 1; __android_log_print(ANDROID_LOG_INFO, LOG_TAG,
-                "present: GL path cannot start EGL; software presentation"); }
-            return 0;
-        }
-    }
-    if (!nj_android_gles2_set_window(&s->gles2, s->window)) {
-        if (!s->gl_present_logged) { s->gl_present_logged = 1; __android_log_print(ANDROID_LOG_INFO, LOG_TAG,
-            "present: GL path has no window surface (window_ok=%d)", s->gles2.window_ok); }
-        return 0;
-    }
-    /* The EGL drawable size is the authority for the letterbox, same as the
-     * ANativeWindow buffer size on the software path. */
-    bw = s->gles2.surface_w;
-    bh = s->gles2.surface_h;
-    if (bw <= 0 || bh <= 0) { bw = s->win_w; bh = s->win_h; }
+static int android_fit_view(android_state *s, int bw, int bh, int scale_cap,
+                            android_viewport *v)
+{
+    int sx0 = 0, sy0 = 0, sw, sh, dw, dh, ox, oy;
+    float scale;
     if (bw <= 0 || bh <= 0) return 0;
-
     sw = s->width;
     sh = s->height;
-    if (s->view_mode != NJ_VIEW_INT && s->view_mode != NJ_VIEW_AUTO &&
-        s->view_mode != NJ_VIEW_FILL && s->view_mode != NJ_VIEW_CUSTOM) {
-        if (!s->gl_present_logged) { s->gl_present_logged = 1; __android_log_print(ANDROID_LOG_INFO, LOG_TAG,
-            "present: GL path off for view mode=%d", s->view_mode); }
-        return 0;
-    }
     if (s->view_mode == NJ_VIEW_AUTO && s->det_w >= 16 && s->det_h >= 16 &&
         (long)s->det_w * s->det_h < (long)s->width * (long)s->height / 10L * 9L) {
         sx0 = s->det_x;
@@ -1549,12 +1532,12 @@ static int android_gl_present_frame(android_state *s)
         scale = (fx < fy) ? fx : fy;
         if (!(scale > 0.0f)) scale = 1.0f;
     } else {
-        int fit = 1;
+        int fit;
         int fx = bw / sw;
         int fy = bh / sh;
         fit = (fx < fy) ? fx : fy;
         if (fit < 1) fit = 1;
-        if (s->gl_present_scale > 1 && s->gl_present_scale < fit) fit = s->gl_present_scale;
+        if (scale_cap > 1 && scale_cap < fit) fit = scale_cap;
         scale = (float)fit;
     }
     if (s->view_zoom > 0.05f && (s->view_zoom > 1.0001f || s->view_zoom < 0.9999f)) {
@@ -1583,55 +1566,127 @@ static int android_gl_present_frame(android_state *s)
         oy = bh - dh;
     }
 
-    bpp = (s->width > 0) ? (s->stride / s->width) : 0;
-    if (bpp <= 0) return 0;
-    memset(&surf, 0, sizeof surf);
-    surf.pixels = s->shadow + (size_t)sy0 * (size_t)s->stride + (size_t)sx0 * (size_t)bpp;
-    surf.width = sw;
-    surf.height = sh;
-    surf.stride = s->stride;
-    surf.format = s->format;
-    surf.bpp = bpp;
+    v->sx = sx0; v->sy = sy0; v->sw = sw; v->sh = sh;
+    v->x = ox; v->y = oy; v->w = dw; v->h = dh;
+    v->scale = scale;
+    return 1;
+}
+
+static void android_publish_view(android_state *s, const android_viewport *v, int bw, int bh)
+{
+    pthread_mutex_lock(&s->lock);
+    s->win_w = bw; s->win_h = bh;
+    s->view_scale = v->scale;
+    s->view_off_x = (float)v->x; s->view_off_y = (float)v->y;
+    s->view_src_x = v->sx; s->view_src_y = v->sy;
+    s->view_max_pan_x = abs(bw - v->w) / 2;
+    s->view_max_pan_y = abs(bh - v->h) / 2;
+    s->view_limits_valid = 1;
+    pthread_mutex_unlock(&s->lock);
+}
+#endif
+
+#if NJ_ANDROID_GLES2 && !NJ_ANDROID_LEGACY
+/*
+ * Experimental GL presentation: upload the logical screen through the
+ * presentation shaders and present it into the SurfaceView window with the
+ * same integer-fit letterbox the software path uses.  Runs on the frame
+ * thread inside display_present(); returns 0 (caller falls back to
+ * ANativeWindow_lock) when the path is disabled or anything is unsupported.
+ */
+static int android_gl_present_frame(android_state *s, ANativeWindow *win,
+                                    const android_gl_settings *settings,
+                                    const nj_surface *frame, int density)
+{
+    nj_surface surf;
+    android_viewport v;
+    int bw, bh;
+
+    if (!settings->enabled) return 0;
+    if (!s->gles2_bound || !win || !s->shadow) {
+        if (!s->gl_present_logged) { s->gl_present_logged = 1; __android_log_print(ANDROID_LOG_INFO, LOG_TAG,
+            "present: GL path waiting (bound=%d window=%p shadow=%p)", s->gles2_bound,
+            (void *)win, (void *)s->shadow); }
+        return 0;
+    }
+    if (s->width <= 0 || s->height <= 0) return 0;
+    /* The GL present switch is independent from the 3D accelerator toggle: a
+     * 2D-only game still needs the private EGL context here.  Start it lazily
+     * on the run thread the first time the setting is on. */
+    if (!s->gles2.initialized) {
+        nj_android_gles2_start_mode(&s->gles2, 1);
+        if (!s->gles2.initialized) {
+            if (!s->gl_present_logged) { s->gl_present_logged = 1; __android_log_print(ANDROID_LOG_INFO, LOG_TAG,
+                "present: GL path cannot start EGL; software presentation"); }
+            return 0;
+        }
+    }
+    if (!nj_android_gles2_set_window(&s->gles2, win)) {
+        if (!s->gl_present_logged) { s->gl_present_logged = 1; __android_log_print(ANDROID_LOG_INFO, LOG_TAG,
+            "present: GL path has no window surface (window_ok=%d)", s->gles2.window_ok); }
+        return 0;
+    }
+    /* The EGL drawable size is the authority for the letterbox, same as the
+     * ANativeWindow buffer size on the software path. */
+    bw = s->gles2.surface_w;
+    bh = s->gles2.surface_h;
+    if (bw <= 0 || bh <= 0) { bw = s->win_w; bh = s->win_h; }
+    if (bw <= 0 || bh <= 0) return 0;
+
+    if (!android_fit_view(s, bw, bh, settings->scale, &v)) return 0;
+    surf = *frame;
+    surf.pixels = (nj_u1 *)surf.pixels + (size_t)(v.sy * density) * surf.stride
+                + (size_t)(v.sx * density) * surf.bpp;
+    surf.width = v.sw * density;
+    surf.height = v.sh * density;
     {
-        int ok = nj_android_gles2_present(&s->gles2, &surf, s->gl_present_mode,
-                                          ox, oy, dw, dh);
+        int ok = nj_android_gles2_present(&s->gles2, &surf, settings->mode,
+                                          settings->sharp, v.x, v.y, v.w, v.h);
+        if (ok) android_publish_view(s, &v, bw, bh);
         if (ok && !s->gl_present_logged) {
             s->gl_present_logged = 1;
             __android_log_print(ANDROID_LOG_INFO, LOG_TAG,
                 "present: GL first frame buf=%dx%d surface=%dx%d vp=%d,%d %dx%d view=%d zoom=%.3f",
-                bw, bh, s->gles2.surface_w, s->gles2.surface_h, ox, oy, dw, dh,
+                bw, bh, s->gles2.surface_w, s->gles2.surface_h, v.x, v.y, v.w, v.h,
                 s->view_mode, (double)s->view_zoom);
         }
         if (!ok && !s->gl_present_logged) { s->gl_present_logged = 1; __android_log_print(ANDROID_LOG_INFO, LOG_TAG,
-            "present: GL path present declined (vp=%d,%d %dx%d)", ox, oy, dw, dh); }
+            "present: GL path present declined (vp=%d,%d %dx%d)", v.x, v.y, v.w, v.h); }
         return ok;
     }
 }
 #endif
 
-static void android_display_present(void *ud, int x, int y, int w, int h)
+static void android_present_frame(void *ud, const nj_surface *frame)
 {
     android_state *s = AS(ud);
 #if !NJ_ANDROID_LEGACY
     ANativeWindow *win;
     ANativeWindow_Buffer buf;
+    nj_surface logical = android_screen_surface(s);
+    int density = 1;
+#if NJ_ANDROID_GLES2
+    android_gl_settings gl;
 #endif
-    (void)x; (void)y; (void)w; (void)h;
-
+#endif
     /*
      * A settings change (font file, anti-aliasing) asks for the glyph cache to
      * be dropped.  Doing it here rather than in the setter keeps the cache the
      * run thread's alone, the same way the speed word is the UI's to write and
      * the frame's to apply.
      */
-    if (s->glyph_flush) {
-        s->glyph_flush = 0;
+    pthread_mutex_lock(&s->lock);
+    int flush_glyphs = s->glyph_flush;
+    s->glyph_flush = 0;
+    pthread_mutex_unlock(&s->lock);
+    if (flush_glyphs) {
         android_glyph_cache_flush(s);
     }
 
     android_rewind_tick(s);
 
 #if NJ_ANDROID_LEGACY
+    (void)frame;
     if (!android_legacy_present(s)) {
         return;
     }
@@ -1646,6 +1701,13 @@ static void android_display_present(void *ud, int x, int y, int w, int h)
      */
     pthread_mutex_lock(&s->lock);
     win = s->window;
+#if NJ_ANDROID_GLES2
+    gl = s->gl_present;
+    if (s->gl_present_log_reset) {
+        s->gl_present_logged = 0;
+        s->gl_present_log_reset = 0;
+    }
+#endif
     if (win) {
         ANativeWindow_acquire(win);
     }
@@ -1656,146 +1718,40 @@ static void android_display_present(void *ud, int x, int y, int w, int h)
         }
         return;
     }
-    if (android_gl_present_frame(s)) {
-        ANativeWindow_release(win);
-        return;
+    if (frame && frame->pixels && s->width > 0 && s->height > 0 &&
+        frame->width % s->width == 0 && frame->height % s->height == 0 &&
+        frame->width / s->width == frame->height / s->height && frame->width >= s->width) {
+        density = frame->width / s->width;
+    } else {
+        frame = &logical;
     }
+    if (!s->det_done) android_detect(s);
+#if NJ_ANDROID_GLES2
+    if (android_gl_present_frame(s, win, &gl, frame, density)) {
+        ANativeWindow_release(win);
+        goto presented;
+    }
+#endif
     if (ANativeWindow_lock(win, &buf, NULL) != 0) {
         ANativeWindow_release(win);
         return;
     }
-    /*
-     * The locked buffer is this frame's real window size, whatever the cached
-     * s->win_w/s->win_h say.  A resize without a new surface (rotation, a
-     * multi-window drag, a display-size change) reaches the port through
-     * nj_port_android_set_window_size(), but a window can also change under a
-     * frame that is already in flight - and the blit writes into THIS buffer,
-     * so its size is what the letterbox has to fit.  Publish it too: the
-     * status line and nj_port_android_view_limits() read the cached values.
-     */
-    if (buf.width != s->win_w || buf.height != s->win_h) {
-        pthread_mutex_lock(&s->lock);
-        s->win_w = buf.width;
-        s->win_h = buf.height;
-        pthread_mutex_unlock(&s->lock);
-    }
-    /*
-     * Decide the picture: which logical pixels, at what scale, and where.
-     *
-     * The default is the largest INTEGER factor that fits, centred, with the
-     * leftover as black bars - integer because a J2ME game's art is pixel art
-     * and a fractional scale turns every sprite edge into a blur, centred
-     * because stretching to the panel's aspect ratio would distort the game.
-     *
-     * On top of that the player gets three things this port cannot guess:
-     * 铺满 (use the whole screen, fractional scale), 自定义 (a zoom and a pan),
-     * and 适配画面 (crop to the area the MIDlet actually paints and scale that,
-     * which is what a title written for 128x128 needs on a 240x320 canvas).
-     */
-    if (!s->det_done) {
-        android_detect(s);
-    }
     {
-        int sx0 = 0, sy0 = 0, sw = s->width, sh = s->height;
-        int fit, ox, oy, drawn_w, drawn_h;
+        android_viewport v;
+        int sx0, sy0, sw, sh, ox, oy, drawn_w, drawn_h, fit;
         float scale;
-
-        if (s->view_mode == NJ_VIEW_AUTO && s->det_w >= 16 && s->det_h >= 16
-                && (long)s->det_w * s->det_h
-                       < (long)s->width * (long)s->height / 10L * 9L) {
-            sx0 = s->det_x;
-            sy0 = s->det_y;
-            sw = s->det_w;
-            sh = s->det_h;
+        if (!android_fit_view(s, buf.width, buf.height, 0, &v)) {
+            ANativeWindow_unlockAndPost(win);
+            ANativeWindow_release(win);
+            return;
         }
-        /* the largest whole-number scale that fits the picture.  The window
-         * size comes from the buffer we are about to fill, not from the size
-         * cached when the window was created: a resize without a new surface
-         * leaves that cache stale for exactly the frame that matters. */
-        {
-            int fx = 1, fy = 1;
-            if (buf.width > 0 && buf.height > 0 && sw > 0 && sh > 0) {
-                fx = buf.width / sw;
-                fy = buf.height / sh;
-            }
-            fit = (fx < fy) ? fx : fy;
-            if (fit < 1) {
-                fit = 1;        /* smaller than the game: show the top-left */
-            }
-        }
-        if (s->view_mode == NJ_VIEW_FILL) {
-            float fx = (float)buf.width / (float)sw;
-            float fy = (float)buf.height / (float)sh;
-            scale = (fx < fy) ? fx : fy;
-            if (!(scale > 0.0f)) {
-                scale = 1.0f;
-            }
-        } else {
-            scale = (float)fit;
-        }
-        /*
-         * The zoom and the pan are the player's in every mode, not just in
-         * NJ_VIEW_CUSTOM: choosing 整数倍 / 铺满 / 适配 decides the base fit,
-         * it does not take the picture away.  A player whose game sits under a
-         * notch, or who wants two more pixels of the sprite sheet on screen,
-         * would otherwise have to give up the crisp integer scaling to move it.
-         */
-        {
-            float z = (s->view_zoom > 0.05f) ? s->view_zoom : 1.0f;
-            if (z != 1.0f) {
-                scale *= z;
-            }
-        }
-        drawn_w = (int)((float)sw * scale);
-        drawn_h = (int)((float)sh * scale);
-        if (drawn_w < 1) { drawn_w = 1; }
-        if (drawn_h < 1) { drawn_h = 1; }
-        ox = (buf.width - drawn_w) / 2;
-        oy = (buf.height - drawn_h) / 2;
-        ox += (int)s->view_dx;
-        oy += (int)s->view_dy;
-        /* Keep the picture reachable.  One that fits may be parked anywhere
-         * inside the window; one that does not is clamped so that no edge can
-         * be dragged past the panel and lost. */
-        if (drawn_w <= buf.width) {
-            if (ox < 0) { ox = 0; }
-            if (ox > buf.width - drawn_w) { ox = buf.width - drawn_w; }
-        } else if (ox > 0) {
-            ox = 0;
-        } else if (ox < buf.width - drawn_w) {
-            ox = buf.width - drawn_w;
-        }
-        if (drawn_h <= buf.height) {
-            if (oy < 0) { oy = 0; }
-            if (oy > buf.height - drawn_h) { oy = buf.height - drawn_h; }
-        } else if (oy > 0) {
-            oy = 0;
-        } else if (oy < buf.height - drawn_h) {
-            oy = buf.height - drawn_h;
-        }
-
-        /* Publish the transform for nj_port_android_touch() before the frame
-         * reaches the panel: a tap that arrives between the two would otherwise
-         * be mapped with the previous geometry. */
-        pthread_mutex_lock(&s->lock);
-        s->view_scale = scale;
-        s->view_off_x = (float)ox;
-        s->view_off_y = (float)oy;
-        s->view_src_x = sx0;
-        s->view_src_y = sy0;
-        /*
-         * How far the pan may go from here, published with the transform so
-         * nj_port_android_view_limits() and the picture agree by construction.
-         * A picture that fits may be parked anywhere inside the window
-         * (half the slack either way); one that does not keeps an edge on the
-         * panel, which is the same number measured from the centre.
-         */
-        s->view_max_pan_x = (buf.width > drawn_w ? buf.width - drawn_w
-                                                 : drawn_w - buf.width) / 2;
-        s->view_max_pan_y = (buf.height > drawn_h ? buf.height - drawn_h
-                                                  : drawn_h - buf.height) / 2;
-        s->view_limits_valid = 1;
-        pthread_mutex_unlock(&s->lock);
+        android_publish_view(s, &v, buf.width, buf.height);
+        /* Input and pan use the logical viewport. Only sampling sees physical pixels. */
+        sx0 = v.sx * density; sy0 = v.sy * density;
+        sw = v.sw * density; sh = v.sh * density;
+        ox = v.x; oy = v.y; drawn_w = v.w; drawn_h = v.h;
+        scale = v.scale / (float)density;
+        fit = (int)scale;
 
         /*
          * The window's byte order is not something this port may assume away.
@@ -1854,7 +1810,7 @@ static void android_display_present(void *ud, int x, int y, int w, int h)
                         drow = (nj_u1 *)buf.bits
                                + (size_t)(oy + ry) * (size_t)buf.stride * bpp;
                         for (col = 0; col < sw; col++) {
-                            nj_u4 px = android_pixel(s, wide, sx0 + col,
+                            nj_u4 px = android_pixel(frame, wide, sx0 + col,
                                                      sy0 + row);
                             int bx = col * fit;
                             int dx0 = (cx0 > bx) ? cx0 : bx;
@@ -1888,7 +1844,7 @@ static void android_display_present(void *ud, int x, int y, int w, int h)
                     for (dx = cx0; dx < cx1; dx++) {
                         float fx = (float)sx0 + ((float)dx + 0.5f) / scale
                                    - 0.5f;
-                        nj_u4 px = android_sample_linear(s, wide, fx, fy,
+                        nj_u4 px = android_sample_linear(frame, wide, fx, fy,
                                                          sx0, sy0, sw, sh);
                         if (wide) {
                             ((nj_u4 *)drow)[ox + dx] = px;
@@ -1915,7 +1871,7 @@ static void android_display_present(void *ud, int x, int y, int w, int h)
                         nj_u4 px;
                         if (sx > sx0 + sw - 1) { sx = sx0 + sw - 1; }
                         if (sx < sx0) { sx = sx0; }
-                        px = android_pixel(s, wide, sx, sy);
+                        px = android_pixel(frame, wide, sx, sy);
                         if (wide) {
                             ((nj_u4 *)drow)[ox + dx] = px;
                         } else {
@@ -1931,6 +1887,9 @@ static void android_display_present(void *ud, int x, int y, int w, int h)
     }
     ANativeWindow_unlockAndPost(win);
     ANativeWindow_release(win);
+#if NJ_ANDROID_GLES2
+presented:
+#endif
 #endif
     s->frames_presented++;
 
@@ -1985,6 +1944,12 @@ static void android_display_present(void *ud, int x, int y, int w, int h)
             s->stats_frames = 0;
         }
     }
+}
+
+static void android_display_present(void *ud, int x, int y, int w, int h)
+{
+    (void)x; (void)y; (void)w; (void)h;
+    android_present_frame(ud, NULL);
 }
 
 /* ------------------------------------------------------------------ */
@@ -2678,7 +2643,9 @@ static const nj_u1 *android_glyph_lookup(void *ud, nj_u2 ch, int *w, int *h)
     android_state *s = gf->state;
     android_glyph_cache *c;
     android_glyph_slot *slot = NULL;
-    jbyte tmp[2 + ANDROID_GLYPH_CELL_MAX * ANDROID_GLYPH_CELL_MAX];
+    android_glyph_slot *slots;
+    int *next, count;
+    jbyte header[2];
     jbyteArray arr;
     JNIEnv *env;
     jsize len;
@@ -2691,11 +2658,21 @@ static const nj_u1 *android_glyph_lookup(void *ud, nj_u2 ch, int *w, int *h)
         return NULL;
     }
     c = s->glyph_cache;
+    slots = c->slot;
+    next = &c->next;
+    count = ANDROID_GLYPH_CACHE;
+#if !NJ_ANDROID_LEGACY
+    if (gf->scale > 1) {
+        slots = s->hd_slots;
+        next = &s->hd_next;
+        count = sizeof s->hd_slots / sizeof *slots;
+    }
+#endif
     c->calls++;
-    for (i = 0; i < ANDROID_GLYPH_CACHE; i++) {
-        if (c->slot[i].w > 0 && c->slot[i].cell == gf->cell &&
-            c->slot[i].bold == gf->bold && c->slot[i].ch == ch) {
-            slot = &c->slot[i];
+    for (i = 0; i < count; i++) {
+        if (slots[i].rows && slots[i].cell == gf->cell && slots[i].scale == gf->scale &&
+            slots[i].bold == gf->bold && slots[i].ch == ch) {
+            slot = &slots[i];
             c->hits++;
             break;
         }
@@ -2709,7 +2686,11 @@ static const nj_u1 *android_glyph_lookup(void *ud, nj_u2 ch, int *w, int *h)
         arr = (jbyteArray)(*env)->CallStaticObjectMethod(
             env, s->glyph_class, s->glyph_mid,
             (jint)ch, (jint)gf->cell, (jint)gf->bold,
-            (jint)gf->face.ascent);
+            (jint)gf->face.ascent
+#if !NJ_ANDROID_LEGACY
+            , (jint)gf->scale
+#endif
+            );
         if ((*env)->ExceptionCheck(env)) {
             (*env)->ExceptionClear(env);
             c->failed++;
@@ -2720,29 +2701,32 @@ static const nj_u1 *android_glyph_lookup(void *ud, nj_u2 ch, int *w, int *h)
             return NULL;
         }
         len = (*env)->GetArrayLength(env, arr);
-        if (len < 2 || len > (jsize)sizeof(tmp)) {
+        if (len >= 2) (*env)->GetByteArrayRegion(env, arr, 0, 2, header);
+        ww = len >= 2 ? (unsigned char)header[0] : 0;
+        hh = len >= 2 ? (unsigned char)header[1] : 0;
+        if (!ww || !hh || ww > ANDROID_GLYPH_CELL_MAX * gf->scale ||
+            hh > gf->cell * gf->scale || len != 2 + ww * hh) {
             (*env)->DeleteLocalRef(env, arr);
             c->failed++;
             return NULL;
         }
-        (*env)->GetByteArrayRegion(env, arr, 0, len, tmp);
-        (*env)->DeleteLocalRef(env, arr);
-
-        ww = (int)(unsigned char)tmp[0];
-        hh = (int)(unsigned char)tmp[1];
-        if (ww <= 0 || hh <= 0 || ww > ANDROID_GLYPH_CELL_MAX ||
-            hh > ANDROID_GLYPH_CELL_MAX || (int)len < 2 + ww * hh) {
+        slot = &slots[*next];
+        nj_u1 *rows = (nj_u1 *)realloc(slot->rows, (size_t)ww * hh);
+        if (!rows) {
+            (*env)->DeleteLocalRef(env, arr);
             c->failed++;
             return NULL;
         }
-        slot = &c->slot[c->next];
-        c->next = (c->next + 1) % ANDROID_GLYPH_CACHE;
+        (*env)->GetByteArrayRegion(env, arr, 2, ww * hh, (jbyte *)rows);
+        (*env)->DeleteLocalRef(env, arr);
+        *next = (*next + 1) % count;
+        slot->rows = rows;
         slot->ch = ch;
         slot->cell = gf->cell;
+        slot->scale = gf->scale;
         slot->bold = gf->bold;
         slot->w = ww;
         slot->h = hh;
-        memcpy(slot->rows, tmp + 2, (size_t)(ww * hh));
         c->misses++;
     }
 
@@ -2751,6 +2735,27 @@ static const nj_u1 *android_glyph_lookup(void *ud, nj_u2 ch, int *w, int *h)
     *h = slot->h;
     return slot->rows;
 }
+
+#if !NJ_ANDROID_LEGACY
+/* blit_outline consumes this face synchronously on the one VM thread. */
+static const nj_font *android_scaled_face(void *ud, int scale)
+{
+    android_glyph_face *base = (android_glyph_face *)ud;
+    android_glyph_face *physical = &base->state->physical_face;
+    if (scale < 2 || scale > 8 || base->cell * scale > 255) return NULL;
+    *physical = *base;
+    physical->scale = scale;
+    physical->face.glyph_ud = physical;
+    physical->face.scaled_face = NULL;
+    physical->face.ascent *= scale;
+    physical->face.descent *= scale;
+    physical->face.leading *= scale;
+    physical->face.height *= scale;
+    physical->face.glyph_w *= scale;
+    physical->face.glyph_h *= scale;
+    return &physical->face;
+}
+#endif
 
 static int android_glyph_advance(void *ud, nj_u2 ch)
 {
@@ -2810,6 +2815,10 @@ static void android_glyph_init(android_state *s)
 
         gf->face = *b;
         gf->face.name = "android-system";
+        gf->scale = 1;
+#if !NJ_ANDROID_LEGACY
+        gf->face.scaled_face = android_scaled_face;
+#endif
         gf->face.glyph_lookup = android_glyph_lookup;
         gf->face.glyph_ascent = 0;  /* Java raster uses the face's own ascent. */
         gf->face.glyph_ud = gf;
@@ -5495,6 +5504,9 @@ nj_status nj_port_android_ex(nj_port *out, int screen_w, int screen_h)
     out->now = android_now;
     out->display_init = android_display_init;
     out->display_present = android_display_present;
+#if !NJ_ANDROID_LEGACY
+    out->display_hd = android_present_frame;
+#endif
     out->input_poll = android_input_poll;
     out->text_input = android_text_input;
     out->input_push = android_input_push;
@@ -5591,22 +5603,23 @@ nj_status nj_port_android_ex(nj_port *out, int screen_w, int screen_h)
         char prop[PROP_VALUE_MAX];
         prop[0] = '\0';
         (void)__system_property_get("debug.nj2me.glpresent", prop);
-        s->gl_present = (prop[0] == '1');
-        if (s->gl_present) {
-            s->gl_present_mode = 0;
-            s->gl_present_scale = 0;    /* 0 = use the software fit */
+        s->gl_present.sharp = 0.87055056f; /* AMD reference default without Java preferences */
+        s->gl_present.enabled = (prop[0] == '1');
+        if (s->gl_present.enabled) {
+            s->gl_present.mode = 0;
+            s->gl_present.scale = 0;    /* 0 = use the software fit */
             prop[0] = '\0';
             (void)__system_property_get("debug.nj2me.glpresent.mode", prop);
-            if (prop[0] != '\0') s->gl_present_mode = atoi(prop);
-            if (s->gl_present_mode < 0 || s->gl_present_mode > 6) s->gl_present_mode = 0;
+            if (prop[0] != '\0') s->gl_present.mode = atoi(prop);
+            if (s->gl_present.mode < 0 || s->gl_present.mode > 6) s->gl_present.mode = 0;
             prop[0] = '\0';
             (void)__system_property_get("debug.nj2me.glpresent.scale", prop);
-            if (prop[0] != '\0') s->gl_present_scale = atoi(prop);
-            if (s->gl_present_scale < 0) s->gl_present_scale = 0;
-            if (s->gl_present_scale > 4) s->gl_present_scale = 4;
+            if (prop[0] != '\0') s->gl_present.scale = atoi(prop);
+            if (s->gl_present.scale < 0) s->gl_present.scale = 0;
+            if (s->gl_present.scale > 4) s->gl_present.scale = 4;
             __android_log_print(ANDROID_LOG_INFO, LOG_TAG,
                                 "present: GL window path mode=%d scale=%d (debug.nj2me.glpresent)",
-                                s->gl_present_mode, s->gl_present_scale);
+                                s->gl_present.mode, s->gl_present.scale);
         }
     }
     {
@@ -6342,7 +6355,11 @@ Java_com_lucinhu_nj2me_GameActivity_nativeCreate(JNIEnv *env, jobject thiz,
         }
         if (gcls) {
             jmethodID gmid = (*env)->GetStaticMethodID(env, gcls, "render",
+#if NJ_ANDROID_LEGACY
                                                        "(IIII)[B");
+#else
+                                                       "(IIIII)[B");
+#endif
             if ((*env)->ExceptionCheck(env)) {
                 (*env)->ExceptionClear(env);
                 gmid = NULL;
@@ -6931,53 +6948,58 @@ Java_com_lucinhu_nj2me_GameActivity_nativeSetPresentFilter(JNIEnv *env,
 }
 
 
-#if NJ_ANDROID_GLES2 && !NJ_ANDROID_LEGACY
-/*
- * GL 呈现（实验）：on/off 以及呈现模式（0 最近邻、2 扫描线、3 LCD、4 CRT）。
- * 由设置界面写入，下一帧生效；GL 未生效时呈现循环自动回退软件路径。
- */
-JNIEXPORT void JNICALL
-Java_com_lucinhu_nj2me_GameActivity_nativeSetGlPresentScale(JNIEnv *env, jobject thiz,
-                                                            jlong handle, jint scale)
+JNIEXPORT jboolean JNICALL
+Java_com_lucinhu_nj2me_GameActivity_nativeFsr2Built(JNIEnv *env, jclass cls)
 {
-    android_app *a = (android_app *)(intptr_t)handle;
-    (void)env; (void)thiz;
-    if (a) {
-        android_state *s = AS(a->port.ud);
-        if (s) {
-            if (scale < 0) {
-                scale = 0;
-            }
-            if (scale > 4) {
-                scale = 4;
-            }
-            s->gl_present_scale = scale;
-            __android_log_print(ANDROID_LOG_INFO, LOG_TAG,
-                    "present: GL picture scale=%d", (int)scale);
-        }
-    }
+    (void)env; (void)cls;
+#if NJ_ENABLE_FSR2 && !NJ_ANDROID_LEGACY
+    return JNI_TRUE;
+#else
+    return JNI_FALSE;
+#endif
 }
 
+/* Java calls this before starting the VM thread. The run owns this copy. */
 JNIEXPORT void JNICALL
-Java_com_lucinhu_nj2me_GameActivity_nativeSetGlPresent(JNIEnv *env, jobject thiz,
-                                                       jlong handle, jint on,
-                                                       jint mode)
+Java_com_lucinhu_nj2me_GameActivity_nativeSetHd(JNIEnv *env, jclass cls, jlong handle,
+                                                jint scale, jint ssaa, jboolean subdivide, jboolean fsr2)
 {
     android_app *a = (android_app *)(intptr_t)handle;
-    (void)env; (void)thiz;
-    if (a) {
-        android_state *s = AS(a->port.ud);
-        if (s) {
-            if (mode < 0 || mode > 6) {
-                mode = 0;
-            }
-            s->gl_present = on ? 1 : 0;
-            s->gl_present_mode = (int)mode;
-            s->gl_present_logged = 0;
-        }
-    }
+    if (!a) return;
+    a->port.render_scale = scale >= 1 && scale <= 4 ? scale : 1;
+    a->port.render_ssaa = ssaa == 2 ? 2 : 1;
+    a->port.render_subdivide = subdivide != 0;
+    a->port.render_fsr2 = fsr2 && a->port.render_scale >= 2 &&
+                          Java_com_lucinhu_nj2me_GameActivity_nativeFsr2Built(env, cls);
 }
-#endif /* NJ_ANDROID_GLES2 && !NJ_ANDROID_LEGACY */
+
+/* Publish a coherent set for the next frame. Only the run thread uses EGL. */
+JNIEXPORT void JNICALL
+Java_com_lucinhu_nj2me_GameActivity_nativeSetGlPresent(JNIEnv *env, jclass cls,
+                                                       jlong handle, jint on, jint mode,
+                                                       jint scale, jfloat sharp)
+{
+    (void)env; (void)cls;
+#if NJ_ANDROID_GLES2 && !NJ_ANDROID_LEGACY
+    android_app *a = (android_app *)(intptr_t)handle;
+    android_state *s = a ? AS(a->port.ud) : NULL;
+    android_gl_settings settings;
+    if (!s) return;
+    settings.enabled = on != 0;
+    settings.mode = (mode >= 0 && mode <= 6) ? mode : 0;
+    settings.scale = scale < 0 ? 0 : scale > 4 ? 4 : scale;
+    if (sharp != sharp) sharp = 0.87f;
+    settings.sharp = sharp < 0.05f ? 0.05f : sharp > 1.0f ? 1.0f : sharp;
+    pthread_mutex_lock(&s->lock);
+    if (s->gl_present.enabled != settings.enabled || s->gl_present.mode != settings.mode)
+        s->gl_present_log_reset = 1;
+    s->gl_present = settings;
+    pthread_mutex_unlock(&s->lock);
+#else
+    (void)handle; (void)on; (void)mode; (void)scale; (void)sharp;
+#endif
+}
+
 
 
 /*
@@ -7073,7 +7095,9 @@ Java_com_lucinhu_nj2me_GameActivity_nativeGlyphReset(JNIEnv *env, jobject thiz,
     if (a) {
         android_state *s = AS(a->port.ud);
         if (s) {
+            pthread_mutex_lock(&s->lock);
             s->glyph_flush = 1;
+            pthread_mutex_unlock(&s->lock);
         }
     }
 }
@@ -7760,6 +7784,7 @@ Java_com_lucinhu_nj2me_GameActivity_nativeDestroy(JNIEnv *env, jobject thiz,
     }
     if (s && s->glyph_cache) {
         /* Only after the run thread is joined: it is the thread that fills it. */
+        android_glyph_cache_flush(s);
         free(s->glyph_cache);
         s->glyph_cache = NULL;
     }

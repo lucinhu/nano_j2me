@@ -264,6 +264,13 @@ void nj_mascot_raster_line(nj_surface *dst,
                            nj_s4 x0, nj_s4 y0, nj_s4 x1, nj_s4 y1,
                            nj_u4 argb, nj_s4 blend);
 
+/* Sample a one-logical-pixel stroke on a scaled target. Endpoints and clip are in physical
+ * samples (signed 16-bit logical coordinates at up to 8 samples per axis). Coincident endpoints draw a one-logical-pixel square. */
+void nj_mascot_raster_stroke(nj_surface *dst, nj_s4 scale,
+                             nj_s4 x1, nj_s4 y1, nj_s4 x2, nj_s4 y2,
+                             nj_s4 ax, nj_s4 ay, nj_s4 bx, nj_s4 by,
+                             nj_u4 argb, nj_s4 blend);
+
 /* Reference per-pixel blend of a source colour over a destination colour
  * (both 0xAARRGGBB). */
 nj_u4 nj_mascot_blend_pixel(nj_u4 src, nj_u4 dst, nj_s4 blend);

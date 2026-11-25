@@ -5,6 +5,7 @@ import android.app.AlertDialog;
 import android.content.Context;
 import android.content.DialogInterface;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.graphics.Color;
 import android.media.AudioManager;
 import android.os.Build;
@@ -148,9 +149,11 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
     private int speed = 100;      /* game speed, percent of real time */
     private int pictureAA;        /* 0 nearest, 1 bilinear: 画面反锯齿 */
     private int presentFilter;    /* 0 off, 2 scanline, 3 LCD, 4 CRT: 画面滤镜 */
-    private int glPresent;        /* 0 software, 1 GL window present: GL 呈现（实验） */
-    private int glPresentMode;    /* GL 呈现的模式: 0 nearest, 2 scanline, 3 LCD, 4 CRT */
-    private int glPresentScale;   /* GL 呈现的放大上限: 0 auto, 2/3/4 */
+    private int glPresent;        /* 0 software, 1 GL window present */
+    private int glPresentMode;    /* 0 nearest, 2 scanline, 3 LCD, 4 CRT, 5 FSR1, 6 bicubic */
+    private int glPresentScale;   /* integer scale cap: 0 auto, 2/3/4 */
+    private static final float DEFAULT_GL_SHARP = 0.87f;
+    private float glPresentSharp = DEFAULT_GL_SHARP;
     private int rewindSeconds;    /* 0 off, 1/2/5: in-memory rewind window */
     private int insetL, insetT, insetR, insetB;
 
@@ -283,9 +286,8 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
      * 呈现循环下一帧应用；只作用于窗口缓冲，不影响模拟器帧/存档/截图。
      */
     private static native void nativeSetPresentFilter(long handle, int mode);
-    /** GL 呈现（实验）：on=0 关闭；on=1 时 mode 为 0 最近邻、2 扫描线、3 LCD、4 CRT。 */
-    private static native void nativeSetGlPresent(long handle, int on, int mode);
-    private static native void nativeSetGlPresentScale(long handle, int scale);
+    private static native void nativeSetGlPresent(long handle, int on, int mode,
+                                                   int scale, float sharp);
     private static native void nativeSetRewind(long handle, int intervalFrames,
                                                int slots);
     private static native void nativeRewindStep(long handle);
@@ -298,6 +300,8 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
     private static native void nativeSetFrameCap(long handle, int cap);
 
     /** Launch choice only: 0 software, 1 experimental GLES2. Never changed mid-run. */
+    private static native boolean nativeFsr2Built();
+    private static native void nativeSetHd(long handle, int scale, int ssaa, boolean subdivide, boolean fsr2);
     private static native void nativeSetGraphicsMode(long handle, int mode);
     private static native boolean nativeGraphicsSupported();
 
@@ -840,18 +844,18 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
                 handle = nativeCreate(holder.getSurface(), jarPath, screenW, screenH,
                                       heapMB, JarStore.rmsRoot(this).getAbsolutePath(),
                                       JarStore.fsRoot(this).getAbsolutePath());
-            if (handle != 0) {
+                if (handle == 0) {
+                    Log.e(TAG, "port creation failed");
+                    toastThenFinish();
+                    return;
+                }
+                SharedPreferences hd = getSharedPreferences("nano_j2me", MODE_PRIVATE);
+                nativeSetHd(handle, hd.getInt("hd_scale", 1), hd.getInt("hd_ssaa", 1),
+                        hd.getInt("hd_subdivide", 0) != 0, hd.getInt("hd_fsr2", 0) != 0);
                 nativeSetGraphicsMode(handle,
                         graphicsSupported() && Settings.gles2Experimental(this) ? 1 : 0);
                 nativeSetSpeed(handle, speed);
-                nativeSetFilter(handle, pictureAA);
-                nativeSetPresentFilter(handle, presentFilter);
-                if (graphicsSupported()) {
-                    nativeSetGlPresent(handle, glPresent, glPresentMode);
-                    nativeSetGlPresentScale(handle, glPresentScale);
-                }
-                applyRewindSetting();
-                nativeSetFrameCap(handle, Settings.frameCap(this));
+                applyNativeDisplaySettingsLocked();
                 /* A new MIDlet: its own vocabulary is what the subset row will
                  * keep, so the previous game's stops being recorded here. */
                 GlyphSource.beginRun();
@@ -860,12 +864,6 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
                      * restored VM resumes mid-method, so there is nothing to
                      * start. */
                     nativeSetRestore(handle, statePath);
-                }
-            }
-                if (handle == 0) {
-                    Log.e(TAG, "port creation failed");
-                    toastThenFinish();
-                    return;
                 }
                 runThread = new Thread(new Runnable() {
                     @Override
@@ -1319,6 +1317,23 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
         android.widget.Toast.makeText(this, s, android.widget.Toast.LENGTH_SHORT).show();
     }
 
+    /* The caller holds lock and has a live handle. */
+    private void applyNativeDisplaySettingsLocked() {
+        nativeSetFilter(handle, pictureAA);
+        nativeSetPresentFilter(handle, presentFilter);
+        applyGlPresentSettings();
+        applyRewindSetting();
+        nativeSetFrameCap(handle, Settings.frameCap(this));
+    }
+
+    private void applyGlPresentSettings() {
+        synchronized (lock) {
+            if (handle != 0 && graphicsSupported()) {
+                nativeSetGlPresent(handle, glPresent, glPresentMode, glPresentScale, glPresentSharp);
+            }
+        }
+    }
+
     /**
      * Push the player's display settings into the two places that need them.
      *
@@ -1338,35 +1353,29 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
         GlyphSource.setAntiAlias(Settings.fontAntiAlias(this));
         GlyphSource.setFontFile(Settings.fontFile(this));
         pictureAA = Settings.pictureAntiAlias(this) ? 1 : 0;
-        presentFilter = getSharedPreferences("nano_j2me", MODE_PRIVATE)
-                .getInt("present_filter", 0);
+        SharedPreferences prefs = getSharedPreferences("nano_j2me", MODE_PRIVATE);
+        presentFilter = prefs.getInt("present_filter", 0);
         if (presentFilter == 1 || presentFilter < 0 || presentFilter > 4) {
             presentFilter = 0;
         }
-        glPresent = getSharedPreferences("nano_j2me", MODE_PRIVATE)
-                .getInt("gl_present", 0) != 0 ? 1 : 0;
-        glPresentMode = getSharedPreferences("nano_j2me", MODE_PRIVATE)
-                .getInt("gl_present_mode", 0);
+        glPresent = prefs.getInt("gl_present", 0) != 0 ? 1 : 0;
+        glPresentMode = prefs.getInt("gl_present_mode", 0);
         if (glPresentMode != 2 && glPresentMode != 3 && glPresentMode != 4
                 && glPresentMode != 5 && glPresentMode != 6) {
             glPresentMode = 0;
         }
-        glPresentScale = getSharedPreferences("nano_j2me", MODE_PRIVATE)
-                .getInt("gl_present_scale", 0);
+        glPresentSharp = prefs.getFloat("gl_present_sharp", DEFAULT_GL_SHARP);
+        if (!(glPresentSharp >= 0.05f && glPresentSharp <= 1.0f)) {
+            glPresentSharp = DEFAULT_GL_SHARP;
+        }
+        glPresentScale = prefs.getInt("gl_present_scale", 0);
         if (glPresentScale != 2 && glPresentScale != 3 && glPresentScale != 4) {
             glPresentScale = 0;
         }
         rewindSeconds = Settings.rewindSeconds(this);
         synchronized (lock) {
             if (handle != 0) {
-                nativeSetFilter(handle, pictureAA);
-                nativeSetPresentFilter(handle, presentFilter);
-                if (graphicsSupported()) {
-                    nativeSetGlPresent(handle, glPresent, glPresentMode);
-                    nativeSetGlPresentScale(handle, glPresentScale);
-                }
-                applyRewindSetting();
-                nativeSetFrameCap(handle, Settings.frameCap(this));
+                applyNativeDisplaySettingsLocked();
                 nativeGlyphReset(handle);
             }
         }
@@ -1468,6 +1477,16 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
                 glPresentScaleDialog();
             }
         });
+        LinearLayout glPresentSharpRow = Md3.row(this, Md3.IC_SCREEN,
+                "FSR1 锐度：" + glPresentSharpText(), null, false, null);
+        glPresentSharpRow.setEnabled(graphicsSupported());
+        glPresentSharpRow.setAlpha(graphicsSupported() ? 1f : 0.5f);
+        glPresentSharpRow.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                glPresentSharpDialog();
+            }
+        });
         glPresentRow.setEnabled(graphicsSupported());
         glPresentRow.setAlpha(graphicsSupported() ? 1f : 0.5f);
         glPresentRow.setOnClickListener(new View.OnClickListener() {
@@ -1514,6 +1533,12 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
         box.addView(glPresentRow);
         box.addView(Md3.divider(this));
         box.addView(glPresentScaleRow);
+        box.addView(glPresentSharpRow);
+        addHdChoice(box, "高清渲染倍率", "hd_scale", 1, new String[]{"1×", "2×", "3×", "4×"}, true);
+        addHdChoice(box, "超采样抗锯齿", "hd_ssaa", 1, new String[]{"关闭", "四采样"}, true);
+        addHdChoice(box, "3D 面片细分", "hd_subdivide", 0, new String[]{"关闭", "开启"}, true);
+        addHdChoice(box, "FSR2 时域放大", "hd_fsr2", 0,
+                new String[]{"关闭", "请求启用（需设备支持）"}, nativeFsr2Built());
         box.addView(Md3.divider(this));
         box.addView(fpsRow);
         box.addView(Md3.header(this, "文字"));
@@ -1758,6 +1783,32 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
         }
     }
 
+    private void addHdChoice(LinearLayout box, final String title, final String key,
+                             final int base, final String[] labels, boolean available) {
+        final SharedPreferences prefs = getSharedPreferences("nano_j2me", MODE_PRIVATE);
+        final int current = Math.max(0, Math.min(labels.length - 1, prefs.getInt(key, base) - base));
+        LinearLayout row = Md3.row(this, Md3.IC_SCREEN, title,
+                available ? labels[current] : "此安装包未含 FSR2 后端", current != 0 && available, null);
+        row.setEnabled(available);
+        if (available) row.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View view) {
+                Md3.chooser(GameActivity.this, Md3.IC_SCREEN, title, "下次启动游戏时生效",
+                        labels, null, current, new Md3.Choice() {
+                    @Override public void picked(int which, AlertDialog dialog) {
+                        SharedPreferences.Editor edit = prefs.edit().putInt(key, which + base);
+                        if ("hd_fsr2".equals(key) && which != 0 && prefs.getInt("hd_scale", 1) < 2)
+                            edit.putInt("hd_scale", 2);
+                        if ("hd_scale".equals(key) && which == 0) edit.putInt("hd_fsr2", 0);
+                        edit.apply();
+                        dialog.dismiss();
+                        showPanel();
+                    }
+                });
+            }
+        });
+        box.addView(row);
+    }
+
     private void glPresentScaleDialog() {
         final int[] scales = { 0, 2, 3, 4 };
         final String[] labels = { "自动（填满画面）", "2×", "3×", "4×" };
@@ -1774,13 +1825,45 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
                         glPresentScale = scales[which];
                         getSharedPreferences("nano_j2me", MODE_PRIVATE).edit()
                                 .putInt("gl_present_scale", glPresentScale).apply();
-                        synchronized (lock) {
-                            if (handle != 0) {
-                                nativeSetGlPresentScale(handle, glPresentScale);
-                            }
-                        }
+                        applyGlPresentSettings();
                         d.dismiss();
                         showPanel();
+                    }
+                });
+    }
+
+    private String glPresentSharpText() {
+        if (Math.abs(glPresentSharp - 0.30f) < 0.01f) {
+            return "0.30（柔和）";
+        }
+        if (Math.abs(glPresentSharp - 0.55f) < 0.01f) {
+            return "0.55（中等）";
+        }
+        if (Math.abs(glPresentSharp - 1.00f) < 0.01f) {
+            return "1.00（锐利）";
+        }
+        return "0.87（默认）";
+    }
+
+    private void glPresentSharpDialog() {
+        final float[] values = { 0.30f, 0.55f, 0.87f, 1.00f };
+        final String[] names = { "0.30（柔和，光晕最少）", "0.55（中等）",
+                "0.87（默认，AMD 参考）", "1.00（最锐，光晕更强）" };
+        int selected = 2;
+        for (int i = 0; i < values.length; i++) {
+            if (Math.abs(values[i] - glPresentSharp) < 0.01f) {
+                selected = i;
+            }
+        }
+        Md3.chooser(this, Md3.IC_SCREEN, "锐度", "当前 " + glPresentSharpText(),
+                names, null, selected, new Md3.Choice() {
+                    @Override
+                    public void picked(int which, AlertDialog d) {
+                        glPresentSharp = values[which];
+                        getSharedPreferences("nano_j2me", MODE_PRIVATE).edit()
+                                .putFloat("gl_present_sharp", glPresentSharp).apply();
+                        applyGlPresentSettings();
+                        toast("FSR1 锐度：" + glPresentSharpText());
                     }
                 });
     }
@@ -1817,11 +1900,7 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
                         getSharedPreferences("nano_j2me", MODE_PRIVATE).edit()
                                 .putInt("gl_present", glPresent)
                                 .putInt("gl_present_mode", glPresentMode).apply();
-                        synchronized (lock) {
-                            if (handle != 0 && graphicsSupported()) {
-                                nativeSetGlPresent(handle, glPresent, glPresentMode);
-                            }
-                        }
+                        applyGlPresentSettings();
                         toast("GL 呈现：" + glPresentText());
                     }
                 });
