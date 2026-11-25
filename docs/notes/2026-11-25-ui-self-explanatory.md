@@ -71,3 +71,13 @@ Android 启动器（`LibraryActivity.java`）：
 - The launcher already draws every option as `label … value` with the value right-aligned,
   so no extra explanatory subtitles were needed.
 - Verified with `cmake --build /tmp/r5-gles2 -j10` (rc=0).
+
+### Round 11: game panel grouped under quiet headings
+
+- `Md3.header(ctx, label)` — 12sp medium primary label with 18dp top margin; it is a plain
+  `TextView`, so the panel gains structure without any instruction prose.
+- Panel order is now 画面（调整、状态栏、画面反锯齿、滤镜、GL 呈现、放大、帧率）、文字（反锯齿、
+  字体、字形子集）、游戏（速度、硬件加速）、存档（保存状态、倒带）、高级（作弊、搜索、菜单）、
+  退出；rows, listeners, preferences and JNI calls are unchanged.
+- Verified on `Medium_Phone_API_36.1`: x86_64 APK installs, panel lists 画面 then 文字 in order, and
+  the previously chosen `放大：2×` / `GL 呈现（实验）：FSR1（GL）` values persist inside the group.

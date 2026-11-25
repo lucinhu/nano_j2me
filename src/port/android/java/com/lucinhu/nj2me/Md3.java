@@ -658,6 +658,21 @@ final class Md3 {
         return box;
     }
 
+    /** A quiet heading above a run of settings rows. */
+    static TextView header(Context ctx, String label) {
+        TextView t = new TextView(ctx);
+        t.setText(label);
+        type(t, 12f, primary, true);
+        t.setLetterSpacing(0.06f);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT);
+        lp.topMargin = dp(ctx, 18);
+        lp.bottomMargin = dp(ctx, 2);
+        t.setLayoutParams(lp);
+        return t;
+    }
+
     /**
      * A command the player is meant to type somewhere else.  It sits in its own
      * filled container - text a reader cannot select is text they cannot use -

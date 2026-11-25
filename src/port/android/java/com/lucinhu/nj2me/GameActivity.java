@@ -1517,39 +1517,42 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
         LinearLayout save = Md3.row(this, Md3.IC_MEMORY, "保存状态", null, false, null);
         LinearLayout quit = Md3.dangerRow(this, Md3.IC_POWER, "退出游戏", null);
 
+        box.addView(Md3.header(this, "画面"));
         box.addView(adjust, Md3.gap(this, 12));
         box.addView(Md3.divider(this));
         box.addView(toggle);
         box.addView(Md3.divider(this));
-        box.addView(fast);
+        box.addView(picAaRow);
         box.addView(Md3.divider(this));
+        box.addView(filterRow);
+        box.addView(Md3.divider(this));
+        box.addView(glPresentRow);
+        box.addView(Md3.divider(this));
+        box.addView(glPresentScaleRow);
+        box.addView(Md3.divider(this));
+        box.addView(fpsRow);
+        box.addView(Md3.header(this, "文字"));
         box.addView(fontAaRow);
         box.addView(Md3.divider(this));
         box.addView(fontRow);
         box.addView(Md3.divider(this));
         box.addView(subsetRow);
-        box.addView(Md3.divider(this));
-        box.addView(picAaRow);
-        box.addView(Md3.divider(this));
-        box.addView(filterRow);
-        box.addView(glPresentRow);
-        box.addView(glPresentScaleRow);
-        box.addView(rewindRow);
-        box.addView(Md3.divider(this));
-        box.addView(fpsRow);
+        box.addView(Md3.header(this, "游戏"));
+        box.addView(fast);
         box.addView(Md3.divider(this));
         box.addView(graphicsRow);
         box.addView(graphicsDetails, Md3.gap(this, 6));
+        box.addView(Md3.header(this, "存档"));
+        box.addView(save);
         box.addView(Md3.divider(this));
+        box.addView(rewindRow);
+        box.addView(Md3.header(this, "高级"));
         box.addView(cheatRow);
         box.addView(Md3.divider(this));
         box.addView(searchRow);
         box.addView(Md3.divider(this));
         box.addView(menuRow);
-        box.addView(Md3.divider(this));
-        box.addView(save);
-        box.addView(Md3.divider(this));
-        box.addView(quit);
+        box.addView(quit, Md3.gap(this, 12));
 
         final AlertDialog dlg = Md3.show(new AlertDialog.Builder(this)
                 .setView(Md3.scroller(this, box))
