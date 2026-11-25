@@ -37,15 +37,10 @@ if ! "$BIN" --port headless --size 240x320 --heap 8 --fps 30 \
     exit 1
 fi
 
-FRAME="$(ls "$WORK/frames"/*.ppm 2>/dev/null | sort | tail -1)"
-if [ -z "$FRAME" ]; then
-    echo "FAIL siemens: no frame was dumped" >&2
-    exit 1
-fi
-
-PPM="$FRAME" LOG="$WORK/run.log" python3 - <<'PY'
+FRAMES="$WORK/frames" LOG="$WORK/run.log" python3 - <<'PY'
 import os
 import sys
+from pathlib import Path
 
 log = open(os.environ["LOG"], "r", errors="replace").read()
 failures = []
@@ -67,12 +62,25 @@ for bad in ("SIEMENS failed=", "SIEMENS resource_failed=",
     if bad in log:
         failures.append("log contains " + bad)
 
-raw = open(os.environ["PPM"], "rb").read()
-parts = raw.split(b"\n", 3)
-if len(parts) != 4 or parts[0] != b"P6":
-    sys.exit("FAIL siemens: not a P6 PPM")
-width, height = map(int, parts[1].split())
-pixels = parts[3]
+# The MIDlet paints one static scene, then explicitly dismisses its Canvas
+# after 800 ms. A dump on the final tick can therefore be entirely black.
+# Check every visible frame and reject any blank gap within the scene.
+width, height = 240, 320
+blank = bytes(width * height * 3)
+pixels = None
+dismissed = False
+for frame in sorted(Path(os.environ['FRAMES']).glob('*.ppm')):
+    parts = frame.read_bytes().split(b'\n', 3)
+    if parts[:3] != [b'P6', b'240 320', b'255'] or len(parts) != 4 or len(parts[3]) != len(blank):
+        sys.exit('FAIL siemens: invalid frame ' + frame.name)
+    if parts[3] == blank:
+        dismissed = pixels is not None
+    elif dismissed or (pixels is not None and pixels != parts[3]):
+        sys.exit('FAIL siemens: static scene changed at ' + frame.name)
+    else:
+        pixels = parts[3]
+if pixels is None:
+    sys.exit('FAIL siemens: no visible canvas was dumped')
 
 def rgb(x, y):
     o = (y * width + x) * 3
