@@ -806,6 +806,58 @@ static void bench_readback(nj_gles2 *state)
     nj_port_shutdown(&port);
 }
 
+/* Synchronous source upload, draw and readback. Change a sampled texel every
+ * call; use the same address twice before switching source allocations. */
+static void bench_blit(nj_gles2 *state)
+{
+    enum { W = 480, H = 640, SX = 2, SY = 1, WARMUP = 16, BLITS = 256 };
+    const char *names[] = { "RGB565", "RGB888", "ARGB8888" };
+    const int formats[] = { NJ_PIXFMT_RGB565, NJ_PIXFMT_RGB888, NJ_PIXFMT_ARGB8888 };
+    nj_port port;
+    CHECK(nj_port_headless(&port) == NJ_OK && port.millis);
+    for (unsigned f = 0; f < sizeof(formats)/sizeof(formats[0]); ++f) {
+        int bpp = bytes_per_pixel(formats[f]);
+        nj_gfx_blit b = {0};
+        nj_surface dst = {0};
+        nj_gfx g;
+        nj_u1 *src[2];
+        nj_u4 start = 0, elapsed;
+        nj_gles2_stats before = stats(state);
+        b.format = formats[f]; b.stride = (SX+W)*bpp+7; b.sx = SX; b.sy = SY;
+        b.width = b.clip_w = W; b.height = b.clip_h = H; b.rop = NJ_ROP_SET; b.alpha = 255;
+        dst.width = W; dst.height = H; dst.stride = W*4; dst.format = NJ_PIXFMT_ARGB8888;
+        dst.pixels = malloc((size_t)dst.stride*H); CHECK(dst.pixels);
+        nj_gfx_init(&g, &dst);
+        snprintf(scenario, sizeof scenario, "mutable synchronous blit %s", names[f]);
+        for (int k = 0; k < 2; ++k) {
+            src[k] = malloc(GUARD + (size_t)(SY+H)*b.stride); CHECK(src[k]);
+            for (int y = 0; y < H; ++y) for (int x = 0; x < W; ++x)
+                store(src[k]+GUARD+(SY+y)*b.stride+(SX+x)*bpp, b.format,
+                      (nj_u4)x*0x132709u + (nj_u4)y*0x711103u + (nj_u4)k*0x619278cdu);
+        }
+        for (int i = 0; i < WARMUP+BLITS; ++i) {
+            int x = i%W, y = (i*23)%H;
+            nj_u1 *pixels = src[(i/2)%2]+GUARD;
+            nj_u1 *changed = pixels + (SY+y)*b.stride + (SX+x)*bpp;
+            store(changed, b.format, 0x456789abu + (nj_u4)i*0x231907u);
+            b.pixels = pixels;
+            if (i == WARMUP) start = port.millis(port.ud);
+            CHECK(nj_gles2_backend()->blit(state, &g, &b) == NJ_GFX_ACCEL_DONE);
+            CHECK(load((nj_u1 *)dst.pixels+y*dst.stride+x*4, dst.format) == load(changed, b.format));
+        }
+        elapsed = port.millis(port.ud) - start;
+        delta(state, before, 0, WARMUP+BLITS, 0);
+        for (int y = 0; y < H; ++y) for (int x = 0; x < W; ++x)
+            CHECK(load((nj_u1 *)dst.pixels+y*dst.stride+x*4, dst.format) ==
+                  load(b.pixels+(SY+y)*b.stride+(SX+x)*bpp, b.format));
+        gl_ok();
+        printf("BLIT source=%s width=%d height=%d stride=%d blits=%d wall_ms=%u verified=1\n",
+               names[f], W, H, (int)b.stride, BLITS, (unsigned)elapsed);
+        free(src[0]); free(src[1]); free(dst.pixels);
+    }
+    nj_port_shutdown(&port);
+}
+
 int main(int argc, char **argv)
 {
     int bench = argc == 2 && strcmp(argv[1], "--bench-readback") == 0;
@@ -814,8 +866,9 @@ int main(int argc, char **argv)
     nj_gles2_config config;
     nj_gles2 *state[2];
     int i;
-    if (argc != 1 && !bench) {
-        fprintf(stderr, "usage: %s [--bench-readback]\n", argv[0]);
+    int blit = argc == 2 && strcmp(argv[1], "--bench-blit") == 0;
+    if (argc != 1 && !bench && !blit) {
+        fprintf(stderr, "usage: %s [--bench-readback|--bench-blit]\n", argv[0]);
         return 2;
     }
     if (!egl_init(&e)) { egl_cleanup(&e); return 77; }
@@ -836,8 +889,9 @@ int main(int argc, char **argv)
         CHECK(state[i] != NULL); CHECK(gate[i].calls >= 2); gl_ok();
     }
     make_current(&e, 0);
-    if (bench) {
-        bench_readback(state[0]);
+    if (bench || blit) {
+        if (blit) bench_blit(state[0]);
+        else bench_readback(state[0]);
         for (i = 0; i < 2; ++i) {
             make_current(&e, i);
             CHECK(nj_gles2_destroy(state[i]));

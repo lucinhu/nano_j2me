@@ -232,7 +232,7 @@ static int commit(nj_gles2 *s, const nj_gfx *g, int x, int y, int w, int h)
  * a readback of only the dirty union. Observers flush before reading pixels. */
 #define NJ_GLES2_FRAME_MAX 4
 
-static nj_u4 read_color(const nj_u1 *p, int format);
+static int stage_blit(nj_u1 *dst, const nj_gfx_blit *b);
 static struct frame_slot *frame_find(nj_gles2 *s, const nj_surface *surface);
 static void frame_reset(nj_gles2 *s, struct frame_slot *f);
 static void frame_dirties(struct frame_slot *f, int x, int y, int w, int h);
@@ -485,7 +485,6 @@ static int frame_blit(nj_gles2 *s, const nj_gfx *g, const nj_gfx_blit *b)
     GLuint src = 0;
     int src_w, src_h, sx, sy;
     size_t bytes;
-    int x, y;
     if (!current(s) || !b || !target_ok(g, b->clip_x, b->clip_y, b->clip_w, b->clip_h) ||
         !b->pixels || b->mask || b->xor_enabled || b->transform != 0 ||
         b->sx < 0 || b->sy < 0 || bytes_per_pixel(b->format) == 0 ||
@@ -507,13 +506,7 @@ static int frame_blit(nj_gles2 *s, const nj_gfx *g, const nj_gfx_blit *b)
     } else {
         bytes = (size_t)b->width*(size_t)b->height*4u;
         if (!reserve(&s->upload, &s->upload_size, bytes)) return 2;
-        for (y = 0; y < b->height; ++y) for (x = 0; x < b->width; ++x) {
-            const nj_u1 *q = (const nj_u1 *)b->pixels + ((nj_s8)b->sy+y)*b->stride +
-                             ((nj_s8)b->sx+x)*bytes_per_pixel(b->format);
-            nj_u4 c = read_color(q, b->format);
-            nj_u1 *o = s->upload + ((size_t)y*(size_t)b->width+(size_t)x)*4u;
-            o[0]=(nj_u1)(c>>16); o[1]=(nj_u1)(c>>8); o[2]=(nj_u1)c; o[3]=(nj_u1)(c>>24);
-        }
+        if (!stage_blit(s->upload, b)) return 2;
         s->gl.ActiveTexture(GL_TEXTURE0);
         texture(s, s->source);
         if (!texture_upload(s, &s->source_storage, b->width, b->height, GL_RGBA, s->upload))
@@ -573,6 +566,38 @@ static nj_u4 read_color(const nj_u1 *p, int format)
                (((g<<2)|(g>>4))<<8) | (b<<3) | (b>>2);
     }
 }
+/* Convert borrowed blit pixels afresh. Rows can be padded and byte-unaligned.
+ * Dispatch by format outside the inner loop so the compiler sees fixed strides. */
+static int stage_blit(nj_u1 *dst, const nj_gfx_blit *b)
+{
+    int bpp = bytes_per_pixel(b->format);
+    for (int y = 0; y < b->height; ++y) {
+        const nj_u1 *row = b->pixels + ((nj_s8)b->sy + y)*b->stride + (nj_s8)b->sx*bpp;
+        if (bpp == 4) {
+            nj_u4 alpha = 0xffffffffu;
+            for (int x = 0; x < b->width; ++x, dst += 4) {
+                nj_u4 c;
+                memcpy(&c, row + (size_t)x*4, sizeof c);
+                alpha &= c;
+                dst[0] = (nj_u1)(c>>16); dst[1] = (nj_u1)(c>>8);
+                dst[2] = (nj_u1)c; dst[3] = (nj_u1)(c>>24);
+            }
+            if (b->rop == NJ_ROP_PAINT && (alpha >> 24) != 255u) return 0;
+        } else if (bpp == 3) {
+            for (int x = 0; x < b->width; ++x, dst += 4) {
+                memcpy(dst, row + (size_t)x*3, 3);
+                dst[3] = 255;
+            }
+        } else {
+            for (int x = 0; x < b->width; ++x, dst += 4) {
+                nj_u4 c = read_color(row + (size_t)x*2, NJ_PIXFMT_RGB565);
+                dst[0] = (nj_u1)(c>>16); dst[1] = (nj_u1)(c>>8);
+                dst[2] = (nj_u1)c; dst[3] = 255;
+            }
+        }
+    }
+    return 1;
+}
 static int aliases(const nj_gfx *g, const nj_gfx_blit *b, int bpp)
 {
     uint64_t src_size, dst_size, rows, tail;
@@ -610,7 +635,7 @@ static int blit(void *ud, const nj_gfx *g, const nj_gfx_blit *b)
     GLfloat uv[8];
     nj_s8 left, top;
     size_t bytes;
-    int x, y, bpp;
+    int bpp;
     if (s->frame_enabled && s->tri_session) frame_cpu_read(s);
     if (s->frame_enabled && !s->tri_session) {
         int fr = frame_blit(s, g, b);
@@ -628,13 +653,7 @@ static int blit(void *ud, const nj_gfx *g, const nj_gfx_blit *b)
         (b->rop != NJ_ROP_SET && b->alpha != 255) || aliases(g, b, bpp)) return decline(s);
     bytes = (size_t)b->width*(size_t)b->height*4u;
     if (!reserve(&s->upload, &s->upload_size, bytes)) return decline(s);
-    for (y = 0; y < b->height; ++y) for (x = 0; x < b->width; ++x) {
-        const nj_u1 *p = b->pixels + ((nj_s8)b->sy+y)*b->stride + ((nj_s8)b->sx+x)*bpp;
-        nj_u4 c = read_color(p, b->format);
-        nj_u1 *out = s->upload + ((size_t)y*(size_t)b->width+(size_t)x)*4u;
-        if (b->rop == NJ_ROP_PAINT && (c>>24) != 255u) return decline(s);
-        out[0]=(nj_u1)(c>>16); out[1]=(nj_u1)(c>>8); out[2]=(nj_u1)c; out[3]=(nj_u1)(c>>24);
-    }
+    if (!stage_blit(s->upload, b)) return decline(s);
     if (!prepare(s, b->clip_w, b->clip_h)) return decline(s);
     texture(s, s->source);
     if (!texture_upload(s, &s->source_storage, b->width, b->height, GL_RGBA, s->upload))
