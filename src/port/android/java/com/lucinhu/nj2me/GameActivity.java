@@ -1421,14 +1421,12 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
                 null, false, null);
         LinearLayout toggle = Md3.row(this, Md3.IC_INFO,
                 shown ? "隐藏状态信息" : "显示状态信息",
-                shown ? "收起帧率、缩放这些数字" : "看帧率、缩放和测到的画面大小", false, null);
+                null, false, null);
         LinearLayout fast = Md3.row(this, Md3.IC_PLAY, "游戏速度",
-                speedText() + " · 慢动作到三倍速", false, null);
+                speedText(), false, null);
         LinearLayout menuRow = Md3.row(this, Md3.IC_KEYS,
                 padConfig.menuVisible ? "隐藏菜单按钮" : "显示菜单按钮",
-                padConfig.menuVisible
-                        ? "把角上的 ≡ 收起来；按返回键还能打开这个面板"
-                        : "把角上的 ≡ 放回来", false, null);
+                null, false, null);
         /*
          * 文字 and 画面 anti-aliasing, and the font.  The switches are the
          * player's, not this game's, so they are the same rows the library's
@@ -1441,21 +1439,14 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
         int[] glyphs = GlyphSource.stats();
         LinearLayout fontAaRow = Md3.row(this, Md3.IC_KEYS,
                 fontAA ? "关闭文字反锯齿" : "打开文字反锯齿",
-                fontAA ? "文字边缘现在是平滑的；关掉是掌机的硬边像素"
-                       : "文字边缘现在没有平滑；打开更接近现在的手机",
-                fontAA, null);
+                null, fontAA, null);
         LinearLayout fontRow = Md3.row(this, Md3.IC_IMPORT, "更换字体…",
-                fontPath == null ? "MIDlet 的文字现在由系统字体绘制；点这里挑一个字体文件"
-                                 : "当前：" + new java.io.File(fontPath).getName()
-                                   + "（长按换回系统字体）",
+                fontPath == null ? "系统字体" : new java.io.File(fontPath).getName(),
                 false, null);
         LinearLayout subsetRow = Md3.row(this, Md3.IC_TUNE, "只保留这个游戏用到的字",
                 "字形缓存 " + glyphs[0] + " 个 · " + FontKit.size(glyphs[1]), false, null);
         LinearLayout picAaRow = Md3.row(this, Md3.IC_SCREEN,
-                picAA ? "关闭画面反锯齿" : "打开画面反锯齿",
-                picAA ? "画面现在会做平滑；关掉是原来的方块像素"
-                      : "画面缩放时是方块锯齿；铺满和自定义时打开更平滑",
-                picAA, null);
+                picAA ? "关闭画面反锯齿" : "打开画面反锯齿", null, picAA, null);
         final String[] filterNames = { "关闭", "扫描线", "LCD 网格", "CRT" };
         int filterIdx = 0;
         for (int i = 1; i < filterNames.length; i++) {
@@ -1464,9 +1455,7 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
             }
         }
         LinearLayout filterRow = Md3.row(this, Md3.IC_SCREEN,
-                "画面滤镜：" + filterNames[filterIdx],
-                "只作用于窗口显示，不改模拟器画面；存档/截图保持原样",
-                presentFilter > 0, null);
+                "画面滤镜：" + filterNames[filterIdx], null, presentFilter > 0, null);
         LinearLayout glPresentRow = Md3.row(this, Md3.IC_SCREEN,
                 "GL 呈现（实验）：" + glPresentText(), null, glPresent != 0, null);
         LinearLayout glPresentScaleRow = Md3.row(this, Md3.IC_SCREEN,
@@ -1488,17 +1477,13 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
             }
         });
         LinearLayout rewindRow = Md3.row(this, Md3.IC_PLAY,
-                "倒带：" + Settings.rewindText(rewindSeconds),
-                "把最近几秒的完整状态存在内存里，随时回退；大堆游戏开销明显，默认关闭",
-                rewindSeconds > 0, null);
+                "倒带：" + Settings.rewindText(rewindSeconds), null, rewindSeconds > 0, null);
         final boolean graphicsAvailable = graphicsSupported();
         final boolean gles2 = graphicsAvailable && Settings.gles2Experimental(this);
         LinearLayout graphicsRow = Md3.row(this, Md3.IC_SCREEN,
                 graphicsAvailable ? "硬件加速（GLES2）：" + (gles2 ? "开" : "关") + "（下次启动）"
                                   : "硬件加速（GLES2）：不可用",
-                graphicsAvailable ? "下次启动游戏生效；支持的绘制交给 GPU，其余用软件。性能提升不保证。"
-                                  : "此安装包未含 GLES2，使用软件绘制。",
-                gles2, null);
+                graphicsAvailable ? null : "此安装包未含 GLES2", gles2, null);
         graphicsRow.setEnabled(graphicsAvailable);
         graphicsRow.setAlpha(graphicsAvailable ? 1f : 0.5f);
         final TextView graphicsDetails = Md3.supporting(this, "");
