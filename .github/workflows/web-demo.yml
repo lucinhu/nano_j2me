@@ -42,7 +42,8 @@ permissions:
 
 concurrency:
   group: pages
-  cancel-in-progress: true
+  # Let the current Pages transaction finish before deploying the latest push.
+  cancel-in-progress: false
 
 jobs:
   build:
@@ -85,13 +86,24 @@ jobs:
     needs: build
     runs-on: ubuntu-24.04
     outputs:
-      page_url: ${{ steps.deployment.outputs.page_url }}
+      page_url: ${{ steps.deployment.outputs.page_url || steps.retry.outputs.page_url }}
     environment:
       name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
+      url: ${{ steps.deployment.outputs.page_url || steps.retry.outputs.page_url }}
     steps:
       - name: Deploy
         id: deployment
+        continue-on-error: true
+        uses: actions/deploy-pages@v5
+
+      # deploy-pages polls an accepted deployment, but a 5xx while creating
+      # it ends the action immediately. Reuse this run's uploaded artifact.
+      - name: Back off after a failed deployment
+        if: ${{ !cancelled() && steps.deployment.outcome == 'failure' }}
+        run: sleep 20
+      - name: Retry Pages deployment
+        id: retry
+        if: ${{ !cancelled() && steps.deployment.outcome == 'failure' }}
         uses: actions/deploy-pages@v5
 
   verify:
