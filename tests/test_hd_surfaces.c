@@ -18,6 +18,76 @@ static void capture(void *ud, const nj_surface *s)
     ++frames;
 }
 
+/* Compare every pixel with a snapshot, including pixels outside the clip.
+ * The HD grid has its own pattern, so upscaling the logical result won't pass. */
+static void check_scroll(nj_vm *vm, nj_ref graphics, nj_surface *grid, int scale,
+                         int sx, int sy, int dx, int dy, int anchor)
+{
+    nj_u4 before[48 * 32];
+    nj_value a[7] = {{0}};
+    const int w = 5, h = 3, tx = 1, ty = 1;
+    CHECK(grid->width * grid->height <= (int)(sizeof(before) / sizeof(before[0])));
+    for (int y = 0; y < grid->height; ++y) for (int x = 0; x < grid->width; ++x) {
+        nj_u4 alpha = x % 3 == 0 ? 0u : x % 3 == 1 ? 0x80000000u : 0xff000000u;
+        nj_surface_set(grid, x, y, alpha | (unsigned)x * 0x5020u | (unsigned)y * 7u);
+        before[y * grid->width + x] = nj_surface_get(grid, x, y);
+    }
+    /* Coordinates here are in device space. The caller translated by (1,1). */
+    a[0].i = sx - tx; a[1].i = sy - ty; a[2].i = w; a[3].i = h;
+    a[4].i = dx - tx; a[5].i = dy - ty; a[6].i = anchor;
+    if (anchor & NJ_ANCHOR_RIGHT) a[4].i += w;
+    if (anchor & NJ_ANCHOR_HCENTER) a[4].i += w / 2;
+    if (anchor & NJ_ANCHOR_BOTTOM) a[5].i += h;
+    if (anchor & NJ_ANCHOR_VCENTER) a[5].i += h / 2;
+    CHECK(nj_call(vm, graphics, NJ_C_GRAPHICS, "copyArea", "(IIIIIII)V", a, NULL) == NJ_OK);
+    for (int y = 0; y < grid->height; ++y) for (int x = 0; x < grid->width; ++x) {
+        int from = y * grid->width + x;
+        int lx = x / scale, ly = y / scale;
+        if (lx >= 1 && lx < 6 && ly < 4 && lx >= dx && lx < dx + w && ly >= dy && ly < dy + h)
+            from += ((sy - dy) * grid->width + sx - dx) * scale;
+        nj_u4 got = nj_surface_get(grid, x, y);
+        if (got != before[from])
+            fprintf(stderr, "copyArea scale %d at (%d,%d): got %08x expected %08x\n",
+                    scale, x, y, (unsigned)got, (unsigned)before[from]);
+        CHECK(got == before[from]);
+    }
+}
+
+static void check_copy_area(nj_vm *vm, nj_ref graphics, nj_surface *logical, nj_surface *hd)
+{
+    nj_value a[7] = {{0}};
+    a[0].i = 1; a[1].i = 1;
+    CHECK(nj_call(vm, graphics, NJ_C_GRAPHICS, "translate", "(II)V", a, NULL) == NJ_OK);
+    a[0].i = 0; a[1].i = -1; a[2].i = 5; a[3].i = 4;
+    CHECK(nj_call(vm, graphics, NJ_C_GRAPHICS, "setClip", "(IIII)V", a, NULL) == NJ_OK);
+    for (int i = 0; i < 2; ++i) {
+        nj_surface *grid = i ? hd : logical;
+        int scale = i ? 4 : 1;
+        check_scroll(vm, graphics, grid, scale, 0, 0, 1, 1, 0);
+        check_scroll(vm, graphics, grid, scale, 1, 1, -1, -1, NJ_ANCHOR_RIGHT | NJ_ANCHOR_BOTTOM);
+        check_scroll(vm, graphics, grid, scale, 0, 0, 1, 0, NJ_ANCHOR_HCENTER | NJ_ANCHOR_VCENTER);
+    }
+    /* Exceptions precede drawing even if part of the source is valid or the
+     * destination is clipped away. Check a pixel that could be partially copied. */
+    const int invalid[][4] = {
+        {logical->width - 2, 0, 2, 1}, {-2, 0, 2, 1},
+        {0, logical->height - 2, 1, 2}, {0, -2, 1, 2}
+    };
+    for (unsigned i = 0; i < sizeof(invalid) / sizeof(invalid[0]); ++i) {
+        for (int j = 0; j < 4; ++j) a[j].i = invalid[i][j];
+        a[4].i = i == 3 ? 20 : 0; a[5].i = 0; a[6].i = 0;
+        nj_u4 prev = nj_surface_get(logical, 1, 1), prev_hd = nj_surface_get(hd, 4, 4);
+        CHECK(nj_call(vm, graphics, NJ_C_GRAPHICS, "copyArea", "(IIIIIII)V", a, NULL) != NJ_OK);
+        nj_ref ex = nj_take_exception(vm);
+        CHECK(ex && strcmp(ex->cls->name, "java/lang/IllegalArgumentException") == 0);
+        CHECK(nj_surface_get(logical, 1, 1) == prev && nj_surface_get(hd, 4, 4) == prev_hd);
+    }
+    /* A zero-sized region right on the bottom-right boundary is legal. */
+    a[0].i = logical->width - 1; a[1].i = logical->height - 1;
+    a[2].i = 0; a[3].i = 0;
+    CHECK(nj_call(vm, graphics, NJ_C_GRAPHICS, "copyArea", "(IIIIIII)V", a, NULL) == NJ_OK);
+}
+
 /* A scroll overlaps on both axes. Each physical sample is unique so a
  * stale mirror, a wrong row order or a nearest upscale fails the check. */
 static void check_image_copies(nj_vm *vm, nj_ref image, nj_surface *logical, nj_surface *hd)
@@ -101,6 +171,9 @@ int main(void)
     nj_midp_hd_invalidate(vm, screen);
     CHECK(nj_midp_hd_present(vm) && frames == 2 && first == 0xff000000u);
     check_image_copies(vm, image, &surface, src->target);
+    check_copy_area(vm, nj_root(vm, nj_midp_image_graphics(vm, image)), &surface, src->target);
+    /* A null target selects the port's framebuffer in this implementation. */
+    check_copy_area(vm, nj_root(vm, nj_object_new(vm, NJ_C_GRAPHICS)), screen, dst->target);
     nj_root_release(vm, mark);
     nj_gc_collect(vm);
     CHECK(dst->lookup(dst->ud, key, 6, 4) == NULL);

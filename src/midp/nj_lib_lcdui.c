@@ -2024,50 +2024,32 @@ NJFN(g_drawRGB)
     return st;
 }
 
-/* Stage one visible scanline. Vertical traversal follows memmove order so
- * scrolling overlapping areas preserves unread source rows on both grids. */
-static int copy_area_rows(nj_vm *vm, const nj_gfx *g, nj_s8 sx, nj_s8 sy,
-                          nj_s8 w, nj_s8 h, nj_s8 dx, nj_s8 dy)
+/* The source has been validated and the destination clip is surface-bounded.
+ * Move packed pixels in place: horizontal overlap is handled by memmove,
+ * vertical overlap by visiting rows in the direction that preserves the source. */
+static void copy_area_rows(const nj_gfx *g, nj_s8 sx, nj_s8 sy,
+                           nj_s8 w, nj_s8 h, nj_s8 dx, nj_s8 dy)
 {
-    nj_gfx dst = *g;
+    const nj_surface *s = g->surf;
     nj_s8 left = dx, top = dy, right = dx + w, bottom = dy + h;
     nj_s8 clip_right = (nj_s8)g->clip_x + g->clip_w;
     nj_s8 clip_bottom = (nj_s8)g->clip_y + g->clip_h;
-    nj_image row;
-    int y, step = dy > sy ? -1 : 1;
+    nj_u1 *pixels = s->pixels;
+    nj_size bytes;
+    int step = dy > sy ? -1 : 1;
 
     if (left < g->clip_x) left = g->clip_x;
     if (top < g->clip_y) top = g->clip_y;
     if (right > clip_right) right = clip_right;
     if (bottom > clip_bottom) bottom = clip_bottom;
-    if (left >= right || top >= bottom) return 1;
-    row.width = (int)(right - left);
-    row.height = 1;
-    row.format = NJ_PIXFMT_ARGB8888;
-    row.has_alpha = 1;
-    row.pixels = nj_host_alloc(vm, (nj_size)row.width * sizeof(*row.pixels));
-    if (!row.pixels) return 0;
-    dst.translate_x = dst.translate_y = 0;
-    dst.mirror = NULL;
+    if (left >= right || top >= bottom || (sx == dx && sy == dy)) return;
     sx += left - dx;
-    for (y = (int)(step < 0 ? bottom - 1 : top); y >= top && y < bottom; y += step) {
-        nj_s8 source_y = sy + (y - dy);
-        if (g->surf->format == NJ_PIXFMT_ARGB8888 && sx >= 0 &&
-            sx + row.width <= g->surf->width && source_y >= 0 && source_y < g->surf->height) {
-            const nj_u1 *source = (const nj_u1 *)g->surf->pixels + (nj_size)source_y * g->surf->stride;
-            memcpy(row.pixels, source + (nj_size)sx * 4, (nj_size)row.width * 4);
-        } else {
-            for (int x = 0; x < row.width; ++x) {
-                nj_s8 source_x = sx + x;
-                row.pixels[x] = source_x >= 0 && source_x < g->surf->width &&
-                    source_y >= 0 && source_y < g->surf->height ?
-                    nj_surface_get(g->surf, (int)source_x, (int)source_y) : 0;
-            }
-        }
-        nj_gfx_draw_image(&dst, &row, (int)left, y, 0, 0, row.width, 1);
+    bytes = (nj_size)(right - left) * s->bpp;
+    for (int y = (int)(step < 0 ? bottom - 1 : top); y >= top && y < bottom; y += step) {
+        nj_u1 *dst = pixels + (nj_size)y * s->stride + (nj_size)left * s->bpp;
+        const nj_u1 *src = pixels + (nj_size)(sy + y - dy) * s->stride + (nj_size)sx * s->bpp;
+        memmove(dst, src, bytes);
     }
-    nj_host_free(vm, row.pixels);
-    return 1;
 }
 
 NJFN(g_copyArea)
@@ -2092,6 +2074,13 @@ NJFN(g_copyArea)
         return nj_throw(vm, "java/lang/IllegalArgumentException",
                         "bad horizontal anchor");
     }
+    if (!gfx_load(vm, self, &g, &sc)) {
+        return NJ_ERR;
+    }
+    xs += g.translate_x; ys += g.translate_y;
+    if (xs < 0 || ys < 0 || xs + w > g.surf->width || ys + h > g.surf->height) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException", "source region outside the image");
+    }
     if (w == 0 || h == 0) {
         return NJ_OK;
     }
@@ -2103,19 +2092,13 @@ NJFN(g_copyArea)
         if (a & NJ_ANCHOR_VCENTER) { yd -= h / 2; }
         else if (a & NJ_ANCHOR_BOTTOM) { yd -= h; }
     }
-    if (!gfx_load(vm, self, &g, &sc)) {
-        return NJ_ERR;
-    }
-    xs += g.translate_x; ys += g.translate_y;
     xd += g.translate_x; yd += g.translate_y;
-    if (!copy_area_rows(vm, &g, xs, ys, w, h, xd, yd)) return nj_throw_oom(vm);
+    copy_area_rows(&g, xs, ys, w, h, xd, yd);
     scale = nj_gfx_mirror_context(&g, &physical);
-    if (scale && !copy_area_rows(vm, &physical, xs * scale, ys * scale,
-                                 (nj_s8)w * scale, (nj_s8)h * scale,
-                                 xd * scale, yd * scale)) {
-        nj_midp_hd_invalidate(vm, g.surf);
+    if (scale) {
+        copy_area_rows(&physical, xs * scale, ys * scale, (nj_s8)w * scale,
+                       (nj_s8)h * scale, xd * scale, yd * scale);
     }
-    gfx_store(vm, self, &g);
     return NJ_OK;
 }
 
