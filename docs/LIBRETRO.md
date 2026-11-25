@@ -951,3 +951,8 @@ fallback). See `docs/RELEASE_0.5.45.md` for hashes and the verification table.
 修复自定义比例视图下的 GL 呈现回退与窗口翻转；核心渲染路径不变，libretro 行为沿用 r65。
 核心归档 `nj2me-0.5.47-libretro-cores.zip` 12,188,997 B SHA-256 `e7d0df1952fd75cf666f4fef0e51573ef16b7fa694cc75795ae6fed5d3382d76`，
 `.info` SHA-256 `095f3c16a14d2d7f4a3c0a8bffd40408fc16e71b6c40ba963b53936ea7e56f0c`。
+
+## 当前发布：0.5.48 / r67（2026-11-25）
+
+界面「自释其意」延续版：Android 面板行副标题压缩为状态与当前值，附五组面板截图；核心渲染路径与 r66 相同。
+`.info` SHA-256 `9960dc74db53ec5283227c62282bc8a4837caecc805f9da5b4ed0676ec27c263`，核心归档 `12,189,042 B` SHA-256 `9d0a77bd35196af0e52ac5fd57f8ed595087973c7695615d9de079f2d9c9ff4b`。

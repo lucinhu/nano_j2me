@@ -2368,3 +2368,13 @@ open/mergeable，未合并。Fork 分支基于 `libretro-super` master `c3c55c2`
 - APK：versionCode 547，5 个 ABI；见 `docs/RELEASE_0.5.47.md`。
 - 验证：CTest 211/211（376.65 s）、mock 20/20、真实 RetroArch PASS、Wine 4/4、bundle 32/32。
 - PR：libretro-super#2204 head `15130ac`、libretro/docs#1239 head `4f360b1`，均 OPEN/MERGEABLE（未合并）。
+
+## 0.5.48 / r67
+
+- 版本：0.5.48；`.info` SHA-256 `9960dc74db53ec5283227c62282bc8a4837caecc805f9da5b4ed0676ec27c263`。
+- super 补丁：基于 `libretro-super` master `c3c55c2d5d16ecf7b447fcfc867acc363b0aa1d9`，
+  分支 `add-nano_j2me` 提交 `3a8b48fdeb92e23e8b3e6de4aa39dfa60568d82a`（50 行校验通过）。
+- 核心：8 目标，归档 `12,189,042 B` SHA-256 `9d0a77bd35196af0e52ac5fd57f8ed595087973c7695615d9de079f2d9c9ff4b`。
+- APK：versionCode 548，5 个 ABI。
+- 验证：CTest 211/211（377.43 s）、mock 20/20、真实 RetroArch PASS、Wine 4/4、bundle 32/32。
+- PR：libretro-super#2204 head `3a8b48f`、libretro/docs#1239 head `4f360b1`，OPEN/MERGEABLE（未合并）。
