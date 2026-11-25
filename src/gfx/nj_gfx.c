@@ -83,6 +83,7 @@
 
 #include <limits.h>
 #include <math.h>
+#include <stdint.h>
 #include <string.h>   /* memcpy: alignment-safe 16/32-bit pixel access */
 
 #ifdef NJ_GFX_2D_STATS
@@ -2052,30 +2053,24 @@ static inline void nj_blend565(nj_u1 *dp, nj_u4 argb)
     memcpy(dp, &v, sizeof v);
 }
 
-/*
- * One translucent ARGB8888 source pixel over an ARGB8888 destination, with the
- * exact arithmetic of nj_gfx_blend_pixel() at full source weight: the source
- * alpha is the coverage (the caller's alpha is 255), and the destination is
- * another ARGB word, so the pixel needs no format conversion at either end.
- * 2330 Graphics.drawImage() calls in a 900-frame Doom 3 run pushed 14.9 M
- * pixels through the general blend for exactly this pair.
- */
+/* Two 8-bit channels in separate 16-bit lanes. Each weighted sum is at
+ * most 255*255. Adding the rounding bias and the high byte in each lane
+ * gives exactly (sum + 127) / 255, without carries between channels. */
+static nj_u4 nj_blend_pair(nj_u4 dst, nj_u4 src, nj_u4 a)
+{
+    const nj_u4 lanes = 0x00ff00ffu;
+    nj_u4 sum = src * a + dst * (255u - a) + 0x00800080u;
+    return ((sum + ((sum >> 8) & lanes)) >> 8) & lanes;
+}
+
 static nj_u4 nj_blend_argb(nj_u4 dst, nj_u4 src)
 {
-    nj_u4 a = (src >> 24) & 0xFFu;
-    nj_u4 sr = (src >> 16) & 0xFFu;
-    nj_u4 sg = (src >> 8) & 0xFFu;
-    nj_u4 sb = src & 0xFFu;
-    nj_u4 dr = (dst >> 16) & 0xFFu;
-    nj_u4 dg = (dst >> 8) & 0xFFu;
-    nj_u4 db = dst & 0xFFu;
-    nj_u4 da = (dst >> 24) & 0xFFu;
-    nj_u4 nr = (sr * a + dr * (255u - a) + 127u) / 255u;
-    nj_u4 ng = (sg * a + dg * (255u - a) + 127u) / 255u;
-    nj_u4 nb = (sb * a + db * (255u - a) + 127u) / 255u;
-    nj_u4 na = (a * 255u + da * (255u - a) + 127u) / 255u;
-
-    return (na << 24) | (nr << 16) | (ng << 8) | nb;
+    const nj_u4 lanes = 0x00ff00ffu;
+    nj_u4 a = src >> 24;
+    nj_u4 rb = nj_blend_pair(dst & lanes, src & lanes, a);
+    /* Source-over adds full coverage in the alpha lane. */
+    nj_u4 ag = nj_blend_pair((dst >> 8) & lanes, 0x00ff0000u | ((src >> 8) & 255u), a);
+    return rb | (ag << 8);
 }
 
 /*
@@ -2207,6 +2202,18 @@ static void hd_bitmap_row(nj_u1 *row, int pitch, int scale, int count,
 {
     size_t cell_bytes = (size_t)scale * sizeof(nj_u4);
     nj_u1 *run = row;
+    /* A full background usually has contiguous ARGB rows. Check the actual
+     * alpha bytes once, then expand the row without a per-texel blend test. */
+    if (format == NJ_PIXFMT_ARGB8888 && step == 4 && alpha == 255 && !force_opaque &&
+        count >= 32 && (replace || nj_argb_row_opaque(source + offset, count))) {
+        const nj_u1 *src = source + offset;
+        for (int i = 0; i < count; ++i, row += cell_bytes, src += 4) {
+            nj_u4 color = nj_word_get(src, 0);
+            for (int x = 0; x < scale; ++x) memcpy(row + (size_t)x * 4, &color, 4);
+        }
+        hd_repeat_row(run, pitch, (size_t)(row - run), scale);
+        return;
+    }
     for (int i = 0; i < count; ++i, offset += step, row += cell_bytes) {
         nj_u4 color = nj_src_pixel(source, offset, format) | (force_opaque ? 0xff000000u : 0u);
         unsigned coverage = ((color >> 24) * (unsigned)alpha + 127u) / 255u;
@@ -2509,9 +2516,14 @@ static void nj_region_draw(nj_gfx *g, const nj_u1 *src, nj_s8 src_stride_bytes,
                     memcpy(dp, src + off, 3);
                 }
             } else {
-                for (i = 0; i < n; i++, off += step, dp += 4) {
-                    memcpy(dp, src + off, 4);
+                /* Four independent address calculations for a strided row.
+                 * Keep each load beside its store for overlapping views. */
+                for (i = 0; i <= n - 4; i += 4, off += 4 * step, dp += 16) {
+                    for (int j = 0; j < 4; ++j)
+                        memcpy(dp + 4 * j, src + (off + j * step), 4);
                 }
+                for (; i < n; i++, off += step, dp += 4)
+                    memcpy(dp, src + off, 4);
             }
         }
         return;
@@ -2859,6 +2871,14 @@ static void nj_region_draw(nj_gfx *g, const nj_u1 *src, nj_s8 src_stride_bytes,
         nj_s8 step;
         nj_u1 *dst = (nj_u1 *)g->surf->pixels;
         int first = (int)(cx0 - X0), n = (int)(cx1 - cx0 + 1);
+        /* Grouped reads must not observe a different source when a C caller
+         * supplies overlapping image views. Keep the old pixel order then. */
+        uintptr_t sbase = (uintptr_t)src, dbase = (uintptr_t)dst;
+        int grouped_width = n;
+        if (image_height <= 0 ||
+            (sbase <= dbase ? (nj_u8)(dbase - sbase) < (nj_u8)src_stride_bytes * image_height
+                            : (nj_u8)(sbase - dbase) < (nj_u8)g->surf->stride * g->surf->height))
+            grouped_width = 0;
 
         if (sw == 1 && sh == 1) {
             nj_u4 c = nj_word_get(src + (nj_s8)sy * src_stride_bytes + (nj_s8)sx * 4, 0);
@@ -2884,9 +2904,21 @@ static void nj_region_draw(nj_gfx *g, const nj_u1 *src, nj_s8 src_stride_bytes,
             /* Advance an integer offset so the final backwards step never
              * constructs a pointer before the source allocation. */
             if (bpp == 4) {
-                for (i = 0; i < n; i++, off += step, dp += 4) {
-                    nj_paint_argb_pixel(dp, nj_word_get(src + off, 0));
+                /* Rotated sprites often have runs of opaque colour. Copy four
+                 * sampled texels together when all four replace the target. */
+                for (i = 0; i <= grouped_width - 4; i += 4, off += 4 * step, dp += 16) {
+                    nj_u4 p[4];
+                    for (int j = 0; j < 4; ++j)
+                        p[j] = nj_word_get(src + (off + j * step), 0);
+                    if (((p[0] & p[1] & p[2] & p[3]) >> 24) == 255u) {
+                        memcpy(dp, p, sizeof p);
+                    } else {
+                        for (int j = 0; j < 4; ++j)
+                            nj_paint_argb_pixel(dp + 4 * j, p[j]);
+                    }
                 }
+                for (; i < n; i++, off += step, dp += 4)
+                    nj_paint_argb_pixel(dp, nj_word_get(src + off, 0));
             } else {
                 for (i = 0; i < n; i++, off += step, dp += 2) {
                     nj_u4 c = nj_word_get(src + off, 0);

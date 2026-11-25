@@ -56,24 +56,29 @@ static int hd_art_radius(int k, nj_u4 corner, nj_u4 center)
     return (k - 1) / 2 + (!(k & 1) && corner > center);
 }
 
-static void hd_art_cell(nj_u1 *dst, int pitch, int k, hd_art_col l, hd_art_col m, hd_art_col r)
+/* Return one for an opaque flat cell. The caller repeats adjacent first-row
+ * spans together after the last such cell, across colour changes as well. */
+static int hd_art_cell(nj_u1 *dst, int pitch, int k, hd_art_col l, hd_art_col m, hd_art_col r)
 {
     nj_u4 c = m.mid;
-    nj_u4 corners[4] = {
-        hd_art_corner(c,m.top,l.mid,m.bot,r.mid,l.top,r.top,l.bot,r.bot),
-        hd_art_corner(c,m.top,r.mid,m.bot,l.mid,r.top,l.top,r.bot,l.bot),
-        hd_art_corner(c,m.bot,l.mid,m.top,r.mid,l.bot,r.bot,l.top,r.top),
-        hd_art_corner(c,m.bot,r.mid,m.top,l.mid,r.bot,l.bot,r.top,l.top)
-    };
+    nj_u4 corners[4];
+    /* Every corner needs both of its orthogonal neighbours to differ from c. */
+    if ((l.mid == c && r.mid == c) || (m.top == c && m.bot == c)) {
+        corners[0] = corners[1] = corners[2] = corners[3] = c;
+    } else {
+        corners[0] = hd_art_corner(c,m.top,l.mid,m.bot,r.mid,l.top,r.top,l.bot,r.bot);
+        corners[1] = hd_art_corner(c,m.top,r.mid,m.bot,l.mid,r.top,l.top,r.bot,l.bot);
+        corners[2] = hd_art_corner(c,m.bot,l.mid,m.top,r.mid,l.bot,r.bot,l.top,r.top);
+        corners[3] = hd_art_corner(c,m.bot,r.mid,m.top,l.mid,r.bot,l.bot,r.top,l.top);
+    }
     if (corners[0] == c && corners[1] == c && corners[2] == c && corners[3] == c) {
-        if (!c) return;
+        if (!c) return 0;
         if ((c >> 24) == 255) {
             hd_art_span(dst, k, c);
-            hd_repeat_row(dst, pitch, (size_t)k * 4, k);
-        } else {
-            for (int y = 0; y < k; ++y) hd_art_span(dst + (nj_s8)y * pitch, k, c);
+            return 1;
         }
-        return;
+        for (int y = 0; y < k; ++y) hd_art_span(dst + (nj_s8)y * pitch, k, c);
+        return 0;
     }
     int radius[4];
     for (int i = 0; i < 4; ++i) radius[i] = hd_art_radius(k, corners[i], c);
@@ -87,6 +92,7 @@ static void hd_art_cell(nj_u1 *dst, int pitch, int k, hd_art_col l, hd_art_col m
         hd_art_span(row + (nj_s8)left * 4, k - left - right, c);
         hd_art_span(row + (nj_s8)(k - right) * 4, right, corners[side+1]);
     }
+    return 0;
 }
 
 static void hd_pixel_art_bitmap(nj_surface *dst, int k, const nj_u1 *src, nj_s8 stride,
@@ -110,12 +116,17 @@ static void hd_pixel_art_bitmap(nj_surface *dst, int k, const nj_u1 *src, nj_s8 
         hd_art_col m = hd_art_column(src, rows, first * step, format);
         hd_art_col l = first ? hd_art_column(src, rows, (first - 1) * step, format) : m;
         nj_u1 *row = (nj_u1 *)dst->pixels + (nj_s8)y * k * dst->stride + (nj_s8)x0 * k * 4;
-        for (int x = x0; x <= x1; ++x) {
+        nj_u1 *run = row;
+        for (int x = x0; x <= x1; ++x, row += (size_t)k * 4) {
             int next = (int)(x - dx) + 1;
             hd_art_col r = next < tw ? hd_art_column(src, rows, next * step, format) : m;
-            hd_art_cell(row + (nj_s8)(x - x0) * k * 4, dst->stride, k, l, m, r);
+            if (!hd_art_cell(row, dst->stride, k, l, m, r)) {
+                hd_repeat_row(run, dst->stride, (size_t)(row - run), k);
+                run = row + (size_t)k * 4;
+            }
             l = m;
             m = r;
         }
+        hd_repeat_row(run, dst->stride, (size_t)(row - run), k);
     }
 }

@@ -150,7 +150,7 @@ static void run_alpha_cases(void)
 /* Measure exactly the same logical blit with a physical ARGB companion. The
  * hash covers both colour planes, including the untouched row padding. */
 static void run_hd(const char *name, int w, int h, int scale, int transform,
-                   int mixed_alpha, int calls)
+                   int mixed_alpha, int calls, int filter, int bands)
 {
     int size = (w > h ? w : h) + 4;
     int pitch = size * scale * 4 + 5;
@@ -162,12 +162,14 @@ static void run_hd(const char *name, int w, int h, int scale, int transform,
     memset(storage, 0x35, bytes + 1);
     for (int i = 0; i < w * h; ++i) {
         unsigned a = mixed_alpha ? (i % 7 == 0 ? 0u : i % 5 == 0 ? 127u : 255u) : 255u;
-        source[i] = (a << 24) | (((unsigned)i * 78541u + 19u) & 0xffffffu);
+        unsigned rgb = ((unsigned)i * 78541u + 19u) & 0xffffffu;
+        if (bands) rgb = ((i / w + i % w) / 12) % 2 ? 0x225533u : 0xeecc33u;
+        source[i] = (a << 24) | rgb;
     }
     nj_image image = {w, h, NJ_PIXFMT_ARGB8888, source, mixed_alpha};
     nj_surface lo = {logical, size, size, size * 4, NJ_PIXFMT_ARGB8888, 4};
     nj_surface hi = {storage + 1, size * scale, size * scale, pitch, NJ_PIXFMT_ARGB8888, 4};
-    nj_render_mirror mirror = {.target = &hi, .scale = scale};
+    nj_render_mirror mirror = {.target = &hi, .scale = scale, .smooth_assets = filter};
     nj_gfx g;
     nj_gfx_init(&g, &lo);
     g.mirror = &mirror;
@@ -190,9 +192,15 @@ static void run_hd(const char *name, int w, int h, int scale, int transform,
 int main(int argc, char **argv)
 {
     if (argc == 2 && strcmp(argv[1], "--hd") == 0) {
-        run_hd("hd-opaque-240x320-3x", 240, 320, 3, NJ_TRANS_NONE, 0, 60);
-        run_hd("hd-mixed-37x29-rot90-4x", 37, 29, 4, NJ_TRANS_ROT90, 1, 2500);
-        run_hd("hd-mixed-16x16-2x", 16, 16, 2, NJ_TRANS_NONE, 1, 7000);
+        run_hd("hd-opaque-240x320-3x", 240, 320, 3, NJ_TRANS_NONE, 0, 60, NJ_ASSET_NEAREST, 0);
+        run_hd("hd-mixed-37x29-rot90-4x", 37, 29, 4, NJ_TRANS_ROT90, 1, 2500, NJ_ASSET_NEAREST, 0);
+        run_hd("hd-mixed-16x16-2x", 16, 16, 2, NJ_TRANS_NONE, 1, 7000, NJ_ASSET_NEAREST, 0);
+        return 0;
+    }
+    if (argc == 2 && strcmp(argv[1], "--assets") == 0) {
+        run_hd("crisp-diagonals-240x320-3x", 240, 320, 3, NJ_TRANS_NONE, 0, 80, NJ_ASSET_PIXEL_ART, 1);
+        run_hd("crisp-detail-240x320-4x", 240, 320, 4, NJ_TRANS_NONE, 0, 80, NJ_ASSET_PIXEL_ART, 0);
+        run_hd("crisp-sprite-37x29-rot90-4x", 37, 29, 4, NJ_TRANS_ROT90, 1, 3000, NJ_ASSET_PIXEL_ART, 1);
         return 0;
     }
     if (argc == 2 && strcmp(argv[1], "--alpha") == 0) {
@@ -200,7 +208,7 @@ int main(int argc, char **argv)
         return 0;
     }
     if (argc != 1) {
-        fprintf(stderr, "usage: %s [--alpha|--hd]\n", argv[0]);
+        fprintf(stderr, "usage: %s [--alpha|--hd|--assets]\n", argv[0]);
         return 2;
     }
     run("565-mirror-1x1", NJ_PIXFMT_RGB565,1,1,NJ_TRANS_MIRROR,NJ_ROP_PAINT,0);

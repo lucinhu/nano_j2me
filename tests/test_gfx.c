@@ -2024,6 +2024,34 @@ static void test_transform_compositing(tctx *t)
     CHECK(t, memcmp(maskbuf, savedmask, sizeof maskbuf) == 0);
 }
 
+/* A transformed self-blit observes earlier destination writes one pixel at
+ * a time. Cover both the image API and its software callback replay. */
+static void test_transform_alias(tctx *t)
+{
+    for (int mode = 0; mode < 4; ++mode) {
+        int replay = mode >= 2, rop = mode & 1 ? NJ_ROP_SET : NJ_ROP_PAINT;
+        for (int shift = -1; shift <= 1; ++shift) {
+            nj_u4 data[10], expected[10];
+            nj_u4 *dst = data + 1 + shift, *src = data + 1;
+            nj_surface s = {dst, 8, 1, 32, NJ_PIXFMT_ARGB8888, 4};
+            nj_image img = {8, 1, NJ_PIXFMT_ARGB8888, src, 0};
+            nj_gfx g;
+            for (int i = 0; i < 10; ++i) expected[i] = data[i] = 0xff123400u + (nj_u4)i;
+            for (int i = 0; i < 8; ++i) expected[1 + shift + i] = expected[1 + 7 - i];
+            nj_gfx_init(&g, &s);
+            if (replay) {
+                nj_gfx_blit b = {.pixels = (const nj_u1 *)src, .stride = 32, .format = img.format,
+                    .width = 8, .height = 1, .transform = NJ_TRANS_MIRROR, .rop = rop,
+                    .alpha = 255, .clip_w = 8, .clip_h = 1};
+                nj_gfx_blit_software(&g, &b);
+            } else {
+                nj_gfx_draw_image_rop(&g, &img, 0, 0, 0, 0, 8, 1, rop, NJ_TRANS_MIRROR);
+            }
+            CHECK(t, memcmp(data, expected, sizeof data) == 0);
+        }
+    }
+}
+
 static void test_short_masks(tctx *t)
 {
     static const int dimensions[][2] = {{1, 1}, {2, 3}, {5, 1}, {1, 5}};
@@ -2103,6 +2131,7 @@ int main(void)
     test_transform_boundaries(&t);
     test_image_region_limits(&t);
     test_transform_compositing(&t);
+    test_transform_alias(&t);
     test_short_masks(&t);
 
     printf("\ntest_gfx: %u assertions, %u failures -> %s\n",

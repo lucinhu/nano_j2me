@@ -440,8 +440,60 @@ static void pixel_art_bypass(void)
         assert(physical[y][x] == colors[2 * S + 2]);
 }
 
+/* Flat cells may share a row copy across colour changes. Transparent and
+ * translucent cells must preserve the distinct samples underneath them. */
+static void pixel_art_run_boundaries(void)
+{
+    nj_u4 colors[] = {WHITE, BG, 0x00010203u, WHITE, 0x80408020u, BG, WHITE, BG};
+    nj_image strip = {8, 1, NJ_PIXFMT_ARGB8888, colors, 1};
+    nj_u4 expected[P][P + 1];
+    for (int t = 0; t < 8; ++t) {
+        for (int pass = 0; pass < 2; ++pass) {
+            reset();
+            for (int y = 0; y < P; ++y) for (int x = 0; x < P; ++x)
+                physical[y][x] = BG | ((nj_u4)(y * P + x) * 73u);
+            mirror.smooth_assets = pass ? NJ_ASSET_PIXEL_ART : NJ_ASSET_NEAREST;
+            nj_gfx_set_clip(&g, 1, 1, 8, 7);
+            nj_gfx_draw_image_rop(&g, &strip, 2, 2, 0, 0, 8, 1, NJ_ROP_PAINT, t);
+            if (!pass) memcpy(expected, physical, sizeof expected);
+            else assert(!memcmp(expected, physical, sizeof expected));
+        }
+    }
+}
+
+/* Compare an eligible wide row with one-cell draws over an identical HD
+ * background. The last texels exercise a late alpha miss and raw SET. */
+static void wide_bitmap_rows(void)
+{
+    enum { W = 37, S = 3 };
+    nj_u4 source[2 * W], low[W * 2], high[2 * S][W * S + 1], expected[2 * S][W * S + 1];
+    nj_surface a = {low, W, 2, W * 4, NJ_PIXFMT_ARGB8888, 4};
+    nj_surface b = {high, W * S, 2 * S, (W * S + 1) * 4, NJ_PIXFMT_ARGB8888, 4};
+    nj_render_mirror m = {.target = &b, .scale = S};
+    nj_image img = {W, 2, NJ_PIXFMT_ARGB8888, source, 0};
+    for (int i = 0; i < 2 * W; ++i) source[i] = BG | (nj_u4)i * 41237u;
+    source[2 * W - 1] = 0x00765432u;
+    source[2 * W - 2] = 0x80654321u;
+    for (int paint = 0; paint <= 1; ++paint) {
+        int rop = paint ? NJ_ROP_PAINT : NJ_ROP_SET;
+        for (int wide = 0; wide <= 1; ++wide) {
+            nj_gfx ctx;
+            memset(low, 0x35, sizeof low);
+            memset(high, 0x65, sizeof high);
+            nj_gfx_init(&ctx, &a);
+            ctx.mirror = &m;
+            int width = wide ? W : 1;
+            for (int x = 0; x < W; x += width)
+                nj_gfx_draw_image_rop(&ctx, &img, x, 0, x, 0, width, 2, rop, NJ_TRANS_NONE);
+            if (!wide) memcpy(expected, high, sizeof high);
+            else assert(!memcmp(expected, high, sizeof high));
+        }
+    }
+}
+
 int main(void)
 {
+    wide_bitmap_rows();
     geometry();
     images();
     bitmap_planes();
@@ -449,6 +501,7 @@ int main(void)
     smooth_offscreen();
     pixel_art_frames();
     pixel_art_bypass();
+    pixel_art_run_boundaries();
     puts("physical LCDUI geometry, image transforms, clipping and compositing passed");
     return 0;
 }
