@@ -341,6 +341,7 @@ typedef struct cli {
     int         upscale;      /* --upscale: -1 unset, 0..6 shader pass mode */
     int         upscale_scale;/* --upscale-scale: 0 port default */
     int         upscale_auto;/* --upscale-scale auto: 1 */
+    float       upscale_sharp;/* --upscale-sharp: RCAS 0..1, -1 default */
     const char *save_state;
     const char *load_state;
     int         save_frame;
@@ -811,6 +812,7 @@ int main(int argc, char **argv)
     c.height = NJ_SCREEN_HEIGHT;
     c.heap_mb = (unsigned)NJ_CLI_HEAP_MB;
     c.upscale = -1;
+    c.upscale_sharp = -1.0f;
     c.save_slot = -1;
     c.load_slot = -1;
 #if NJ_HAVE_SDL2
@@ -888,6 +890,14 @@ int main(int argc, char **argv)
                 fprintf(stderr, "--upscale: bad mode %s (nearest|sharp|scanline|lcd|crt|fsr|bicubic|0..6)\n", m);
                 return 2;
             }
+        } else if (strcmp(a, "--upscale-sharp") == 0 && i + 1 < argc) {
+            const char *sv = argv[++i];
+            float fv = (float)atof(sv);
+            if (fv <= 0.0f || fv > 1.0f) {
+                fprintf(stderr, "--upscale-sharp: expected 0..1, got %s\n", sv);
+                return 2;
+            }
+            c.upscale_sharp = fv;
         } else if (strcmp(a, "--upscale-scale") == 0 && i + 1 < argc) {
             const char *sc = argv[++i];
             if (strcmp(sc, "auto") == 0) {
@@ -1157,11 +1167,19 @@ int main(int argc, char **argv)
                 snprintf(v, sizeof v, "%d", c.upscale_auto ? 0 : c.upscale_scale);
                 _putenv_s("NJ_GL_PRESENT_SCALE", v);
             }
+            if (c.upscale_sharp > 0.0f) {
+                snprintf(v, sizeof v, "%.3f", (double)c.upscale_sharp);
+                _putenv_s("NJ_GL_PRESENT_SHARP", v);
+            }
 #else
             setenv("NJ_GL_PRESENT", v, 1);
             if (c.upscale_scale > 0 || c.upscale_auto) {
                 snprintf(v, sizeof v, "%d", c.upscale_auto ? 0 : c.upscale_scale);
                 setenv("NJ_GL_PRESENT_SCALE", v, 1);
+            }
+            if (c.upscale_sharp > 0.0f) {
+                snprintf(v, sizeof v, "%.3f", (double)c.upscale_sharp);
+                setenv("NJ_GL_PRESENT_SHARP", v, 1);
             }
 #endif
         }

@@ -611,6 +611,7 @@ static void sdl2_gles2_open(sdl2_gles2 *s)
         const char *dump_prefix = getenv("NJ_GL_PRESENT_DUMP");
         const char *scale_env = getenv("NJ_GL_PRESENT_SCALE");
         const char *count_env = getenv("NJ_GL_PRESENT_COUNT");
+        const char *sharp_env = getenv("NJ_GL_PRESENT_SHARP");
         int mode;
         if ((!mode_env || !mode_env[0]) && (!dump_prefix || !dump_prefix[0])) {
             /* A1/A2 presentation pass disabled: default software path. */
@@ -626,6 +627,9 @@ static void sdl2_gles2_open(sdl2_gles2 *s)
             if (s->present_left < 1) s->present_left = 1;
             if (mode < 0 || mode >= NJ_GL_PRESENT_MODES) mode = 0;
             s->present_mode = mode;
+            if (sharp_env && sharp_env[0]) {
+                nj_gles2_present_set_sharp(s->backend, (float)SDL_atof(sharp_env));
+            }
             if (mode_env && mode_env[0]) s->present_window = 1;
             if (dump_prefix && dump_prefix[0]) {
                 SDL_snprintf(s->present_prefix, sizeof s->present_prefix, "%s",

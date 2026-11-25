@@ -40,6 +40,7 @@ struct nj_gles2 {
     int frame_enabled;
     /* Offscreen presentation shader pass (nj_gfx_present.inc). */
     int present_ready;
+    float present_sharp;
     GLuint present_program[NJ_GL_PRESENT_MODES];
     GLint present_sampler[NJ_GL_PRESENT_MODES];
     GLint present_texel[NJ_GL_PRESENT_MODES];
@@ -942,6 +943,7 @@ nj_gles2 *nj_gles2_create(const nj_gles2_config *config)
     if (!config || !config->is_current || !config->is_current(config->ud)) return NULL;
     s = (nj_gles2 *)calloc(1, sizeof *s);
     if (!s) return NULL;
+    s->present_sharp = 0.87055056f;
     s->config = *config;
     if (config->gl) s->gl = *config->gl;
     else if (!nj_gl_api_default(&s->gl)) { free(s); return NULL; }

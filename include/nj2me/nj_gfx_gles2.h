@@ -89,6 +89,9 @@ int nj_gles2_frame_active(const void *ud);
 #define NJ_GL_PRESENT_MODES 7
 int nj_gles2_present(void *ud, const nj_surface *src, int mode, int out_w, int out_h,
                      nj_u1 *out_rgba);
+/* Tune the RCAS sharpen amount of the FSR1 path (0.05 soft .. 1.0 sharp;
+ * AMD reference default is 0.87). Applied to later presentation calls. */
+void nj_gles2_present_set_sharp(void *ud, float sharp);
 /* Debug aid: read the currently bound window framebuffer back into out_rgba
  * (w*h RGBA8888, bottom-up GL row order). Returns 1 on success, 0 on failure. */
 int nj_gles2_present_readback(void *ud, int w, int h, nj_u1 *out_rgba);

@@ -39,3 +39,10 @@
 - `--upscale bicubic`（或数字 6）在桌面上可用；Catmull-Rom 4x4 采样，无 EASU 边缘自适应、无 RCAS 过冲。
 - StaticDemo 3x 对比：bicubic 与 nearest 有 36.0% 像素差异，但字形不再加粗/出光晕；文本带梯度均值 20.16（nearest 20.77，fsr 31.77 —— 高梯度正是 FSR 光晕的体现）。
 - 结论：文字/像素画优先 nearest/bicubic；FSR 留给 3D。Android 选择器与 RCAS 强度参数下一步接入。
+
+## round 19：RCAS 强度可调
+
+- 桌面：`--upscale-sharp <0.05..1.0>`（默认 0.87，即 AMD 参考 `exp2(-0.2)`）；也可直接设环境变量 `NJ_GL_PRESENT_SHARP`。
+- 实现：`nj_gles2_present_set_sharp()`（`include/nj2me/nj_gfx_gles2.h`），FSR1 的 RCAS uniform 由 `nj_gles2` 的 `present_sharp` 字段供给；SDL2 端口在开启呈现通道时读取环境变量。
+- StaticDemo 3x 实测：sharp 0.05 文本带梯度 30.06、默认 0.87 为 31.77 —— 降低强度可减轻 RCAS 过冲/光晕约 5%，但 EASU 的软边是主要来源，文字场景仍建议 nearest/bicubic。
+- 建议：FSR 用于 3D 时可尝试 `--upscale-sharp 0.5~0.7` 减少光晕；文字类仍用 nearest/bicubic。

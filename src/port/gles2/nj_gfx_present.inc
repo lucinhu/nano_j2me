@@ -486,7 +486,7 @@ static int present_fsr(nj_gles2 *s, int in_w, int in_h, int out_w, int out_h,
     s->gl.BindTexture(GL_TEXTURE_2D, s->present_stage_tex);
     s->gl.Uniform1i(s->present_fsr_rcas_sampler, 0);
     s->gl.Uniform2f(s->present_fsr_rcas_texel, 1.0f / ow, 1.0f / oh);
-    s->gl.Uniform1f(s->present_fsr_rcas_sharp, 0.87055056f); /* exp2(-0.2) */
+    s->gl.Uniform1f(s->present_fsr_rcas_sharp, s->present_sharp);
     s->gl.EnableVertexAttribArray(0); s->gl.EnableVertexAttribArray(1);
     s->gl.VertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, quad);
     s->gl.VertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 0, uvs);
@@ -785,7 +785,7 @@ static int present_fsr_screen(nj_gles2 *s, int in_w, int in_h, int vp_x, int vp_
     s->gl.BindTexture(GL_TEXTURE_2D, s->present_stage_tex);
     s->gl.Uniform1i(s->present_fsr_rcas_sampler, 0);
     s->gl.Uniform2f(s->present_fsr_rcas_texel, 1.0f / ow, 1.0f / oh);
-    s->gl.Uniform1f(s->present_fsr_rcas_sharp, 0.87055056f);
+    s->gl.Uniform1f(s->present_fsr_rcas_sharp, s->present_sharp);
     s->gl.EnableVertexAttribArray(0); s->gl.EnableVertexAttribArray(1);
     s->gl.VertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, quad);
     s->gl.VertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 0, uvs_vflip);
@@ -823,4 +823,15 @@ int nj_gles2_present_onscreen(void *ud, const nj_surface *src, int mode,
      * texture needs its vertical axis flipped; horizontal orientation matches
      * the CPU framebuffer. */
     return present_draw_quad(s, mode, src->width, src->height, vp_w, vp_h, 2);
+}
+
+
+/* Tune RCAS sharpness (0.05..1.0). Default mirrors the AMD reference exp2(-0.2). */
+void nj_gles2_present_set_sharp(void *ud, float sharp)
+{
+    nj_gles2 *s = (nj_gles2 *)ud;
+    if (!s) return;
+    if (sharp < 0.05f) sharp = 0.05f;
+    if (sharp > 1.0f) sharp = 1.0f;
+    s->present_sharp = sharp;
 }
