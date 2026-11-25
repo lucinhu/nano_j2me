@@ -2309,16 +2309,14 @@ static const ui_help_entry ui_help_entries[] = {
     { "游戏库：", NULL },
     { NULL, "↑↓ 选择 · Enter 运行 · O 打开 · R 刷新 · S 设置" },
     { NULL, "输入 搜索 · F1 帮助 · Esc 退出" },
-    { NULL, "F2 收藏/取消收藏 · 最近玩过 显示最近运行的游戏" },
+    { NULL, "F2 收藏 · 最近玩过" },
     { "游戏窗口：", NULL },
     { NULL, "方向键 移动 · Enter/空格 开火 · F1 左软键 · F2 右软键" },
     { NULL, "Backspace 清除 · 数字键 · F3 速度 · F5 存档" },
     { NULL, "F10 回到库 · F11 全屏 · 拖放 .jar 切换" },
     { "设置：", NULL },
     { NULL, "↑↓ 选择 · ←→ 修改 · Enter 确认 · Esc 返回" },
-    { NULL, "" },
-    { NULL, "$XDG_CONFIG_HOME/nano_j2me/client.conf" },
-    { NULL, "窗口大小会自动记住" }
+    { NULL, "配置：$XDG_CONFIG_HOME/nano_j2me/client.conf" }
 };
 
 static void ui_draw_help(nj_client_ui *ui, nj_gfx *g)
@@ -2611,8 +2609,8 @@ static void ui_draw_settings(nj_client_ui *ui, nj_gfx *g)
     ui_draw_scrollbar(g, px + pw - 10, rows_y, vis * rh, count,
                       ui->settings_top, vis);
     ui_draw_text(g, ui->settings_row == UI_SET_ROW_HEAP_GROW
-                  ? "内存不足时扩展 · 下次游戏启动生效"
-                  : "↑↓ 选择 · ←→ 修改 · Enter 打开 · Esc 关闭", medium,
+                  ? "下次启动生效"
+                  : "↑↓ 选择 · ←→ 调整 · Enter 确认 · Esc 返回", medium,
                  UI_COL_ROW_SUB, px + 24, py + ph - 18,
                  NJ_ANCHOR_LEFT | NJ_ANCHOR_VCENTER, pw - 48, 0);
     ui_draw_panel_end(ui, g);

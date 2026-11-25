@@ -61,3 +61,13 @@ Android 启动器（`LibraryActivity.java`）：
   `放大：自动` directly under `GL 呈现（实验）：FSR1（GL）`.
 - Tapping it opens a four-item chooser (自动（填满画面）/ 2× / 3× / 4×); picking `2×` closes the
   dialog and the row immediately reads `放大：2×` (preference persisted).
+
+## Round 11: SDL2 launcher copy trim
+
+- Settings footer is now contextual and short: `下次启动生效` on the auto-grow row and
+  `↑↓ 选择 · ←→ 调整 · Enter 确认 · Esc 返回` elsewhere (was a two-clause sentence).
+- F1 help sheet: `F2 收藏 · 最近玩过` replaces the long favorite blurb; the trailing
+  "窗口大小会自动记住" line is gone and the config path is a single labelled line.
+- The launcher already draws every option as `label … value` with the value right-aligned,
+  so no extra explanatory subtitles were needed.
+- Verified with `cmake --build /tmp/r5-gles2 -j10` (rc=0).
