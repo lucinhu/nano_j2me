@@ -1491,22 +1491,14 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
         final File cheatFile = cheatFileFor(jarName);
         final boolean cheatFileExists = cheatFile.isFile();
         LinearLayout cheatRow = Md3.row(this, Md3.IC_CHECK, "作弊码",
-                cheatFileExists
-                        ? "已启用 " + cheatFile.getName() + "：点开可以编辑并立即重新加载"
-                        : "点开编辑这个游戏的作弊码文件（每行一条，例如 1A2B0:05）",
+                cheatFileExists ? "已启用 · " + cheatFile.getName() : null,
                 false, null);
         LinearLayout searchRow = Md3.row(this, Md3.IC_TUNE, "搜索作弊数值",
-                "搜游戏里能看到的数值，再输入新数值缩小范围，最后直接生成作弊码",
-                false, null);
+                null, false, null);
         final int frameCap = Settings.frameCap(this);
-        LinearLayout fpsRow = Md3.row(this, Md3.IC_PLAY,
-                "帧率上限：" + Settings.frameCapText(frameCap),
-                frameCap < 0 ? "默认不限制，画面最流畅；想省电就往下调"
-                        : frameCap == 0 ? "不设上限：最流畅，也最费电"
-                                : "每秒最多 " + frameCap + " 帧；调高更流畅，也更快用完电",
-                false, null);
-        LinearLayout save = Md3.row(this, Md3.IC_MEMORY, "保存状态",
-                "选一个存档位保存这一局；回到游戏卡片里「读取存档」继续", false, null);
+        LinearLayout fpsRow = Md3.row(this, Md3.IC_PLAY, "帧率上限",
+                Settings.frameCapText(frameCap), false, null);
+        LinearLayout save = Md3.row(this, Md3.IC_MEMORY, "保存状态", null, false, null);
         LinearLayout quit = Md3.dangerRow(this, Md3.IC_POWER, "退出游戏", null);
 
         box.addView(adjust, Md3.gap(this, 12));

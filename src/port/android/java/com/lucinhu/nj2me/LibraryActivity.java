@@ -299,11 +299,7 @@ public class LibraryActivity extends Activity {
         all = JarStore.list(this);
         applyFilter();
         if (all.isEmpty()) {
-            empty.setText("还没有游戏\n\n"
-                    + "点右下角的「+」从文件管理器选一个\n"
-                    + "也可以直接在其他文件管理器里点开 .jar\n\n"
-                    + "用电脑推送：\n"
-                    + "adb push 游戏.jar " + JarStore.dir(this).getAbsolutePath() + "/");
+            empty.setText("还没有游戏\n点右下角的 + 添加 .jar");
         }
     }
 
@@ -323,9 +319,9 @@ public class LibraryActivity extends Activity {
         items = shown;
         adapter.notifyDataSetChanged();
         if (query.length() == 0) {
-            headerCount.setText("J2ME 运行时 · " + all.size() + " 个游戏");
+            headerCount.setText(all.size() + " 个游戏");
         } else {
-            headerCount.setText("找到 " + shown.size() + " / " + all.size() + " 个游戏");
+            headerCount.setText(shown.size() + " / " + all.size() + " 个游戏");
         }
     }
 
@@ -624,7 +620,7 @@ public class LibraryActivity extends Activity {
              * starts the game at the title screen while calling itself "resume"
              * is worse than no row at all. */
             box.addView(rowAction(Md3.IC_PLAY, "读取存档",
-                    "选择快速存档或某个存档位继续", new Runnable() {
+                    null, new Runnable() {
                         @Override
                         public void run() {
                             stateDialog(e);
@@ -646,7 +642,7 @@ public class LibraryActivity extends Activity {
             }
         }));
         box.addView(rowAction(Md3.IC_RENAME, "显示名字",
-                e.titleSet ? "你自己改的名字" : "jar 里写的游戏名", new Runnable() {
+                e.title, new Runnable() {
                     @Override
                     public void run() {
                         renameDialog(e);
