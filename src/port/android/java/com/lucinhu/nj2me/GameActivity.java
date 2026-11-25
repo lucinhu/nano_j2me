@@ -1348,7 +1348,7 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
         glPresentMode = getSharedPreferences("nano_j2me", MODE_PRIVATE)
                 .getInt("gl_present_mode", 0);
         if (glPresentMode != 2 && glPresentMode != 3 && glPresentMode != 4
-                && glPresentMode != 5) {
+                && glPresentMode != 5 && glPresentMode != 6) {
             glPresentMode = 0;
         }
         glPresentScale = getSharedPreferences("nano_j2me", MODE_PRIVATE)
@@ -1744,6 +1744,7 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
             case 3: return "LCD 网格（GL）";
             case 4: return "CRT（GL）";
             case 5: return "FSR1（GL）";
+            case 6: return "双三次（GL）";
             default: return "最近邻（GL）";
         }
     }
@@ -1785,16 +1786,17 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
     }
 
     private void glPresentDialog() {
-        final int[] modes = { -1, 0, 2, 3, 4, 5 };
+        final int[] modes = { -1, 0, 2, 3, 4, 5, 6 };
         final String[] labels = { "关闭（软件呈现）", "最近邻（GL）", "扫描线（GL）",
-                "LCD 网格（GL）", "CRT（GL）", "FSR1（GL）" };
+                "LCD 网格（GL）", "CRT（GL）", "FSR1（GL）", "双三次（GL）" };
         final String[] hints = {
                 "保持现有软件呈现；完全不占用 GPU 呈现资源",
                 "GPU 把原始帧放大到屏幕，像素清晰、开销低；与软件呈现逐像素一致",
                 "GPU 呈现时叠加扫描线；只作用于窗口显示",
                 "GPU 呈现时叠加 LCD 网格；只作用于窗口显示",
                 "GPU 呈现时叠加 CRT 扫描线/荫罩效果；只作用于窗口显示",
-                "AMD FSR1（EASU 边缘重建 + RCAS 锐化）；画面更平滑，开销略高" };
+                "AMD FSR1（EASU 边缘重建 + RCAS 锐化）；画面更平滑，开销略高",
+                "双三次（Catmull-Rom）插值；文字与像素画更自然，光晕少" };
         int checked = 0;
         for (int i = 0; i < modes.length; i++) {
             if (modes[i] == (glPresent != 0 ? glPresentMode : -1)) {

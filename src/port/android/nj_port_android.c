@@ -300,7 +300,7 @@ typedef struct android_state {
      * window instead of blitting it with ANativeWindow_lock.  Default off;
      * every failure falls through to the software path in display_present(). */
     int gl_present;
-    int gl_present_mode;   /* 0 nearest, 2 scanline, 3 LCD, 4 CRT, 5 FSR1 */
+    int gl_present_mode;   /* 0 nearest, 2 scanline, 3 LCD, 4 CRT, 5 FSR1, 6 bicubic */
     int gl_present_scale;  /* integer picture scale cap (1..4) */
     int gl_present_logged; /* one-shot diagnostic for the GL present path */
 #endif
@@ -5598,7 +5598,7 @@ nj_status nj_port_android_ex(nj_port *out, int screen_w, int screen_h)
             prop[0] = '\0';
             (void)__system_property_get("debug.nj2me.glpresent.mode", prop);
             if (prop[0] != '\0') s->gl_present_mode = atoi(prop);
-            if (s->gl_present_mode < 0 || s->gl_present_mode > 5) s->gl_present_mode = 0;
+            if (s->gl_present_mode < 0 || s->gl_present_mode > 6) s->gl_present_mode = 0;
             prop[0] = '\0';
             (void)__system_property_get("debug.nj2me.glpresent.scale", prop);
             if (prop[0] != '\0') s->gl_present_scale = atoi(prop);
@@ -6968,7 +6968,7 @@ Java_com_lucinhu_nj2me_GameActivity_nativeSetGlPresent(JNIEnv *env, jobject thiz
     if (a) {
         android_state *s = AS(a->port.ud);
         if (s) {
-            if (mode < 0 || mode > 5) {
+            if (mode < 0 || mode > 6) {
                 mode = 0;
             }
             s->gl_present = on ? 1 : 0;
