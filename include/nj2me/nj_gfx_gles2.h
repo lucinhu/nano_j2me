@@ -81,7 +81,7 @@ int nj_gles2_frame_active(const void *ud);
 
 /* Offscreen presentation shader pass (goal A: GL presentation layer).
  * Modes: 0 nearest, 1 sharp-bilinear, 2 scanline, 3 LCD grid, 4 CRT,
- * 5 FSR1 (EASU edge-adaptive upscale + RCAS sharpening, two passes).
+ * 5 FSR1 (EASU edge-adaptive upscale + RCAS sharpening), 6 bicubic.
  * `src` may be any surface format the backend accepts; `out` receives
  * out_w*out_h tightly packed RGBA8888 rows, top-down. Returns 1 on success and
  * 0 on decline (context not current, unsupported size, or GL failure); the
@@ -103,8 +103,7 @@ int nj_gles2_present_onscreen_capture(void *ud, const nj_surface *src, int mode,
 
 /* Render the presentation shader into the current draw framebuffer (0),
  * inside the given viewport, clearing the rest of the drawable to black.
- * This is the Android window-presentation entry point; modes 0-4 are
- * supported (FSR1 needs its readback staging, not ported yet).  Returns 0
+ * This is the Android window-presentation entry point. Returns 0
  * for unsupported modes or any GL failure so callers can fall back to
  * software presentation. */
 int nj_gles2_present_onscreen(void *ud, const nj_surface *src, int mode,

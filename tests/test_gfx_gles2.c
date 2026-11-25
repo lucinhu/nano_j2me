@@ -614,6 +614,26 @@ static void test_instances(const egl_fixture *e, nj_gles2 *first, nj_gles2 *seco
     CHECK(nj_gles2_destroy(second) == 0);
     delta(second, second_before, 0, 0, 0);
 }
+static void test_present_rows(nj_gles2 *state)
+{
+    const int formats[] = {NJ_PIXFMT_RGB565, NJ_PIXFMT_RGB888, NJ_PIXFMT_ARGB8888};
+    nj_u1 rgba[13 * 7 * 4];
+    canvas src;
+    snprintf(scenario, sizeof scenario, "presentation converts padded, unaligned rows");
+    for (unsigned f = 0; f < sizeof(formats)/sizeof(formats[0]); ++f) {
+        init_canvas(&src, formats[f], 13, 7, 5, 0);
+        src.surface.bpp = 0; /* optional cached field */
+        CHECK(nj_gles2_present(state, &src.surface, 0, 13, 7, rgba));
+        for (int y = 0; y < 7; ++y) for (int x = 0; x < 13; ++x) {
+            const nj_u1 *px = rgba + 4 * (13*y + x);
+            nj_u4 c = nj_surface_get(&src.surface, x, y);
+            CHECK(px[0] == (nj_u1)(c >> 16) && px[1] == (nj_u1)(c >> 8) &&
+                  px[2] == (nj_u1)c && px[3] == 255);
+        }
+        src.surface.stride = 1;
+        CHECK(!nj_gles2_present(state, &src.surface, 0, 13, 7, rgba));
+    }
+}
 int main(void)
 {
     egl_fixture e;
@@ -639,6 +659,7 @@ int main(void)
         CHECK(state[i] != NULL); CHECK(gate[i].calls >= 2); gl_ok();
     }
     make_current(&e, 0);
+    test_present_rows(state[0]);
     test_fills(state[0]); test_images(state[0]); test_padded_sources(state[0]);
     test_rgb(state[0]); test_direct_declines(state[0]); test_fallback_matrix(state[0]);
     test_coherence(state[0]); test_budget(&gate[0]); test_default_budget(state[0]);

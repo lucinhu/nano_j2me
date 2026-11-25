@@ -501,6 +501,31 @@ static int present_fsr(nj_gles2 *s, int in_w, int in_h, int out_w, int out_h,
     return 1;
 }
 
+/* Pack opaque RGBA rows once for both the window and readback paths. */
+static int present_upload(nj_gles2 *s, const nj_surface *src)
+{
+    if (!s || !src || !src->pixels || !dimensions(s, src->width, src->height)) return 0;
+    int bpp = bytes_per_pixel(src->format);
+    if (!bpp || (src->bpp && src->bpp != bpp) || (nj_s8)src->stride < (nj_s8)src->width * bpp ||
+        (size_t)src->height > SIZE_MAX / (size_t)src->stride ||
+        (size_t)src->width > SIZE_MAX / 4u / (size_t)src->height) return 0;
+    if (!reserve(&s->upload, &s->upload_size, (size_t)src->width * src->height * 4u)) return 0;
+    nj_u1 *dst = s->upload;
+    for (int y = 0; y < src->height; ++y) {
+        const nj_u1 *pixel = (const nj_u1 *)src->pixels + (size_t)y * src->stride;
+        for (int x = 0; x < src->width; ++x, dst += 4, pixel += bpp) {
+            nj_u4 c = read_color(pixel, src->format);
+            dst[0] = (nj_u1)(c >> 16);
+            dst[1] = (nj_u1)(c >> 8);
+            dst[2] = (nj_u1)c;
+            dst[3] = 255;
+        }
+    }
+    s->gl.ActiveTexture(GL_TEXTURE0);
+    texture(s, s->present_input);
+    return texture_upload(s, &s->present_input_storage, src->width, src->height, GL_RGBA, s->upload);
+}
+
 /* Render one frame through the offscreen shader pass.  Returns 1 on success,
  * 0 when the GL context is not current or the pass failed (the caller then
  * falls back to the software presentation unchanged).  Same surface formats
@@ -512,8 +537,6 @@ int nj_gles2_present(void *ud, const nj_surface *src, int mode, int out_w, int o
     static const GLfloat quad[8] = {-1,-1, 1,-1, -1,1, 1,1};
     static const GLfloat uv[8] = {0,0, 1,0, 0,1, 1,1};
     nj_gles2 *s = (nj_gles2 *)ud;
-    size_t in_bytes;
-    int x, y;
 #if !defined(__ANDROID__)
 #define NJ_PRESENT_DBG(why) do { \
     const char *e = getenv("NJ_GL_PRESENT_DEBUG"); \
@@ -531,26 +554,7 @@ int nj_gles2_present(void *ud, const nj_surface *src, int mode, int out_w, int o
         out_w > s->max_texture || out_h > s->max_texture) {
         NJ_PRESENT_DBG("out size"); return 0;
     }
-    if (!dimensions(s, src->width, src->height)) { NJ_PRESENT_DBG("source size"); return 0; }
-    if (src->format != NJ_PIXFMT_RGB565 && src->format != NJ_PIXFMT_RGB888 &&
-        src->format != NJ_PIXFMT_ARGB8888) { NJ_PRESENT_DBG("format"); return 0; }
-    in_bytes = (size_t)src->width * (size_t)src->height * 4u;
-    if (!reserve(&s->upload, &s->upload_size, in_bytes)) return 0;
-    for (y = 0; y < src->height; ++y) {
-        nj_u1 *dst = s->upload + (size_t)y * (size_t)src->width * 4u;
-        for (x = 0; x < src->width; ++x) {
-            nj_u4 c = nj_surface_get(src, x, y);
-            dst[x*4+0] = (nj_u1)(c >> 16);
-            dst[x*4+1] = (nj_u1)(c >> 8);
-            dst[x*4+2] = (nj_u1)c;
-            dst[x*4+3] = 255;
-        }
-    }
-    s->gl.ActiveTexture(GL_TEXTURE0);
-    texture(s, s->present_input);
-    if (!texture_upload(s, &s->present_input_storage, src->width, src->height, GL_RGBA, s->upload)) {
-        NJ_PRESENT_DBG("input upload"); return 0;
-    }
+    if (!present_upload(s, src)) { NJ_PRESENT_DBG("input upload"); return 0; }
     if (mode == 5) {
         if (!present_fsr(s, src->width, src->height, out_w, out_h, out)) {
             return 0;
@@ -587,37 +591,6 @@ int nj_gles2_present(void *ud, const nj_surface *src, int mode, int out_w, int o
     s->gl.ReadPixels(0, 0, out_w, out_h, GL_RGBA, GL_UNSIGNED_BYTE, out);
     s->gl.BindFramebuffer(GL_FRAMEBUFFER, 0);
     return clean_errors(s);
-}
-
-/*
- * Upload the source framebuffer as an RGBA texture for the presentation
- * shaders.  Shared by the offscreen (readback) and on-screen variants.
- */
-static int present_upload(nj_gles2 *s, const nj_surface *src)
-{
-    size_t in_bytes;
-    int x, y;
-
-    if (!s || !src || !src->pixels) return 0;
-    if (!dimensions(s, src->width, src->height)) return 0;
-    if (src->format != NJ_PIXFMT_RGB565 && src->format != NJ_PIXFMT_RGB888 &&
-        src->format != NJ_PIXFMT_ARGB8888) { NJ_PRESENT_DBG("format"); return 0; }
-    in_bytes = (size_t)src->width * (size_t)src->height * 4u;
-    if (!reserve(&s->upload, &s->upload_size, in_bytes)) return 0;
-    for (y = 0; y < src->height; ++y) {
-        nj_u1 *dst = s->upload + (size_t)y * (size_t)src->width * 4u;
-        for (x = 0; x < src->width; ++x) {
-            nj_u4 c = nj_surface_get(src, x, y);
-            dst[x * 4 + 0] = (nj_u1)(c >> 16);
-            dst[x * 4 + 1] = (nj_u1)(c >> 8);
-            dst[x * 4 + 2] = (nj_u1)c;
-            dst[x * 4 + 3] = 255;
-        }
-    }
-    s->gl.ActiveTexture(GL_TEXTURE0);
-    texture(s, s->present_input);
-    return texture_upload(s, &s->present_input_storage, src->width, src->height,
-                          GL_RGBA, s->upload);
 }
 
 /*
@@ -659,10 +632,7 @@ static int present_draw_quad(nj_gles2 *s, int mode, int src_w, int src_h,
  * Android window presentation path; the desktop SDL2 port keeps using
  * nj_gles2_present() so its PPM comparison tooling stays unchanged.
  *
- * Mode 5 (FSR1) is not supported on this path yet: EASU/RCAS write through an
- * intermediate stage texture and read the result back today, so an Android
- * port of the on-screen FSR chain is a separate step.  Returns 0 (caller
- * falls back to software presentation) for unsupported modes.
+ * FSR1 draws EASU into an intermediate texture, then RCAS into the window.
  */
 /* Debug aid: draw the same on-screen quad into a temporary offscreen
  * framebuffer of the full drawable and read it back.  Unlike a window-surface
