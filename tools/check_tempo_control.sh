@@ -33,8 +33,9 @@ fi
 [ -x "$BIN" ] || { echo "SKIP: no emulator at $BIN"; exit 77; }
 
 if [ -z "$JAR" ]; then
-    STUBS="$(python3 "$ROOT/tools/midp_stubs.py" --quiet)" || {
-        echo "SKIP: the stub generator failed"; exit 77; }
+    command -v python3 >/dev/null 2>&1 || { echo "SKIP: no python3 to build the fixture"; exit 77; }
+    STUBS="$(python3 "$ROOT/tools/midp_stubs.py" --out "$WORK/stubs" --quiet)" || {
+        echo "FAIL: the stub generator failed"; exit 1; }
     mkdir -p "$WORK/classes/META-INF" "$WORK/classes/res"
     if ! javac --release 8 -nowarn -classpath "$STUBS" \
             -d "$WORK/classes" "$ROOT/tests/tempodemo/TempoDemo.java"; then

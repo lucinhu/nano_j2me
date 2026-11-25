@@ -546,7 +546,7 @@ public class Cond extends MIDlet {
 }
 JAVA
 
-CP="$(python3 "$ROOT/tools/midp_stubs.py" --quiet)"
+CP="$(python3 "$ROOT/tools/midp_stubs.py" --out "$WORK/stubs" --quiet)"
 javac -source 8 -target 8 -nowarn -cp "$CP" -d "$WORK/classes" \
       "$WORK/src/cond/CondCore.java" "$WORK/src/cond/Cond.java"
 
