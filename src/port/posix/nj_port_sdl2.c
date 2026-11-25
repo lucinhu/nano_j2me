@@ -621,7 +621,7 @@ static void sdl2_gles2_open(sdl2_gles2 *s)
             mode = mode_env && mode_env[0] ? SDL_atoi(mode_env) : 0;
             s->present_scale = scale_env ? SDL_atoi(scale_env) : 2;
             s->present_left = count_env ? SDL_atoi(count_env) : 1;
-            if (s->present_scale < 1) s->present_scale = 1;
+            if (s->present_scale < 0) s->present_scale = 1;
             if (s->present_scale > 8) s->present_scale = 8;
             if (s->present_left < 1) s->present_left = 1;
             if (mode < 0 || mode >= NJ_GL_PRESENT_MODES) mode = 0;
@@ -2586,7 +2586,8 @@ static void sdl_draw_filter(sdl_state *s)
  * never runs unless NJ_GL_PRESENT_DUMP is set. */
 static void sdl2_gles2_present_frame(sdl2_gles2 *s, SDL_Renderer *renderer,
                                      int width, int height,
-                                     int stride, int format, void *pixels)
+                                     int stride, int format, void *pixels,
+                                     int area_w, int area_h)
 {
     sdl2_gl_binding previous;
     nj_surface src;
@@ -2598,8 +2599,16 @@ static void sdl2_gles2_present_frame(sdl2_gles2 *s, SDL_Renderer *renderer,
 
     if (!s->backend || width <= 0 || height <= 0) return;
     if (!s->present_window && (!s->present_prefix[0] || s->present_left <= 0)) return;
-    out_w = width * s->present_scale;
-    out_h = height * s->present_scale;
+    if (s->present_scale > 0) {
+        out_w = width * s->present_scale;
+        out_h = height * s->present_scale;
+    } else {
+        /* auto: one shader output pixel per displayed pixel */
+        out_w = area_w;
+        out_h = area_h;
+        if (out_w < width) out_w = width;
+        if (out_h < height) out_h = height;
+    }
     rgba = (unsigned char *)malloc((size_t)out_w * (size_t)out_h * 4u);
     row = (unsigned char *)malloc((size_t)out_w * 3u);
     if (!rgba || !row) { free(rgba); free(row); return; }
@@ -3177,7 +3186,8 @@ static void sdl_display_present(void *ud, int x, int y, int w, int h)
     sdl2_gles2_flush_frame(&s->gfx);
     sdl2_gles2_yield(&s->gfx);
     sdl2_gles2_present_frame(&s->gfx, s->renderer, s->width, s->height, s->stride,
-                             s->format, s->pixels);
+                             s->format, s->pixels, s->game_dst.w,
+                             s->game_dst.h);
 #endif
 #if NJ_SDL2_GLES2
     if (s->gfx.present_ok) {

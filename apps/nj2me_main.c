@@ -247,7 +247,7 @@ static void usage(const char *argv0)
 "  --where              say where each thread stopped, frame by frame\n"
 "  --dump-frames <prefix>  write a PPM per frame as <prefix>NNNNN.ppm\n"
 "  --upscale <mode>     present through the GLES2 shader pass: nearest|sharp|scanline|lcd|crt|fsr\n"
-"  --upscale-scale <n>  output scale for --upscale (1-8, default 2)\n"
+"  --upscale-scale <n|auto>  output scale for --upscale (1-8, auto = display, default 2)\n"
 "                          (headless; give a directory by ending it in /)\n"
 "  --dump-every <n>     write every n-th frame (headless, default: 1)\n"
 "  --version            print the version and exit\n"
@@ -340,6 +340,7 @@ typedef struct cli {
     const char *device_name;
     int         upscale;      /* --upscale: -1 unset, 0..5 shader pass mode */
     int         upscale_scale;/* --upscale-scale: 0 port default */
+    int         upscale_auto;/* --upscale-scale auto: 1 */
     const char *save_state;
     const char *load_state;
     int         save_frame;
@@ -887,8 +888,13 @@ int main(int argc, char **argv)
                 return 2;
             }
         } else if (strcmp(a, "--upscale-scale") == 0 && i + 1 < argc) {
-            c.upscale_scale = atoi(argv[++i]);
-            if (c.upscale_scale < 1 || c.upscale_scale > 8) {
+            const char *sc = argv[++i];
+            if (strcmp(sc, "auto") == 0) {
+                c.upscale_auto = 1;
+            } else {
+                c.upscale_scale = atoi(sc);
+            }
+            if (!c.upscale_auto && (c.upscale_scale < 1 || c.upscale_scale > 8)) {
                 fprintf(stderr, "--upscale-scale: expected 1..8\n");
                 return 2;
             }
@@ -1146,14 +1152,14 @@ int main(int argc, char **argv)
             snprintf(v, sizeof v, "%d", c.upscale);
 #if defined(_WIN32)
             _putenv_s("NJ_GL_PRESENT", v);
-            if (c.upscale_scale > 0) {
-                snprintf(v, sizeof v, "%d", c.upscale_scale);
+            if (c.upscale_scale > 0 || c.upscale_auto) {
+                snprintf(v, sizeof v, "%d", c.upscale_auto ? 0 : c.upscale_scale);
                 _putenv_s("NJ_GL_PRESENT_SCALE", v);
             }
 #else
             setenv("NJ_GL_PRESENT", v, 1);
-            if (c.upscale_scale > 0) {
-                snprintf(v, sizeof v, "%d", c.upscale_scale);
+            if (c.upscale_scale > 0 || c.upscale_auto) {
+                snprintf(v, sizeof v, "%d", c.upscale_auto ? 0 : c.upscale_scale);
                 setenv("NJ_GL_PRESENT_SCALE", v, 1);
             }
 #endif
