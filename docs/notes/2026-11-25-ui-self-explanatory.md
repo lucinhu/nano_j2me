@@ -105,3 +105,13 @@ x86_64 APK 编译通过；截图与改动一同提交。
 
 面板行副标题二次精简与五组截图随 0.5.48 / r67 发布；核心渲染路径不变。验证与哈希见
 `docs/RELEASE_0.5.48.md`。
+
+### Round 15: web 截图证据
+
+- `tools/check_web.sh --theme` PASS（Playwright/Firefox），证据目录
+  `.local-tools/debug-runs/web-verify-20261125-2106/shots/`；截图已复制为
+  `docs/images/ui/web-dark.png`、`docs/images/ui/web-light.png`。
+- 深色下背景 `rgb(17,20,27)`、浅色下 `rgb(238,242,248)`，主题随系统切换，控制台 0 错误。
+- SDL2 桌面启动器截图本轮未能捕获：本机 `Xvfb` 可用，但该 SDL2 构建未带 X11 视频驱动
+  （日志 `client: cannot start SDL2 video: x11 not available`），headless 下无法抓窗口；
+  已在文档中注明，后续可用真实桌面会话补图。
