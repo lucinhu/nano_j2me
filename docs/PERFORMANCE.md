@@ -8,6 +8,9 @@ and given with its assumption spelled out.
     Build   cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release   (-O3 -DNDEBUG)
     Kernel  Linux x86-64
 
+The [software rendering, JIT and GPU measurements from November 26](notes/2026-11-26-render-jit-performance.md)
+cover two retail game replays, Minecraft world generation and synchronous GPU calls.
+
 ## How to measure
 
     tools/make_bench_jar.sh

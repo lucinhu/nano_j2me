@@ -1,8 +1,8 @@
 # Baseline JIT performance: measurements and reproduction
 
-A later resolved-field cache fix and anonymous target follow-up are recorded in
-[JIT_CACHE_LOOKUP.md](JIT_CACHE_LOOKUP.md). The measurements below describe the
-upstream revisions before that fix.
+The measurements below cover the earlier JIT. Later results include the
+[resolved-field cache measurements](JIT_CACHE_LOOKUP.md) and the
+[November 26 hot-loop and Minecraft world-generation measurements](notes/2026-11-26-render-jit-performance.md#jit).
 
 This work responds to a second board report, against `fe974fc` — the commit
 that carried the previous probe/dispatch optimisation set. It landed in several
