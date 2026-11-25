@@ -1300,9 +1300,21 @@ static void x64_add32_imm8(x64_writer *w, unsigned reg, unsigned imm)
     x64_u8(w, imm & 0xffu);
 }
 
-/* Take the branch at instruction `insn`, popping its operands.  The completed
- * counter is advanced before the compare because x86 INC/ADD modify flags;
- * the block-exit stubs return the updated count. */
+/* ADD imm8 sign-extends its immediate. The largest configured region can
+ * contain 128 bytecodes, so that count requires the imm32 form. */
+static void x64_add_done(x64_writer *w, unsigned count)
+{
+    if (count == 1u) x64_inc32(w, X64_DONE);
+    else if (count < 128u) x64_add32_imm8(w, X64_DONE, count);
+    else {
+        x64_rex(w, 0, 0, X64_DONE);
+        x64_u8(w, 0x81u);
+        x64_u8(w, 0xc0u | (X64_DONE & 7u));
+        x64_u32(w, count);
+    }
+}
+
+/* Take the branch at instruction `insn`, popping its operands. */
 static void x64_emit_branch(x64_writer *w, const x64_scan *s, unsigned insn)
 {
     const x64_bytecode *b = &s->ins[insn];
@@ -1319,8 +1331,6 @@ static void x64_emit_branch(x64_writer *w, const x64_scan *s, unsigned insn)
         kind = X64_FIX_EXIT;
         target = s->br_target[insn];
     }
-
-    if (w->counter) x64_inc32(w, X64_DONE);
 
     if (b->branch == 2) { /* goto */
         x64_jmp(w, kind, target);
@@ -1373,7 +1383,7 @@ static int x64_emit_block(x64_writer *w, const x64_scan *s, nj_size capacity)
     nj_size exit_at[NJ_JIT_MAX_EXITS];
     nj_size fault_at[NJ_JIT_MAX_FAULTS];
     nj_size reserve;
-    unsigned i;
+    unsigned i, pending = 0u;
     unsigned exit_stub = 10u; /* mov eax,r10d; shl eax,4; add eax,imm8; ret */
     unsigned fault_stub = 9u; /* mov eax,imm32; or eax,r10d; ret */
 
@@ -1411,13 +1421,23 @@ static int x64_emit_block(x64_writer *w, const x64_scan *s, nj_size capacity)
         } else if (s->label[i]) {
             label_at[i] = w->used;
         }
+        /* Every path into a label has paid for its own prefix. A fault
+         * requires the count before the guarded bytecode, and a branch
+         * requires the count including the branch, on either successor. */
+        ++pending;
         if (s->ins[i].branch != 0) {
+            x64_add_done(w, pending);
+            pending = 0u;
             x64_emit_branch(w, s, i);
         } else {
             unsigned fault = s->fault_of[i] == X64_NO_FAULT ?
                              0u : (unsigned)s->fault_of[i];
             x64_emit(w, &s->ins[i], s->delta[i], fault);
-            if (w->counter) x64_inc32(w, X64_DONE);
+            if (w->counter && (i + 1u == s->n || s->label[i + 1u] ||
+                               s->ins[i + 1u].guarding)) {
+                x64_add_done(w, pending);
+                pending = 0u;
+            }
         }
         if (w->failed) return 0;
     }

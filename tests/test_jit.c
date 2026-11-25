@@ -385,6 +385,50 @@ static void guards(void)
     nj_port_shutdown(&port);
 }
 
+/* A loop of nops and a back edge fits in a small code buffer when its
+ * accounting cost is per straight-line run. Exercise the largest configured
+ * immediate too (128 does not fit a positive x86 ADD imm8). */
+#if NJ_JIT_HOST_ARM64 || NJ_JIT_HOST_X86_64
+static void counted_loop(void)
+{
+    enum { N = NJ_JIT_MAX_BLOCK_INSNS };
+    nj_u1 code[N + 2] = {0}, native[96];
+    nj_method m;
+    nj_jit_block block;
+    nj_u2 back = (nj_u2)(1 - N);
+    nj_vm *vm;
+    nj_port port;
+    nj_frame fr;
+    nj_value stack[1], locals[1], *sp;
+    nj_u4 i, pc, completed = 0;
+    if (N < 2 || NJ_JIT_MAX_EXITS < 2 || NJ_JIT_MAX_CODE_BYTES < sizeof(native)) return;
+    code[N - 1] = 0xa7; /* goto entry */
+    code[N] = (nj_u1)(back >> 8);
+    code[N + 1] = (nj_u1)back;
+    memset(&m, 0, sizeof(m));
+    m.code = code; m.code_len = sizeof(code); m.max_stack = 1;
+#if NJ_JIT_HOST_ARM64
+    CHECK(nj_arm64_compile(NULL, &m, 0, native, sizeof(native), &block));
+#else
+    CHECK(nj_x86_64_compile(NULL, &m, 0, native, sizeof(native), &block));
+#endif
+    CHECK(block.loop && block.insns == N && block.size <= sizeof(native));
+    CHECK(nj_port_headless(&port) == NJ_OK);
+    vm = nj_vm_create(&port, 1024u * 1024u);
+    CHECK(vm && nj_jit_enable(vm) == NJ_OK);
+    memset(&fr, 0, sizeof(fr));
+    fr.m = &m; fr.locals = locals; fr.stack = stack; fr.stack_limit = stack + 1;
+    for (i = 0; i <= NJ_JIT_HOT_THRESHOLD; ++i) {
+        pc = 0; sp = stack;
+        completed = nj_jit_try_block(vm, &fr, &pc, &sp, 4u * N - 1u);
+        CHECK(pc == 0 && sp == stack);
+    }
+    CHECK(completed == 3u * N);
+    nj_vm_destroy(vm);
+    nj_port_shutdown(&port);
+}
+#endif
+
 static void probe_contract(void)
 {
     nj_u1 code[NJ_JIT_MIN_BLOCK_INSNS + 5];
@@ -837,17 +881,25 @@ static void cache_collisions(void)
     }
     CHECK(nj_jit_get_stats(vm, &stats));
     CHECK(stats.compiled_blocks == NSITES && stats.code_evictions == 1);
-    /* The oldest site must heat again; its retained history identifies a
-     * recompile. With tiny history configurations the lower bound may be 0. */
+    /* A recently evicted site must not immediately displace the new arrival.
+     * A sustained hot site must still regain a slot after bounded extra heat. */
     for (j = 0; j < NJ_JIT_HOT_THRESHOLD; ++j) {
         pc = pcs[0]; sp = values;
-        (void)nj_jit_try_block(vm, &fr, &pc, &sp, 128);
+        CHECK(nj_jit_try_block(vm, &fr, &pc, &sp, 128) == 0);
     }
+    CHECK(nj_jit_get_stats(vm, &stats));
+    CHECK(stats.compiled_blocks == NSITES && stats.code_evictions == 1);
+    pc = pcs[NJ_JIT_CACHE_WAYS]; sp = values;
+    CHECK(nj_jit_try_block(vm, &fr, &pc, &sp, 128) == NJ_JIT_MIN_BLOCK_INSNS);
+    for (j = 0; j < 4096u; ++j) {
+        pc = pcs[0]; sp = values;
+        if (nj_jit_try_block(vm, &fr, &pc, &sp, 128)) break;
+    }
+    CHECK(j < 4096u);
     CHECK(nj_jit_get_stats(vm, &stats));
     CHECK(stats.compiled_blocks == NSITES + 1 && stats.code_evictions == 2);
 #if NJ_JIT_STATS
-    /* Evicting code clears the site's map cell, so the reheat recompiles
-     * instead of reusing code; the small workload never overflows the map. */
+    /* Readmission requires new code; the small workload retains its map. */
     CHECK(stats.method_map_evictions == 0);
     CHECK(stats.recompiled_blocks == 0);
 #endif
@@ -1120,6 +1172,9 @@ int main(void)
         CHECK(a.a == d.a && a.b == d.b && a.pc == d.pc && a.insns == d.insns);
         CHECK(a.a == e.a && a.b == e.b && a.pc == e.pc && a.insns == e.insns);
         guards();
+#if NJ_JIT_HOST_ARM64 || NJ_JIT_HOST_X86_64
+        counted_loop();
+#endif
         probe_contract();
         frame_mask_collision();
         frame_probe_masks();

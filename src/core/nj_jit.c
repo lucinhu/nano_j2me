@@ -24,9 +24,16 @@
 /* Cell states, in one 16-bit word per bytecode offset:
  *   0x0000..0x3FFF  heat counter (0 = never probed)
  *   0x4000          refused: unsupported, short, or a failed compile
+ *   0x5000..0x5FFF  evicted: additional cold probes before heating again
  *   0x6000|insns    analyzed; awaiting compile (or a probe-only measurement)
  *   0x8000|slot     compiled; low ten bits are the code-cache entry index   */
 #define JIT_CELL_REFUSED 0x4000u
+#define JIT_CELL_READMIT 0x5000u
+/* Repeated evictions allocate and seal code only to free it shortly after.
+ * Spend eight heat intervals interpreting a recently evicted site before it
+ * competes for another slot. The 12-bit countdown fits its existing cell. */
+#define JIT_READMIT_DELAY (NJ_JIT_HOT_THRESHOLD < 512u ? \
+                           8u * NJ_JIT_HOT_THRESHOLD : 4096u)
 #define JIT_CELL_READY 0x6000u
 #define JIT_CELL_STATE_MASK 0xe000u
 #define JIT_CELL_INSNS_MASK 0x1fffu
@@ -385,7 +392,7 @@ static void jit_map_forget(struct nj_jit *jit, const nj_method *m, nj_u4 pc)
 {
     nj_jit_method *slot = jit_map_slot_find(jit, m);
     if (!slot || slot->off == 0xffffffffu || pc >= (nj_u4)slot->pcs) return;
-    jit->cells[slot->off + pc] = 0u;
+    jit->cells[slot->off + pc] = (nj_u2)(JIT_CELL_READMIT | (JIT_READMIT_DELAY - 1u));
 }
 
 static int jit_guard(struct nj_jit *jit, const nj_jit_block *b,
@@ -606,6 +613,11 @@ int nj_jit_probe(nj_vm *vm, const nj_frame *fr, nj_u4 pc, nj_value *sp,
         }
         ticket->cell = cell;
         return 1;
+    }
+    if ((v & 0xf000u) == JIT_CELL_READMIT) {
+        *cell = (v == JIT_CELL_READMIT) ? 0u : (nj_u2)(v - 1u);
+        JIT_DETAIL(jit, cold_skips);
+        return 0;
     }
     /* Cold: count heat without touching anything but this cell. */
     if ((nj_u4)v + 1u < (nj_u4)NJ_JIT_HOT_THRESHOLD) {

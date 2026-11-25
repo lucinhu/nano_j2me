@@ -73,7 +73,6 @@ typedef struct a64_writer {
     nj_size used;
     nj_size capacity;
     int failed;
-    int counter;      /* track completed bytecodes in w3 */
     unsigned nfixups;
     a64_fixup fixups[A64_MAX_FIXUPS];
 } a64_writer;
@@ -325,11 +324,9 @@ static nj_u4 a64_fault_word(unsigned index, nj_u4 completed)
            (completed & NJ_JIT_FAULT_COMPLETED_MASK);
 }
 
-/* One executed bytecode.  ADD (immediate) does not modify the condition
- * flags, so it may sit between a CMP and its conditional branch. */
-static void a64_inc_done(a64_writer *w)
+static void a64_add_done(a64_writer *w, unsigned count)
 {
-    a64_u32(w, 0x11000000u | (1u << 10) |
+    a64_u32(w, 0x11000000u | (count << 10) |
                 ((nj_u4)A64_DONE << 5) | A64_DONE);
 }
 
@@ -1129,9 +1126,7 @@ int nj_arm64_analyze(nj_vm *vm, const nj_method *m, nj_u4 pc, nj_jit_block *out)
 
 /* ---- emission -------------------------------------------------------- */
 
-/* Take the branch at instruction `insn`, popping its operands.  The completed-
- * bytecode counter is advanced before either path leaves the instruction; ADD
- * leaves the flags alone so it can sit between CMP and B.cond. */
+/* Take the branch at instruction `insn`, popping its operands. */
 static void a64_emit_branch(a64_writer *w, const a64_scan *s, unsigned insn)
 {
     const a64_bytecode *b = &s->ins[insn];
@@ -1150,7 +1145,6 @@ static void a64_emit_branch(a64_writer *w, const a64_scan *s, unsigned insn)
     }
 
     if (b->branch == 2) { /* goto */
-        if (w->counter) a64_inc_done(w);
         a64_branch(w, kind, target);
         return;
     }
@@ -1191,7 +1185,6 @@ static void a64_emit_branch(a64_writer *w, const a64_scan *s, unsigned insn)
         a64_load(w, A64_T0, A64_SP_ARG, top - 8, 0);
         a64_cmp_imm(w, A64_T0, 0u);
     }
-    if (w->counter) a64_inc_done(w);
     a64_branch_cond(w, cond, kind, target);
 }
 
@@ -1203,7 +1196,7 @@ static int a64_emit_block(a64_writer *w, const a64_scan *s, nj_size capacity)
     nj_size fault_at[NJ_JIT_MAX_FAULTS];
     nj_size epilogue_at = A64_NO_LABEL;
     nj_size reserve;
-    unsigned i;
+    unsigned i, pending = 0u;
     int counter = s->njumps != 0u;
     int fp = s->fp_used;
 
@@ -1222,7 +1215,6 @@ static int a64_emit_block(a64_writer *w, const a64_scan *s, nj_size capacity)
     if (fp) reserve += 8u;
     if (capacity < reserve + 4u) return 0;
     w->capacity = capacity - reserve;
-    w->counter = counter;
 
     /* Indirect calls may target a BTI-guarded executable page. This landing
      * pad is a backwards-compatible HINT on cores without FEAT_BTI. */
@@ -1242,13 +1234,23 @@ static int a64_emit_block(a64_writer *w, const a64_scan *s, nj_size capacity)
         } else if (s->label[i]) {
             label_at[i] = w->used;
         }
+        /* Every path into a label has paid for its own prefix. A fault
+         * requires the count before the guarded bytecode, and a branch
+         * requires the count including the branch, on either successor. */
+        ++pending;
         if (s->ins[i].branch != 0) {
+            a64_add_done(w, pending);
+            pending = 0u;
             a64_emit_branch(w, s, i);
         } else {
             unsigned fault = s->fault_of[i] == A64_NO_FAULT ?
                              0u : (unsigned)s->fault_of[i];
             a64_emit(w, &s->ins[i], s->delta[i], fault);
-            if (counter) a64_inc_done(w);
+            if (counter && (i + 1u == s->n || s->label[i + 1u] ||
+                            s->ins[i + 1u].guarding)) {
+                a64_add_done(w, pending);
+                pending = 0u;
+            }
         }
         if (w->failed) return 0;
     }
