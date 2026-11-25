@@ -1131,26 +1131,34 @@ static int x64_scan_build(nj_vm *vm, const nj_method *m, nj_u4 pc, x64_scan *s)
     unsigned nfaults = 0u;
     unsigned i;
     int loop = 0;
+    int fallthrough = 1;
 
     memset(s, 0, sizeof(*s));
     s->start = pc;
     while (pos < m->code_len && n < NJ_JIT_MAX_BLOCK_INSNS) {
         x64_bytecode b;
         int delta, required, growth;
+        int reachable = fallthrough;
 
         if (!x64_decode(vm, m, pos, &b)) break;
+        /* goto has no fallthrough. The other arm of a conditional expression
+         * starts at the depth of its incoming branch. All actual incoming
+         * edges, including a fallthrough when present, must still agree. */
+        for (i = 0u; i < njumps; ++i) {
+            if (!s->jump_back[i] && s->jump_target[i] == pos) {
+                if (reachable && s->jump_delta[i] != depth) return 0;
+                depth = s->jump_delta[i];
+                reachable = 1;
+            }
+        }
+        /* Still decode dead instructions for alignment and the window limit.
+         * They contribute no stack effects, guards or outgoing edges. */
+        if (!reachable) b = (x64_bytecode){ .length = b.length };
+        fallthrough = reachable && b.branch != 2;
         if (b.guarding && nfaults >= NJ_JIT_MAX_FAULTS) break;
         /* A throwing division may not follow mutations: the interpreter has to
          * observe the incoming stack when it re-executes the instruction. */
         if ((b.op == 0x6cu || b.op == 0x70u) && n != 0u) break;
-        /* A forward branch must land on the instruction it was recorded with
-         * the same operand depth, or the block is not a single-entry region. */
-        for (i = 0u; i < njumps; ++i) {
-            if (!s->jump_back[i] && s->jump_target[i] == pos &&
-                s->jump_delta[i] != depth) {
-                return 0;
-            }
-        }
         delta = depth + b.change;
         required = b.need - depth;
         if (required < min_stack) required = min_stack;

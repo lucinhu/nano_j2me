@@ -2371,6 +2371,9 @@ static void test_branches(void)
     (void)word;
 }
 
+#define EXECUTE_DIAMOND EXECUTE_ARM64
+#include "test_jit_diamond.h"
+
 static void test_loops(void)
 {
 #if NJ_JIT_MAX_EXITS >= 2
@@ -2596,7 +2599,7 @@ int main(int argc, char **argv)
 #endif
     test_integer(); test_float(); test_boundaries();
     test_faults(); test_fields_arrays();
-    test_branches(); test_loops();
+    test_branches(); tests_diamond(); test_loops();
     test_large_locals(); test_fpcr();
     test_numeric_constants(); test_analysis(); test_write_through(); test_constant_chain();
     test_name = "extension coverage";

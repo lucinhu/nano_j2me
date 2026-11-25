@@ -305,6 +305,9 @@ static void tests_integer(void)
     expect_success(ret, &block);
 }
 
+#define EXECUTE_DIAMOND EXECUTE_X86_64
+#include "test_jit_diamond.h"
+
 /* ---- loop and budget ------------------------------------------------ */
 
 static void tests_loop(void)
@@ -684,6 +687,7 @@ static void tests_capacity(void)
 int main(void)
 {
     tests_integer();
+    tests_diamond();
     tests_loop();
     tests_div();
     tests_float();
