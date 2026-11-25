@@ -62,6 +62,31 @@ static unsigned hd_asset_weight(int phase, int scale)
     return (unsigned)((((nj_s8)phase * 2 + !(scale & 1)) * 128 + scale / 2) / scale);
 }
 
+/* When both columns are opaque the alpha factor of 255 cancels. Round the
+ * resulting Q16 RGB value once. This has the same half-up threshold as the
+ * premultiplied source-over calculation, including at channel midpoints. */
+static void hd_asset_opaque_span(nj_u1 *dst, int n, hd_asset_color l, hd_asset_color r,
+                                 const unsigned *weights, int phase, int k)
+{
+    nj_u4 red = l.r / 255u, green = l.g / 255u, blue = l.b / 255u;
+    if (l.r == r.r && l.g == r.g && l.b == r.b) {
+        nj_u4 color = 0xff000000u | (((red + 128u) >> 8) << 16) |
+                      (((green + 128u) >> 8) << 8) | ((blue + 128u) >> 8);
+        for (int i = 0; i < n; ++i) memcpy(dst + (size_t)i * 4, &color, 4);
+        return;
+    }
+    nj_u4 dr = r.r / 255u - red, dg = r.g / 255u - green, db = r.b / 255u - blue;
+    red = (red << 8) + 32768u;
+    green = (green << 8) + 32768u;
+    blue = (blue << 8) + 32768u;
+    for (int i = 0; i < n; ++i) {
+        unsigned w = weights ? weights[phase+i] : hd_asset_weight(phase+i, k);
+        nj_u4 color = 0xff000000u | (((red + w * dr) >> 16) << 16) |
+                      (((green + w * dg) >> 16) << 8) | ((blue + w * db) >> 16);
+        memcpy(dst + (size_t)i * 4, &color, 4);
+    }
+}
+
 static void hd_filter_bitmap(nj_surface *dst, int k, const nj_u1 *src, nj_s8 stride,
                              int format, int bpp, int sx, int sy, int sw, int sh, int transform,
                              nj_s8 dx, nj_s8 dy, int x0, int y0, int x1, int y1)
@@ -92,10 +117,15 @@ static void hd_filter_bitmap(nj_surface *dst, int k, const nj_u1 *src, nj_s8 str
             nj_s8 right = (i + 1 < tw ? i + 1 : tw - 1) * step;
             hd_asset_color r = hd_asset_column(src + top, src + bot, right, format, wy);
             int n = k - phase < count ? k - phase : count;
-            for (int p = phase; p < phase + n; ++p, row += 4) {
-                unsigned wx = cached ? weights[p] : hd_asset_weight(p, k);
-                hd_asset_over(row, hd_asset_mix(l, r, wx));
+            if (l.a == (255u << 8) && r.a == (255u << 8)) {
+                hd_asset_opaque_span(row, n, l, r, cached ? weights : NULL, phase, k);
+            } else if (l.a || r.a) {
+                for (int p = 0; p < n; ++p) {
+                    unsigned wx = cached ? weights[phase+p] : hd_asset_weight(phase+p, k);
+                    hd_asset_over(row + (size_t)p * 4, hd_asset_mix(l, r, wx));
+                }
             }
+            row += (size_t)n * 4;
             count -= n;
             phase = 0;
             l = r;

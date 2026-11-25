@@ -203,12 +203,18 @@ int main(int argc, char **argv)
         run_hd("crisp-sprite-37x29-rot90-4x", 37, 29, 4, NJ_TRANS_ROT90, 1, 3000, NJ_ASSET_PIXEL_ART, 1);
         return 0;
     }
+    if (argc == 2 && strcmp(argv[1], "--smooth") == 0) {
+        run_hd("smooth-diagonals-240x320-3x", 240, 320, 3, NJ_TRANS_NONE, 0, 40, NJ_ASSET_SMOOTH, 1);
+        run_hd("smooth-detail-240x320-4x", 240, 320, 4, NJ_TRANS_NONE, 0, 40, NJ_ASSET_SMOOTH, 0);
+        run_hd("smooth-sprite-37x29-rot90-4x", 37, 29, 4, NJ_TRANS_ROT90, 1, 1800, NJ_ASSET_SMOOTH, 1);
+        return 0;
+    }
     if (argc == 2 && strcmp(argv[1], "--alpha") == 0) {
         run_alpha_cases();
         return 0;
     }
     if (argc != 1) {
-        fprintf(stderr, "usage: %s [--alpha|--hd|--assets]\n", argv[0]);
+        fprintf(stderr, "usage: %s [--alpha|--hd|--assets|--smooth]\n", argv[0]);
         return 2;
     }
     run("565-mirror-1x1", NJ_PIXFMT_RGB565,1,1,NJ_TRANS_MIRROR,NJ_ROP_PAINT,0);

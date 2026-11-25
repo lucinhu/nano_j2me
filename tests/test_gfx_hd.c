@@ -301,6 +301,60 @@ static void smooth_frames(void)
     }
 }
 
+/* Compare the opaque shortcut with the four-tap premultiplied equation at
+ * every sample. Include odd scales, the uncached weight path, flat columns,
+ * descending channels, a translucent destination and unaligned row starts. */
+static void smooth_opaque_ramps(void)
+{
+    enum { W = 4, H = 3, MAX_K = 33, PAD = 3 };
+    const int scales[] = {2,3,4,5,6,7,8,33};
+    nj_u4 colors[W * H] = {
+        0xffff0080u,0xffff0080u,0xff00ff7fu,0xff01027eu,
+        0xff00ff7fu,0xff00ff7fu,0xffff0080u,0xfffe017fu,
+        0xff01027eu,0xff01027eu,0xfffeff81u,0xff007f00u
+    };
+    nj_u4 small[W * H];
+    nj_u1 storage[1 + (W * MAX_K * 4 + PAD) * H * MAX_K];
+    nj_image image = {W,H,NJ_PIXFMT_ARGB8888,colors,1};
+    nj_surface logical_target = {small,W,H,W*4,NJ_PIXFMT_ARGB8888,4};
+    for (size_t s = 0; s < sizeof scales / sizeof *scales; ++s) {
+        int k = scales[s], pitch = W * k * 4 + PAD;
+        nj_surface target = {storage+1,W*k,H*k,pitch,NJ_PIXFMT_ARGB8888,4};
+        nj_render_mirror m = {.target = &target, .scale = k, .smooth_assets = NJ_ASSET_SMOOTH};
+        nj_gfx paint;
+        nj_gfx_init(&paint, &logical_target);
+        paint.mirror = &m;
+        memset(storage, 0x73, sizeof storage);
+        nj_gfx_clear(&paint, 0x7320df45u);
+        nj_gfx_draw_image(&paint, &image, 0, 0, 0, 0, W, H);
+        assert(!memcmp(small, colors, sizeof small));
+        for (int y = 0; y < H*k; ++y) {
+            const nj_u1 *row = storage + 1 + y*pitch;
+            for (int x = 0; x < W*k; ++x) {
+                /* Unbounded coordinate of the physical sample centre in Q8. */
+                int u = (int)floor(((x+.5)/k - .5)*256 + .5);
+                int v = (int)floor(((y+.5)/k - .5)*256 + .5);
+                u = u < 0 ? 0 : u > (W-1)*256 ? (W-1)*256 : u;
+                v = v < 0 ? 0 : v > (H-1)*256 ? (H-1)*256 : v;
+                nj_u4 want = 0xff000000u, got;
+                for (int shift = 0; shift < 24; shift += 8) {
+                    nj_u4 sum = 0;
+                    for (int sy = 0; sy < H; ++sy) for (int sx = 0; sx < W; ++sx) {
+                        int wx = 256 - (int)fabs(sx*256 - u), wy = 256 - (int)fabs(sy*256 - v);
+                        if (wx > 0 && wy > 0)
+                            sum += (nj_u4)(wx * wy) * 255u * ((colors[sy*W+sx] >> shift) & 255u);
+                    }
+                    want |= ((((sum + 32768u) >> 16) + 127u) / 255u) << shift;
+                }
+                memcpy(&got, row+x*4, sizeof got);
+                assert(got == want);
+            }
+            for (int p = 0; p < PAD; ++p) assert(row[W*k*4+p] == 0x73);
+        }
+        assert(storage[0] == 0x73);
+    }
+}
+
 /* A filtered sprite may be painted into a transparent Image before it reaches
  * the screen. Both the Image and the second blit consume straight ARGB. */
 static void smooth_offscreen(void)
@@ -498,6 +552,7 @@ int main(void)
     images();
     bitmap_planes();
     smooth_frames();
+    smooth_opaque_ramps();
     smooth_offscreen();
     pixel_art_frames();
     pixel_art_bypass();
