@@ -15,7 +15,8 @@
 # Options:
 #   --dist DIR        also check a release tree (default: build/libretro-dist
 #                     when it exists)
-#   --super-clone DIR local libretro-super clone (reset to fb15e63 and apply)
+#   --source-only     check tracked metadata independently of local release trees
+#   --super-clone DIR local libretro-super clone for a patch dry run
 #   --docs-clone DIR  local libretro/docs clone (reset to 96ee874 and apply)
 #   --apply-clones    reset/clean the given clones and apply the patches
 #   --mkdocs PATH     mkdocs binary for the docs site build (requires
@@ -40,6 +41,7 @@ SUPER_BASE=c3c55c2280a0eac7e8343a7f15e3c2e35f9a69e6
 DOCS_BASE=e0280f629ca0158f8861d34c1f50e6b5b20504e3
 
 DIST=
+AUTO_DIST=1
 SUPER_CLONE=
 DOCS_CLONE=
 APPLY=0
@@ -47,6 +49,7 @@ MKDOCS=
 
 while [ $# -gt 0 ]; do
     case $1 in
+        --source-only) DIST=; AUTO_DIST=0; shift ;;
         --dist) DIST=$2; shift 2 ;;
         --super-clone) SUPER_CLONE=$2; shift 2 ;;
         --docs-clone) DOCS_CLONE=$2; shift 2 ;;
@@ -57,7 +60,7 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-if [ -z "$DIST" ] && [ -d "$ROOT/build/libretro-dist" ]; then
+if [ "$AUTO_DIST" -eq 1 ] && [ -z "$DIST" ] && [ -d "$ROOT/build/libretro-dist" ]; then
     DIST=$ROOT/build/libretro-dist
 fi
 

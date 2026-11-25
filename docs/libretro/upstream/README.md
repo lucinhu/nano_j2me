@@ -8,9 +8,9 @@ the prepared bundles were opened as pull requests from forks:
 * `libretro/docs#1239` — `docs: add nano_j2me (Mobile - J2ME)`
   (branch `add-nano_j2me` in `lucinhu/docs`, commit `3316299`)
 
-The files in this directory remain the exact copies used for those PRs, plus
-the validation notes and the manual checklist. If upstream requests changes,
-update the fork branch and regenerate the patch from it.
+The super patch and `.info` in this directory now carry the 0.5.49 release
+metadata. The fork commit recorded above describes the earlier 0.5.48
+submission. The docs patch still corresponds to the recorded docs submission.
 
 Prepared 2026-11-15. The exact-index patches below were generated against and
 verified to apply cleanly to `libretro/docs` master
@@ -41,7 +41,7 @@ nano_j2me_libretro.info  ->  dist/info/nano_j2me_libretro.info
 
 The copy in this directory is byte-identical to
 `src/port/libretro/nano_j2me_libretro.info`
-(SHA-256 `9960dc74db53ec5283227c62282bc8a4837caecc805f9da5b4ed0676ec27c263`, version 0.5.48).
+(SHA-256 `301515af32d82a48cbe473954e6e556650ac4dcb23035a9793d27738b7446e1f`, version 0.5.49).
 Suggested PR title: `Add nano_j2me core information for J2ME MIDlets`.
 The ready-to-post title, patch commands, body text and checklist are in
 [`PR-libretro-super.md`](PR-libretro-super.md).

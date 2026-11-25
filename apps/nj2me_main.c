@@ -10,6 +10,9 @@
  * around nj_run(); everything here is argument handling and port selection.
  */
 #include "nj2me/nj.h"
+#if NJ_ENABLE_VULKAN
+#include "nj2me/nj_gfx_vulkan.h"
+#endif
 
 #include <stdio.h>
 #include <string.h>
@@ -171,7 +174,7 @@ static void usage(const char *argv0)
 "options:\n"
 "  --port <name>        headless | sdl2        (default: sdl2 if built in)\n"
 #if NJ_HAVE_SDL2
-"  --graphics <mode>    software | gles2 (SDL2 game drawing; default: software)\n"
+"  --graphics <mode>    software | gles2 | vulkan (M3G drawing; default: software)\n"
 "                       gles2 is experimental and requires the optional backend;\n"
 "                       unavailable builds reject it. Unsupported drawing falls\n"
 "                       back to software; acceleration is not guaranteed.\n"
@@ -179,7 +182,7 @@ static void usage(const char *argv0)
 "                       Without this flag, legacy NJ_SDL2_GFX=gles2 is honored;\n"
 "                       explicit software overrides it. SDL presentation is separate.\n"
 #else
-"  --graphics <mode>    unavailable: this build has no SDL2 port\n"
+"  --graphics <mode>    software | vulkan (optional headless M3G drawing)\n"
 #endif
 "  --midlet <class>     run a specific MIDlet class instead of MIDlet-1\n"
 "  --font <file>        draw text with a TrueType face (default: built-in)\n"
@@ -314,7 +317,7 @@ static void usage(const char *argv0)
 
 typedef struct cli {
     const char *port_name;
-    int graphics_mode;           /* -1 legacy env, 0 software, 1 GLES2 */
+    int graphics_mode;           /* -1 legacy env, 0 software, 1 GLES2, 2 Vulkan */
     const char *jar;
     const char *midlet;
     const char *rms_dir;
@@ -594,6 +597,10 @@ static int setup_port(const cli *c, nj_port *port,
             fprintf(stderr, "cannot create the headless port\n");
             return 1;
         }
+#if NJ_ENABLE_VULKAN
+        if (c->graphics_mode == 2 && !nj_vk_renderer_attach(port))
+            fprintf(stderr, "Vulkan initialization failed, using software drawing\n");
+#endif
     } else if (strcmp(c->port_name, "sdl2") == 0) {
 #if NJ_HAVE_SDL2
         use_sdl2 = 1;
@@ -608,7 +615,7 @@ static int setup_port(const cli *c, nj_port *port,
         }
         st = nj_port_sdl2_ex(port, "nano_j2me", c->graphics_mode);
         if (st == NJ_ERR_UNSUPPORTED) {
-            fprintf(stderr, "this build has no GLES2 drawing backend; use --graphics software\n");
+            fprintf(stderr, "requested drawing backend is unavailable; use --graphics software\n");
             return 2;
         }
         if (st != NJ_OK) {
@@ -852,14 +859,15 @@ int main(int argc, char **argv)
             c.port_name = argv[++i];
         } else if (strcmp(a, "--graphics") == 0) {
             if (i + 1 >= argc) {
-                fprintf(stderr, "--graphics requires software or gles2\n");
+                fprintf(stderr, "--graphics requires software, gles2 or vulkan\n");
                 return 2;
             }
             a = argv[++i];
             if (strcmp(a, "software") == 0) c.graphics_mode = 0;
             else if (strcmp(a, "gles2") == 0) c.graphics_mode = 1;
+            else if (strcmp(a, "vulkan") == 0) c.graphics_mode = 2;
             else {
-                fprintf(stderr, "bad --graphics: %s (expected software or gles2)\n", a);
+                fprintf(stderr, "bad --graphics: %s (expected software, gles2 or vulkan)\n", a);
                 return 2;
             }
         } else if (strcmp(a, "--midlet") == 0 && i + 1 < argc) {
@@ -1060,13 +1068,13 @@ int main(int argc, char **argv)
         }
     }
 
-    if (c.graphics_mode != -1 && strcmp(c.port_name, "sdl2") != 0) {
-        fprintf(stderr, "--graphics is only supported with --port sdl2\n");
+    if (c.graphics_mode == 1 && strcmp(c.port_name, "sdl2") != 0) {
+        fprintf(stderr, "--graphics gles2 requires --port sdl2\n");
         return 2;
     }
-#if !NJ_HAVE_SDL2
-    if (c.graphics_mode != -1) {
-        fprintf(stderr, "this build has no SDL2 port; --graphics is unavailable\n");
+#if !NJ_ENABLE_VULKAN
+    if (c.graphics_mode == 2) {
+        fprintf(stderr, "--graphics vulkan requires NJ_ENABLE_VULKAN=ON\n");
         return 2;
     }
 #endif
@@ -1187,7 +1195,7 @@ int main(int argc, char **argv)
 
     if (c.upscale >= 0) {
         char v[8];
-        if (c.graphics_mode == 0) {
+        if (c.graphics_mode == 0 || c.graphics_mode == 2) {
             fprintf(stderr, "--upscale needs a GLES2 path: use --graphics gles2\n");
         } else {
             if (c.graphics_mode < 0) c.graphics_mode = 1;

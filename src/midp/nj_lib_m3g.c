@@ -13912,6 +13912,21 @@ static void jr_collect_triangle(m3g_jr *r, const float xy[6], const float inv[3]
 }
 #endif
 
+/* Immediate software and native collection consume the very same physical
+ * edges, depth bias and texture level, including the optional four children. */
+static void jr_hd_triangle(m3g_jr *r, const float xy[6], const float inv[3],
+                           const double depth[3], const float st[6], int textured,
+                           const nj_u4 rgb[3], const nj_u4 rgb2[3])
+{
+#if NJ_ENABLE_GFX_ACCEL
+    if (r->triangles) {
+        jr_collect_triangle(r, xy, inv, depth, st, rgb, rgb2);
+        return;
+    }
+#endif
+    sw_tri_band(&r->sw, xy, inv, depth, st, textured, rgb, rgb2, r->twosided, -1);
+}
+
 /* Linear surface subdivision. Split each edge at its projected midpoint.
  * Attributes in the rasterizer's affine domain (Z/w, 1/w and Gouraud
  * colors) use their ordinary midpoint. UV is linear in object space, so
@@ -13936,7 +13951,7 @@ static void jr_hd_raster(m3g_jr *r, const float xy[6], const float inv[3],
                  (!textured || r->sw.tex_no_alpha) &&
                  ((rgb[0] & rgb[1] & rgb[2]) >> 24) == 255u));
     if (!split || !(inv[0] > 0 && inv[1] > 0 && inv[2] > 0)) {
-        sw_tri_band(&r->sw, xy, inv, depth, st, textured, rgb, rgb2, r->twosided, -1);
+        jr_hd_triangle(r, xy, inv, depth, st, textured, rgb, rgb2);
         return;
     }
     for (int i=0; i<3; ++i) {
@@ -13962,7 +13977,7 @@ static void jr_hd_raster(m3g_jr *r, const float xy[6], const float inv[3],
             memcpy(fx+k*2,x[i],sizeof(x[i])); memcpy(fst+k*2,uv[i],sizeof(uv[i]));
             fi[k]=iw[i]; fz[k]=z[i]; fc[k]=colors[i]; fb[k]=back[i];
         }
-        sw_tri_band(&r->sw,fx,fi,fz,fst,textured,fc,fb,r->twosided,-1);
+        jr_hd_triangle(r, fx, fi, fz, fst, textured, fc, fb);
     }
 }
 
@@ -14040,7 +14055,7 @@ static void jr_emit(m3g_jr *r, const jr_vtx *v0, const jr_vtx *v1,
             }
         }
 #if NJ_ENABLE_GFX_ACCEL
-        if (r->triangles) {
+        if (r->triangles && !r->hd_scale) {
             jr_collect_triangle(r, xy, inv, depth, st, rgb, rgb2);
             return; /* Including failed collection: never write part of a batch. */
         }
@@ -16116,13 +16131,19 @@ static int jr_draw_accel(m3g_jr *r)
     int result = NJ_GFX_ACCEL_DECLINE;
     int deferred = 0;
     int journaled;
-    if (!r->vm->port || !r->vm->port->gfx_triangles || !r->sw.surf ||
+    const nj_port *port = r->vm->port;
+    nj_gfx_triangles_fn draw;
+    void *ud;
+    if (!port) return 0;
+    draw = r->hd_scale ? port->gfx_hd_triangles : port->gfx_triangles;
+    ud = r->hd_scale ? port->gfx_hd_triangles_ud : port->gfx_triangles_ud;
+    if (!draw || !r->sw.surf ||
         !r->sw.surf->pixels || !r->sw.z || r->sw.sprite || r->triangles) return 0;
     /* Ports that ask for auto-selection calibrate once, then keep whichever
      * path measured faster on this device. NJ_M3G_FORCE_ACCEL=1 is a debug
      * switch that skips the calibration and always takes the native path, so
      * the same binary can A/B the two renderers. */
-    if (r->vm->port->gfx_triangles_auto) {
+    if (!r->hd_scale && port->gfx_triangles_auto) {
         if (r->vm->m3g_accel_auto == 0u) {
 #if NJ_USE_LIBC
             const char *force = getenv("NJ_M3G_FORCE_ACCEL");
@@ -16138,7 +16159,7 @@ static int jr_draw_accel(m3g_jr *r)
     }
     /* Queue into the journal only when the port can commit a whole list in
      * one transaction; otherwise keep the original synchronous callback. */
-    journaled = r->vm->port->gfx_triangles_list != NULL;
+    journaled = !r->hd_scale && port->gfx_triangles_list != NULL;
     memset(&c, 0, sizeof(c));
     collector = *r;
     collector.triangles = &c;
@@ -16182,8 +16203,7 @@ static int jr_draw_accel(m3g_jr *r)
                 } else {
                     /* Never submit out of order: commit what is queued first. */
                     if (journaled) m3g_journal_flush(r->vm, NJ_M3G_FLUSH_ORDER);
-                    result = r->vm->port->gfx_triangles(
-                        r->vm->port->gfx_triangles_ud, &packet, &submitted);
+                    result = draw(ud, &packet, &submitted);
                 }
 #if NJ_M3G_PROFILE
                 ++m3g_prof.appends; m3g_prof.append += m3g_now() - ta;
@@ -16244,32 +16264,49 @@ static int jr_hd_target(m3g_jr *r, m3g_jr *hd)
     return 1;
 }
 
-static void jr_hd_mesh(m3g_jr *r)
+static int jr_hd_mesh(m3g_jr *r)
 {
     m3g_jr hd;
     if (jr_hd_target(r, &hd)) {
 #if NJ_ENABLE_FSR2
         if (r->vm->render_quality.fsr2) m3g_temporal_mesh(&hd);
 #endif
+#if NJ_ENABLE_GFX_ACCEL
+        /* Temporal capture records each original face during this walk. A
+         * declined transaction must never record a second set of samples. */
+        if (!r->vm->render_quality.fsr2 && jr_draw_accel(&hd)) return 1;
+#endif
         jr_draw_walk(&hd);
+        return 1;
     }
 #if NJ_ENABLE_FSR2
-    else if (r->vm->render_quality.fsr2) m3g_temporal_invalidate(r->vm);
+    if (r->vm->render_quality.fsr2) m3g_temporal_invalidate(r->vm);
 #endif
+    return 0;
 }
 
 static nj_u4 jr_draw(m3g_jr *r)
 {
+    int hd = 0;
     if (r->vm->render_quality.scale > 1 || r->vm->render_quality.ssaa > 1 ||
-        r->vm->render_quality.fsr2) jr_hd_mesh(r);
+        r->vm->render_quality.fsr2) {
 #if NJ_ENABLE_GFX_ACCEL
-    if (!jr_draw_accel(r)) {
+        if (r->vm->port && r->vm->port->gfx_hd_triangles && nj_m3g_pending(r->vm))
+            m3g_journal_flush(r->vm, NJ_M3G_FLUSH_ORDER);
+#endif
+        hd = jr_hd_mesh(r);
+    }
+#if NJ_ENABLE_GFX_ACCEL
+    /* Spend a native transaction on the visible target. Keep the original
+     * logical raster for Java observers instead of issuing two GPU readbacks. */
+    if ((hd && r->vm->port && r->vm->port->gfx_hd_triangles) || !jr_draw_accel(r)) {
         /* A journaled frame must stay ordered: commit queued draws before the
          * software path writes the same target for this call. */
         if (r->vm->m3g_journal) m3g_journal_flush(r->vm, NJ_M3G_FLUSH_SOFTWARE);
         jr_draw_walk(r);
     }
 #else
+    (void)hd;
     jr_draw_walk(r);
 #endif
     /* Commit counters exactly once, including collection failures and DECLINE.

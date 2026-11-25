@@ -35,6 +35,12 @@ add_library(nj2me SHARED
 
 include(${NJ_ROOT}/cmake/NjFsr2.cmake)
 nj_enable_fsr2(nj2me)
+include(${NJ_ROOT}/cmake/NjVulkan.cmake)
+if(NJ_ENABLE_VULKAN)
+    set(NJ_ENABLE_GFX_ACCEL 1)
+    target_compile_definitions(nj2me PRIVATE NJ_ENABLE_GFX_ACCEL=1)
+endif()
+nj_enable_vulkan(nj2me)
 
 target_include_directories(nj2me PRIVATE
     ${NJ_ROOT}/include

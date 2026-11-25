@@ -308,7 +308,7 @@ typedef struct nj_client_run_options {
     const char *fs_dir;              /* NULL = no filesystem */
     int launcher_width, launcher_height; /* 0 = 720x540 */
     int heap_grow_override;              /* 0=settings, -1=off, +1=on */
-    int graphics_mode; /* 0=legacy env/default, 1=software, 2=experimental GLES2 */
+    int graphics_mode; /* 0=legacy env/default, 1=software, 2=GLES2, 3=Vulkan */
     int render_scale, render_ssaa, render_subdivide, render_fsr2; /* see nj_port */
 } nj_client_run_options;
 

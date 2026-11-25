@@ -17,7 +17,7 @@
 #  built and is what the tests use).
 # =====================================================================
 cmake_minimum_required(VERSION 3.16)
-project(nano_j2me VERSION 0.5.48 LANGUAGES C)
+project(nano_j2me VERSION 0.5.49 LANGUAGES C)
 
 set(CMAKE_C_STANDARD 99)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -329,6 +329,11 @@ add_library(nj2me STATIC ${NJ_SOURCES})
 add_library(nj2me::nj2me ALIAS nj2me)
 include(cmake/NjFsr2.cmake)
 nj_enable_fsr2(nj2me)
+include(cmake/NjVulkan.cmake)
+nj_enable_vulkan(nj2me)
+if(NJ_ENABLE_VULKAN)
+  set(NJ_ENABLE_GFX_ACCEL 1)
+endif()
 
 target_include_directories(nj2me
   PUBLIC  ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -1074,11 +1079,25 @@ if(NJ_BUILD_TESTS)
   nj_add_test(test_m3g_targets tests/test_m3g_targets.c)
   if(NJ_ENABLE_M3G)
     nj_add_test(test_m3g_hd tests/test_m3g_hd.c)
+    if(NJ_ENABLE_VULKAN)
+      add_test(NAME test_m3g_hd_vulkan COMMAND test_m3g_hd vulkan)
+      set_tests_properties(test_m3g_hd_vulkan PROPERTIES SKIP_RETURN_CODE 77)
+    endif()
+    if(NJ_BUILD_GLES2_ACCEL AND NJ_BUILD_SDL2 AND SDL2_FOUND)
+      target_compile_definitions(test_m3g_hd PRIVATE NJ_TEST_HD_GLES2=1)
+      add_test(NAME test_m3g_hd_gles2 COMMAND test_m3g_hd gles2)
+      set_tests_properties(test_m3g_hd_gles2 PROPERTIES SKIP_RETURN_CODE 77
+        ENVIRONMENT "SDL_VIDEODRIVER=offscreen;SDL_AUDIODRIVER=dummy")
+    endif()
   endif()
   if(NJ_ENABLE_M3G AND NJ_ENABLE_FSR2 AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
     nj_add_test(test_m3g_temporal tests/test_m3g_temporal.c)
     target_link_options(test_m3g_temporal PRIVATE -Wl,--wrap=nj_fsr2_dispatch)
     set_tests_properties(test_m3g_temporal PROPERTIES SKIP_RETURN_CODE 77)
+  endif()
+  if(NJ_ENABLE_VULKAN)
+    nj_add_test(test_gfx_vulkan tests/test_gfx_vulkan.c)
+    set_tests_properties(test_gfx_vulkan PROPERTIES SKIP_RETURN_CODE 77)
   endif()
   nj_add_test(test_m3g_accel tests/test_m3g_accel.c)
   nj_add_test(test_m3g_triangles tests/test_m3g_triangles.c)
@@ -2442,12 +2461,11 @@ endif()
 # The prepared upstream submission bundle is checked without network access:
 # the .info copies must be byte-identical, the libretro-super patch must add
 # exactly that .info, the libretro/docs patch must touch the five expected
-# files, and (when build/libretro-dist exists) every target must carry the same
-# .info.  Clones are optional; see the script header for the clone-based
-# apply + mkdocs checks.
+# files. Validate release artifacts with --dist DIR when packaging them.
+# Local artifacts from older builds are independent of this source checkout.
 if(UNIX AND EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_libretro_submission_bundle.sh)
   add_test(NAME check_libretro_submission_bundle
-           COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_libretro_submission_bundle.sh)
+           COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_libretro_submission_bundle.sh --source-only)
   set_tests_properties(check_libretro_submission_bundle PROPERTIES
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
     TIMEOUT 120)

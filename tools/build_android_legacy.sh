@@ -54,7 +54,7 @@ FLAGS=(--sysroot="$SYSROOT" -std=c99 -Os -fPIC -ffunction-sections -fdata-sectio
        -march=armv5te -mtune=xscale -mthumb -mfloat-abi=soft -Wall
        -I"$ROOT/include" -I"$ROOT/src/core" -I"$ROOT/src/midp" -I"$ROOT/src/gfx" -I"$ROOT/src/zip")
 SOURCES=("$ROOT"/src/core/*.c "$ROOT"/src/midp/*.c "$ROOT"/src/gfx/*.c "$ROOT"/src/zip/*.c
-         "$ROOT/src/runner/nj_run.c" "$ROOT/src/port/android/nj_port_android.c")
+         "$ROOT/src/port/fsr2/nj_fsr2_stub.c" "$ROOT/src/runner/nj_run.c" "$ROOT/src/port/android/nj_port_android.c")
 OBJS=()
 echo '== native: armeabi / ARMv5TE, soft float, API 5 libc, API 5 frontend'
 for src in "${SOURCES[@]}"; do

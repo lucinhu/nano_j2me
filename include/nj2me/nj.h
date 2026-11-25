@@ -43,8 +43,8 @@ extern "C" {
 /* Version of the runtime, reported by --version and in logs. */
 #define NJ_VERSION_MAJOR 0
 #define NJ_VERSION_MINOR 5
-#define NJ_VERSION_PATCH 10
-#define NJ_VERSION_STRING "0.5.48"
+#define NJ_VERSION_PATCH 49
+#define NJ_VERSION_STRING "0.5.49"
 
 /*
  * Run an embedded JAR with a caller-provided port, using a MIDlet class name
@@ -56,8 +56,8 @@ int nj_run(const nj_port *port, const nj_run_opts *opts);
 nj_status nj_port_headless(nj_port *out);
 nj_status nj_port_sdl2(nj_port *out, const char *title);
 /* Per-instance drawing selection: -1 reads NJ_SDL2_GFX for compatibility,
- * 0 forces software, 1 requests experimental GLES2. Invalid modes return NJ_ERR;
- * an explicit GLES2 request in a software-only build returns NJ_ERR_UNSUPPORTED.
+ * 0 forces software, 1 requests GLES2, 2 requests Vulkan M3G triangles.
+ * Unsupported builds return NJ_ERR_UNSUPPORTED. Device failures use software.
  * The ordinary constructor is equivalent to mode -1. No environment mutation. */
 nj_status nj_port_sdl2_ex(nj_port *out, const char *title, int graphics_mode);
 

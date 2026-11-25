@@ -4,6 +4,9 @@
 #include "test_m3g_depth.c"
 #undef main
 #include "../src/midp/nj_midp.h"
+#if NJ_ENABLE_VULKAN
+#include "nj2me/nj_gfx_vulkan.h"
+#endif
 
 #if NJ_ENABLE_M3G
 static const nj_u4 foreground = 0xffff2020u;
@@ -156,6 +159,67 @@ static int decline_list(void *ud, const nj_gfx_triangles_list *list, nj_u4 *subm
     return NJ_GFX_ACCEL_DECLINE;
 }
 
+/* Run the public M3G draw through exactly one physical packet. A CPU-only
+ * callback declines; optional CTest variants forward to the real driver. */
+typedef struct hd_probe {
+    nj_gfx_triangles_fn forward;
+    void *backend;
+    nj_surface *target;
+    void *logical_depth;
+    unsigned calls, accepted;
+} hd_probe;
+
+static int trace_physical(void *ud, const nj_gfx_triangles *packet, nj_u4 *submitted)
+{
+    hd_probe *p = ud;
+    ++p->calls;
+    check(packet->surface == p->target && packet->depth != p->logical_depth &&
+          packet->depth_stride == 128, "native draw uses physical colour and depth");
+    check(packet->count == 4 && packet->width < 128 && packet->height < 128,
+          "one bounded physical packet contains the four subdivided faces");
+    if (!p->forward) return NJ_GFX_ACCEL_DECLINE;
+    int result = p->forward(p->backend, packet, submitted);
+    if (result == NJ_GFX_ACCEL_DONE) p->accepted += *submitted;
+    return result;
+}
+
+static void check_physical(nj_vm *vm, nj_port *port, canvas *c, const canvas *ref,
+                           const nj_u4 *logical, const nj_s4 *z, const nj_port *backend)
+{
+    hd_probe probe = {backend->gfx_hd_triangles, backend->gfx_hd_triangles_ud,
+                      companion(vm,c), nj_array_data(zbuf(vm,c)), 0, 0};
+    const nj_u4 *expected = nj_array_data(ref->pixels);
+    unsigned before = packet_calls, different = 0, interior = 0;
+    port->gfx_hd_triangles = trace_physical;
+    port->gfx_hd_triangles_ud = &probe;
+    port->gfx_triangles = decline_packet;
+    vm->render_quality.subdivide = 1;
+    default_clear(vm,c);
+    diagonal(vm,c);
+    check(probe.calls == 1 && packet_calls == before && !nj_m3g_pending(vm),
+          "HD submission leaves Java pixels synchronous without a second GPU draw");
+    check(!probe.forward || probe.accepted == 4, "selected driver committed all four faces");
+    check(!memcmp(logical,nj_array_data(c->pixels),64*64*sizeof(*logical)) &&
+          !memcmp(z,nj_array_data(zbuf(vm,c)),64*64*sizeof(*z)), "logical colour and Z match software byte for byte");
+    for (int y=0; y<128; ++y) for (int x=0; x<128; ++x) {
+        int at = y*128+x;
+        if (nj_surface_get(probe.target,x,y) == expected[at]) continue;
+        ++different;
+        /* Native coverage can differ at an edge. The entire interior of this
+         * flat-colour scene and the untouched exterior must still be exact. */
+        if (x==0 || y==0 || x==127 || y==127 ||
+            (expected[at]==expected[at-1] && expected[at]==expected[at+1] &&
+             expected[at]==expected[at-128] && expected[at]==expected[at+128])) ++interior;
+    }
+    printf("physical packet: %u accepted faces, %u / 16384 different pixels, %u interior differences\n",
+           probe.accepted, different, interior);
+    check(probe.forward ? interior==0 && different<=160 : different==0,
+          "native edges stay bounded; declined draws replay the exact HD image");
+    port->gfx_hd_triangles = NULL;
+    port->gfx_hd_triangles_ud = NULL;
+    port->gfx_triangles = NULL;
+}
+
 static void check_queue(nj_vm *vm, nj_port *port, canvas *c)
 {
     nj_surface *hd = companion(vm,c);
@@ -203,8 +267,9 @@ static void check_weak_depth(nj_vm *vm, canvas *c)
 }
 #endif
 
-int main(void)
+int main(int argc, char **argv)
 {
+    (void)argc; (void)argv;
 #if !NJ_ENABLE_M3G
     puts("SKIP: NJ_ENABLE_M3G=0"); return 0;
 #else
@@ -213,6 +278,26 @@ int main(void)
     canvas c, ref;
     nj_u4 baseline[64*64];
     nj_s4 logical_z[64*64];
+#if NJ_ENABLE_GFX_ACCEL
+    nj_port backend = {0};
+    if (argc > 1) {
+#if NJ_ENABLE_VULKAN
+        if (strcmp(argv[1],"vulkan")==0 && !nj_vk_renderer_attach(&backend)) return 77;
+#endif
+#if NJ_TEST_HD_GLES2
+        if (strcmp(argv[1],"gles2")==0) {
+            int w=64, h=64, stride=0;
+            void *pixels=NULL;
+            if (nj_port_sdl2_ex(&backend,"M3G HD test",1)!=NJ_OK) return 77;
+            if (!backend.display_init || backend.display_init(backend.ud,&w,&h,&stride,&pixels)<0) {
+                nj_port_shutdown(&backend);
+                return 77;
+            }
+        }
+#endif
+        if (!backend.gfx_hd_triangles) { nj_port_shutdown(&backend); return 2; }
+    }
+#endif
     nj_port_headless_ex(&port,64,64,0,NULL);
     vm=nj_vm_create(&port,4u*1024u*1024u);
     if (!vm) return 2;
@@ -225,6 +310,10 @@ int main(void)
     memcpy(baseline,nj_array_data(c.pixels),sizeof(baseline));
     memcpy(logical_z,nj_array_data(zbuf(vm,&c)),sizeof(logical_z));
     vm->render_quality.scale=2;
+#if NJ_ENABLE_GFX_ACCEL
+    check_physical(vm,&port,&c,&ref,baseline,logical_z,&backend);
+    nj_port_shutdown(&backend);
+#endif
     check_geometry(vm,&c,0,baseline,logical_z,&ref);
     check_geometry(vm,&c,1,baseline,logical_z,&ref);
     check_perspective(vm,&c,&ref);

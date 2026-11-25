@@ -5,7 +5,7 @@
 #     tools/build_android.sh [--abi arm64-v8a] [--api 21] [--out DIR] [--no-midi]
 #                              [--opt 0|1|2|3|s|g|z] [--no-png] [--no-jpeg]
 #                              [--no-gif] [--no-inflate] [--no-wav] [--no-amr]
-#                              [--gles2] [--fsr2-sdk PREFIX]
+#                              [--gles2] [--vulkan] [--fsr2-sdk PREFIX]
 #
 # --fsr2-sdk enables AMD FSR2 for --abi arm64-v8a --api 28 (or later).
 # Supply a prefix cross-compiled with the same NDK and target. Package both
@@ -42,6 +42,7 @@ SCREEN=""     # e.g. 176x208; empty leaves the runtime's default (240x320)
 NO_MIDI=0     # 1 drops the built-in MIDI renderer (see --no-midi below)
 NO_CODECS=""  # space-separated codec names to cut (see --no-<codec> below)
 OPT="s"       # -O<n> for the native compile; see --opt below
+VULKAN=0
 GLES2=0       # optional private EGL context for synchronous 2D acceleration
 FSR2_SDK=""   # optional prefix compiled for the requested Android target
 
@@ -53,6 +54,7 @@ while [ $# -gt 0 ]; do
         --screen) SCREEN="$2"; shift 2 ;;
         --opt)  OPT="${2#-O}"; shift 2 ;;
         --no-midi) NO_MIDI=1; shift ;;
+        --vulkan) VULKAN=1; shift ;;
         --gles2) GLES2=1; shift ;;
         --fsr2-sdk)
             if [ -z "${2:-}" ]; then echo "--fsr2-sdk needs an SDK prefix" >&2; exit 2; fi
@@ -116,6 +118,12 @@ else
     SOURCES="$SOURCES src/port/fsr2/nj_fsr2_stub.c"
 fi
 
+VULKAN_LIBS=""
+if [ "$VULKAN" -eq 1 ]; then
+    [ "$API" -ge 24 ] || { echo "--vulkan requires API 24+" >&2; exit 2; }
+    SOURCES="$SOURCES src/port/vulkan/nj_gfx_vulkan.c"
+    VULKAN_LIBS="-lvulkan"
+fi
 GLES2_LIBS=""
 if [ "$GLES2" -eq 1 ]; then
     SOURCES="$SOURCES src/port/gles2/nj_gfx_gles2.c src/port/gles2/nj_gl_api.c src/port/android/nj_android_gles2.c"
@@ -178,6 +186,9 @@ FEATURE_DEFS="-DNJ_PIXFMT=NJ_PIXFMT_RGB565 \
 -DNJ_ENABLE_FONT_CJK=0"
 if [ -n "$FSR2_SDK" ]; then
     FEATURE_DEFS="$FEATURE_DEFS -DNJ_ENABLE_FSR2=1"
+fi
+if [ "$VULKAN" -eq 1 ]; then
+    FEATURE_DEFS="$FEATURE_DEFS -DNJ_ENABLE_VULKAN=1 -DNJ_ENABLE_GFX_ACCEL=1"
 fi
 if [ "$GLES2" -eq 1 ]; then
     FEATURE_DEFS="$FEATURE_DEFS -DNJ_ENABLE_GFX_ACCEL=1 -DNJ_ANDROID_GLES2=1"
@@ -303,7 +314,7 @@ for abi in $ABIS; do
     # device - which is exactly what happened with src/runner/nj_run.c.
     if ! "$link_cc" -shared -Wl,--gc-sections -Wl,--no-undefined \
             -Wl,-soname,libnj2me.so \
-            -o "$dir/libnj2me.so" $objs "${fsr_link[@]}" -llog -landroid -lOpenSLES -lz -ldl -lm $GLES2_LIBS 2>"$dir/err"; then
+            -o "$dir/libnj2me.so" $objs "${fsr_link[@]}" -llog -landroid -lOpenSLES -lz -ldl -lm $GLES2_LIBS $VULKAN_LIBS 2>"$dir/err"; then
         echo "  $abi: link failed"
         head -5 "$dir/err"
         fail=1

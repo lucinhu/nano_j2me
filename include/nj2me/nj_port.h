@@ -878,6 +878,12 @@ typedef struct nj_port {
      * once. Zero (the default for tests and embedders) keeps the callbacks
      * exactly as configured. Pure software ports never calibrate. */
     int gfx_triangles_auto;
+    /* Physical-resolution triangle transaction. DONE commits visible color
+     * and depth before returning. DECLINE leaves both untouched for software.
+     * Logical pixels remain authoritative for MIDP readback in HD mode. */
+    nj_gfx_triangles_fn gfx_hd_triangles;
+    void *gfx_hd_triangles_ud;
+    void (*gfx_hd_destroy)(void *ud); /* optional owned backend, released at shutdown */
 #endif
 
     /* Optional high-resolution output. Zero-initialized ports use the logical

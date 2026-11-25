@@ -7,7 +7,7 @@
 #                                [--push FILE.jar] [--no-midi]
 #                                [--no-png] [--no-jpeg] [--no-gif]
 #                                [--no-inflate] [--no-wav] [--no-amr] [--gles2]
-#                                [--fsr2-sdk PREFIX] [--out DIR]
+#                                [--vulkan] [--fsr2-sdk PREFIX] [--out DIR]
 #
 # --fsr2-sdk builds an arm64-v8a APK for API 28+ using an Android SDK prefix
 # produced by tools/build_fsr2_sdk.py. It bundles libc++ and both SDK licenses.
@@ -64,6 +64,7 @@ while [ $# -gt 0 ]; do
         --install) INSTALL=1; shift ;;
         --push) PUSH="$2"; shift 2 ;;
         --no-midi) NO_MIDI=1; shift ;;
+        --vulkan) MIN_API=24; NO_CODECS="$NO_CODECS --vulkan"; shift ;;
         --gles2|--no-png|--no-jpeg|--no-gif|--no-inflate|--no-wav|--no-amr)
             NO_CODECS="$NO_CODECS $1"; shift ;;
         -h|--help) sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;

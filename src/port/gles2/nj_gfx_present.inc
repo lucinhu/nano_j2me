@@ -17,43 +17,53 @@ static const char present_vs[] =
     "attribute vec2 position; attribute vec2 texcoord; varying highp vec2 uv;"
     "void main(){ uv=texcoord; gl_Position=vec4(position,0.0,1.0); }";
 
+/* The input texture carries B,G,R,A bytes even on GLES2 without BGRA
+ * extensions. Swizzle at the first sample so all filters see opaque RGB.
+ * RCAS samples the already-decoded EASU render target instead. */
+#define PRESENT_FRAME_SAMPLE "#define frameSample(p) vec4(texture2D(image,(p)).bgr,1.0)\n"
+
 /* 0: nearest (exact texel replication for integer scales) */
 static const char present_fs_nearest[] =
+    PRESENT_FRAME_SAMPLE
     "#ifdef GL_ES\nprecision highp float;\n#endif\n"
     "varying highp vec2 uv; uniform highp sampler2D image;"
-    "void main(){ gl_FragColor=texture2D(image,uv); }";
+    "void main(){ gl_FragColor=frameSample(uv); }";
 
 /* 1: sharp-bilinear - nearest at texel centres, bilinear at texel edges */
 static const char present_fs_sharp[] =
+    PRESENT_FRAME_SAMPLE
     "#ifdef GL_ES\nprecision highp float;\n#endif\n"
     "varying highp vec2 uv; uniform highp sampler2D image; uniform vec2 texel;"
     "void main(){ vec2 size=1.0/texel; vec2 f=fract(uv*size);"
     " vec2 centre=(floor(uv*size)+0.5)*texel;"
-    " vec4 near=texture2D(image,centre); vec4 lin=texture2D(image,uv);"
+    " vec4 near=frameSample(centre); vec4 lin=frameSample(uv);"
     " vec2 w=clamp(abs(f-0.5)*2.0,0.0,1.0);"
     " gl_FragColor=mix(near,lin,max(w.x,w.y)); }";
 
 /* 2: scanline (nearest + every other output row darkened) */
 static const char present_fs_scanline[] =
+    PRESENT_FRAME_SAMPLE
     "#ifdef GL_ES\nprecision highp float;\n#endif\n"
     "varying highp vec2 uv; uniform highp sampler2D image;"
-    "void main(){ vec4 c=texture2D(image,uv);"
+    "void main(){ vec4 c=frameSample(uv);"
     " if(mod(floor(gl_FragCoord.y),2.0)>0.5) c.rgb*=0.62;"
     " gl_FragColor=c; }";
 
 /* 3: LCD grid (nearest + every third row/column darkened) */
 static const char present_fs_lcd[] =
+    PRESENT_FRAME_SAMPLE
     "#ifdef GL_ES\nprecision highp float;\n#endif\n"
     "varying highp vec2 uv; uniform highp sampler2D image;"
-    "void main(){ vec4 c=texture2D(image,uv);"
+    "void main(){ vec4 c=frameSample(uv);"
     " if(mod(floor(gl_FragCoord.x),3.0)<0.5 || mod(floor(gl_FragCoord.y),3.0)<0.5) c.rgb*=0.80;"
     " gl_FragColor=c; }";
 
 /* 4: CRT (strong scanlines + column grid + gentle vignette) */
 static const char present_fs_crt[] =
+    PRESENT_FRAME_SAMPLE
     "#ifdef GL_ES\nprecision highp float;\n#endif\n"
     "varying highp vec2 uv; uniform highp sampler2D image; uniform vec2 outsize;"
-    "void main(){ vec4 c=texture2D(image,uv);"
+    "void main(){ vec4 c=frameSample(uv);"
     " if(mod(floor(gl_FragCoord.y),2.0)>0.5) c.rgb*=0.58;"
     " if(mod(floor(gl_FragCoord.x),3.0)<0.5) c.rgb*=0.82;"
     " vec2 q=gl_FragCoord.xy/outsize-0.5; c.rgb*=1.0-0.30*dot(q,q);"
@@ -66,7 +76,8 @@ static const char present_fs_crt[] =
  * texture2D taps because GLSL ES 1.0 has no gather instruction.
  * The RCAS sharpness is the reference default of 0.2 stops. */
 static const char present_fs_bicubic[] =
-    "precision highp float;\n"
+    PRESENT_FRAME_SAMPLE
+    "#ifdef GL_ES\nprecision highp float;\n#endif\n"
     "uniform sampler2D image;\n"
     "uniform vec2 texel;\n"
     "varying vec2 uv;\n"
@@ -86,13 +97,14 @@ static const char present_fs_bicubic[] =
     "    for (int i = 0; i < 4; ++i) {\n"
     "      float wx = (i == 0) ? w0.x : ((i == 1) ? w1.x : ((i == 2) ? w2.x : w3.x));\n"
     "      vec2 o = vec2(float(i) - 1.0, float(j) - 1.0);\n"
-    "      acc += texture2D(image, (base + o + 0.5) * texel) * (wx * wy);\n"
+    "      acc += frameSample((base + o + 0.5) * texel) * (wx * wy);\n"
     "    }\n"
     "  }\n"
-    "  gl_FragColor = acc;\n"
+    "  gl_FragColor = vec4(acc.rgb, 1.0);\n"
     "}\n";
 
 static const char present_fs_easu[] =
+    PRESENT_FRAME_SAMPLE
     "#ifdef GL_ES\n"
     "precision highp float;\n"
     "#endif\n"
@@ -113,10 +125,10 @@ static const char present_fs_easu[] =
     "    vec2 ij = floor(p * insize - 0.5);\n"
     "    vec2 base = (ij + 0.5) / insize;\n"
     "    vec2 st = 1.0 / insize;\n"
-    "    vec4 t00 = texture2D(image, base);\n"
-    "    vec4 t10 = texture2D(image, base + vec2(st.x, 0.0));\n"
-    "    vec4 t01 = texture2D(image, base + vec2(0.0, st.y));\n"
-    "    vec4 t11 = texture2D(image, base + st);\n"
+    "    vec4 t00 = frameSample(base);\n"
+    "    vec4 t10 = frameSample(base + vec2(st.x, 0.0));\n"
+    "    vec4 t01 = frameSample(base + vec2(0.0, st.y));\n"
+    "    vec4 t11 = frameSample(base + st);\n"
     "    r = vec4(t00.r, t10.r, t01.r, t11.r);\n"
     "    g = vec4(t00.g, t10.g, t01.g, t11.g);\n"
     "    b = vec4(t00.b, t10.b, t01.b, t11.b);\n"
@@ -234,6 +246,8 @@ static const char present_fs_easu[] =
     "    vec3 pix = min(max4, max(min4, aC * (1.0 / aW)));\n"
     "    gl_FragColor = vec4(pix, 1.0);\n"
     "}\n";
+
+#undef PRESENT_FRAME_SAMPLE
 
 static const char present_fs_rcas[] =
     "#ifdef GL_ES\n"
@@ -501,36 +515,57 @@ static int present_fsr(nj_gles2 *s, int in_w, int in_h, int out_w, int out_h,
     return 1;
 }
 
-/* Pack opaque RGBA rows once for both the window and readback paths. */
+/* A physical presentation frame has its own budget, separate from draw ROIs. */
+static int present_dimensions(const nj_gles2 *s, int w, int h)
+{
+    return w > 0 && h > 0 && w <= s->max_texture && h <= s->max_texture &&
+           (size_t)w <= NJ_GL_PRESENT_MAX_PIXELS / (size_t)h;
+}
+
 static int present_upload(nj_gles2 *s, const nj_surface *src)
 {
-    if (!s || !src || !src->pixels || !dimensions(s, src->width, src->height)) return 0;
+    const nj_u4 byte_order = 1;
     int bpp = bytes_per_pixel(src->format);
-    if (!bpp || (src->bpp && src->bpp != bpp) || (nj_s8)src->stride < (nj_s8)src->width * bpp ||
-        (size_t)src->height > SIZE_MAX / (size_t)src->stride ||
-        (size_t)src->width > SIZE_MAX / 4u / (size_t)src->height) return 0;
-    if (!reserve(&s->upload, &s->upload_size, (size_t)src->width * src->height * 4u)) return 0;
-    nj_u1 *dst = s->upload;
-    for (int y = 0; y < src->height; ++y) {
-        const nj_u1 *pixel = (const nj_u1 *)src->pixels + (size_t)y * src->stride;
-        for (int x = 0; x < src->width; ++x, dst += 4, pixel += bpp) {
-            nj_u4 c = read_color(pixel, src->format);
-            dst[0] = (nj_u1)(c >> 16);
-            dst[1] = (nj_u1)(c >> 8);
-            dst[2] = (nj_u1)c;
-            dst[3] = 255;
+    if (!present_dimensions(s, src->width, src->height) || !bpp ||
+        (src->bpp && src->bpp != bpp) || (nj_s8)src->stride < (nj_s8)src->width * bpp)
+        return 0;
+    size_t row = (size_t)src->width * bpp;
+    size_t rows = (size_t)src->height - 1;
+    if (rows > (SIZE_MAX - row) / (size_t)src->stride ||
+        rows * (size_t)src->stride + row > UINTPTR_MAX - (uintptr_t)src->pixels) return 0;
+
+    int native_bgra = src->format == NJ_PIXFMT_ARGB8888 && *(const nj_u1 *)&byte_order == 1;
+    const nj_u1 *pixels = src->pixels;
+    if (!native_bgra || (size_t)src->stride != row) {
+        size_t out_row = (size_t)src->width * 4u;
+        if (!reserve(&s->upload, &s->upload_size, out_row * (size_t)src->height)) return 0;
+        for (int y = 0; y < src->height; ++y) {
+            const nj_u1 *pixel = pixels + (size_t)y * src->stride;
+            nj_u1 *dst = s->upload + (size_t)y * out_row;
+            if (native_bgra) {
+                memcpy(dst, pixel, row); /* GLES2 has no core UNPACK_ROW_LENGTH. */
+            } else {
+                for (int x = 0; x < src->width; ++x, dst += 4, pixel += bpp) {
+                    nj_u4 c = read_color(pixel, src->format);
+                    dst[0] = (nj_u1)c;
+                    dst[1] = (nj_u1)(c >> 8);
+                    dst[2] = (nj_u1)(c >> 16);
+                    dst[3] = 255;
+                }
+            }
         }
+        pixels = s->upload;
     }
     s->gl.ActiveTexture(GL_TEXTURE0);
     texture(s, s->present_input);
-    return texture_upload(s, &s->present_input_storage, src->width, src->height, GL_RGBA, s->upload);
+    s->gl.PixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    return texture_upload(s, &s->present_input_storage, src->width, src->height, GL_RGBA, pixels);
 }
 
 /* Render one frame through the offscreen shader pass.  Returns 1 on success,
  * 0 when the GL context is not current or the pass failed (the caller then
  * falls back to the software presentation unchanged).  Same surface formats
- * as the rest of the backend are accepted; non-RGBA sources are converted on
- * the CPU. */
+ * as the rest of the backend are accepted. */
 int nj_gles2_present(void *ud, const nj_surface *src, int mode, int out_w, int out_h,
                      nj_u1 *out)
 {
@@ -550,8 +585,8 @@ int nj_gles2_present(void *ud, const nj_surface *src, int mode, int out_w, int o
     if (!current(s) || !present_init(s)) { NJ_PRESENT_DBG("current/init"); return 0; }
     /* Presentation targets are bounded by the drawable/viewport, not by the
      * generic 1M-pixel texture budget (a 1080x2400 window alone exceeds it). */
-    if (out_w <= 0 || out_h <= 0 || out_w > s->max_viewport[0] || out_h > s->max_viewport[1] ||
-        out_w > s->max_texture || out_h > s->max_texture) {
+    if (!present_dimensions(s, out_w, out_h) ||
+        out_w > s->max_viewport[0] || out_h > s->max_viewport[1]) {
         NJ_PRESENT_DBG("out size"); return 0;
     }
     if (!present_upload(s, src)) { NJ_PRESENT_DBG("input upload"); return 0; }
@@ -653,9 +688,10 @@ int nj_gles2_present_onscreen_capture(void *ud, const nj_surface *src, int mode,
     if (!s || !src || !src->pixels || !out_rgba) return 0;
     if (mode < 0 || mode >= NJ_GL_PRESENT_MODES) return 0;
     if (!current(s) || !present_init(s)) return 0;
-    if (out_w <= 0 || out_h <= 0) return 0;
+    if (!present_dimensions(s, out_w, out_h) ||
+        out_w > s->max_viewport[0] || out_h > s->max_viewport[1]) return 0;
     if (vp_w <= 0 || vp_h <= 0 || vp_x < 0 || vp_y < 0) return 0;
-    if (vp_x + vp_w > out_w || vp_y + vp_h > out_h) return 0;
+    if (vp_x > out_w - vp_w || vp_y > out_h - vp_h) return 0;
     w = out_w;
     h = out_h;
     if (!present_upload(s, src)) return 0;
@@ -680,8 +716,9 @@ int nj_gles2_present_onscreen_capture(void *ud, const nj_surface *src, int mode,
         s->gl.Viewport(vp_x, vp_y, vp_w, vp_h);
         if (mode == 5 ? present_fsr_screen(s, src->width, src->height, vp_x, vp_y, vp_w, vp_h)
                       : present_draw_quad(s, mode, src->width, src->height, vp_w, vp_h, 2)) {
+            s->gl.PixelStorei(GL_PACK_ALIGNMENT, 1);
             s->gl.ReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, out_rgba);
-            ok = 1;
+            ok = clean_errors(s);
         }
     }
     s->gl.BindFramebuffer(GL_FRAMEBUFFER, 0);
@@ -696,11 +733,11 @@ int nj_gles2_present_readback(void *ud, int w, int h, nj_u1 *out_rgba)
     nj_gles2 *s = (nj_gles2 *)ud;
     if (s == NULL || out_rgba == NULL || w <= 0 || h <= 0) return 0;
     if (!current(s)) return 0;
-    if (!dimensions(s, w, h)) return 0;
+    if (!present_dimensions(s, w, h) || w > s->max_viewport[0] || h > s->max_viewport[1]) return 0;
     s->gl.BindFramebuffer(GL_FRAMEBUFFER, 0);
+    s->gl.PixelStorei(GL_PACK_ALIGNMENT, 1);
     s->gl.ReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, out_rgba);
-    (void)clean_errors(s);
-    return 1;
+    return clean_errors(s);
 }
 
 /* Two-pass FSR1 (EASU -> RCAS) straight into the current framebuffer.  The
@@ -775,7 +812,8 @@ int nj_gles2_present_onscreen(void *ud, const nj_surface *src, int mode,
     if (mode < 0 || mode >= NJ_GL_PRESENT_MODES) return 0;
     if (!current(s) || !present_init(s)) return 0;
     if (vp_w <= 0 || vp_h <= 0 || vp_x < 0 || vp_y < 0) return 0;
-    if (vp_x + vp_w > s->max_viewport[0] || vp_y + vp_h > s->max_viewport[1])
+    if (vp_x > s->max_viewport[0] - vp_w || vp_y > s->max_viewport[1] - vp_h ||
+        (mode == 5 && !present_dimensions(s, vp_w, vp_h)))
         return 0;
     if (!present_upload(s, src)) return 0;
 

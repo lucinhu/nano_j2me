@@ -2195,6 +2195,16 @@ void nj_port_shutdown(nj_port *port)
     if (!port) {
         return;
     }
+#if NJ_ENABLE_GFX_ACCEL
+    if (port->gfx_hd_destroy) {
+        port->gfx_hd_destroy(port->gfx_hd_triangles_ud);
+        port->gfx_hd_destroy = NULL;
+        port->gfx_hd_triangles = NULL;
+        port->gfx_hd_triangles_ud = NULL;
+        port->gfx_triangles = NULL;
+        port->gfx_triangles_ud = NULL;
+    }
+#endif
     if (port->shutdown) {
         port->shutdown(port->ud);
     }

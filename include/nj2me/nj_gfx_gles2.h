@@ -20,7 +20,8 @@ typedef struct nj_gles2_config {
     /* Per source / destination / raster rectangle limit. 0 selects 1M pixels.
      * 2D uses at most two CPU RGBA buffers and two GL RGBA textures. Raster
      * lazily adds one CPU RGBA readback buffer and one GL RGBA depth texture.
-     * Each buffer/texture is individually bounded by 4*max_pixels bytes. */
+     * Draw allocations are individually bounded by 4*max_pixels bytes.
+     * Presentation has a separate NJ_GL_PRESENT_MAX_PIXELS budget. */
     size_t max_pixels;
     /* Optional copied per-instance GL dispatch. NULL uses linked GLES2.
      * Zero-initialize the complete config before setting individual fields. */
@@ -82,10 +83,14 @@ int nj_gles2_frame_active(const void *ud);
 /* Offscreen presentation shader pass (goal A: GL presentation layer).
  * Modes: 0 nearest, 1 sharp-bilinear, 2 scanline, 3 LCD grid, 4 CRT,
  * 5 FSR1 (EASU edge-adaptive upscale + RCAS sharpening), 6 bicubic.
+ * Input and offscreen textures are independently capped at 16M pixels and
+ * the device texture size. Tightly packed little-endian ARGB8888 uploads
+ * directly. All filters ignore input alpha and output opaque pixels.
  * `src` may be any surface format the backend accepts; `out` receives
  * out_w*out_h tightly packed RGBA8888 rows, top-down. Returns 1 on success and
  * 0 on decline (context not current, unsupported size, or GL failure); the
  * caller then falls back to the software presentation unchanged. */
+#define NJ_GL_PRESENT_MAX_PIXELS (4096u * 4096u)
 #define NJ_GL_PRESENT_MODES 7
 int nj_gles2_present(void *ud, const nj_surface *src, int mode, int out_w, int out_h,
                      nj_u1 *out_rgba);

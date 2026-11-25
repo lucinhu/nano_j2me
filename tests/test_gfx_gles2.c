@@ -3,6 +3,8 @@
  * renderer identity is logged, and no hardware/performance claim is made.
  * CHECK deliberately stays active in Release/NDEBUG builds. */
 #include "nj2me/nj_gfx_gles2.h"
+#include "nj2me/nj_gl_api.h"
+#include <limits.h>
 #include <EGL/egl.h>
 #include <GLES2/gl2.h>
 #include <stdio.h>
@@ -614,6 +616,110 @@ static void test_instances(const egl_fixture *e, nj_gles2 *first, nj_gles2 *seco
     CHECK(nj_gles2_destroy(second) == 0);
     delta(second, second_before, 0, 0, 0);
 }
+/* Observe the actual GL calls while still using the real driver and shaders. */
+static struct {
+    unsigned images, updates, reads;
+    const void *last_source;
+    size_t upload_bytes;
+} transfers;
+
+static void GL_APIENTRY count_image(GLenum target, GLint level, GLint internal, GLsizei w,
+                                    GLsizei h, GLint border, GLenum fmt, GLenum type, const void *p)
+{
+    ++transfers.images;
+    if (p) { transfers.last_source = p; transfers.upload_bytes += (size_t)w*h*4u; }
+    glTexImage2D(target, level, internal, w, h, border, fmt, type, p);
+}
+static void GL_APIENTRY count_update(GLenum target, GLint level, GLint x, GLint y, GLsizei w,
+                                     GLsizei h, GLenum fmt, GLenum type, const void *p)
+{
+    ++transfers.updates;
+    transfers.last_source = p;
+    transfers.upload_bytes += (size_t)w*h*4u;
+    glTexSubImage2D(target, level, x, y, w, h, fmt, type, p);
+}
+static void GL_APIENTRY count_read(GLint x, GLint y, GLsizei w, GLsizei h,
+                                   GLenum fmt, GLenum type, void *p)
+{
+    ++transfers.reads;
+    glReadPixels(x, y, w, h, fmt, type, p);
+}
+
+static void test_present_hd(current_gate *gate)
+{
+    enum { W = 960, H = 1280 };
+    nj_gl_api api;
+    nj_gles2_config cfg = {0};
+    nj_surface src = {0};
+    nj_u4 *pixels;
+    nj_u1 *rgba;
+    nj_gles2 *state;
+    GLint max_tex, max_vp[2];
+    glGetIntegerv(GL_MAX_TEXTURE_SIZE, &max_tex);
+    glGetIntegerv(GL_MAX_VIEWPORT_DIMS, max_vp);
+    if (max_tex < H || max_vp[0] < W || max_vp[1] < H) return;
+    snprintf(scenario, sizeof scenario, "4x physical presentation, transfer counts and bounds");
+    CHECK(nj_gl_api_default(&api));
+    api.TexImage2D = count_image; api.TexSubImage2D = count_update; api.ReadPixels = count_read;
+    cfg.is_current = is_current; cfg.ud = gate; cfg.gl = &api;
+    state = nj_gles2_create(&cfg);
+    CHECK(state);
+    pixels = malloc((size_t)W*H*4u); rgba = malloc((size_t)W*H*4u);
+    CHECK(pixels && rgba);
+    for (unsigned i = 0; i < W*H; ++i) pixels[i] = i*0x211575u + 0x581135u;
+    src.pixels = pixels; src.width = W; src.height = H; src.stride = W*4;
+    src.format = NJ_PIXFMT_ARGB8888;
+    memset(&transfers, 0, sizeof transfers);
+    CHECK(nj_gles2_present(state, &src, 0, W, H, rgba));
+    CHECK(transfers.images == 2 && transfers.updates == 0 && transfers.reads == 1);
+    for (unsigned i = 0; i < W*H; ++i) {
+        nj_u4 c = pixels[i];
+        CHECK(rgba[i*4] == (nj_u1)(c>>16) && rgba[i*4+1] == (nj_u1)(c>>8) &&
+              rgba[i*4+2] == (nj_u1)c && rgba[i*4+3] == 255);
+    }
+    memset(&transfers, 0, sizeof transfers);
+    CHECK(nj_gles2_present_onscreen(state, &src, 0, 0, 0, 64, 64));
+    CHECK(!transfers.images && transfers.updates == 1 && !transfers.reads);
+    CHECK(transfers.upload_bytes == (size_t)W*H*4u);
+    const nj_u4 one = 1;
+    if (*(const nj_u1 *)&one == 1) CHECK(transfers.last_source == pixels);
+    printf("HD %dx%d onscreen: %zu upload bytes, %u update, %u allocations, %u reads\n",
+           W, H, transfers.upload_bytes, transfers.updates, transfers.images, transfers.reads);
+    src.stride = 4097*4; src.width = 4097; src.height = 4096;
+    CHECK(!nj_gles2_present(state, &src, 0, 1, 1, rgba));
+    CHECK(!nj_gles2_present_onscreen(state, &src, 0, INT_MAX, 1, 8, 8));
+    CHECK(transfers.updates == 1 && transfers.images == 0 && transfers.reads == 0);
+    src.stride = W*4; src.width = W; src.height = H;
+    glEnable(0xdead); /* A pending GL error invalidates the cached upload. */
+    CHECK(!nj_gles2_present_onscreen(state, &src, 0, 0, 0, 64, 64));
+    CHECK(nj_gles2_present_onscreen(state, &src, 0, 0, 0, 64, 64));
+    CHECK(transfers.images == 1 && transfers.reads == 0);
+    CHECK(nj_gles2_destroy(state));
+    free(rgba); free(pixels);
+}
+
+static void test_present_filters(nj_gles2 *state)
+{
+    canvas argb, rgb, padded;
+    nj_u1 expected[23*17*4], actual[sizeof expected];
+    init_canvas(&argb, NJ_PIXFMT_ARGB8888, 13, 7, 0, 1);
+    init_canvas(&padded, NJ_PIXFMT_ARGB8888, 13, 7, 5, 1);
+    init_canvas(&rgb, NJ_PIXFMT_RGB888, 13, 7, 3, 0);
+    for (int mode = 0; mode < NJ_GL_PRESENT_MODES; ++mode) {
+        snprintf(scenario, sizeof scenario, "presentation filter %d: alpha, padding, row order", mode);
+        CHECK(nj_gles2_present(state, &rgb.surface, mode, 23, 17, expected));
+        for (size_t i = 3; i < sizeof expected; i += 4) CHECK(expected[i] == 255);
+        CHECK(nj_gles2_present(state, &argb.surface, mode, 23, 17, actual));
+        CHECK(!memcmp(expected, actual, sizeof expected));
+        CHECK(nj_gles2_present(state, &padded.surface, mode, 23, 17, actual));
+        CHECK(!memcmp(expected, actual, sizeof expected));
+        CHECK(nj_gles2_present_onscreen_capture(state, &argb.surface, mode, 0, 0, 23, 17, 23, 17, actual));
+        /* Check the window flip independently for the unmodulated nearest pass. */
+        if (!mode) for (int y = 0; y < 17; ++y)
+            CHECK(!memcmp(actual + y*23*4, expected + (16-y)*23*4, 23*4));
+    }
+}
+
 static void test_present_rows(nj_gles2 *state)
 {
     const int formats[] = {NJ_PIXFMT_RGB565, NJ_PIXFMT_RGB888, NJ_PIXFMT_ARGB8888};
@@ -659,7 +765,9 @@ int main(void)
         CHECK(state[i] != NULL); CHECK(gate[i].calls >= 2); gl_ok();
     }
     make_current(&e, 0);
+    test_present_hd(&gate[0]);
     test_present_rows(state[0]);
+    test_present_filters(state[0]);
     test_fills(state[0]); test_images(state[0]); test_padded_sources(state[0]);
     test_rgb(state[0]); test_direct_declines(state[0]); test_fallback_matrix(state[0]);
     test_coherence(state[0]); test_budget(&gate[0]); test_default_budget(state[0]);

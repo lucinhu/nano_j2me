@@ -30,6 +30,22 @@ Android 在游戏内画面面板调整「高清渲染倍率」「超采样抗锯
 
 ![桌面线条、轮廓字体和 Android 中文系统字体三档画质对照](images/internal-render-comparison.png)
 
+### 选择软件、OpenGL ES 或 Vulkan
+
+`--graphics software` 使用 CPU 绘制，可单独使用高清倍率和四采样。`--graphics gles2` 使用 SDL2 的 OpenGL ES 后端。`--graphics vulkan` 将可加速的 M3G 三角形交给 Vulkan，支持 SDL2 和无头运行。使用对应构建后，可以用同一个 JAR 比较三条路径。
+
+```sh
+cmake -S . -B build-gpu -DNJ_ENABLE_GFX_ACCEL=1 -DNJ_BUILD_GLES2_ACCEL=ON -DNJ_ENABLE_VULKAN=ON
+cmake --build build-gpu --target nj2me-cli
+build-gpu/nj2me --port sdl2 --graphics gles2 --render-scale 2 game.jar
+build-gpu/nj2me --port sdl2 --graphics vulkan --render-scale 2 game.jar
+build-gpu/nj2me --port sdl2 --graphics software --render-scale 2 game.jar
+```
+
+在高清 M3G 模式下，GPU 接收物理分辨率的顶点、颜色与深度缓冲区，只交换绘制涉及的矩形。Java 的逻辑像素和深度仍由软件生成，供游戏同步读取。驱动拒绝某批面片时，软件按原顺序重绘该批。FSR2 是独立可选项，按上节的条件收集时域输入。GLES2 窗口在小端上可直接上传紧密排列的 ARGB8888 高清帧，像素预算为 4096²，具体尺寸还受设备纹理与视口上限约束。
+
+Android 的常规包提供软件和 GLES2。arm64 增强包在画面面板增加「Vulkan 3D 面片渲染」，下次启动游戏时尝试启用。如果设备初始化失败，游戏沿用已选的绘制方式。API 36 模拟器已验证回退，Vulkan 面片提交已在桌面 NVIDIA 和 Intel 设备上验证。
+
 ## 1. libretro / RetroArch：用前端 shader（现在就能用，无需改内核）
 
 内核输出 240×320 的 RGB565 画面，RetroArch 的 slang shader 负责放大：

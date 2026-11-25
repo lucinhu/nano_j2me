@@ -42,6 +42,9 @@
 #include <string.h>
 #include <stdlib.h>
 #include "nj2me/nj_gfx.h"
+#if NJ_ENABLE_VULKAN
+#include "nj2me/nj_gfx_vulkan.h"
+#endif
 #include <stdio.h>
 
 #if defined(__ANDROID__)
@@ -5915,6 +5918,7 @@ typedef struct android_app {
     nj_run_opts opts;
     char       jar_path[512];
     char       cheat_path[640];
+    int        request_vulkan;
     pthread_t  thread;
     int        running;
     int        started;
@@ -6115,6 +6119,10 @@ static void *android_main_thread(void *arg)
 #if NJ_ANDROID_GLES2 && !NJ_ANDROID_LEGACY
     if (s && s->gles2_bound) {
         nj_android_gles2_start(&s->gles2);
+        if (s->gles2.requested && s->gles2.backend) {
+            a->port.gfx_hd_triangles = a->port.gfx_triangles;
+            a->port.gfx_hd_triangles_ud = a->port.gfx_triangles_ud;
+        }
     } else if (s) {
         /* Resolve the old property only on the run thread if binding failed.
          * Explicit UI selection still takes precedence in this fallback. */
@@ -6147,6 +6155,13 @@ static void *android_main_thread(void *arg)
                                 "m3g: accel forced by debug.nj2me.m3g_accel");
         }
     }
+#if NJ_ENABLE_VULKAN
+    if (a->request_vulkan) {
+        int ready = nj_vk_renderer_attach(&a->port);
+        android_log(NULL, ready ? 2 : 1, ready ? "3D triangles: Vulkan ready" :
+                                                "Vulkan unavailable; continuing with previous renderer");
+    }
+#endif
     (void)nj_run(&a->port, &a->opts);
 #if NJ_ANDROID_GLES2 && !NJ_ANDROID_LEGACY
     if (s && s->gles2_bound) {
@@ -6949,6 +6964,17 @@ Java_com_lucinhu_nj2me_GameActivity_nativeSetPresentFilter(JNIEnv *env,
 
 
 JNIEXPORT jboolean JNICALL
+Java_com_lucinhu_nj2me_GameActivity_nativeVulkanBuilt(JNIEnv *env, jclass cls)
+{
+    (void)env; (void)cls;
+#if NJ_ENABLE_VULKAN
+    return JNI_TRUE;
+#else
+    return JNI_FALSE;
+#endif
+}
+
+JNIEXPORT jboolean JNICALL
 Java_com_lucinhu_nj2me_GameActivity_nativeFsr2Built(JNIEnv *env, jclass cls)
 {
     (void)env; (void)cls;
@@ -6962,11 +6988,12 @@ Java_com_lucinhu_nj2me_GameActivity_nativeFsr2Built(JNIEnv *env, jclass cls)
 /* Java calls this before starting the VM thread. The run owns this copy. */
 JNIEXPORT void JNICALL
 Java_com_lucinhu_nj2me_GameActivity_nativeSetHd(JNIEnv *env, jclass cls, jlong handle,
-                                                jint scale, jint ssaa, jboolean subdivide, jboolean fsr2)
+                                                jint scale, jint ssaa, jboolean subdivide, jboolean fsr2, jboolean vulkan)
 {
     android_app *a = (android_app *)(intptr_t)handle;
     if (!a) return;
     a->port.render_scale = scale >= 1 && scale <= 4 ? scale : 1;
+    a->request_vulkan = vulkan != 0;
     a->port.render_ssaa = ssaa == 2 ? 2 : 1;
     a->port.render_subdivide = subdivide != 0;
     a->port.render_fsr2 = fsr2 && a->port.render_scale >= 2 &&

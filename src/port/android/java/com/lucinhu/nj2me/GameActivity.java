@@ -301,7 +301,8 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
 
     /** Launch choice only: 0 software, 1 experimental GLES2. Never changed mid-run. */
     private static native boolean nativeFsr2Built();
-    private static native void nativeSetHd(long handle, int scale, int ssaa, boolean subdivide, boolean fsr2);
+    private static native boolean nativeVulkanBuilt();
+    private static native void nativeSetHd(long handle, int scale, int ssaa, boolean subdivide, boolean fsr2, boolean vulkan);
     private static native void nativeSetGraphicsMode(long handle, int mode);
     private static native boolean nativeGraphicsSupported();
 
@@ -851,7 +852,8 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
                 }
                 SharedPreferences hd = getSharedPreferences("nano_j2me", MODE_PRIVATE);
                 nativeSetHd(handle, hd.getInt("hd_scale", 1), hd.getInt("hd_ssaa", 1),
-                        hd.getInt("hd_subdivide", 0) != 0, hd.getInt("hd_fsr2", 0) != 0);
+                        hd.getInt("hd_subdivide", 0) != 0, hd.getInt("hd_fsr2", 0) != 0,
+                        hd.getInt("hd_vulkan", 0) != 0);
                 nativeSetGraphicsMode(handle,
                         graphicsSupported() && Settings.gles2Experimental(this) ? 1 : 0);
                 nativeSetSpeed(handle, speed);
@@ -1537,6 +1539,8 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
         addHdChoice(box, "高清渲染倍率", "hd_scale", 1, new String[]{"1×", "2×", "3×", "4×"}, true);
         addHdChoice(box, "超采样抗锯齿", "hd_ssaa", 1, new String[]{"关闭", "四采样"}, true);
         addHdChoice(box, "3D 面片细分", "hd_subdivide", 0, new String[]{"关闭", "开启"}, true);
+        addHdChoice(box, "Vulkan 3D 面片渲染", "hd_vulkan", 0,
+                new String[]{"关闭", "请求启用（设备不支持时回退）"}, nativeVulkanBuilt());
         addHdChoice(box, "FSR2 时域放大", "hd_fsr2", 0,
                 new String[]{"关闭", "请求启用（需设备支持）"}, nativeFsr2Built());
         box.addView(Md3.divider(this));
@@ -1788,7 +1792,7 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
         final SharedPreferences prefs = getSharedPreferences("nano_j2me", MODE_PRIVATE);
         final int current = Math.max(0, Math.min(labels.length - 1, prefs.getInt(key, base) - base));
         LinearLayout row = Md3.row(this, Md3.IC_SCREEN, title,
-                available ? labels[current] : "此安装包未含 FSR2 后端", current != 0 && available, null);
+                available ? labels[current] : "此安装包未含此后端", current != 0 && available, null);
         row.setEnabled(available);
         if (available) row.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View view) {

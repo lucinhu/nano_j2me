@@ -672,7 +672,10 @@ nj_status nj_client_run(const nj_client_run_options *options)
     int quit = 0;
 
     if (options == NULL || options->game == NULL ||
-        options->graphics_mode < 0 || options->graphics_mode > 2) return NJ_ERR;
+        options->graphics_mode < 0 || options->graphics_mode > 3) return NJ_ERR;
+#if !NJ_ENABLE_VULKAN
+    if (options->graphics_mode == 3) return NJ_ERR_UNSUPPORTED;
+#endif
 #if !defined(NJ_SDL2_GLES2) || !NJ_SDL2_GLES2
     if (options->graphics_mode == 2) {
         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,

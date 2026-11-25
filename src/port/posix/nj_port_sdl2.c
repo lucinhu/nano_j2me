@@ -32,6 +32,9 @@
 #endif
 #include "nj2me/nj_port.h"
 #include "nj2me/nj_gfx.h"
+#if NJ_ENABLE_VULKAN
+#include "nj2me/nj_gfx_vulkan.h"
+#endif
 
 #include "nj_posix_clock.h"
 #include "nj_posix_dir.h"
@@ -4085,7 +4088,10 @@ nj_status nj_port_sdl2_ex(nj_port *out, const char *title, int graphics_mode)
     sdl_state *s;
     Uint32 subsystems = SDL_INIT_VIDEO;
 
-    if (!out || graphics_mode < -1 || graphics_mode > 1) return NJ_ERR;
+    if (!out || graphics_mode < -1 || graphics_mode > 2) return NJ_ERR;
+#if !NJ_ENABLE_VULKAN
+    if (graphics_mode == 2) return NJ_ERR_UNSUPPORTED;
+#endif
 #if !NJ_SDL2_GLES2
     if (graphics_mode == 1) return NJ_ERR_UNSUPPORTED;
 #endif
@@ -4311,6 +4317,8 @@ nj_status nj_port_sdl2_ex(nj_port *out, const char *title, int graphics_mode)
             out->gfx_raster_ud = &s->gfx;
             out->gfx_triangles = sdl2_gles2_triangles;
             out->gfx_triangles_ud = &s->gfx;
+            out->gfx_hd_triangles = sdl2_gles2_triangles;
+            out->gfx_hd_triangles_ud = &s->gfx;
             out->gfx_triangles_list = sdl2_gles2_triangles_list;
             out->gfx_triangles_list_ud = &s->gfx;
             out->gfx_triangles_begin = sdl2_gles2_triangles_begin;
@@ -4376,6 +4384,10 @@ nj_status nj_port_sdl2_ex(nj_port *out, const char *title, int graphics_mode)
      * touch except from input_poll (the speed badge and the F5 snapshot). */
     out->install_codecs = sdl_install_codecs;
     out->shutdown = sdl_shutdown;
+#if NJ_ENABLE_VULKAN
+    if (graphics_mode == 2 && !nj_vk_renderer_attach(out))
+        sdl_log(s, 1, "Vulkan initialization failed, using software drawing");
+#endif
     /*
      * Uncapped by default: the renderer asks for PRESENTVSYNC and a desktop
      * compositor only shows a finished frame at the panel's rate, so the
