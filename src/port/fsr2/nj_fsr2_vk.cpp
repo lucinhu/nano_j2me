@@ -380,7 +380,12 @@ NjFsr2 *nj_fsr2_create(int rw, int rh, int ow, int oh, char *error, size_t cap) 
     // Bound reconstruction to AMD's Ultra Performance envelope (3x per axis).
     if (rw < 32 || rh < 32 || (rw < 64 && rh < 64) || rw > 4096 || rh > 4096 || ow < rw || oh < rh ||
         ow > 3 * rw || oh > 3 * rh) {
-        err.fail("Unsupported FSR2 input/output dimensions");
+        char why[160];
+        std::snprintf(why, sizeof(why),
+                      "Unsupported FSR2 input/output dimensions %dx%d -> %dx%d; "
+                      "at most 3x per axis",
+                      rw, rh, ow, oh);
+        err.fail(why);
         return nullptr;
     }
     NjFsr2 *c = new(std::nothrow) NjFsr2{};

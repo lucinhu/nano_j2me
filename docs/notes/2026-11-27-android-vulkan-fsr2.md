@@ -131,7 +131,49 @@ s->reset = s->active || !s->prev.count || target != s->target ||
   `src/midp/nj_m3g_temporal.inc`（平台无关的 FSR2 跟踪与同帧绑定判定）、
   `tools/build_android_apk.sh`、`tools/build_android.sh`（FSR2 SDK 的 ABI 放开）。
 
-## 六、遗留
+## 六、游戏内 3D 验证与 FSR2 / 高清倍率的配对
+
+前两轮只在《毁灭战士 3》标题画面上拿到 FSR2 证据：那一段是持续动画的 3D 背景，但
+游戏没有可用的输入回放，进不了正式关卡；《田园物语》是 2D，整局都不会绑定 FSR2。
+本轮换用 `tests/games/JBenchmark3D.jar`：把它推到
+`/sdcard/Android/data/com.lucinhu.nj2me/files/jars/jb3d.jar`（旁挂同名
+`jb3d.jar.cfg`，`title=JBenchmark3D`、240×320），进库点开，欢迎页按软左键
+（`adb shell input keyevent 82`，即 MENU）即开始，之后是自动播放的旋转 3D 场景，
+无需任何导航。这是可重复的游戏内 3D 素材，日志、截图见
+`.local-tools/debug-runs/fsr-round3/`。
+
+**问题 3：高清倍率超过 3× 时 FSR2 静默失效。** HD 4× 下 logcat 只有一行
+`FSR2 context 240x320 -> 960x1280: Unsupported FSR2 input/output dimensions`，
+之后没有任何 `FSR2 dispatched`。原因是 AMD FSR2 2.2 的 Ultra Performance 档最多
+每个轴 3× 重建（`nj_fsr2_create` 也按 `ow <= 3 * rw` 收口），而高清倍率 4× 会让
+240×320 的时域输入对应 960×1280 的输出，比例 4 直接被拒；`m3g_temporal_bind`
+随后返回，3D 悄悄退回纯空间渲染。更糟的是画面面板仍显示「FSR2 时域放大：请求
+启用」，两种状态不一致。
+
+**修复（画面面板 + 原生报错）。** `GameActivity.java` 的 `addHdChoice` 现在把两个
+设置当成一对维护：打开 FSR2 时，若高清倍率不是 2× 也不是 3×，自动改成 2×；反过来
+把倍率选成 1× 或 4×–8× 时自动关闭 FSR2，并提示「FSR2 时域放大需要 2× 或 3× 高清
+渲染，已关闭 FSR2」。`src/port/fsr2/nj_fsr2_vk.cpp` 的失败信息带上实际尺寸和
+「at most 3x per axis」的限制，logcat 里能直接看出是配对问题而不是驱动缺失。
+
+**实测矩阵**（AVD `Medium_Phone_API_36.1`、`-gpu host`、窗口 1080×2400、GL 呈现
+FSR1、JBenchmark3D 连续 3D、Vulkan 面片渲染有效）：
+
+| 高清倍率 | FSR2 | 时域 dispatch | 呈现绘制中位 | 交换中位 | PSS |
+| --- | --- | --- | --- | --- | --- |
+| 2× | 请求启用（有效） | `240x320 -> 480x640`，1443 次，仅 2 次 reset | 0.39 ms | 15.4 ms | 181 MB |
+| 3× | 请求启用（有效） | `240x320 -> 720x960`，1383 次，仅 2 次 reset | 0.66–0.85 ms | 14.5–14.8 ms | 181 MB |
+| 4× | 自动关闭 | 无 | 0.91–1.17 ms | 13.4–13.8 ms | 187 MB |
+| 8× | 自动关闭 | 无 | 3.09–3.36 ms | 5.5–5.7 ms | 278 MB |
+
+2× 与 3× 的 reset 次数都只有启动时的 2 次，之后连续 dispatch 全部 `reset=0`、phase
+逐个递增，说明时域历史在游戏内连续 3D 下稳定工作。8× 的交换耗时反而更低，是因为
+1920×2560 的高清镜像让帧率掉到约 52 fps（120 帧约 2.3 秒），而 2×/3× 是满 60 fps
+（120 帧约 2.0 秒）；8× 期间没有 FATAL/OutOfMemory，Vulkan 面片照常提交，只是没有
+时域放大。面板配对也逐项点验过：8× + FSR2 打开时把倍率改成 4×，FSR2 立刻变「关闭」；
+从 8× 直接打开 FSR2，倍率会自动回到 2×；3× 可以保留 FSR2 打开。
+
+## 七、遗留
 
 - 游戏在启动和场景切换时会在同一帧编号内绑定/释放同一目标两次，因此可能出现一帧两次
   FSR2 dispatch；修复后这类重复绑定不再清空历史。稳态每帧只有一次 dispatch（本次
@@ -140,3 +182,9 @@ s->reset = s->active || !s->prev.count || target != s->target ||
   dispatch。
 - 没有 arm64 真机可用，`arm64` 的 Vulkan + FSR2 只做了构建与桌面链路验证，本轮新增
   的实例参数修复对真实驱动同样成立，但仍需真机复验。
+- 4×–8× 的高清倍率目前只能纯空间放大。若要让这些档位也吃到时域信息，可以先用
+  FSR2 重建到 2×，再把结果交给现有的 FSR1 立方核放大到 4×–8× 的高清镜像；这需要
+  在 M3G 高清镜像和呈现路径之间加一次空间放大，属于结构改动，留作后续。
+- `JBenchmark3D` 现在是游戏内 3D 的可重复素材：欢迎页用 MENU 键启动，场景自动播放，
+  不需要点击或输入回放；后续验证 Vulkan 面片与 FSR2 时优先用它，而不是《毁灭战士 3》
+  的标题画面。

@@ -863,8 +863,18 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
                     return;
                 }
                 SharedPreferences hd = getSharedPreferences("nano_j2me", MODE_PRIVATE);
-                nativeSetHd(handle, hd.getInt("hd_scale", 1), hd.getInt("hd_ssaa", 1),
-                        hd.getInt("hd_subdivide", 0) != 0, hd.getInt("hd_fsr2", 0) != 0,
+                /* Stored preferences may predate the menu pairing rule: FSR2
+                 * only carries valid temporal data beside a 2x or 3x HD
+                 * scale, so repair the pair here instead of silently
+                 * rendering without temporal history. */
+                int hdScale = hd.getInt("hd_scale", 1);
+                boolean fsr2 = hd.getInt("hd_fsr2", 0) != 0;
+                if (fsr2 && hdScale != 2 && hdScale != 3) {
+                    hdScale = 2;
+                    hd.edit().putInt("hd_scale", hdScale).apply();
+                }
+                nativeSetHd(handle, hdScale, hd.getInt("hd_ssaa", 1),
+                        hd.getInt("hd_subdivide", 0) != 0, fsr2,
                         hd.getInt("hd_vulkan", 0) != 0, hd.getInt("hd_smooth_assets", 0));
                 nativeSetGraphicsMode(handle,
                         graphicsSupported() && Settings.gles2Experimental(this) ? 1 : 0);
@@ -1670,14 +1680,24 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
         final int current = Math.max(0, Math.min(labels.length - 1, prefs.getInt(key, base) - base));
         Md3.Setting row = new Md3.Setting(this, title + "（下次启动）", labels, current, new Md3.Pick() {
             @Override public void set(int which) {
-                SharedPreferences.Editor edit = prefs.edit().putInt(key, which + base);
-                if ("hd_fsr2".equals(key) && which != 0 && prefs.getInt("hd_scale", 1) < 2) {
-                    edit.putInt("hd_scale", 2);
-                    ((Md3.Setting)box.findViewWithTag("hd_scale")).select(1);
+                int value = which + base;
+                SharedPreferences.Editor edit = prefs.edit().putInt(key, value);
+                /* AMD FSR2 2.2 takes at most three source pixels per output
+                 * axis, so temporal upscaling can only run beside a 2x or 3x
+                 * HD scale. Keep the pair consistent instead of accepting a
+                 * combination that silently renders without temporal history. */
+                if ("hd_fsr2".equals(key) && which != 0) {
+                    int scale = prefs.getInt("hd_scale", 1);
+                    if (scale != 2 && scale != 3) {
+                        edit.putInt("hd_scale", 2);
+                        ((Md3.Setting)box.findViewWithTag("hd_scale")).select(1);
+                    }
                 }
-                if ("hd_scale".equals(key) && which == 0) {
+                if ("hd_scale".equals(key) && (value < 2 || value > 3) &&
+                        prefs.getInt("hd_fsr2", 0) != 0) {
                     edit.putInt("hd_fsr2", 0);
                     ((Md3.Setting)box.findViewWithTag("hd_fsr2")).select(0);
+                    toast("FSR2 时域放大需要 2× 或 3× 高清渲染，已关闭 FSR2");
                 }
                 edit.apply();
             }
