@@ -380,6 +380,62 @@ static void bench_atlas(nj_vk_renderer *r, int side) {
     free(storage);
 }
 
+/* Non-native surfaces can start unaligned and include unrelated row padding.
+ * Refill the same storage for each packet; compare the entire allocation and
+ * the separate depth stride against a known rectangular draw. */
+static void rgb565_packets(nj_vk_renderer *r, int w, int h, int measure) {
+    enum { REPS = 51 };
+    int stride = w * 2 + 5, zs = w + 2;
+    size_t bytes = (size_t)stride * h + 2, nz = (size_t)zs * h;
+    uint8_t *storage = malloc(bytes), *expected = malloc(bytes);
+    nj_s4 *z = malloc(nz * sizeof *z), *want_z = malloc(nz * sizeof *z);
+    CHECK(storage && expected && z && want_z);
+    nj_surface s = {storage + 1, w, h, stride, NJ_PIXFMT_RGB565, 2};
+    nj_gfx_triangle_cmd t[2];
+    nj_gfx_triangles p = {NJ_GFX_TRIANGLES_VERSION, &s, z, zs, 1, 1, w - 3, h - 2, t, 2};
+    double samples[REPS];
+    int right = w / 2, bottom = h / 2;
+    for (int i = 0; i < (measure ? REPS + 5 : 3); ++i) {
+        nj_u4 color = 0x7a000000u | ((0x315731u * (i + 1u)) & 0xffffffu);
+        uint16_t packed = (uint16_t)((((color >> 16) & 255) >> 3 << 11) |
+                                     (((color >> 8) & 255) >> 2 << 5) | ((color & 255) >> 3));
+        /* The timing workload isolates color transfer. The smaller regression
+         * also tests a checkerboard depth mask, including untouched keys. */
+        for (int j = 0; j < 2; ++j) {
+            t[j] = triangle(color, 0.25);
+            t[j].depth_test = t[j].depth_write = !measure;
+        }
+        t[0].vertices[1].x = t[1].vertices[0].x = t[1].vertices[1].x = (float)right;
+        t[0].vertices[2].y = t[1].vertices[1].y = t[1].vertices[2].y = (float)bottom;
+        for (size_t k = 0; k < bytes; ++k)
+            storage[k] = (uint8_t)(k * 71u + (k >> 4) + 19u * i);
+        memcpy(expected, storage, bytes);
+        for (int y = 0; y < h; ++y)
+            for (int x = 0; x < zs; ++x) {
+                size_t k = (size_t)y * zs + x;
+                want_z[k] = z[k] = ((x + y + i) & 1) ? 16777216 : i;
+                if (x >= p.x && x < right && y >= p.y && y < bottom && (measure || z[k] <= 12582912)) {
+                    memcpy(expected + 1 + (size_t)y * stride + 2 * x, &packed, 2);
+                    if (!measure) want_z[k] = 12582912;
+                }
+            }
+        nj_u4 submitted = 0;
+        double start = millis();
+        CHECK(nj_vk_renderer_triangles(r, &p, &submitted) == NJ_GFX_ACCEL_DONE && submitted == 2);
+        if (measure && i >= 5) samples[i - 5] = millis() - start;
+        CHECK(!memcmp(storage, expected, bytes) && !memcmp(z, want_z, nz * sizeof *z));
+    }
+    if (measure) {
+        qsort(samples, REPS, sizeof *samples, compare_double);
+        printf("%dx%d RGB565 ROI, %d synchronous calls: median %.3f ms, p95 %.3f ms\n",
+               p.width, p.height, REPS, samples[REPS / 2], samples[48]);
+    }
+    free(want_z);
+    free(z);
+    free(expected);
+    free(storage);
+}
+
 int main(int argc, char **argv) {
     nj_vk_renderer *r = nj_vk_renderer_create();
     if (!r) {
@@ -397,6 +453,11 @@ int main(int argc, char **argv) {
     depth_matrix(r);
     textures(r);
     materials(r);
+    rgb565_packets(r, 24, 16, 0);
+    if (argc > 1 && !strcmp(argv[1], "--bench-rgb565")) {
+        rgb565_packets(r, 243, 322, 1);
+        rgb565_packets(r, 1283, 722, 1);
+    }
     order_and_fallback(r);
     puts("Vulkan color/depth, guarded ROI, perspective textures, blends, fog, cutouts, ordering and "
          "atomic declines passed");

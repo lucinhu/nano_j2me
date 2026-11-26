@@ -193,6 +193,27 @@ static void upload_geometry(nj_vk_renderer *r, const nj_gfx_triangles *p, const 
                         ((v->bpp == 4 ? (uint32_t)src[3] : 255u) << 24);
     }
 }
+/* Mapped staging and caller storage are disjoint. Fixed-size memcpy permits
+ * odd surface addresses and strides, and a fixed width leaves each color loop
+ * independent of writes through caller-provided byte pointers. */
+static void import_rgb565(uint8_t *restrict bgra, const uint8_t *restrict row, int width) {
+    for (int x = 0; x < width; ++x) {
+        uint16_t rgb;
+        memcpy(&rgb, row + 2 * (size_t)x, sizeof rgb);
+        unsigned red = rgb >> 11, green = (rgb >> 5) & 63, blue = rgb & 31;
+        bgra[4 * x + 0] = (uint8_t)((blue << 3) | (blue >> 2));
+        bgra[4 * x + 1] = (uint8_t)((green << 2) | (green >> 4));
+        bgra[4 * x + 2] = (uint8_t)((red << 3) | (red >> 2));
+        bgra[4 * x + 3] = 255;
+    }
+}
+static void export_rgb565(uint8_t *restrict row, const uint8_t *restrict bgra, int width) {
+    for (int x = 0; x < width; ++x) {
+        uint16_t rgb = (uint16_t)(((bgra[4 * x + 2] >> 3) << 11) | ((bgra[4 * x + 1] >> 2) << 5) |
+                                  (bgra[4 * x] >> 3));
+        memcpy(row + 2 * (size_t)x, &rgb, sizeof rgb);
+    }
+}
 static void transfer_cpu(nj_vk_renderer *r, const nj_gfx_triangles *p, int depth, int output) {
     const nj_surface *s = p->surface;
     int bpp = s->format == NJ_PIXFMT_ARGB8888 ? 4 : s->format == NJ_PIXFMT_RGB888 ? 3 : 2;
@@ -200,6 +221,7 @@ static void transfer_cpu(nj_vk_renderer *r, const nj_gfx_triangles *p, int depth
     uint8_t *bytes = r->stage.map;
     float *z = (float *)(bytes + n * 4);
     int x, y;
+    const int width = p->width;
     for (y = 0; y < p->height; ++y) {
         uint8_t *row = (uint8_t *)s->pixels + (size_t)(p->y + y) * s->stride + (size_t)p->x * bpp;
         uint8_t *bgra = bytes + (size_t)y * p->width * 4;
@@ -209,46 +231,33 @@ static void transfer_cpu(nj_vk_renderer *r, const nj_gfx_triangles *p, int depth
                 memcpy(row, bgra, (size_t)p->width * 4);
             else
                 memcpy(bgra, row, (size_t)p->width * 4);
-        } else
-            for (x = 0; x < p->width; ++x, row += bpp, bgra += 4) {
-                if (bpp == 3) {
-                    if (output) {
-                        row[0] = bgra[2];
-                        row[1] = bgra[1];
-                        row[2] = bgra[0];
-                    } else {
-                        bgra[2] = row[0];
-                        bgra[1] = row[1];
-                        bgra[0] = row[2];
-                        bgra[3] = 255;
-                    }
+        } else if (bpp == 2) {
+            if (output)
+                export_rgb565(row, bgra, width);
+            else
+                import_rgb565(bgra, row, width);
+        } else {
+            for (x = 0; x < width; ++x, row += 3, bgra += 4) {
+                if (output) {
+                    row[0] = bgra[2];
+                    row[1] = bgra[1];
+                    row[2] = bgra[0];
                 } else {
-                    uint16_t rgb;
-                    if (output) {
-                        rgb =
-                            (uint16_t)(((bgra[2] >> 3) << 11) | ((bgra[1] >> 2) << 5) | (bgra[0] >> 3));
-                        memcpy(row, &rgb, 2);
-                    } else {
-                        unsigned red, green, blue;
-                        memcpy(&rgb, row, 2);
-                        red = rgb >> 11;
-                        green = (rgb >> 5) & 63;
-                        blue = rgb & 31;
-                        bgra[2] = (uint8_t)(red * 8 + red / 4);
-                        bgra[1] = (uint8_t)(green * 4 + green / 16);
-                        bgra[0] = (uint8_t)(blue * 8 + blue / 4);
-                        bgra[3] = 255;
-                    }
+                    bgra[2] = row[0];
+                    bgra[1] = row[1];
+                    bgra[0] = row[2];
+                    bgra[3] = 255;
                 }
             }
+        }
         if (depth) {
             nj_s4 *keys = p->depth + (size_t)(p->y + y) * p->depth_stride + p->x;
             float *values = z + (size_t)y * p->width;
             if (output)
-                for (x = 0; x < p->width; ++x)
+                for (x = 0; x < width; ++x)
                     keys[x] = 16777216 - (nj_s4)(values[x] * 16777216.0f);
             else
-                for (x = 0; x < p->width; ++x)
+                for (x = 0; x < width; ++x)
                     values[x] = (float)(16777216 - keys[x]) * (1.0f / 16777216.0f);
         }
     }
