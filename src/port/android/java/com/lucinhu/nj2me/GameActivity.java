@@ -151,7 +151,7 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
     private int presentFilter;    /* 0 off, 2 scanline, 3 LCD, 4 CRT: 画面滤镜 */
     private int glPresent;        /* 0 software, 1 GL window present */
     private int glPresentMode;    /* 0 nearest, 2 scanline, 3 LCD, 4 CRT, 5 FSR1, 6 bicubic */
-    private int glPresentScale;   /* integer scale cap: 0 auto, 2/3/4 */
+    private int glPresentScale;   /* 0 for automatic fit, otherwise an integer scale cap */
     private static final float DEFAULT_GL_SHARP = 0.87f;
     private float glPresentSharp = DEFAULT_GL_SHARP;
     private int rewindSeconds;    /* 0 off, 1/2/5: in-memory rewind window */
@@ -1371,7 +1371,7 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
             glPresentSharp = DEFAULT_GL_SHARP;
         }
         glPresentScale = prefs.getInt("gl_present_scale", 0);
-        if (glPresentScale != 2 && glPresentScale != 3 && glPresentScale != 4) {
+        if (glPresentScale < 2 || glPresentScale > PictureFit.MAX_RENDER_SCALE) {
             glPresentScale = 0;
         }
         rewindSeconds = Settings.rewindSeconds(this);
@@ -1468,7 +1468,7 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
         box.addView(Md3.divider(this));
         box.addView(glPresentScaleSetting());
         box.addView(glPresentSharpSetting());
-        addHdChoice(box, "高清渲染倍率", "hd_scale", 1, new String[]{"1×", "2×", "3×", "4×"}, true);
+        addHdChoice(box, "高清渲染倍率", "hd_scale", 1, scaleLabels(false), true);
         addHdChoice(box, "高清素材采样", "hd_smooth_assets", 0,
                 new String[]{"原始像素", "柔和平滑", "像素画清晰"}, true);
         addHdChoice(box, "超采样抗锯齿", "hd_ssaa", 1, new String[]{"关闭", "四采样"}, true);
@@ -1633,13 +1633,11 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
         }
     }
 
-    private String glPresentScaleText() {
-        switch (glPresentScale) {
-            case 2: return "2×";
-            case 3: return "3×";
-            case 4: return "4×";
-            default: return "自动";
-        }
+    private static String[] scaleLabels(boolean autoFirst) {
+        String[] labels = new String[PictureFit.MAX_RENDER_SCALE];
+        for (int i = 0; i < labels.length; ++i) labels[i] = (i + 1) + "×";
+        if (autoFirst) labels[0] = "自动（填满画面）";
+        return labels;
     }
 
     private void addHdChoice(LinearLayout box, final String title, final String key,
@@ -1667,18 +1665,12 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
     }
 
     private View glPresentScaleSetting() {
-        final int[] scales = { 0, 2, 3, 4 };
-        final String[] labels = { "自动（填满画面）", "2×", "3×", "4×" };
-        int checked = 0;
-        for (int i = 0; i < scales.length; ++i) {
-            if (scales[i] == glPresentScale) {
-                checked = i;
-            }
-        }
+        final String[] labels = scaleLabels(true);
+        int checked = glPresentScale == 0 ? 0 : glPresentScale - 1;
         Md3.Setting row = new Md3.Setting(this, "GL 放大", labels, checked, new Md3.Pick() {
                     @Override
                     public void set(int which) {
-                        glPresentScale = scales[which];
+                        glPresentScale = which == 0 ? 0 : which + 1;
                         getSharedPreferences("nano_j2me", MODE_PRIVATE).edit()
                                 .putInt("gl_present_scale", glPresentScale).apply();
                         applyGlPresentSettings();
@@ -2534,6 +2526,9 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
             return;
         }
         String detail = "本局状态：" + graphicsStateText(info);
+        if (info != null && info.length >= 9 && info[8] > 0) {
+            detail += "\n实际渲染倍率 " + info[8] + "×";
+        }
         if (info != null && info.length >= 6) {
             detail += "\n本局启动选择：" + (info[5] == 1 ? "硬件加速（GLES2）" : "软件绘制")
                     + "\nGPU 填充 " + info[1] + " · 图像 " + info[2] + " · 栅格 " + info[3]

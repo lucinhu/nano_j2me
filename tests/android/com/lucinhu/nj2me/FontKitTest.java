@@ -16,9 +16,15 @@ public final class FontKitTest {
     }
 
     public static void main(String[] args) {
-        Check.section("a glyph costs two header bytes and one per pixel");
-        Check.eq("12x12", FontKit.glyphBytes(12, 12), 146);
-        Check.eq("16x16", FontKit.glyphBytes(16, 16), 258);
+        Check.section("two uint16 dimensions followed by one coverage byte per pixel");
+        Check.eq("12x12", FontKit.glyphBytes(12, 12), 148);
+        Check.eq("16x16", FontKit.glyphBytes(16, 16), 260);
+        byte[] header = new byte[4];
+        FontKit.putDimensions(header, 256, 512);
+        Check.eq("width low", header[0], 0);
+        Check.eq("width high", header[1], 1);
+        Check.eq("height low", header[2], 0);
+        Check.eq("height high", header[3], 2);
         Check.eq("nothing is nothing", FontKit.glyphBytes(0, 12), 0);
 
         Check.section("only a file a font loader would open");
@@ -46,11 +52,13 @@ public final class FontKitTest {
         Check.eq("a hanzi survives the packing",
                 FontKit.cacheCodePoint(FontKit.cacheKey(0x4e2d, 16, 1, true, false)), 0x4e2d);
 
-        for (int scale = 1; scale <= 8; ++scale) {
-            int key = FontKit.cacheKey(0x10ffff, 20, scale, true, true);
-            Check.eq("trim decodes Unicode at every scale", FontKit.cacheCodePoint(key), 0x10ffff);
-            if (scale > 1) Check.isTrue("physical size has a separate cache entry",
-                    key != FontKit.cacheKey(0x10ffff, 20, scale - 1, true, true));
+        java.util.HashSet<Integer> keys = new java.util.HashSet<Integer>();
+        for (int cell = 1; cell <= 32; ++cell) {
+            for (int scale = 1; scale <= FontKit.MAX_SAMPLE_SCALE; ++scale) {
+                int key = FontKit.cacheKey(0x10ffff, cell, scale, true, true);
+                Check.eq("trim decodes Unicode at every scale", FontKit.cacheCodePoint(key), 0x10ffff);
+                Check.isTrue("cell and sample scale select distinct ink", keys.add(key));
+            }
         }
         Check.section("sizes a player can read");
         Check.eq("bytes", FontKit.size(512), "512 B");

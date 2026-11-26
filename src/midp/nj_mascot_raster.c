@@ -326,7 +326,7 @@ void nj_mascot_raster_stroke(nj_surface *dst, nj_s4 scale,
     int c = steep ? ax : ay, d = steep ? bx : by;
     nj_s8 first, end, lo, hi, p, span;
 
-    if (!mr_surface_ok(dst) || scale <= 0 || scale > 8) return;
+    if (!mr_surface_ok(dst) || scale <= 0 || scale > NJ_RENDER_SAMPLE_SCALE_MAX) return;
     if (x1 < 0) x1 = 0;
     if (y1 < 0) y1 = 0;
     if (x2 > dst->width) x2 = dst->width;
@@ -1067,7 +1067,7 @@ static void mr_span_tex_raw4(nj_u1 *pp, nj_s4 n, nj_s4 uu, nj_s4 vv,
 static void mr_fill_segment(const mr_state *st,
                             nj_s4 clip_x1, nj_s4 clip_x2,
                             nj_s4 y_start, nj_s4 y_end,
-                            nj_s8 x, nj_s4 dx, nj_s8 x2, nj_s4 dx2,
+                            nj_s8 x, nj_s8 dx, nj_s8 x2, nj_s8 dx2,
                             nj_s8 u, nj_s4 du, nj_s8 v, nj_s4 dv,
                             nj_s8 s, nj_s4 ds,
                             nj_s8 eu, nj_s4 deu, nj_s8 ev, nj_s4 dev,
@@ -1646,8 +1646,8 @@ static void mr_triangle(nj_surface *dst,
                     if (left_first) {
                         mr_fill_segment(&st, clip_x1, clip_x2,
                                         (nj_s4)y_start, (nj_s4)y_draw,
-                                        x_start, (nj_s4)dx_start, x_end,
-                                        (nj_s4)dx_end,
+                                        x_start, dx_start, x_end,
+                                        dx_end,
                                         u_start, (nj_s4)du_across, v_start,
                                         (nj_s4)dv_across, s_start,
                                         (nj_s4)ds_across, eu_start,
@@ -1659,8 +1659,8 @@ static void mr_triangle(nj_surface *dst,
                     } else {
                         mr_fill_segment(&st, clip_x1, clip_x2,
                                         (nj_s4)y_start, (nj_s4)y_draw,
-                                        x_end, (nj_s4)dx_end, x_start,
-                                        (nj_s4)dx_start,
+                                        x_end, dx_end, x_start,
+                                        dx_start,
                                         u_end, (nj_s4)du_across, v_end,
                                         (nj_s4)dv_across, s_end,
                                         (nj_s4)ds_across, eu_end,

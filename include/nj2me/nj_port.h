@@ -53,6 +53,9 @@
 extern "C" {
 #endif
 
+#define NJ_RENDER_SCALE_MAX 8
+#define NJ_RENDER_SAMPLE_SCALE_MAX (2 * NJ_RENDER_SCALE_MAX)
+
 /* Forward declaration so the port contract can mention the VM without
  * pulling the whole VM API into every port. */
 struct nj_vm;
@@ -887,7 +890,8 @@ typedef struct nj_port {
 #endif
 
     /* Optional high-resolution output. Zero-initialized ports use the logical
-     * framebuffer. scale is 1..4, ssaa is 1 or 2 samples per axis. The port
+     * framebuffer. scale is 1..NJ_RENDER_SCALE_MAX, ssaa is 1 or 2 samples
+     * per axis. The VM may reduce these to fit its display buffers. The port
      * consumes this complete ARGB8888 frame synchronously in place of
      * display_present. Input coordinates and display_init remain logical. */
     int render_scale, render_ssaa, render_subdivide, render_fsr2;

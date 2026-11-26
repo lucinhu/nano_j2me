@@ -932,6 +932,8 @@ void nj_gfx_blend_coverage(nj_gfx *g, int x, int y, int coverage)
     nj_gfx_blend_pixel(g->surf, x, y, g->color, coverage);
 }
 
+static nj_u4 nj_blend_argb(nj_u4 dst, nj_u4 src);
+
 /* Inclusive horizontal run, already clipped to the clip rectangle. */
 static void nj_span(nj_gfx *g, int x0, int x1, int y, nj_u4 argb)
 {
@@ -985,6 +987,19 @@ static void nj_span(nj_gfx *g, int x0, int x1, int y, nj_u4 argb)
             for (x = x0; x <= x1; x++) {
                 nj_raw_set(g->surf, x, y, bpp, packed);
             }
+        }
+        return;
+    }
+    /* Physical mirrors are ARGB8888. The clip and format are constant for
+     * the entire translucent span, as is the source colour. */
+    if (!g->use_xor && g->surf->format == NJ_PIXFMT_ARGB8888 && nj_surface_bpp(g->surf) == 4) {
+        nj_u1 *p = (nj_u1 *)g->surf->pixels + (nj_size)y * g->surf->stride + (nj_size)x0 * 4;
+        if ((argb >> 24) == 0) return;
+        for (x = x0; x <= x1; ++x, p += 4) {
+            nj_u4 dst;
+            memcpy(&dst, p, sizeof dst);
+            dst = nj_blend_argb(dst, argb);
+            memcpy(p, &dst, sizeof dst);
         }
         return;
     }

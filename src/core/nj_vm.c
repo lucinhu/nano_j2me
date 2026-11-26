@@ -129,7 +129,7 @@ static nj_status vm_setup(nj_vm *vm, const nj_port *port, nj_size heap_bytes)
 
     vm->port = port;
     vm->render_quality.scale = port && port->display_hd && port->render_scale >= 2 &&
-                               port->render_scale <= 4 ? port->render_scale : 1;
+                               port->render_scale <= NJ_RENDER_SCALE_MAX ? port->render_scale : 1;
     vm->render_quality.ssaa = port && port->display_hd && port->render_ssaa == 2 ? 2 : 1;
     vm->render_quality.subdivide = port && port->render_subdivide != 0;
     int asset_filter = port ? port->render_smooth_assets : NJ_ASSET_NEAREST;

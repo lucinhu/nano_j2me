@@ -404,8 +404,9 @@ static void check_physical(nj_vm *vm, nj_port *port, canvas *c, const canvas *re
     check(probe.calls == 1 && packet_calls == before && !nj_m3g_pending(vm),
           "HD submission leaves Java pixels synchronous without a second GPU draw");
     check(!probe.forward || probe.accepted == 4, "selected driver committed all four faces");
-    check(!memcmp(logical,nj_array_data(c->pixels),64*64*sizeof(*logical)) &&
-          !memcmp(z,nj_array_data(zbuf(vm,c)),64*64*sizeof(*z)), "logical colour and Z match software byte for byte");
+    size_t logical_pixels = (size_t)c->w * c->h;
+    check(!memcmp(logical,nj_array_data(c->pixels),logical_pixels*sizeof(*logical)) &&
+          !memcmp(z,nj_array_data(zbuf(vm,c)),logical_pixels*sizeof(*z)), "logical colour and Z match software byte for byte");
     for (int y=0; y<128; ++y) for (int x=0; x<128; ++x) {
         int at = y*128+x;
         if (nj_surface_get(probe.target,x,y) == expected[at]) continue;
@@ -531,7 +532,34 @@ int main(int argc, char **argv)
     default_clear(vm,&c); diagonal(vm,&c);
     memcpy(baseline,nj_array_data(c.pixels),sizeof(baseline));
     memcpy(logical_z,nj_array_data(zbuf(vm,&c)),sizeof(logical_z));
-    vm->render_quality.scale=2;
+    /* An 8x8 Java binding at 8x + four samples shares the reference's
+     * 128x128 physical geometry. Keep the Java colour and depth as oracles. */
+    {
+        canvas small;
+        nj_u4 colour[64];
+        nj_s4 depth[64];
+        init(vm,&small); release(vm,&small); bind_image(vm,&small,8,8);
+        default_clear(vm,&small); diagonal(vm,&small);
+        memcpy(colour,nj_array_data(small.pixels),sizeof colour);
+        memcpy(depth,nj_array_data(zbuf(vm,&small)),sizeof depth);
+        vm->render_quality.scale=8; vm->render_quality.ssaa=2;
+        default_clear(vm,&small); diagonal(vm,&small);
+        nj_surface *target = companion(vm,&small);
+        const nj_u4 *expected = nj_array_data(ref.pixels);
+        int matches = target->width == 128 && target->height == 128;
+        for (int y=0; matches && y<128; ++y)
+            matches = !memcmp((nj_u1 *)target->pixels + (nj_size)y*target->stride,
+                              expected+y*128,128*sizeof(*expected));
+        check(matches,"8x with four samples matches independent 128x128 colour");
+        check(!memcmp(colour,nj_array_data(small.pixels),sizeof colour) &&
+              !memcmp(depth,nj_array_data(zbuf(vm,&small)),sizeof depth),
+              "k=16 preserves every logical colour and depth sample");
+#if NJ_ENABLE_GFX_ACCEL
+        check_physical(vm,&port,&small,&ref,colour,depth,&backend);
+#endif
+        release(vm,&small);
+    }
+    vm->render_quality.scale=2; vm->render_quality.ssaa=1;
 #if NJ_ENABLE_GFX_ACCEL
     check_physical(vm,&port,&c,&ref,baseline,logical_z,&backend);
 #endif

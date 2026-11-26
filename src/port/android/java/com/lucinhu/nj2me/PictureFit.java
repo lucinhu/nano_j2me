@@ -15,6 +15,9 @@ package com.lucinhu.nj2me;
  */
 final class PictureFit {
 
+    /* Mirrors NJ_RENDER_SCALE_MAX in the native port. */
+    static final int MAX_RENDER_SCALE = 8;
+
     /*
      * How the picture is fitted to the window.  The constants live here rather
      * than in GameActivity so that this file stays free of Android types and

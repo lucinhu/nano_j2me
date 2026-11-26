@@ -56,21 +56,24 @@ static void hd_release(nj_vm *vm, hd_entry *entry)
     memset(entry, 0, sizeof(*entry));
 }
 
-static int hd_surface(nj_vm *vm, nj_surface *s, int w, int h)
+/* Applying the side limit before multiplying also bounds the byte count to
+ * 1 GiB, even on ports with a 32-bit nj_size. */
+static nj_size hd_bytes(const nj_surface *s, int k)
 {
-    nj_size bytes;
-    if (w <= 0 || h <= 0 || (nj_size)w > HD_BYTE_LIMIT / 4u / (nj_size)h)
-        return 0;
-    bytes = (nj_size)w * (nj_size)h * 4u;
-    if (s->pixels && s->width == w && s->height == h) return 1;
-    hd_free_surface(vm, s);
-    if (bytes > HD_BYTE_LIMIT - vm->hd_store->bytes) return 0;
+    if (k < 1 || k > NJ_RENDER_SAMPLE_SCALE_MAX || s->width <= 0 || s->height <= 0 ||
+        s->width > 16384 / k || s->height > 16384 / k) return 0;
+    return (nj_size)(s->width * k) * (nj_size)(s->height * k) * 4u;
+}
+
+/* Caller has checked the extent and the combined pool budget. */
+static int hd_surface(nj_vm *vm, nj_surface *s, const nj_surface *logical, int k, nj_size bytes)
+{
     s->pixels = nj_host_alloc(vm, bytes);
     if (!s->pixels) return 0;
     s->format = NJ_PIXFMT_ARGB8888;
-    s->width = w;
-    s->height = h;
-    s->stride = w * 4;
+    s->width = logical->width * k;
+    s->height = logical->height * k;
+    s->stride = s->width * 4;
     s->bpp = 4;
     vm->hd_store->bytes += bytes;
     return 1;
@@ -105,44 +108,113 @@ static void hd_seed(hd_entry *e, const nj_surface *s)
     e->valid = 1;
 }
 
+static void hd_bind(hd_entry *e, struct nj_hd_store *store, const nj_surface *s,
+                    nj_ref owner, int k)
+{
+    e->width = s->width;
+    e->height = s->height;
+    e->key = s->pixels;
+    e->owner = owner;
+    e->mirror.target = &e->physical;
+    e->mirror.scale = k;
+    e->mirror.ud = store;
+    e->mirror.lookup = hd_lookup;
+}
+
+static void hd_quality(nj_vm *vm, int scale, int aa, const char *reason)
+{
+    if (vm->render_quality.scale != scale || vm->render_quality.ssaa != aa) {
+        nj_logf(vm, 1, "HD %dx SSAA=%d -> %dx SSAA=%d (%s)",
+                vm->render_quality.scale, vm->render_quality.ssaa, scale, aa, reason);
+        vm->render_quality.scale = scale;
+        vm->render_quality.ssaa = aa;
+        if (scale == 1) vm->render_quality.fsr2 = 0;
+    }
+}
+
+/* Reserve the screen and its resolved output together, before admitting any
+ * weak image.  Even an offscreen-first draw must use the selected sample grid.
+ * At each output scale try the requested AA first, then direct rendering. */
+static int hd_prepare_screen(nj_vm *vm, const nj_surface *s)
+{
+    struct nj_hd_store *store = vm->hd_store;
+    hd_entry *e = &store->entries[0];
+    int scale, aa, k = vm->render_quality.scale * vm->render_quality.ssaa;
+    const char *reason = "96 MiB pool or 16384 side limit";
+    if (e->key == s->pixels && e->width == s->width && e->height == s->height &&
+        e->mirror.scale == k && !!store->resolve.pixels == (vm->render_quality.ssaa == 2)) return 1;
+    /* A changed screen geometry invalidates the sample grid of its sources. */
+    if (e->key) {
+        for (int i = 0; i < HD_TARGETS; ++i) hd_release(vm, &store->entries[i]);
+        hd_free_surface(vm, &store->resolve);
+    }
+    for (scale = vm->render_quality.scale; scale >= 1; --scale) {
+        for (aa = vm->render_quality.ssaa; aa >= 1; --aa) {
+            k = scale * aa;
+            if (k == 1) break; /* the port already owns the logical frame */
+            nj_size samples = hd_bytes(s, k), output = aa == 2 ? hd_bytes(s, scale) : 0;
+            if (!samples || samples > HD_BYTE_LIMIT || output > HD_BYTE_LIMIT - samples) continue;
+            if (hd_surface(vm, &e->physical, s, k, samples)) {
+                if (!output || hd_surface(vm, &store->resolve, s, scale, output)) {
+                    hd_bind(e, store, s, NULL, k);
+                    hd_quality(vm, scale, aa, reason);
+                    return 1;
+                }
+                hd_free_surface(vm, &e->physical);
+            }
+            reason = "host allocation failed";
+        }
+    }
+    hd_quality(vm, 1, 1, reason);
+    return 0;
+}
+
 nj_render_mirror *nj_midp_hd_target(nj_vm *vm, const nj_surface *s)
 {
     struct nj_hd_store *store;
-    hd_entry *e = NULL;
+    const nj_surface *screen;
+    hd_entry *e;
     nj_ref owner = NULL;
-    int k, i;
-    if (!vm || !s || !s->pixels || s->width <= 0 || s->height <= 0) return NULL;
-    k = vm->render_quality.scale * vm->render_quality.ssaa;
-    if (k < 2 || k > 8 || s->width > 16384 / k || s->height > 16384 / k) return NULL;
+    int k;
+    if (!vm || !s || !s->pixels || s->width <= 0 || s->height <= 0 ||
+        (vm->render_quality.scale == 1 && vm->render_quality.ssaa == 1)) return NULL;
     if (s->pixels != vm->screen.pixels && !(owner = hd_owner(vm, s))) return NULL;
+    screen = vm->screen.pixels ? &vm->screen : nj_midp_screen(vm);
+    if (!screen) {
+        hd_quality(vm, 1, 1, "logical screen allocation failed");
+        return NULL;
+    }
     store = vm->hd_store;
     if (!store) {
-        store = (struct nj_hd_store *)nj_host_alloc(vm, sizeof(*store));
-        if (!store) return NULL;
-        vm->hd_store = store;
+        vm->hd_store = store = (struct nj_hd_store *)nj_host_alloc(vm, sizeof(*store));
+        if (!store) {
+            hd_quality(vm, 1, 1, "host allocation failed");
+            return NULL;
+        }
     }
+    if (!hd_prepare_screen(vm, screen)) return NULL;
     if (!owner) {
         e = &store->entries[0];
+        if (s->width != e->width || s->height != e->height) return NULL;
     } else {
-        for (i = 1; i < HD_TARGETS; ++i) {
+        k = store->entries[0].mirror.scale;
+        e = NULL;
+        for (int i = 1; i < HD_TARGETS; ++i) {
             hd_entry *candidate = &store->entries[i];
             if (candidate->key == s->pixels) { e = candidate; break; }
             if (!candidate->key && !e) e = candidate;
         }
-    }
-    if (!e) return NULL;
-    if (e->key != s->pixels || e->width != s->width || e->height != s->height ||
-        e->mirror.scale != k) {
-        hd_release(vm, e);
-        if (!hd_surface(vm, &e->physical, s->width * k, s->height * k)) return NULL;
-        e->width = s->width;
-        e->height = s->height;
-        e->key = s->pixels;
-        e->owner = owner;
-        e->mirror.target = &e->physical;
-        e->mirror.scale = k;
-        e->mirror.ud = store;
-        e->mirror.lookup = hd_lookup;
+        if (!e) return NULL;
+        if (e->key != s->pixels || e->width != s->width || e->height != s->height) {
+            nj_size bytes = hd_bytes(s, k);
+            hd_release(vm, e);
+            if (!bytes || bytes > HD_BYTE_LIMIT - store->bytes) return NULL;
+            /* Remember a host allocation failure until the weak owner is
+             * collected. Replaying this image's draws should stay cheap. */
+            hd_bind(e, store, s, owner, k);
+            if (!hd_surface(vm, &e->physical, s, k, bytes)) return NULL;
+        }
+        if (!e->physical.pixels) return NULL;
     }
     e->mirror.smooth_assets = vm->render_quality.smooth_assets;
     if (!e->valid) hd_seed(e, s);
@@ -195,14 +267,14 @@ static nj_u4 hd_average(nj_u4 a, nj_u4 b, nj_u4 c, nj_u4 d)
 
 int nj_midp_hd_present(nj_vm *vm)
 {
-    nj_render_mirror *mirror = nj_midp_hd_target(vm, &vm->screen);
     const nj_surface *frame;
-    if (!mirror || !vm->port || !vm->port->display_hd) return 0;
+    if (!vm || !vm->port || !vm->port->display_hd) return 0;
+    nj_render_mirror *mirror = nj_midp_hd_target(vm, &vm->screen);
+    if (!mirror) return 0;
     frame = mirror->target;
     if (vm->render_quality.ssaa == 2) {
         nj_surface *out = &vm->hd_store->resolve;
         int x, y;
-        if (!hd_surface(vm, out, frame->width / 2, frame->height / 2)) return 0;
         const int width = out->width, height = out->height, samples = frame->width;
         const size_t row_bytes = (size_t)frame->stride;
         for (y = 0; y < height; ++y) {

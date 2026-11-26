@@ -179,8 +179,8 @@ final class GlyphSource {
     }
 
     /**
-     * Coverage rows for one character: {@code {w, h, w*h bytes}} with one byte
-     * per pixel, 0 = empty and 255 = solid.
+     * Little-endian uint16 width and height, followed by one coverage byte per
+     * pixel, 0 = empty and 255 = solid.
      *
      * <p>Returns null when the character cannot be drawn, which the runtime
      * reads as "this face has no glyph" and answers with a blank cell.
@@ -193,8 +193,8 @@ final class GlyphSource {
      *               ink against that row, and the same row for every glyph
      */
     static byte[] render(int cp, int cell, int bold, int ascent, int scale) {
-        if (cell <= 0 || cell > 32 || scale < 1 || scale > 8 || cell * scale > 255) {
-            return null;  // The wire format uses unsigned byte dimensions.
+        if (cell <= 0 || cell > 32 || scale < 1 || scale > FontKit.MAX_SAMPLE_SCALE) {
+            return null;
         }
         synchronized (LOCK) {
             boolean b = bold != 0;
@@ -255,10 +255,9 @@ final class GlyphSource {
         bm.recycle();
 
         byte[] out = new byte[FontKit.glyphBytes(w, h)];
-        out[0] = (byte) w;
-        out[1] = (byte) h;
+        FontKit.putDimensions(out, w, h);
         for (int i = 0; i < argb.length; i++) {
-            out[2 + i] = (byte) ((argb[i] >>> 24) & 0xff);
+            out[FontKit.HEADER_BYTES + i] = (byte) (argb[i] >>> 24);
         }
         return out;
     }

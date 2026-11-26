@@ -1,13 +1,15 @@
 /* Draw real outlines on a mirrored target and compare each physical pixel
  * against individually placed physical-size glyphs at logical advances. */
 #include "nj2me/nj_gfx.h"
+#include "nj2me/nj_port.h"
+#include "../src/gfx/nj_ttf.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #define CHECK(expr) do { if (!(expr)) { fprintf(stderr, "%d: %s\n", __LINE__, #expr); exit(1); } } while (0)
 
-enum { WIDTH = 80, HEIGHT = 36, MAX_SCALE = 4 };
+enum { WIDTH = 80, HEIGHT = 36, MAX_SCALE = NJ_RENDER_SAMPLE_SCALE_MAX };
 typedef struct allocations {
     void *block[NJ_FONTSET_SLOTS + 1];
     int count;
@@ -131,6 +133,33 @@ static void check_bitmap_formats(int mode)
     }
 }
 
+/* At 32 px/em the fixture's k=16 O is 320x512 (160 KiB). Compare
+ * coverage to a direct 512 px/em raster, including after a scale switch. */
+static void check_large_outline(const nj_u1 *data, nj_u4 len)
+{
+    allocations a = {0};
+    nj_size small = nj_ttf_sizeof(128), large = nj_ttf_sizeof(2048);
+    nj_ttf *base = nj_ttf_open(track(&a,small),small,data,len,32);
+    nj_ttf *direct = nj_ttf_open(track(&a,large),large,data,len,512);
+    nj_font logical, ref;
+    CHECK(base && direct);
+    nj_ttf_enable_scaled_face(base,track,&a);
+    CHECK(nj_ttf_font(base,&logical,0,0) && nj_ttf_font(direct,&ref,0,0));
+    int w, h;
+    const nj_u1 *want = ref.glyph_lookup(ref.glyph_ud,'O',&w,&h);
+    CHECK(want && w*h > 128*1024);
+    for (int pass=0; pass<2; ++pass) {
+        CHECK(logical.scaled_face(logical.glyph_ud,2));
+        const nj_font *scaled = logical.scaled_face(logical.glyph_ud,16);
+        int sw, sh;
+        CHECK(scaled);
+        const nj_u1 *got = scaled->glyph_lookup(scaled->glyph_ud,'O',&sw,&sh);
+        CHECK(got && w == sw && h == sh && !memcmp(want,got,(nj_size)w*h));
+        CHECK(a.count == 4);
+    }
+    while (a.count) free(a.block[--a.count]);
+}
+
 int main(int argc, char **argv)
 {
     const char *path = argc > 1 ? argv[1] : "tests/fixtures/ttf/nj_fixture.ttf";
@@ -143,6 +172,7 @@ int main(int argc, char **argv)
     nj_u1 *data = malloc((size_t)len);
     CHECK(data && fread(data, 1, (size_t)len, fp) == (size_t)len);
     fclose(fp);
+    check_large_outline(data,(nj_u4)len);
     check_bitmap_formats(NJ_ASSET_SMOOTH);
     check_bitmap_formats(NJ_ASSET_PIXEL_ART);
     nj_fontset_init(&fs);
@@ -151,6 +181,7 @@ int main(int argc, char **argv)
     CHECK(a.count == NJ_FONTSET_SLOTS && f->scaled_face);
     check_draw(*f, 2, NJ_ASSET_NEAREST); check_draw(*f, 4, NJ_ASSET_SMOOTH);
     check_draw(*f, 2, NJ_ASSET_SMOOTH); check_draw(*f, 4, NJ_ASSET_PIXEL_ART);
+    check_draw(*f, 8, NJ_ASSET_NEAREST); check_draw(*f, 16, NJ_ASSET_SMOOTH);
     CHECK(a.count == NJ_FONTSET_SLOTS + 1);
     while (a.count) free(a.block[--a.count]);
     free(data);

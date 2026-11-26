@@ -2,6 +2,7 @@
  * all four channels, and a dead Java pixel buffer releases its companion. */
 #include "nj2me/nj.h"
 #include "nj_midp.h"
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -214,6 +215,168 @@ static void check_resolve_rows(void)
     nj_port_shutdown(&port);
 }
 
+/* The port allocator counts attempts (including failures) so that repeated
+ * presents cannot hide an allocation/free cycle behind a steady live count. */
+typedef struct probe {
+    int attempts, live, fail_at, fail_from, width, height, hd_frames, logical_frames;
+    nj_u4 first, last;
+} probe;
+
+static void *probe_alloc(void *ud, nj_size bytes)
+{
+    probe *p = ud;
+    ++p->attempts;
+    if (p->attempts == p->fail_at || (p->fail_from && p->attempts >= p->fail_from)) return NULL;
+    void *mem = malloc(bytes);
+    if (mem) ++p->live;
+    return mem;
+}
+
+static void probe_free(void *ud, void *mem)
+{
+    probe *p = ud;
+    if (mem) --p->live;
+    free(mem);
+}
+
+static void probe_hd(void *ud, const nj_surface *s)
+{
+    probe *p = ud;
+    CHECK(s->width == p->width && s->height == p->height);
+    CHECK(nj_surface_get(s, 0, 0) == p->first);
+    CHECK(nj_surface_get(s, s->width - 1, s->height - 1) == p->last);
+    ++p->hd_frames;
+}
+
+static void probe_logical(void *ud, int x, int y, int w, int h)
+{
+    probe *p = ud;
+    CHECK(x == 0 && y == 0 && w == p->width && h == p->height);
+    ++p->logical_frames;
+}
+
+/* fail_at is relative to the first HD allocation (store, sample, resolve).
+ * A negative value fails every allocation starting at that index. With
+ * weak_first set, a screen-sized source asks for a companion first. */
+static void check_mode(int w, int h, int request, int aa, int output, int actual_aa,
+                       int fail_at, int weak_first, int has_display)
+{
+    probe p = {0};
+    nj_port port = {0};
+    port.ud = &p; port.alloc = probe_alloc; port.free = probe_free;
+    port.width = w; port.height = h; port.render_scale = request; port.render_ssaa = aa;
+    port.display_hd = has_display ? probe_hd : NULL;
+    port.display_present = probe_logical;
+    nj_vm *vm = nj_vm_create(&port, 2u * 1024u * 1024u);
+    CHECK(vm);
+    if (weak_first) {
+        nj_surface surface;
+        nj_ref image = nj_root(vm, nj_midp_image_new(vm, w, h, 1));
+        CHECK(image && nj_midp_surface(vm, image, &surface));
+        CHECK(!nj_midp_hd_target(vm, &surface)); /* remaining pool is too small */
+        CHECK(vm->render_quality.scale == output && vm->render_quality.ssaa == actual_aa);
+    }
+    nj_surface *screen = nj_midp_screen(vm);
+    CHECK(screen && screen->width == w && screen->height == h);
+    nj_surface_set(screen, 0, 0, 0xff123456u);
+    nj_surface_set(screen, w-1, h-1, 0xffedcba9u);
+    p.first = nj_surface_get(screen, 0, 0); p.last = nj_surface_get(screen, w-1, h-1);
+    p.width = w * output; p.height = h * output;
+    if (fail_at > 0) p.fail_at = p.attempts + fail_at;
+    if (fail_at < 0) p.fail_from = p.attempts - fail_at;
+    int k = output * actual_aa;
+    nj_render_mirror *m = nj_midp_hd_target(vm, screen);
+    CHECK(vm->render_quality.scale == output && vm->render_quality.ssaa == actual_aa);
+    CHECK(k == 1 ? m == NULL : m && m->scale == k && m->target->width == w*k && m->target->height == h*k);
+    if (!has_display || (request == 1 && aa == 1)) CHECK(!vm->hd_store);
+    int attempts = p.attempts;
+    for (int i = 0; i < 3; ++i) {
+        CHECK(nj_midp_hd_target(vm, screen) == m);
+        nj_midp_present(vm);
+        CHECK(p.hd_frames == (k > 1 ? i+1 : 0));
+        CHECK(p.logical_frames == (k == 1 ? i+1 : 0));
+        CHECK(p.attempts == attempts);
+        nj_surface_set(screen, 0, 0, 0xffcc8844u >> i);
+        p.first = nj_surface_get(screen, 0, 0);
+        nj_midp_hd_invalidate(vm, screen);
+    }
+    nj_vm_destroy(vm);
+    CHECK(p.live == 0);
+}
+
+/* Reject only the weak companion. A subsequent copy to the HD screen must
+ * reflect each new logical color, without asking the allocator again. */
+static void check_missing_source(void)
+{
+    probe p = {0};
+    nj_port port = {0};
+    port.ud = &p; port.alloc = probe_alloc; port.free = probe_free;
+    port.width = 12; port.height = 8; port.render_scale = 2; port.display_hd = probe_hd;
+    nj_vm *vm = nj_vm_create(&port, 1024u * 1024u);
+    CHECK(vm);
+    nj_surface *screen = nj_midp_screen(vm), surface;
+    nj_ref image = nj_root(vm, nj_midp_image_new(vm, 12, 8, 1));
+    nj_image view;
+    CHECK(screen && image && nj_midp_surface(vm, image, &surface) && nj_midp_image_view(vm, image, &view));
+    CHECK(nj_midp_hd_target(vm, screen));
+    p.fail_at = p.attempts + 1;
+    p.width = 24; p.height = 16;
+    for (int i = 0; i < 4; ++i) {
+        nj_gfx g;
+        nj_u4 color = 0xff000000u | (nj_u4)(i + 1) * 0x224411u;
+        nj_midp_gfx_init(vm, &g, &surface);
+        CHECK(!g.mirror && !nj_midp_hd_source(vm, &view));
+        nj_gfx_clear(&g, color);
+        nj_midp_gfx_init(vm, &g, screen);
+        nj_gfx_draw_image(&g, &view, 0, 0, 0, 0, view.width, view.height);
+        p.first = p.last = color;
+        CHECK(nj_midp_hd_present(vm) && p.hd_frames == i + 1 && p.attempts == p.fail_at);
+    }
+    nj_vm_destroy(vm);
+    CHECK(!p.live);
+}
+
+static void check_extremes(void)
+{
+    for (int i = 1; i <= NJ_RENDER_SCALE_MAX; ++i) {
+        check_mode(13, 9, i, 1, i, 1, 0, 0, 1);
+        check_mode(13, 9, i, 2, i, 2, 0, 0, 1);
+    }
+    check_mode(13, 9, 8, 2, 1, 1, 0, 0, 0); /* port has no HD sink */
+    check_mode(13, 9, 9, 1, 1, 1, 0, 0, 1); /* invalid scale retains old default */
+    check_mode(13, 9, 8, 2, 1, 1, 1, 0, 1); /* store allocation fails */
+    check_mode(13, 9, 8, 2, 8, 1, 2, 0, 1); /* sample allocation fails */
+    check_mode(13, 9, 8, 2, 8, 1, 3, 0, 1); /* sample OK, resolve fails */
+    check_mode(13, 9, 8, 2, 1, 1, -2, 0, 1); /* every sample allocation fails */
+    check_mode(13, 9, 8, 1, 7, 1, 2, 0, 1); /* smaller sample succeeds */
+    check_mode(240, 320, 8, 2, 8, 2, 0, 1, 1); /* 93.75 MiB for display alone */
+    check_mode(512, 768, 8, 2, 8, 1, 0, 0, 1); /* exactly 96 MiB */
+    check_mode(513, 768, 8, 2, 7, 1, 0, 0, 1); /* one more column */
+    check_mode(2048, 1, 8, 2, 8, 1, 0, 0, 1);  /* exactly 16384 physical columns */
+    check_mode(2049, 1, 8, 2, 7, 1, 0, 0, 1);
+
+    /* Impossible descriptors must decline before multiplying or touching the
+     * pretend extent. Exercise both individual axes as well as their product. */
+    const int invalid[][2] = {{INT_MAX, 1}, {1, INT_MAX}, {INT_MAX, INT_MAX}};
+    for (unsigned i = 0; i < sizeof(invalid)/sizeof(invalid[0]); ++i) {
+        probe p = {0};
+        nj_port port = {0};
+        port.ud = &p; port.alloc = probe_alloc; port.free = probe_free;
+        port.display_hd = probe_hd; port.render_scale = 8; port.render_ssaa = 2;
+        port.width = port.height = 1;
+        nj_vm *vm = nj_vm_create(&port, 1024u * 1024u);
+        CHECK(vm);
+        nj_surface *screen = nj_midp_screen(vm);
+        CHECK(screen);
+        screen->width = invalid[i][0]; screen->height = invalid[i][1];
+        int before = p.attempts;
+        CHECK(!nj_midp_hd_target(vm, screen) && !nj_midp_hd_present(vm));
+        CHECK(p.attempts <= before + 1 && !p.hd_frames);
+        nj_vm_destroy(vm);
+        CHECK(!p.live);
+    }
+}
+
 int main(void)
 {
     nj_port port = {0};
@@ -272,5 +435,7 @@ int main(void)
     nj_vm_destroy(vm);
     nj_port_shutdown(&port);
     check_resolve_rows();
+    check_extremes();
+    check_missing_source();
     return 0;
 }

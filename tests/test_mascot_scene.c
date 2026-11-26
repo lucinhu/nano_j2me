@@ -1649,7 +1649,7 @@ static void test_hd_scene(nj_vm *vm)
     const nj_u4 white = 0xffffffffu, red = 0xffff0000u, pink = 0xffff7f7fu;
     nj_u4 reference[64 * 64];
     int pass, smooth_mixed = 0, smooth_covered = 0;
-    for (pass = 0; pass < 4; ++pass) {
+    for (pass = 0; pass < 5; ++pass) {
         nj_ref img, g, g3, fl, fx, tex, quv, quad, point, line, sprite, sprite_uv;
         nj_ref red_arg, black_arg;
         nj_s4 p[3] = {4, 4, 0}, l[6] = {-124, -124, 0, -60, -92, 0};
@@ -1660,8 +1660,8 @@ static void test_hd_scene(nj_vm *vm)
         nj_ref tri, keyed, split_sprite, split_tex;
         nj_surface scratch, *logical;
         nj_render_mirror *m;
-        if (pass) { vm->render_quality.scale = 2; vm->render_quality.ssaa = 2; }
-        vm->render_quality.smooth_assets = pass ? pass-1 : 0;
+        if (pass) { vm->render_quality.scale = pass == 4 ? 8 : 2; vm->render_quality.ssaa = 2; }
+        vm->render_quality.smooth_assets = pass == 4 ? 0 : pass ? pass-1 : 0;
         g3 = scene_setup(vm, &img, &g);
         fl = centre_layout(vm); fx = default_effect(vm); tex = texture(vm, 0, 1);
         red_arg = ints(vm, col, 1); col[0] = 0; black_arg = ints(vm, col, 1);
@@ -1685,7 +1685,18 @@ static void test_hd_scene(nj_vm *vm)
             memcpy(reference,logical->pixels,sizeof reference);
         } else {
             check(!memcmp(reference,logical->pixels,sizeof reference), "all 4096 logical pixels match default rendering");
-            check(m && m->scale == 4, "2x output with 2x SSAA has a 4x raster grid");
+            check(m && m->scale == (pass == 4 ? 16 : 4), "physical grid matches output times SSAA");
+            if (m && pass == 4) {
+                nj_surface *s = m->target;
+                check(nj_surface_get(s,519,520) == red && nj_surface_get(s,520,520) == 0xff7f0000u &&
+                      nj_surface_get(s,535,535) == 0xff7f0000u && nj_surface_get(s,536,535) == red,
+                      "k=16 half-pixel point starts at +8 and covers sixteen samples");
+                check(nj_surface_get(s,263,264) == white && nj_surface_get(s,264,264) == pink,
+                      "k=16 slanted stroke retains its positive projection remainder");
+                check(nj_surface_get(s,647,648) == white && nj_surface_get(s,648,648) == red,
+                      "k=16 textured sprite retains its fractional centre");
+                continue;
+            }
             if (m) {
                 nj_surface *s = m->target;
                 int x, y, mixed = 0, covered = 0, fringe = 0;
@@ -1732,7 +1743,7 @@ int main(void)
     nj_port port;
     nj_vm *vm;
 
-    nj_port_headless(&port);
+    nj_port_headless_ex(&port, 64, 64, 0, NULL);
     vm = nj_vm_create(&port, 2u * 1024u * 1024u);
     if (!vm) {
         printf("tests/test_mascot_scene: could not create a VM\n");

@@ -142,6 +142,9 @@ struct nj_ttf {
     nj_font_alloc_fn hd_alloc;
     void *hd_alloc_ud;
     void *hd_mem;
+    /* Optional large bitmap arena, owned by the logical face across reopen. */
+    nj_ttf *hd_owner;
+    nj_u1 *hd_large_pool;
     nj_font hd_font;
     int hd_scale;
 
@@ -1644,7 +1647,17 @@ static const nj_u1 *ttf_glyph_lookup(void *ud, nj_u2 ch, int *w, int *h)
     }
     bytes = (nj_u4)bw * (nj_u4)bh;
     if (bytes > t->pool_bytes) {
-        return NULL;            /* the caller's cache is too small for this */
+        /* A valid outline at k=16 can exceed the usual 128 KiB physical
+         * cache by itself. Grow only for a glyph that actually needs it.
+         * Cache indices belong to the old arena until the allocation succeeds. */
+        nj_ttf *owner = t->hd_owner;
+        if (!owner) return NULL;
+        if (!owner->hd_large_pool)
+            owner->hd_large_pool = owner->hd_alloc(owner->hd_alloc_ud, NJ_TTF_MAX_W * NJ_TTF_MAX_H);
+        if (!owner->hd_large_pool) return NULL;
+        ttf_cache_reset(t);
+        t->pool = owner->hd_large_pool;
+        t->pool_bytes = NJ_TTF_MAX_W * NJ_TTF_MAX_H;
     }
     if (t->pool_used > t->pool_bytes - bytes) {
         ttf_cache_reset(t);
@@ -2080,6 +2093,11 @@ static const nj_font *ttf_scaled_face(void *ud, int scale)
     t->hd_scale = 0;
     physical = nj_ttf_open(t->hd_mem, bytes, t->data, t->len, t->px_size * scale);
     if (!nj_ttf_font(physical, &t->hd_font, t->style, NJ_FONT_SIZE_MEDIUM)) return NULL;
+    physical->hd_owner = t;
+    if (t->hd_large_pool) {
+        physical->pool = t->hd_large_pool;
+        physical->pool_bytes = NJ_TTF_MAX_W * NJ_TTF_MAX_H;
+    }
     t->hd_scale = scale;
     return &t->hd_font;
 }

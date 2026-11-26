@@ -189,7 +189,7 @@ static void usage(const char *argv0)
 "  --heap <mb>          initial Java heap MB (saved setting; runtime default: %u)\n"
 "  --heap-grow          expand after GC when needed, up to 128 MB or --heap\n"
 "  --no-heap-grow       keep the Java heap fixed (overrides the saved switch)\n"
-"  --render-scale <1..4>  rasterize geometry and outlines at this output scale\n"
+"  --render-scale <1..%d>  rasterize geometry and outlines at this output scale\n"
 "  --ssaa <1|2>           samples per axis before resolving the physical frame\n"
 "  --subdivide            split M3G triangles during HD drawing\n"
 "  --asset-filter <mode>  HD artwork: nearest (default), smooth or pixel-art\n"
@@ -312,7 +312,7 @@ static void usage(const char *argv0)
 "  %s --port headless --dump-frames out/ game.jar\n"
 "  %s --port sdl2 --scale 3 --heap 8 game.jar\n",
         argv0,
-        (unsigned)NJ_CLI_HEAP_MB,
+        (unsigned)NJ_CLI_HEAP_MB, NJ_RENDER_SCALE_MAX,
         NJ_SCREEN_WIDTH, NJ_SCREEN_HEIGHT,
         argv0, argv0, argv0);
 }
@@ -901,9 +901,10 @@ int main(int argc, char **argv)
             c.grow_given = 1;
         } else if (strcmp(a, "--render-scale") == 0 || strcmp(a, "--ssaa") == 0) {
             int samples = strcmp(a, "--ssaa") == 0;
-            if (++i >= argc || argv[i][0] < '1' || argv[i][0] > (samples ? '2' : '4') ||
+            int maximum = samples ? 2 : NJ_RENDER_SCALE_MAX;
+            if (++i >= argc || argv[i][0] < '1' || argv[i][0] > '0' + maximum ||
                 argv[i][1] != '\0') {
-                fprintf(stderr, "%s expects an integer from 1 to %d\n", a, samples ? 2 : 4);
+                fprintf(stderr, "%s expects an integer from 1 to %d\n", a, maximum);
                 return 2;
             }
             if (samples) c.ssaa = argv[i][0] - '0';

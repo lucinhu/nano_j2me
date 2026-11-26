@@ -346,6 +346,7 @@ typedef struct android_state {
      * Guarded by `lock`: the frame loop writes it, the UI thread reads it, and
      * they are different threads.
      */
+    int   view_density;            /* rendered pixels per logical pixel in the last frame */
     float view_scale;              /* window pixels per logical pixel */
     float view_off_x, view_off_y;  /* where the picture starts in the window */
     int   view_src_x, view_src_y;  /* first logical pixel drawn */
@@ -1575,10 +1576,12 @@ static int android_fit_view(android_state *s, int bw, int bh, int scale_cap,
     return 1;
 }
 
-static void android_publish_view(android_state *s, const android_viewport *v, int bw, int bh)
+static void android_publish_view(android_state *s, const android_viewport *v,
+                                 int bw, int bh, int density)
 {
     pthread_mutex_lock(&s->lock);
     s->win_w = bw; s->win_h = bh;
+    s->view_density = density;
     s->view_scale = v->scale;
     s->view_off_x = (float)v->x; s->view_off_y = (float)v->y;
     s->view_src_x = v->sx; s->view_src_y = v->sy;
@@ -1645,7 +1648,7 @@ static int android_gl_present_frame(android_state *s, ANativeWindow *win,
     {
         int ok = nj_android_gles2_present(&s->gles2, &surf, settings->mode,
                                           settings->sharp, v.x, v.y, v.w, v.h);
-        if (ok) android_publish_view(s, &v, bw, bh);
+        if (ok) android_publish_view(s, &v, bw, bh, density);
         if (ok && !s->gl_present_logged) {
             s->gl_present_logged = 1;
             __android_log_print(ANDROID_LOG_INFO, LOG_TAG,
@@ -1748,7 +1751,7 @@ static void android_present_frame(void *ud, const nj_surface *frame)
             ANativeWindow_release(win);
             return;
         }
-        android_publish_view(s, &v, buf.width, buf.height);
+        android_publish_view(s, &v, buf.width, buf.height, density);
         /* Input and pan use the logical viewport. Only sampling sees physical pixels. */
         sx0 = v.sx * density; sy0 = v.sy * density;
         sw = v.sw * density; sh = v.sh * density;
@@ -2648,7 +2651,12 @@ static const nj_u1 *android_glyph_lookup(void *ud, nj_u2 ch, int *w, int *h)
     android_glyph_slot *slot = NULL;
     android_glyph_slot *slots;
     int *next, count;
-    jbyte header[2];
+#if NJ_ANDROID_LEGACY
+    enum { header_bytes = 2 };  /* Legacy GlyphSource uses single-byte dimensions. */
+#else
+    enum { header_bytes = 4 };  /* uint16 LE width and height. */
+#endif
+    jbyte header[header_bytes];
     jbyteArray arr;
     JNIEnv *env;
     jsize len;
@@ -2704,11 +2712,19 @@ static const nj_u1 *android_glyph_lookup(void *ud, nj_u2 ch, int *w, int *h)
             return NULL;
         }
         len = (*env)->GetArrayLength(env, arr);
-        if (len >= 2) (*env)->GetByteArrayRegion(env, arr, 0, 2, header);
-        ww = len >= 2 ? (unsigned char)header[0] : 0;
-        hh = len >= 2 ? (unsigned char)header[1] : 0;
+        ww = hh = 0;
+        if (len >= header_bytes) {
+            (*env)->GetByteArrayRegion(env, arr, 0, header_bytes, header);
+#if NJ_ANDROID_LEGACY
+            ww = (nj_u1)header[0];
+            hh = (nj_u1)header[1];
+#else
+            ww = (nj_u1)header[0] | ((nj_u1)header[1] << 8);
+            hh = (nj_u1)header[2] | ((nj_u1)header[3] << 8);
+#endif
+        }
         if (!ww || !hh || ww > ANDROID_GLYPH_CELL_MAX * gf->scale ||
-            hh > gf->cell * gf->scale || len != 2 + ww * hh) {
+            hh > gf->cell * gf->scale || len != header_bytes + ww * hh) {
             (*env)->DeleteLocalRef(env, arr);
             c->failed++;
             return NULL;
@@ -2720,7 +2736,7 @@ static const nj_u1 *android_glyph_lookup(void *ud, nj_u2 ch, int *w, int *h)
             c->failed++;
             return NULL;
         }
-        (*env)->GetByteArrayRegion(env, arr, 2, ww * hh, (jbyte *)rows);
+        (*env)->GetByteArrayRegion(env, arr, header_bytes, ww * hh, (jbyte *)rows);
         (*env)->DeleteLocalRef(env, arr);
         *next = (*next + 1) % count;
         slot->rows = rows;
@@ -2745,7 +2761,7 @@ static const nj_font *android_scaled_face(void *ud, int scale)
 {
     android_glyph_face *base = (android_glyph_face *)ud;
     android_glyph_face *physical = &base->state->physical_face;
-    if (scale < 2 || scale > 8 || base->cell * scale > 255) return NULL;
+    if (scale < 2 || scale > NJ_RENDER_SAMPLE_SCALE_MAX) return NULL;
     *physical = *base;
     physical->scale = scale;
     physical->face.glyph_ud = physical;
@@ -5961,28 +5977,31 @@ Java_com_lucinhu_nj2me_GameActivity_nativeGraphicsInfo(JNIEnv *env, jclass cls,
                                                      jlong handle)
 {
     nj_android_gles2_info info;
-    jlong values[8];
+    android_app *a = (android_app *)(intptr_t)handle;
+    android_state *s = a ? AS(a->port.ud) : NULL;
+    jlong values[9];
     jlongArray result;
     (void)cls;
     memset(&info, 0, sizeof info);
+    values[8] = 0;
+    if (s) {
+        pthread_mutex_lock(&s->lock);
+        values[8] = s->view_density;
+        pthread_mutex_unlock(&s->lock);
+    }
 #if NJ_ANDROID_GLES2 && !NJ_ANDROID_LEGACY
-    {
-        android_app *a = (android_app *)(intptr_t)handle;
-        android_state *s = a ? AS(a->port.ud) : NULL;
-        if (s && s->gles2_bound) {
-            nj_android_gles2_snapshot(&s->gles2, &info);
-        } else if (s) {
-            /* No GLES lock exists if bind failed. This path never enters EGL;
-             * only the run thread resolves a legacy property selection. */
-            pthread_mutex_lock(&s->lock);
-            info.requested = s->graphics_mode == 1;
-            info.state = s->graphics_stopped ? 4 : info.requested ?
-                         (s->graphics_started ? 3 : 1) : 0;
-            pthread_mutex_unlock(&s->lock);
-        }
+    if (s && s->gles2_bound) {
+        nj_android_gles2_snapshot(&s->gles2, &info);
+    } else if (s) {
+        /* No GLES lock exists if bind failed. This path never enters EGL;
+         * only the run thread resolves a legacy property selection. */
+        pthread_mutex_lock(&s->lock);
+        info.requested = s->graphics_mode == 1;
+        info.state = s->graphics_stopped ? 4 : info.requested ?
+                     (s->graphics_started ? 3 : 1) : 0;
+        pthread_mutex_unlock(&s->lock);
     }
 #else
-    (void)handle;
     info.state = 5;
 #endif
     values[0] = (jlong)info.state;
@@ -5992,8 +6011,8 @@ Java_com_lucinhu_nj2me_GameActivity_nativeGraphicsInfo(JNIEnv *env, jclass cls,
     values[6] = (jlong)info.triangles; values[7] = (jlong)info.batches;
     /* Java holds its existing handle-lifetime lock. Allocation/copy happen
      * after releasing native locks, never across driver or VM work. */
-    result = (*env)->NewLongArray(env, 8);
-    if (result) (*env)->SetLongArrayRegion(env, result, 0, 8, values);
+    result = (*env)->NewLongArray(env, 9);
+    if (result) (*env)->SetLongArrayRegion(env, result, 0, 9, values);
     return result;
 }
 
@@ -6993,7 +7012,7 @@ Java_com_lucinhu_nj2me_GameActivity_nativeSetHd(JNIEnv *env, jclass cls, jlong h
 {
     android_app *a = (android_app *)(intptr_t)handle;
     if (!a) return;
-    a->port.render_scale = scale >= 1 && scale <= 4 ? scale : 1;
+    a->port.render_scale = scale >= 1 && scale <= NJ_RENDER_SCALE_MAX ? scale : 1;
     a->request_vulkan = vulkan != 0;
     a->port.render_smooth_assets = asset_filter;
     a->port.render_ssaa = ssaa == 2 ? 2 : 1;
@@ -7016,7 +7035,7 @@ Java_com_lucinhu_nj2me_GameActivity_nativeSetGlPresent(JNIEnv *env, jclass cls,
     if (!s) return;
     settings.enabled = on != 0;
     settings.mode = (mode >= 0 && mode <= 6) ? mode : 0;
-    settings.scale = scale < 0 ? 0 : scale > 4 ? 4 : scale;
+    settings.scale = scale >= 2 && scale <= NJ_RENDER_SCALE_MAX ? scale : 0;
     if (sharp != sharp) sharp = 0.87f;
     settings.sharp = sharp < 0.05f ? 0.05f : sharp > 1.0f ? 1.0f : sharp;
     pthread_mutex_lock(&s->lock);

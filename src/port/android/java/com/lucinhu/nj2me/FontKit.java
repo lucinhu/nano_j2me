@@ -30,9 +30,19 @@ final class FontKit {
     private FontKit() {
     }
 
-    /** Bytes one cached glyph costs: two header bytes and one per pixel. */
+    /* Modern JNI packets use two little-endian uint16 dimensions. */
+    static final int HEADER_BYTES = 4;
+    static final int MAX_SAMPLE_SCALE = 2 * PictureFit.MAX_RENDER_SCALE;
+
+    static void putDimensions(byte[] out, int w, int h) {
+        out[0] = (byte) w;
+        out[1] = (byte) (w >>> 8);
+        out[2] = (byte) h;
+        out[3] = (byte) (h >>> 8);
+    }
+
     static int glyphBytes(int w, int h) {
-        return (w > 0 && h > 0) ? 2 + w * h : 0;
+        return (w > 0 && h > 0) ? HEADER_BYTES + w * h : 0;
     }
 
     /** True when the name looks like a font the platform can load. */
@@ -85,7 +95,8 @@ final class FontKit {
      * settings rows clear both.)
      */
     static int cacheKey(int cp, int cell, int scale, boolean bold, boolean antiAlias) {
-        return (cp << 11) | (cell << 5) | ((scale - 1) << 2) | (bold ? 2 : 0) | (antiAlias ? 1 : 0);
+        return (cp << 11) | ((cell - 1) << 6) | ((scale - 1) << 2)
+                | (bold ? 2 : 0) | (antiAlias ? 1 : 0);
     }
 
     /** The code point a {@link #cacheKey} was built from. */
