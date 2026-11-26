@@ -1370,8 +1370,7 @@ nj_status nj_interp_run(nj_vm *vm, nj_thread *th, int stop_depth)
 
 #define CHECK_QUANTUM() do {                                           \
         if (--quantum == 0u) {                                         \
-            SAVE();                                                    \
-            return NJ_ERR_YIELD;                                       \
+            goto yield_quantum;                                        \
         }                                                              \
     } while (0)
 
@@ -1747,8 +1746,7 @@ nj_status nj_interp_run(nj_vm *vm, nj_thread *th, int stop_depth)
 #endif
 #define NJ_FETCH_OP() do {                                             \
         if (pc >= code_len) {                                          \
-            THROW("java/lang/VerifyError",                            \
-                  "code runs past the end of the method");            \
+            goto invalid_pc;                                           \
         }                                                              \
         /*
          * The operand stack is bounded by THIS FRAME's max_stack, not just by
@@ -1765,8 +1763,7 @@ nj_status nj_interp_run(nj_vm *vm, nj_thread *th, int stop_depth)
          * and a loud VerifyError is the outcome this project wants.
          */                                                             \
         if (sp > stack_limit) {                                        \
-            THROW("java/lang/VerifyError",                            \
-                  "operand stack overflow");                           \
+            goto stack_overflow;                                       \
         }                                                              \
         _Pragma("GCC diagnostic push")                                 \
         _Pragma("GCC diagnostic ignored \"-Wpedantic\"")                \
@@ -3166,6 +3163,16 @@ nj_status nj_interp_run(nj_vm *vm, nj_thread *th, int stop_depth)
 #undef ARRAY_HEAD
         CHECK_QUANTUM();
         continue;
+
+        /* DISPATCH expands at each threaded handler. Share the cold exit
+         * bodies so their frame saves and throws do not inflate the loop. */
+yield_quantum:
+        SAVE();
+        return NJ_ERR_YIELD;
+invalid_pc:
+        THROW("java/lang/VerifyError", "code runs past the end of the method");
+stack_overflow:
+        THROW("java/lang/VerifyError", "operand stack overflow");
 
 do_unwind:
         SAVE();

@@ -253,6 +253,54 @@ static int check_system_properties(void)
     return failures != 0;
 }
 
+/* Both dispatch guards run before the next opcode is fetched or counted. */
+static int check_dispatch_guards(void)
+{
+    nj_u1 code[] = {0x00, 0x03, 0xb1};  /* nop, iconst_0, return */
+    nj_method m = {0};
+    nj_vm *vm = nj_vm_create(NULL, 1024u * 1024u);
+    nj_thread *th;
+    unsigned i;
+    int failed = 0;
+
+    if (!vm) return 1;
+    th = nj_thread_create(vm, NULL, 0);
+    vm->cur = th;
+    m.owner = nj_class_find(vm, "java/lang/Object");
+    m.name = "dispatchGuards";
+    m.desc = "()V";
+    m.code = code;
+    for (i = 0; i < 2u; ++i) {
+        nj_u8 before = vm->insns;
+        nj_status result = NJ_ERR;
+        /* First run falls off the code. Second run still has a return to
+         * fetch, but the preceding push has exceeded its declared max_stack. */
+        m.code_len = i == 0u ? 2u : 3u;
+        m.max_stack = i == 0u ? 1u : 0u;
+        if (th && m.owner && nj_frame_push(vm, th, &m, th->top, 0) == NJ_OK) {
+            do {
+                result = nj_interp_run(vm, th, 0);
+            } while (result == NJ_ERR_YIELD);
+        }
+        if (result != NJ_ERR_HALT || !vm->exception ||
+            strcmp(nj_ref_class_name(vm->exception), "java/lang/VerifyError") != 0 ||
+#if NJ_ENABLE_EXCEPTION_MESSAGES
+            !strstr(nj_exception_describe(vm), i == 0u ? "code runs past the end"
+                                                        : "operand stack overflow") ||
+#endif
+            vm->exception_method != &m || vm->exception_pc != 1u ||
+            vm->insns - before != 2u || th->nframes != 0) {
+            fprintf(stderr, "FAIL: dispatch %s guard\n",
+                    i == 0u ? "PC" : "stack");
+            failed = 1;
+            break;
+        }
+        nj_clear_exception(vm);
+    }
+    nj_vm_destroy(vm);
+    return failed;
+}
+
 int main(int argc, char **argv)
 {
     unsigned char *jar;
@@ -373,5 +421,5 @@ int main(int argc, char **argv)
            rounds);
     printf("      run under -fsanitize=address,leak for the process-level proof\n");
     free(jar);
-    return check_system_properties();
+    return check_dispatch_guards() || check_system_properties();
 }
