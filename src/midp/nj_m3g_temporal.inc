@@ -2,6 +2,24 @@
  * same coverage, alpha test, shading and depth quantization as the HD pass. */
 #include "../port/fsr2/nj_fsr2.h"
 
+/* Request-level tracing: an environment variable on desktop, the usual debug
+ * system property on Android, because apps there do not inherit our shell's
+ * environment. Output goes to the platform log so it is visible without stdio. */
+#if defined(__ANDROID__)
+#include <android/log.h>
+#include <sys/system_properties.h>
+#define TEMPORAL_TRACE(...) __android_log_print(ANDROID_LOG_INFO, "nj2me", __VA_ARGS__)
+static int m3g_temporal_trace(void) {
+  char value[PROP_VALUE_MAX];
+  if (__system_property_get("debug.nj2me.fsr2_trace", value) > 0 && value[0] != '0')
+    return 1;
+  return getenv("NJ_FSR2_TRACE") != NULL;
+}
+#else
+#define TEMPORAL_TRACE(...) fprintf(stderr, __VA_ARGS__)
+static int m3g_temporal_trace(void) { return getenv("NJ_FSR2_TRACE") != NULL; }
+#endif
+
 typedef struct {
   nj_ref node, vb, ib;
   unsigned draw, index[3];
@@ -78,8 +96,8 @@ static void m3g_temporal_bind(nj_vm *vm, const void *target, int w, int h,
     s->ow = ow;
     s->oh = oh;
     s->ctx = nj_fsr2_create(w, h, ow, oh, error, sizeof(error));
-    if (!s->ctx && getenv("NJ_FSR2_TRACE"))
-      fprintf(stderr, "FSR2 context %dx%d -> %dx%d: %s\n", w, h, ow, oh, error);
+    if (!s->ctx && m3g_temporal_trace())
+      TEMPORAL_TRACE("FSR2 context %dx%d -> %dx%d: %s\n", w, h, ow, oh, error);
     if (!s->ctx)
       return; /* Memoize unsupported dimensions/device. */
     s->scratch.width = w;
@@ -101,8 +119,18 @@ static void m3g_temporal_bind(nj_vm *vm, const void *target, int w, int h,
   }
   if (!s->ctx)
     return;
+  /* A frame may bind and release the same target more than once (a scene
+     pass and a second pass over the same geometry). Those passes share one
+     frame counter value, so accept the previous counter and the next one;
+     anything else is a new stream and cannot reuse temporal history. */
   s->reset = s->active || !s->prev.count || target != s->target ||
-             serial != s->serial + 1 || s->gc != vm->heap.gc_count;
+             (serial != s->serial && serial != s->serial + 1) ||
+             s->gc != vm->heap.gc_count;
+  if (m3g_temporal_trace())
+    TEMPORAL_TRACE(
+        "FSR2 bind target_changed=%d serial=%u prev_serial=%u active=%d prev_faces=%zu reset=%d\n",
+        target != s->target, (unsigned)serial, (unsigned)s->serial, s->active,
+        s->prev.count, s->reset);
   s->active = 1;
   s->valid = 1;
   s->cleared = 0;
@@ -127,8 +155,8 @@ static void m3g_temporal_clear(nj_vm *vm, const nj_surface *logical, int full) {
   if (logical && logical->pixels == s->target && full)
     s->valid =
         1; /* This clear replaces every earlier fragment in the binding. */
-  if (getenv("NJ_FSR2_TRACE") && !s->frame)
-    fprintf(stderr, "FSR2 clear full=%d valid=%d target_matches=%d\n", full,
+  if (m3g_temporal_trace() && !s->frame)
+    TEMPORAL_TRACE("FSR2 clear full=%d valid=%d target_matches=%d\n", full,
             s->valid, logical && logical->pixels == s->target);
   if (!s->valid)
     return;
@@ -169,8 +197,8 @@ static int m3g_temporal_mesh(m3g_jr *r) {
       r->sw.depth_far != 1 || !r->sw.dwrite || !r->sw.dtest ||
       (r->sw.blend != 64 && r->sw.blend != 68) || r->sw.depth_units ||
       r->sw.depth_factor) {
-    if (getenv("NJ_FSR2_TRACE"))
-      fprintf(stderr,
+    if (m3g_temporal_trace())
+      TEMPORAL_TRACE(
               "FSR2 mesh clear=%d p14=%g p5=%g p10=%g p11=%g depth=%g,%g "
               "test/write=%d,%d blend=%d\n",
               s->cleared, p[14], p[5], p[10], p[11], r->sw.depth_near,
@@ -331,8 +359,8 @@ static int m3g_temporal_release(nj_vm *vm, const void *target, nj_surface *hd) {
   if (!s->valid || !s->cleared || !s->curr.count || target != s->target ||
       !hd || !hd->pixels || hd->format != NJ_PIXFMT_ARGB8888 ||
       hd->width != s->ow || hd->height != s->oh || hd->stride != s->ow * 4) {
-    if (getenv("NJ_FSR2_TRACE"))
-      fprintf(stderr,
+    if (m3g_temporal_trace())
+      TEMPORAL_TRACE(
               "FSR2 fallback valid=%d clear=%d draws=%u triangles=%zu\n",
               s->valid, s->cleared, s->draw, s->curr.count);
     s->prev.count = 0;
@@ -364,8 +392,8 @@ static int m3g_temporal_release(nj_vm *vm, const void *target, nj_surface *hd) {
     m3g_temporal_dispose(vm);
     return 0;
   }
-  if (getenv("NJ_FSR2_TRACE"))
-    fprintf(stderr,
+  if (m3g_temporal_trace())
+    TEMPORAL_TRACE(
             "FSR2 dispatched %dx%d -> %dx%d triangles=%zu reset=%d phase=%u\n",
             s->w, s->h, s->ow, s->oh, s->curr.count, f.reset, s->frame);
   temporal_history tmp = s->prev;

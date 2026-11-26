@@ -106,8 +106,11 @@ SOURCES="$(cd "$ROOT" && ls src/core/*.c src/midp/*.c src/gfx/*.c src/zip/*.c)"
 SOURCES="$SOURCES src/runner/nj_run.c src/port/android/nj_port_android.c src/port/common/nj_system_amr.c"
 
 if [ -n "$FSR2_SDK" ]; then
-    if [ "$ABIS" != arm64-v8a ] || [ "$API" -lt 28 ]; then
-        echo "--fsr2-sdk requires --abi arm64-v8a and --api 28 or later" >&2
+    # The prefix's archive is compiled for one architecture; the caller pairs it
+    # with the matching --abi. Releases pair it with arm64-v8a, the emulator and
+    # x86 devices with an x86_64 prefix.
+    if [ "$API" -lt 28 ]; then
+        echo "--fsr2-sdk requires --api 28 or later" >&2
         exit 2
     fi
     if [ ! -f "$FSR2_SDK/include/ffx_fsr2.h" ] || [ ! -f "$FSR2_SDK/lib/libffx_fsr2_vk.a" ]; then

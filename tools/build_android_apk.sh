@@ -9,7 +9,8 @@
 #                                [--no-inflate] [--no-wav] [--no-amr] [--gles2]
 #                                [--vulkan] [--fsr2-sdk PREFIX] [--out DIR]
 #
-# --fsr2-sdk builds an arm64-v8a APK for API 28+ using an Android SDK prefix
+# --fsr2-sdk builds an API 28+ APK with Vulkan FSR2 using an Android SDK prefix
+#               compiled for the requested --abi (arm64-v8a for releases)
 # produced by tools/build_fsr2_sdk.py. It bundles libc++ and both SDK licenses.
 #
 # --opt is the native optimisation level, forwarded to tools/build_android.sh.
@@ -73,7 +74,9 @@ done
 
 if [ -n "$FSR2_SDK" ]; then
     ABIS="${ABIS:-arm64-v8a}"
-    [ "$ABIS" = arm64-v8a ] || { echo "--fsr2-sdk supports arm64-v8a" >&2; exit 2; }
+    # The prefix supplies one architecture's libffx_fsr2_vk.a; the caller pairs
+    # it with the matching --abi (the release arm64 SDK, an x86_64 SDK for the
+    # emulator, ...). Nothing here can check which architecture it holds.
     MIN_API=28
     for package in fsr2 vulkan-headers; do
         notice="$FSR2_SDK/share/licenses/$package/LICENSE.txt"

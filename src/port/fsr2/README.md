@@ -29,6 +29,28 @@ tools/build_android_apk.sh --fsr2-sdk "$work/install" --out build/android-fsr2
 
 The signed debug APK is `build/android-fsr2/nj2me.apk`. This variant targets arm64-v8a with minimum API 28 and includes the native libraries and both SDK notices under `assets/licenses/`. For just the native libraries run `tools/build_android.sh --abi arm64-v8a --api 28 --fsr2-sdk "$work/install"`. For Android NDK CMake builds use `ANDROID_ABI=arm64-v8a`, `ANDROID_PLATFORM=android-28`, `ANDROID_STL=c++_shared`, `NJ_ENABLE_FSR2=ON`, and `NJ_FSR2_SDK_ROOT` pointing at that Android SDK prefix. The device must expose the required Vulkan capabilities for a context to be created.
 
+## Build for Android x86_64
+
+The builder cross-compiles for any Android ABI: pass the matching compiler wrapper and
+archiver. The generated SPIR-V permutation headers are architecture independent, so the
+same GLSL permutation set serves every ABI. For the emulator's x86_64 image with NDK 30:
+
+```sh
+bin="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+work="$PWD/.local-tools/debug-runs/fsr2/x86_64"
+CXX="$bin/x86_64-linux-android28-clang++" AR="$bin/llvm-ar" \
+  python3 tools/build_fsr2_sdk.py --work "$work"
+tools/build_android_apk.sh --abi x86_64 --gles2 --vulkan \
+  --fsr2-sdk "$work/install" --out build/android-fsr2-x86_64
+```
+
+`--fsr2-sdk` pairs the SDK archive with the requested ABI, so the prefix must have been
+built for that ABI at API 28 or newer. The validation image ran with `-gpu host`, which
+exposes Vulkan 1.3 through gfxstream. If the Vulkan renderer cannot initialize, the app
+keeps the selected 2D/GLES2 path and logs the failing stage under the `nj2me` logcat tag.
+On Android, `adb shell setprop debug.nj2me.fsr2_trace 1` logs context, bind and dispatch
+lines for FSR2; desktop builds use `NJ_FSR2_TRACE=1` instead.
+
 ## Frame contract
 
 * Create one context per size and view history. Keep it on one thread. The CPU bridge accepts 32–4096 texels per input axis, with at least one axis of 64 or more for the luminance pyramid. The output may be up to three times the input in each axis (AMD Ultra Performance), within device limits. M3G uses the realized physical sample grid, including SSAA, as the FSR2 output. For example, 2× with SSAA off fits this envelope, while 2× with four-sample SSAA produces a 4× grid and uses native HD geometry followed by the normal SSAA resolve.

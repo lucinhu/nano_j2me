@@ -61,7 +61,7 @@ build-gpu/nj2me --port sdl2 --graphics software --render-scale 2 game.jar
 
 GLES2 默认允许每批面片的绘制矩形最多覆盖 1,048,576 个像素。超过该值的批次由软件按当前内部倍率绘制。《毁灭战士 3》在 240×320、8× 的前四帧均输出 1920×2560。桌面 RTX 5080 Laptop 的 Vulkan 后端接收了其中两批、共 836 个三角形，GLES2 的这两批走软件。对于较小的绘制区域，两个后端都通过了 8× 加四采样的 M3G 测试，128×128 采样图的全部像素与软件参考相同。
 
-Android 的常规包提供软件和 GLES2。arm64 增强包在画面面板增加「Vulkan 3D 面片渲染」，下次启动游戏时尝试启用。如果设备初始化失败，游戏沿用已选的绘制方式。API 36 模拟器已验证回退，Vulkan 面片提交已在桌面 NVIDIA 和 Intel 设备上验证。
+Android 的常规包提供软件和 GLES2。arm64 增强包在画面面板增加「Vulkan 3D 面片渲染」，下次启动游戏时尝试启用；初始化失败时游戏沿用已选的绘制方式，并在 logcat 说明原因。API 36 模拟器（gfxstream Vulkan、直通宿主机 NVIDIA GPU）上已完成 Vulkan 面片提交与 FSR2 时域放大的实际验证，见 [Android Vulkan 与 FSR2 路径验证](notes/2026-11-27-android-vulkan-fsr2.md)。Vulkan 面片提交此前已在桌面 NVIDIA 和 Intel 设备上验证。
 
 ## 1. libretro / RetroArch：用前端 shader（现在就能用，无需改内核）
 
@@ -137,7 +137,7 @@ Android 的常规包提供软件和 GLES2。arm64 增强包在画面面板增加
 
 立方核的 A 参数由原生高分真值扫得：A=0.10 在 2D 文字、斜线和 3D 场景上同时比 Catmull-Rom（A=-0.5）的过冲和旧版 FSR1 的 2× 重建网格更接近原生画面。整数倍率时采样相位均匀（每 s 个输出像素有一个正落在纹素中心），边缘粗细一致，不会出现非整数倍放大的相位抖动；只有 1× 是逐像素复制，2× 以上仍是立方核插值。
 
-桌面默认适配窗口内游戏区域，`--upscale-scale 2` 等显式倍率仍可指定中间输出尺寸。Android 直接绘制到 EGL 窗口。`--fsr2` 则用于提供深度和运动数据的 M3G 绘制，见上面的内部渲染设置。[跨分辨率实测](notes/2026-11-26-fsr-resolution.md)、[立方核重建与原生高分对照](notes/2026-11-27-fsr-cubic-reconstruction.md)、[缩放矩阵、整数倍率与缩小路径](notes/2026-11-27-fsr-scale-matrix.md)
+桌面默认适配窗口内游戏区域，`--upscale-scale 2` 等显式倍率仍可指定中间输出尺寸。Android 直接绘制到 EGL 窗口。`--fsr2` 则用于提供深度和运动数据的 M3G 绘制，见上面的内部渲染设置。[跨分辨率实测](notes/2026-11-26-fsr-resolution.md)、[立方核重建与原生高分对照](notes/2026-11-27-fsr-cubic-reconstruction.md)、[缩放矩阵、整数倍率与缩小路径](notes/2026-11-27-fsr-scale-matrix.md)、[Android Vulkan 与 FSR2 路径验证](notes/2026-11-27-android-vulkan-fsr2.md)
 
 ### Android 版：软件呈现滤镜（已实现，0.5.43+）
 

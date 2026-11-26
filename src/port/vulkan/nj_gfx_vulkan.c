@@ -2,6 +2,12 @@
  * storage. The sole caller-visible commit follows fence wait and invalidation. */
 #include "nj2me/nj_gfx_vulkan.h"
 #include <vulkan/vulkan.h>
+#if defined(__ANDROID__)
+#include <android/log.h>
+#define VK_LOG(...) __android_log_print(ANDROID_LOG_INFO, "nj2me", __VA_ARGS__)
+#else
+#define VK_LOG(...) ((void)0)
+#endif
 #include <math.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -204,6 +210,7 @@ static int choose_gpu(nj_vk_renderer *r) {
     VkPhysicalDevice devices[16];
     uint32_t n = 16, i;
     VkResult result = vkEnumeratePhysicalDevices(r->instance, &n, devices);
+    VK_LOG("vulkan: enumerate result=%d count=%u", (int)result, n);
     if (result != VK_SUCCESS && result != VK_INCOMPLETE)
         return 0;
     for (i = 0; i < n; ++i) {
@@ -211,11 +218,18 @@ static int choose_gpu(nj_vk_renderer *r) {
         VkFormatProperties format;
         uint32_t f = 32, j;
         vkGetPhysicalDeviceProperties(devices[i], &r->properties);
-        if (r->properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_CPU)
+        VK_LOG("vulkan: device %u %s type=%d api=%u.%u", i, r->properties.deviceName,
+               (int)r->properties.deviceType, r->properties.apiVersion >> 22,
+               (r->properties.apiVersion >> 12) & 0x3ffu);
+        if (r->properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_CPU) {
+            VK_LOG("vulkan: device %u skipped, cpu", i);
             continue;
+        }
         vkGetPhysicalDeviceFormatProperties(devices[i], formats[0], &format);
-        if (!(format.optimalTilingFeatures & VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BLEND_BIT))
+        if (!(format.optimalTilingFeatures & VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BLEND_BIT)) {
+            VK_LOG("vulkan: device %u skipped, no blend on bgra8", i);
             continue;
+        }
         r->max_image_width = r->max_image_height = UINT32_MAX;
         for (j = 0; j < 2; ++j) {
             VkImageFormatProperties props;
@@ -228,8 +242,10 @@ static int choose_gpu(nj_vk_renderer *r) {
             if (props.maxExtent.height < r->max_image_height)
                 r->max_image_height = props.maxExtent.height;
         }
-        if (j != 2)
+        if (j != 2) {
+            VK_LOG("vulkan: device %u skipped, formats or usages unsupported", i);
             continue;
+        }
         vkGetPhysicalDeviceQueueFamilyProperties(devices[i], &f, families);
         for (j = 0; j < f; ++j)
             if (families[j].queueFlags & VK_QUEUE_GRAPHICS_BIT) {
@@ -238,6 +254,7 @@ static int choose_gpu(nj_vk_renderer *r) {
                 vkGetPhysicalDeviceMemoryProperties(r->gpu, &r->memory);
                 return 1;
             }
+        VK_LOG("vulkan: device %u skipped, no graphics queue", i);
     }
     return 0;
 }
@@ -291,6 +308,7 @@ static int create_pass(nj_vk_renderer *r) {
 }
 nj_vk_renderer *nj_vk_renderer_create(void) {
     nj_vk_renderer *r = calloc(1, sizeof *r);
+    VkApplicationInfo app_info = VK_INIT(APPLICATION_INFO);
     VkInstanceCreateInfo instance = VK_INIT(INSTANCE_CREATE_INFO);
     VkDeviceQueueCreateInfo queue = VK_INIT(DEVICE_QUEUE_CREATE_INFO);
     VkDeviceCreateInfo dev = VK_INIT(DEVICE_CREATE_INFO);
@@ -307,55 +325,90 @@ nj_vk_renderer *nj_vk_renderer_create(void) {
     VkDescriptorPoolCreateInfo descriptors = VK_INIT(DESCRIPTOR_POOL_CREATE_INFO);
     VkDescriptorSetAllocateInfo set = VK_INIT(DESCRIPTOR_SET_ALLOCATE_INFO);
     float priority = 1;
+    VkResult stage = VK_SUCCESS;
+    const char *stage_name = "instance";
     if (!r)
         return NULL;
-    if (vkCreateInstance(&instance, NULL, &r->instance) != VK_SUCCESS || !choose_gpu(r))
+    /* A NULL pApplicationInfo leaves apiVersion 0; some Android Vulkan HALs (the
+       emulator's gfxstream one) then enumerate no physical devices at all. */
+    app_info.apiVersion = VK_API_VERSION_1_0;
+    app_info.pApplicationName = "nano_j2me";
+    app_info.applicationVersion = 1;
+    app_info.pEngineName = "nano_j2me";
+    app_info.engineVersion = 1;
+    instance.pApplicationInfo = &app_info;
+    stage = vkCreateInstance(&instance, NULL, &r->instance);
+    if (stage != VK_SUCCESS) {
+        VK_LOG("vulkan: vkCreateInstance failed (%d)", (int)stage);
+        goto fail;
+    }
+    stage_name = "physical device";
+    if (!choose_gpu(r))
         goto fail;
     queue.queueFamilyIndex = r->family;
     queue.queueCount = 1;
     queue.pQueuePriorities = &priority;
     dev.queueCreateInfoCount = 1;
     dev.pQueueCreateInfos = &queue;
-    if (vkCreateDevice(r->gpu, &dev, NULL, &r->dev) != VK_SUCCESS)
+    stage_name = "device";
+    if ((stage = vkCreateDevice(r->gpu, &dev, NULL, &r->dev)) != VK_SUCCESS)
         goto fail;
     vkGetDeviceQueue(r->dev, r->family, 0, &r->queue);
     pool.queueFamilyIndex = r->family;
-    if (vkCreateCommandPool(r->dev, &pool, NULL, &r->pool) != VK_SUCCESS)
+    stage_name = "command pool";
+    if ((stage = vkCreateCommandPool(r->dev, &pool, NULL, &r->pool)) != VK_SUCCESS)
         goto fail;
     cmd.commandPool = r->pool;
     cmd.commandBufferCount = 1;
-    if (vkAllocateCommandBuffers(r->dev, &cmd, &r->cmd) != VK_SUCCESS ||
-        vkCreateFence(r->dev, &fence, NULL, &r->fence) != VK_SUCCESS || !create_pass(r))
+    stage_name = "command buffer";
+    stage = vkAllocateCommandBuffers(r->dev, &cmd, &r->cmd);
+    if (stage != VK_SUCCESS)
         goto fail;
+    stage_name = "fence";
+    if ((stage = vkCreateFence(r->dev, &fence, NULL, &r->fence)) != VK_SUCCESS)
+        goto fail;
+    stage_name = "render pass";
+    if (!create_pass(r)) {
+        stage = VK_ERROR_INITIALIZATION_FAILED;
+        goto fail;
+    }
     shader.codeSize = sizeof tri_vert;
     shader.pCode = tri_vert;
-    if (vkCreateShaderModule(r->dev, &shader, NULL, &r->vs) != VK_SUCCESS)
+    stage_name = "vertex module";
+    if ((stage = vkCreateShaderModule(r->dev, &shader, NULL, &r->vs)) != VK_SUCCESS)
         goto fail;
     shader.codeSize = sizeof tri_frag;
     shader.pCode = tri_frag;
-    if (vkCreateShaderModule(r->dev, &shader, NULL, &r->fs) != VK_SUCCESS)
+    stage_name = "fragment module";
+    if ((stage = vkCreateShaderModule(r->dev, &shader, NULL, &r->fs)) != VK_SUCCESS)
         goto fail;
     set_layout.bindingCount = 1;
     set_layout.pBindings = &binding;
-    if (vkCreateDescriptorSetLayout(r->dev, &set_layout, NULL, &r->set_layout) != VK_SUCCESS)
+    stage_name = "descriptor layout";
+    if ((stage = vkCreateDescriptorSetLayout(r->dev, &set_layout, NULL, &r->set_layout)) != VK_SUCCESS)
         goto fail;
     layout.setLayoutCount = 1;
     layout.pSetLayouts = &r->set_layout;
     layout.pushConstantRangeCount = 1;
     layout.pPushConstantRanges = &range;
-    if (vkCreatePipelineLayout(r->dev, &layout, NULL, &r->layout) != VK_SUCCESS)
+    stage_name = "pipeline layout";
+    if ((stage = vkCreatePipelineLayout(r->dev, &layout, NULL, &r->layout)) != VK_SUCCESS)
         goto fail;
     descriptors.maxSets = descriptors.poolSizeCount = 1;
     descriptors.pPoolSizes = &size;
-    if (vkCreateDescriptorPool(r->dev, &descriptors, NULL, &r->descriptors) != VK_SUCCESS)
+    stage_name = "descriptor pool";
+    if ((stage = vkCreateDescriptorPool(r->dev, &descriptors, NULL, &r->descriptors)) != VK_SUCCESS)
         goto fail;
     set.descriptorPool = r->descriptors;
     set.descriptorSetCount = 1;
     set.pSetLayouts = &r->set_layout;
-    if (vkAllocateDescriptorSets(r->dev, &set, &r->set) != VK_SUCCESS)
+    stage_name = "descriptor set";
+    if ((stage = vkAllocateDescriptorSets(r->dev, &set, &r->set)) != VK_SUCCESS)
         goto fail;
+    VK_LOG("vulkan: renderer ready on %s", r->properties.deviceName);
     return r;
 fail:
+    VK_LOG("vulkan: %s setup failed (%d)", stage_name, (int)stage);
     nj_vk_renderer_destroy(r);
     return NULL;
 }
