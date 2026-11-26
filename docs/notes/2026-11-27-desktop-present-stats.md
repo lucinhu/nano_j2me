@@ -51,9 +51,9 @@ SDL_VIDEODRIVER=offscreen NJ_SDL2_GFX=gles2 NJ_GL_PRESENT=5 NJ_PRESENT_STATS=1 \
 
 ## 三、验证
 
-* 两组窗口都能在关闭 `NJ_PRESENT_STATS` 时不输出任何日志；打开后每 120 帧
-  稳定输出两行，模式/尺寸变化会重新开窗（窗口自适应时观察到了
-  `960x1280` → `551x751` 的重开）。
+* 不设 `NJ_PRESENT_STATS` 时同一回放不输出任何 `present stats` 行；设置后每
+  120 帧稳定输出两行。窗口按“模式 + 可绘制区尺寸”分组，尺寸或模式变化会重新
+  开窗（本轮每次进程固定窗口尺寸，未在单进程内跨尺寸采样）。
 * `mode 0`（不设 `NJ_GL_PRESENT`）与 `mode 5`（`NJ_GL_PRESENT=5`）两条路径都
   能给出数字，后者与第 5 轮手工计时（8× → 960×1280 median 4.268 ms）在
   0.1 ms 量级一致。
