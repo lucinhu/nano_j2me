@@ -1416,14 +1416,8 @@ nj_status nj_interp_run(nj_vm *vm, nj_thread *th, int stop_depth)
      * demonstrated - there is none to show on either instrument.
      */
 #if NJ_ENABLE_JIT && NJ_JIT_HOST_SUPPORTED
-    /*
-     * Cache the frame's conservative entry mask and the preceding opcode's
-     * boundary flag. Refresh on frame changes and activation/quantum resume.
-     * A stale mask can only defer native execution until the next refresh;
-     * nj_jit_probe still validates every admitted entry and its guards.
-     */
+    /* Refresh the conservative PC mask when execution changes frames. */
     nj_u4 jit_probe_mask = nj_jit_method_probe_mask(vm, m);
-    int jit_probe_next = jit_probe_mask != 0;
 #endif
 
     for (;;) {
@@ -1431,12 +1425,10 @@ nj_status nj_interp_run(nj_vm *vm, nj_thread *th, int stop_depth)
         nj_u4 op_pc;
 
     /*
-     * The fetch is written ONCE and used by both paths: L_slow for the top of
-     * the loop, and DISPATCH() for a handler that has been converted.  Opcodes
-     * without a label reach the switch through L_haveop, which sits just after
-     * this fetch - never in front of a second one.  Two copies of the fetch
-     * would be two chances to forget a counter, and it was exactly the second
-     * copy that misaligned the threaded interpreter for months.
+     * NJ_FETCH_OP is shared by the loop entry, threaded handlers and the
+     * probe path. Opcodes without a label reach the switch through L_haveop
+     * with their opcode already fetched. A second fetch there would skip
+     * the opcode and dispatch its first operand instead.
      */
     /*
      * Computed goto is a GCC/Clang extension, and this project builds for
@@ -1739,35 +1731,21 @@ nj_status nj_interp_run(nj_vm *vm, nj_thread *th, int stop_depth)
 /* Probe frame entries and potential block boundaries. During allocation
  * backoff the mask admits only PCs that may have surviving native code.
  * Native exits probe inside NJ_TRY_JIT, including capacity-split continuations. */
-#define NJ_JIT_REFRESH() do {                                         \
-        jit_probe_mask = nj_jit_method_probe_mask(vm, m);               \
-        jit_probe_next = jit_probe_mask != 0;                          \
-    } while (0)
-#if NJ_ENABLE_SUPERINSTR
-/* Fused branches can jump to the method entry without dispatching the branch
- * opcode. Preserve entry probing for that path too. */
-#define NJ_JIT_AT_BOUNDARY() (jit_probe_next || pc == 0u)
-#else
-#define NJ_JIT_AT_BOUNDARY() jit_probe_next
-#endif
-#define NJ_JIT_PROBE_GATE() do {                                      \
-        if (NJ_JIT_AT_BOUNDARY() &&                                   \
-            (jit_probe_mask & ((nj_u4)1u << (pc & 31u)))) {             \
-            NJ_TRY_JIT();                                             \
-        }                                                             \
-    } while (0)
-#define NJ_JIT_TRACK_OP(o) do {                                       \
-        jit_probe_next = jit_probe_mask != 0 &&                        \
-                         nj_jit_probe_boundary(o);                    \
+#define NJ_JIT_REFRESH() (jit_probe_mask = nj_jit_method_probe_mask(vm, m))
+/* op still names the handler we are leaving. Test it before fetching the
+ * successor, so normal dispatch carries no per-opcode probe state. Include
+ * method entry for branches folded into a load/compare handler. */
+#define NJ_JIT_AT_BOUNDARY()                                            \
+    (jit_probe_mask && (pc == 0u || nj_jit_probe_boundary(op)))
+#define NJ_PROBE_PC() do {                                              \
+        if (jit_probe_mask & ((nj_u4)1u << (pc & 31u))) NJ_TRY_JIT();   \
     } while (0)
 #else
 #define NJ_JIT_REFRESH() ((void)0)
-#define NJ_TRY_JIT() ((void)0)
-#define NJ_JIT_PROBE_GATE() ((void)0)
-#define NJ_JIT_TRACK_OP(o) ((void)(o))
+#define NJ_JIT_AT_BOUNDARY() 0
+#define NJ_PROBE_PC() ((void)0)
 #endif
 #define NJ_FETCH_OP() do {                                             \
-        NJ_JIT_PROBE_GATE();                                           \
         if (pc >= code_len) {                                          \
             THROW("java/lang/VerifyError",                            \
                   "code runs past the end of the method");            \
@@ -1795,7 +1773,6 @@ nj_status nj_interp_run(nj_vm *vm, nj_thread *th, int stop_depth)
         op_pc = pc;                                                    \
         op = code[pc++];                                               \
         _Pragma("GCC diagnostic pop")                                  \
-        NJ_JIT_TRACK_OP(op);                                           \
         (void)op_pc;                                                   \
         insns_++;                                                      \
     } while (0)
@@ -1806,27 +1783,28 @@ nj_status nj_interp_run(nj_vm *vm, nj_thread *th, int stop_depth)
      * the table from ITS OWN site, which is the point of the exercise.
      */
 #if NJ_THREADED_DISPATCH
-#define DISPATCH() do {                                                \
-        CHECK_QUANTUM();                                               \
-        NJ_FETCH_OP();                                                 \
+#define NJ_GOTO_HANDLER() do {                                         \
         _Pragma("GCC diagnostic push")                                 \
-        _Pragma("GCC diagnostic ignored \"-Wpedantic\"")                \
+        _Pragma("GCC diagnostic ignored \"-Wpedantic\"")               \
         goto *nj_dispatch[op];                                         \
         _Pragma("GCC diagnostic pop")                                  \
     } while (0)
+#define DISPATCH() do {                                                \
+        CHECK_QUANTUM();                                               \
+        if (NJ_JIT_AT_BOUNDARY()) goto L_probe;                        \
+        NJ_FETCH_OP();                                                 \
+        NJ_GOTO_HANDLER();                                             \
+    } while (0)
 #else
-/* Converted handlers bypass the switch tail, so they must poll here too. */
-#define DISPATCH() { CHECK_QUANTUM(); continue; }
+/* The portable loop can share the fetch, including its trace hook. */
+#define DISPATCH() { CHECK_QUANTUM();                                  \
+        if (!NJ_JIT_AT_BOUNDARY()) goto L_fetch;                        \
+        continue; }
 #endif
-
-    /*
-     * The portable build re-enters the loop through this label; the threaded
-     * build has no label because every handler that can reach the top of the
-     * loop dispatches through the table itself, so only a fall-through needs
-     * the fetch below.
-     */
+        /* Frame entry, exception recovery and switch fall-through. */
+        NJ_PROBE_PC();
 #if !NJ_THREADED_DISPATCH
-    L_slow:
+    L_fetch:
 #endif
         NJ_FETCH_OP();
 #if NJ_ENABLE_DEBUG
@@ -1834,18 +1812,12 @@ nj_status nj_interp_run(nj_vm *vm, nj_thread *th, int stop_depth)
             nj_trace_step(vm, m, pc, (nj_u4)(sp - stack), locals, stack, sp);
         }
 #endif
-
 #if NJ_THREADED_DISPATCH
-    /*
-     * A converted handler's DISPATCH() has already fetched the opcode before
-     * branching here, so this entry point must NOT fetch a second time.  It
-     * used to: the table sent unconverted opcodes to L_slow, which refetched,
-     * so the first converted-to-unconverted transition consumed the byte after
-     * the opcode as if it were the opcode.  keysdemo's
-     * `invokespecial Canvas.<init>` (converted) followed by `aload_0`
-     * (unconverted) resumed one byte late and produced
-     * "receiver is not an object reference".
-     */
+        goto L_haveop;
+    L_probe:
+        NJ_PROBE_PC();
+        NJ_FETCH_OP();
+        NJ_GOTO_HANDLER();
     L_haveop:
 #endif
         switch (op) {
