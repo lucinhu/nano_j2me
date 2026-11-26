@@ -1751,8 +1751,8 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
                 "GPU 呈现时叠加扫描线；只作用于窗口显示",
                 "GPU 呈现时叠加 LCD 网格；只作用于窗口显示",
                 "GPU 呈现时叠加 CRT 扫描线/荫罩效果；只作用于窗口显示",
-                "放大时使用 FSR1 重建边缘并锐化，等大时保留原像素，缩小时按覆盖面积采样",
-                "双三次（Catmull-Rom）插值；文字与像素画更自然，光晕少" };
+                "放大时用立方核重建原始像素并锐化，等大时保留原像素，缩小时按覆盖面积采样",
+                "立方核插值、不做锐化；比 FSR1 柔和，无锐化光晕" };
         int checked = 0;
         for (int i = 0; i < modes.length; i++) {
             if (modes[i] == (glPresent != 0 ? glPresentMode : -1)) {

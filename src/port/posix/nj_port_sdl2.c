@@ -2563,7 +2563,7 @@ static void sdl_text_input(void *ud, const nj_text_input_state *state)
  *   scanline                   - darken every second device row
  *   lcd                        - scanline plus RGB stripe gaps
  *   crt                        - stronger scanline and stripe shadow mask
- * The GLES2 shader pipeline (FSR1 EASU/RCAS) arrives with the EGL
+ * The GLES2 shader pipeline (FSR1 cubic reconstruction/RCAS) arrives with the EGL
  * presentation path; until then these cover the "filters" half of the
  * presentation goal without changing the default look.
  */

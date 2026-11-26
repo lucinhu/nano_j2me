@@ -824,8 +824,31 @@ static void test_present_spatial(nj_gles2 *state)
     CHECK(memcmp(screen,result,27*21*4) != 0);
     nj_gles2_present_set_sharp(state, 0.87055056f);
 
-    /* At 8x and beyond the average includes texels far outside a 12-tap
-     * EASU neighbourhood. A narrow bright stripe catches sparse subsampling. */
+    /* FSR1 reconstructs with the cubic kernel and sharpens with RCAS at every
+     * upscale, so it must differ from the plain cubic mode while every shell
+     * stays geometry-identical to it. */
+    {
+        enum { BIG = 136*104*4 };
+        static nj_u1 cubic[BIG], fsr[BIG];
+        static const int large[][2] = {{W*3,H*3}, {W*5,H*4}, {W*8,H*8}};
+        for (unsigned n = 0; n < sizeof large/sizeof large[0]; ++n) {
+            int w = large[n][0], h = large[n][1];
+            snprintf(scenario, sizeof scenario, "FSR1 %dx%d sharpens the cubic reconstruction", w,h);
+            CHECK(w <= 136 && h <= 104);
+            CHECK(nj_gles2_present(state, &src, 5, w, h, fsr));
+            CHECK(nj_gles2_present(state, &src, 6, w, h, cubic));
+            CHECK(memcmp(fsr, cubic, (size_t)w*h*4) != 0);
+            CHECK(fsr[3] == 255 && cubic[3] == 255);
+        }
+        snprintf(scenario, sizeof scenario, "FSR1 sharpening also applies below 2x");
+        CHECK(nj_gles2_present(state, &src, 5, 27, 21, result));
+        CHECK(nj_gles2_present(state, &src, 6, 27, 21, screen));
+        CHECK(memcmp(result, screen, 27*21*4) != 0);
+    }
+
+    /* At 8x and beyond the exact area average includes source texels far
+     * outside any single reconstruction footprint. A narrow bright stripe
+     * catches sparse subsampling. */
     {
         nj_u4 stripe[128*8];
         src.width = 128; src.height = 8; src.stride = 128*4; src.pixels = stripe;

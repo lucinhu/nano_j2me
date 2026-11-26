@@ -59,3 +59,5 @@ RTX 5080，SDL offscreen 窗口和 GLES2 滤镜。每种组合预热 8 帧，测
 EGL_PLATFORM=surfaceless ctest --test-dir build-fsr2 \
   -R '^(test_gfx_gles2|test_sdl2_dpi|test_fsr2|test_m3g_temporal)$' --output-on-failure
 ```
+
+> 0.5.51 之后 FSR1 的放大路径已替换为立方核重建 + RCAS，见 [2026-11-27 笔记](2026-11-27-fsr-cubic-reconstruction.md)；本文的 FSR1 指标对应 0.5.51 的 EASU 实现。

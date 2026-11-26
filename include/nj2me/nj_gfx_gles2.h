@@ -82,7 +82,8 @@ int nj_gles2_frame_active(const void *ud);
 
 /* Offscreen presentation shader pass (goal A: GL presentation layer).
  * Modes: 0 nearest, 1 sharp-bilinear, 2 scanline, 3 LCD grid, 4 CRT,
- * 5 FSR1 (EASU edge-adaptive upscale + RCAS sharpening), 6 bicubic.
+ * 5 FSR1 (cubic reconstruction of the original texels + RCAS sharpening),
+ * 6 bicubic (the same cubic reconstruction without sharpening).
  * Input and offscreen textures are independently capped at 16M pixels and
  * the device texture size. Tightly packed little-endian ARGB8888 uploads
  * directly. All filters ignore input alpha and output opaque pixels.
