@@ -165,6 +165,10 @@ typedef struct sdl2_gl_binding {
     SDL_GLContext context;
 } sdl2_gl_binding;
 
+/* Android prints one "present stats" pair per 120 presented frames; the
+ * desktop window matches it so the numbers are read the same way. */
+#define NJ_SDL2_PRESENT_STATS_FRAMES 120
+
 typedef struct sdl2_gles2 {
     nj_gfx_accel callbacks;
     nj_gl_api gl; /* loaded only with this instance's dedicated context current */
@@ -195,7 +199,76 @@ typedef struct sdl2_gles2 {
     int present_ok;          /* this frame has a shader-presented texture ready */
     int present_out_w, present_out_h;
     SDL_Texture *present_texture;
+    /* NJ_PRESENT_STATS: per-frame draw/swap timings, printed in the same two
+     * lines as the Android port so a desktop replay and a phone can be
+     * compared without a hand-rolled harness.  A window restarts whenever the
+     * requested mode or the drawable size changes. */
+    int stats_probed, stats_wanted;
+    unsigned int stats_frames;
+    int stats_mode, stats_w, stats_h;
+    unsigned long long stats_draw[NJ_SDL2_PRESENT_STATS_FRAMES];
+    unsigned long long stats_swap[NJ_SDL2_PRESENT_STATS_FRAMES];
 } sdl2_gles2;
+
+static int present_stats_cmp(const void *a, const void *b)
+{
+    unsigned long long x = *(const unsigned long long *)a;
+    unsigned long long y = *(const unsigned long long *)b;
+    return x < y ? -1 : (x > y ? 1 : 0);
+}
+
+static unsigned long long present_stats_ns(Uint64 ticks)
+{
+    return (unsigned long long)((double)ticks * 1e9 /
+                                (double)SDL_GetPerformanceFrequency());
+}
+
+/* NJ_PRESENT_STATS=1 turns the measurement on.  It is read once: the counter
+ * reading and the percentile work must never appear on the hot path unless the
+ * person asked for numbers. */
+static void present_stats_probe(sdl2_gles2 *s)
+{
+    const char *v;
+    if (s->stats_probed) return;
+    s->stats_probed = 1;
+    v = getenv("NJ_PRESENT_STATS");
+    s->stats_wanted = v && *v && *v != '0';
+}
+
+static void present_stats_record(sdl2_gles2 *s, int mode, int w, int h,
+                                 unsigned long long draw_ns,
+                                 unsigned long long swap_ns)
+{
+    unsigned long long sorted[NJ_SDL2_PRESENT_STATS_FRAMES];
+    if (!s->stats_wanted || w <= 0 || h <= 0) return;
+    if (s->stats_frames == NJ_SDL2_PRESENT_STATS_FRAMES || s->stats_mode != mode ||
+        s->stats_w != w || s->stats_h != h) {
+        s->stats_frames = 0;
+        s->stats_mode = mode;
+        s->stats_w = w;
+        s->stats_h = h;
+    }
+    s->stats_draw[s->stats_frames] = draw_ns;
+    s->stats_swap[s->stats_frames] = swap_ns;
+    if (++s->stats_frames < NJ_SDL2_PRESENT_STATS_FRAMES) return;
+    memcpy(sorted, s->stats_draw, sizeof sorted);
+    qsort(sorted, NJ_SDL2_PRESENT_STATS_FRAMES, sizeof sorted[0], present_stats_cmp);
+    fprintf(stderr,
+            "present stats: mode=%d %dx%d frames=%u draw ms min=%.3f "
+            "median=%.3f p95=%.3f\n",
+            s->stats_mode, s->stats_w, s->stats_h,
+            (unsigned)NJ_SDL2_PRESENT_STATS_FRAMES,
+            (double)sorted[0] / 1e6,
+            (double)sorted[NJ_SDL2_PRESENT_STATS_FRAMES / 2] / 1e6,
+            (double)sorted[(NJ_SDL2_PRESENT_STATS_FRAMES * 95) / 100] / 1e6);
+    memcpy(sorted, s->stats_swap, sizeof sorted);
+    qsort(sorted, NJ_SDL2_PRESENT_STATS_FRAMES, sizeof sorted[0], present_stats_cmp);
+    fprintf(stderr, "present stats: swap ms min=%.3f median=%.3f p95=%.3f\n",
+            (double)sorted[0] / 1e6,
+            (double)sorted[NJ_SDL2_PRESENT_STATS_FRAMES / 2] / 1e6,
+            (double)sorted[(NJ_SDL2_PRESENT_STATS_FRAMES * 95) / 100] / 1e6);
+    s->stats_frames = 0;
+}
 
 static sdl2_gl_binding sdl2_gl_save(void)
 {
@@ -2736,6 +2809,11 @@ static void sdl_display_frame(void *ud, int x, int y, int w, int h, const nj_sur
     sdl_state *s = SS(ud);
     SDL_Rect r;
     SDL_Event ev;
+#if NJ_SDL2_GLES2
+    unsigned long long stats_draw = 0;
+    Uint64 stats_start = 0;
+    int stats_timed = 0;
+#endif
 
     /* Pump the window system here: present() is called exactly once per frame
      * and is the natural place to do it, whatever the port. */
@@ -3241,6 +3319,9 @@ static void sdl_display_frame(void *ud, int x, int y, int w, int h, const nj_sur
     /* A resize/fullscreen event above may have changed the drawable. */
     sdl_layout(s);
 #if NJ_SDL2_GLES2
+    present_stats_probe(&s->gfx);
+    stats_timed = s->gfx.stats_wanted;
+    if (stats_timed) stats_start = SDL_GetPerformanceCounter();
     sdl2_gles2_flush_frame(&s->gfx);
     sdl2_gles2_yield(&s->gfx);
     sdl2_gles2_present_frame(&s->gfx, s->renderer, hd ? hd->width : s->width,
@@ -3284,6 +3365,11 @@ static void sdl_display_frame(void *ud, int x, int y, int w, int h, const nj_sur
     sdl_draw_filter(s);
     sdl_draw_keys(s);
     sdl_draw_speed(s);
+#if NJ_SDL2_GLES2
+    if (stats_timed) {
+        stats_draw = present_stats_ns(SDL_GetPerformanceCounter() - stats_start);
+    }
+#endif
 
     /*
      * Optional proof-of-presentation capture.
@@ -3342,7 +3428,20 @@ static void sdl_display_frame(void *ud, int x, int y, int w, int h, const nj_sur
     }
 capture_done: ;
 
-    SDL_RenderPresent(s->renderer);
+    {
+#if NJ_SDL2_GLES2
+        Uint64 swap_start = stats_timed ? SDL_GetPerformanceCounter() : 0;
+#endif
+        SDL_RenderPresent(s->renderer);
+#if NJ_SDL2_GLES2
+        if (stats_timed) {
+            present_stats_record(&s->gfx, s->gfx.present_mode, s->dpi.output_w,
+                                 s->dpi.output_h, stats_draw,
+                                 present_stats_ns(SDL_GetPerformanceCounter() -
+                                                  swap_start));
+        }
+#endif
+    }
 }
 
 static void sdl_display_present(void *ud, int x, int y, int w, int h)

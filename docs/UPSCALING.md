@@ -139,7 +139,7 @@ Android 的常规包提供软件和 GLES2。arm64 增强包在画面面板增加
 
 立方核的 A 参数由原生高分真值扫得：A=0.10 在 2D 文字、斜线和 3D 场景上同时比 Catmull-Rom（A=-0.5）的过冲和旧版 FSR1 的 2× 重建网格更接近原生画面。整数倍率时采样相位均匀（每 s 个输出像素有一个正落在纹素中心），边缘粗细一致，不会出现非整数倍放大的相位抖动；只有 1× 是逐像素复制，2× 以上仍是立方核插值。
 
-桌面默认适配窗口内游戏区域，`--upscale-scale 2` 等显式倍率仍可指定中间输出尺寸。Android 直接绘制到 EGL 窗口。`--fsr2` 则用于提供深度和运动数据的 M3G 绘制，见上面的内部渲染设置。[跨分辨率实测](notes/2026-11-26-fsr-resolution.md)、[立方核重建与原生高分对照](notes/2026-11-27-fsr-cubic-reconstruction.md)、[缩放矩阵、整数倍率与缩小路径](notes/2026-11-27-fsr-scale-matrix.md)、[FSR2 画质对照与回读耗时](notes/2026-11-27-fsr2-accuracy-and-readback.md)、[Android Vulkan 与 FSR2 路径验证](notes/2026-11-27-android-vulkan-fsr2.md)、[FSR1 锐度灵敏度与 4×/8× 呈现耗时](notes/2026-11-27-fsr1-sharpness-and-present-cost.md)
+桌面默认适配窗口内游戏区域，`--upscale-scale 2` 等显式倍率仍可指定中间输出尺寸。Android 直接绘制到 EGL 窗口。`--fsr2` 则用于提供深度和运动数据的 M3G 绘制，见上面的内部渲染设置。[跨分辨率实测](notes/2026-11-26-fsr-resolution.md)、[立方核重建与原生高分对照](notes/2026-11-27-fsr-cubic-reconstruction.md)、[缩放矩阵、整数倍率与缩小路径](notes/2026-11-27-fsr-scale-matrix.md)、[FSR2 画质对照与回读耗时](notes/2026-11-27-fsr2-accuracy-and-readback.md)、[Android Vulkan 与 FSR2 路径验证](notes/2026-11-27-android-vulkan-fsr2.md)、[FSR1 锐度灵敏度与 4×/8× 呈现耗时](notes/2026-11-27-fsr1-sharpness-and-present-cost.md)、[桌面 present stats](notes/2026-11-27-desktop-present-stats.md)
 
 ### Android 版：软件呈现滤镜（已实现，0.5.43+）
 
@@ -153,6 +153,13 @@ SharedPreferences（`present_filter`），通过 `nativeSetPresentFilter(mode)` 
 每秒采样一次，每 120 帧把绘制（make-current、上传、滤镜）与交换（`eglSwapBuffers`）的时间
 按 min/median/p95 写进 logcat，清掉属性即停。模拟器实测数字见
 [缩放矩阵、整数倍率与缩小路径](notes/2026-11-27-fsr-scale-matrix.md)。
+
+桌面端有同一套开关：`NJ_PRESENT_STATS=1`，每 120 帧向 stderr 打印
+`present stats: mode=… WxH frames=120 draw ms min/median/p95` 与对应的 `swap`
+一行，字段含义与 Android 相同，可直接比较同一帧在不同窗口尺寸下的呈现成本。
+8× 高清镜像（20 MB）放大到 960×1280 的实测 draw 中位数约 4.2 ms，几乎全部是
+纹理上传，说明呈现成本以字节数为准；详见
+[桌面 present stats](notes/2026-11-27-desktop-present-stats.md)。
 
 **模拟器验证（2026-11-25，API 36 AVD，x86_64 APK）**：LoopDemo 游戏画面在
 关闭滤镜时为基准；切换「扫描线」后画面区域 614,784 / 2,592,000 像素变化
