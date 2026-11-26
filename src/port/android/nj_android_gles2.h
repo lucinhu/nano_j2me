@@ -30,6 +30,22 @@ typedef struct nj_android_gles2_info {
 #error "NJ_ANDROID_GLES2 requires NJ_ENABLE_GFX_ACCEL=1"
 #endif
 
+/* Opt-in present-cost statistics: the buffers live in the heap state because
+ * the shared object is built with zero writable static data (data+bss=0, see
+ * tools/build_android.sh). nj_android_gles2_present() samples the
+ * debug.nj2me.present_stats property once a second and logs min/median/p95 of
+ * the draw and of the swap every NJ_ANDROID_PRESENT_STATS frames. */
+#define NJ_ANDROID_PRESENT_STATS 120
+typedef struct nj_android_gles2_present_stats {
+    int enabled;     /* last sampled value of the debug property */
+    int refresh;     /* frames left before the property is sampled again */
+    unsigned frames; /* samples held in draw/swap */
+    int mode;        /* present mode the samples belong to */
+    int w, h;        /* window size the samples belong to */
+    unsigned long long draw[NJ_ANDROID_PRESENT_STATS];
+    unsigned long long swap[NJ_ANDROID_PRESENT_STATS];
+} nj_android_gles2_present_stats;
+
 /* Embedded in android_state: port/Graphics userdata never points at a backend
  * that can be destroyed at run exit. The mutex also serializes late/foreign
  * callbacks, which decline without touching EGL or GL. */
@@ -66,6 +82,7 @@ typedef struct nj_android_gles2 {
     float applied_sharp;           /* zero until first FSR1 draw on this backend */
     unsigned int (*reset_status)(void);
     nj_gles2_stats stats;
+    nj_android_gles2_present_stats present_stats;
     /* One-shot presentation debug dump: when debug.nj2me.gldump names a path
      * the first presented on-screen frame is read back and written as a PPM. */
     char dump_path[256];

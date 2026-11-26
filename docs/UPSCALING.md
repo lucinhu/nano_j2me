@@ -137,7 +137,7 @@ Android 的常规包提供软件和 GLES2。arm64 增强包在画面面板增加
 
 立方核的 A 参数由原生高分真值扫得：A=0.10 在 2D 文字、斜线和 3D 场景上同时比 Catmull-Rom（A=-0.5）的过冲和旧版 FSR1 的 2× 重建网格更接近原生画面。整数倍率时采样相位均匀（每 s 个输出像素有一个正落在纹素中心），边缘粗细一致，不会出现非整数倍放大的相位抖动；只有 1× 是逐像素复制，2× 以上仍是立方核插值。
 
-桌面默认适配窗口内游戏区域，`--upscale-scale 2` 等显式倍率仍可指定中间输出尺寸。Android 直接绘制到 EGL 窗口。`--fsr2` 则用于提供深度和运动数据的 M3G 绘制，见上面的内部渲染设置。[跨分辨率实测](notes/2026-11-26-fsr-resolution.md)、[立方核重建与原生高分对照](notes/2026-11-27-fsr-cubic-reconstruction.md)
+桌面默认适配窗口内游戏区域，`--upscale-scale 2` 等显式倍率仍可指定中间输出尺寸。Android 直接绘制到 EGL 窗口。`--fsr2` 则用于提供深度和运动数据的 M3G 绘制，见上面的内部渲染设置。[跨分辨率实测](notes/2026-11-26-fsr-resolution.md)、[立方核重建与原生高分对照](notes/2026-11-27-fsr-cubic-reconstruction.md)、[缩放矩阵、整数倍率与缩小路径](notes/2026-11-27-fsr-scale-matrix.md)
 
 ### Android 版：软件呈现滤镜（已实现，0.5.43+）
 
@@ -146,6 +146,11 @@ Android 的常规包提供软件和 GLES2。arm64 增强包在画面面板增加
 存档、截图、帧转储与 libretro 核心均不受影响。选择保存在应用私有
 SharedPreferences（`present_filter`），通过 `nativeSetPresentFilter(mode)` 传给原生层，
 下一帧生效。「GL 呈现」可单独选择 FSR1 和 bicubic，各渲染倍率开关见上面的内部渲染设置。
+
+要量 Android 端每帧的呈现开销，执行 `adb shell setprop debug.nj2me.present_stats 1`：属性
+每秒采样一次，每 120 帧把绘制（make-current、上传、滤镜）与交换（`eglSwapBuffers`）的时间
+按 min/median/p95 写进 logcat，清掉属性即停。模拟器实测数字见
+[缩放矩阵、整数倍率与缩小路径](notes/2026-11-27-fsr-scale-matrix.md)。
 
 **模拟器验证（2026-11-25，API 36 AVD，x86_64 APK）**：LoopDemo 游戏画面在
 关闭滤镜时为基准；切换「扫描线」后画面区域 614,784 / 2,592,000 像素变化

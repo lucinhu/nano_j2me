@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 /* 1: install the optional 2D fill/blit GPU callbacks (see the comment at the
  * wiring site; the 3D triangle list path is unaffected). */
@@ -17,6 +18,75 @@
 #endif
 
 #define GLES2_TAG "nj2me"
+
+/* Opt-in present-cost statistics:
+ *
+ *     adb shell setprop debug.nj2me.present_stats 1
+ *
+ * The property is sampled once a second. Every NJ_ANDROID_PRESENT_STATS
+ * presented frames the GL clock times of the draw (make-current, upload and the
+ * filter passes) and of the swap are logged as min/median/p95. The swap figure
+ * includes the wait for the next buffer, so the draw figure is the one that
+ * describes the filtering cost. The samples live in the heap state because the
+ * shared object must keep zero writable static data. Only the run thread calls
+ * present(), so the state needs no lock. */
+static unsigned long long present_now_ns(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (unsigned long long)ts.tv_sec * 1000000000ull + (unsigned long long)ts.tv_nsec;
+}
+
+static int present_stats_wanted(void)
+{
+    char value[PROP_VALUE_MAX] = {0};
+    (void)__system_property_get("debug.nj2me.present_stats", value);
+    return value[0] != '\0' && value[0] != '0';
+}
+
+static int present_stats_cmp(const void *a, const void *b)
+{
+    unsigned long long x = *(const unsigned long long *)a;
+    unsigned long long y = *(const unsigned long long *)b;
+    return x < y ? -1 : (x > y ? 1 : 0);
+}
+
+static void present_stats_record(nj_android_gles2 *s, unsigned long long draw_ns,
+                                 unsigned long long swap_ns, int mode, int w, int h)
+{
+    if (!s->present_stats.enabled || w <= 0 || h <= 0) return;
+    if (s->present_stats.frames == NJ_ANDROID_PRESENT_STATS || s->present_stats.mode != mode ||
+        s->present_stats.w != w || s->present_stats.h != h) {
+        s->present_stats.frames = 0;
+        s->present_stats.mode = mode;
+        s->present_stats.w = w;
+        s->present_stats.h = h;
+    }
+    s->present_stats.draw[s->present_stats.frames] = draw_ns;
+    s->present_stats.swap[s->present_stats.frames] = swap_ns;
+    if (++s->present_stats.frames < NJ_ANDROID_PRESENT_STATS) return;
+    {
+        unsigned long long sorted[NJ_ANDROID_PRESENT_STATS];
+        memcpy(sorted, s->present_stats.draw, sizeof sorted);
+        qsort(sorted, NJ_ANDROID_PRESENT_STATS, sizeof sorted[0], present_stats_cmp);
+        __android_log_print(ANDROID_LOG_INFO, GLES2_TAG,
+                            "present stats: mode=%d %dx%d frames=%u draw ms min=%.3f "
+                            "median=%.3f p95=%.3f",
+                            s->present_stats.mode, s->present_stats.w, s->present_stats.h,
+                            (unsigned)NJ_ANDROID_PRESENT_STATS,
+                            (double)sorted[0] / 1e6,
+                            (double)sorted[NJ_ANDROID_PRESENT_STATS / 2] / 1e6,
+                            (double)sorted[(NJ_ANDROID_PRESENT_STATS * 95) / 100] / 1e6);
+        memcpy(sorted, s->present_stats.swap, sizeof sorted);
+        qsort(sorted, NJ_ANDROID_PRESENT_STATS, sizeof sorted[0], present_stats_cmp);
+        __android_log_print(ANDROID_LOG_INFO, GLES2_TAG,
+                            "present stats: swap ms min=%.3f median=%.3f p95=%.3f",
+                            (double)sorted[0] / 1e6,
+                            (double)sorted[NJ_ANDROID_PRESENT_STATS / 2] / 1e6,
+                            (double)sorted[(NJ_ANDROID_PRESENT_STATS * 95) / 100] / 1e6);
+    }
+    s->present_stats.frames = 0;
+}
 
 /* Caller holds lock. Publishing never calls GL and never acquires a port or
  * Java lock. Readers take info_lock only, so driver stalls cannot block UI. */
@@ -579,7 +649,14 @@ int nj_android_gles2_present(nj_android_gles2 *s, const nj_surface *src,
                              int mode, float sharp, int vp_x, int vp_y, int vp_w, int vp_h)
 {
     int ok = 0;
+    unsigned long long t0, t1;
     if (!s || src == NULL) return 0;
+    if (--s->present_stats.refresh <= 0) {
+        s->present_stats.refresh = 60;
+        s->present_stats.enabled = present_stats_wanted();
+        if (!s->present_stats.enabled) s->present_stats.frames = 0;
+    }
+    t0 = present_now_ns();
     pthread_mutex_lock(&s->lock);
     if (owning_thread(s) && s->backend != NULL && s->window != EGL_NO_SURFACE &&
         !s->failed && s->context != EGL_NO_CONTEXT) {
@@ -597,6 +674,7 @@ int nj_android_gles2_present(nj_android_gles2 *s, const nj_surface *src,
                 }
                 ok = nj_gles2_present_onscreen(s->backend, src, mode,
                                                vp_x, gl_y, vp_w, vp_h);
+                t1 = present_now_ns();
             }
             if (ok && !s->dump_done) {
                 /* One-shot debug dump of the presented window framebuffer
@@ -648,6 +726,10 @@ int nj_android_gles2_present(nj_android_gles2 *s, const nj_surface *src,
                 if (error == EGL_CONTEXT_LOST)
                     failed(s, "eglSwapBuffers lost context", error);
             }
+            if (ok)
+                present_stats_record(s, t1 > t0 ? t1 - t0 : 0,
+                                     present_now_ns() - (t1 > t0 ? t1 : t0),
+                                     mode, s->surface_w, s->surface_h);
             if (!eglMakeCurrent(s->display, s->pbuffer, s->pbuffer, s->context)) {
                 failed(s, "eglMakeCurrent(pbuffer restore) failed", eglGetError());
             } else {
