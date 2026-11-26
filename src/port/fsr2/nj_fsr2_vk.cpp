@@ -172,8 +172,8 @@ bool init(NjFsr2 &c, Error err) {
     return true;
 }
 
-bool allocate(NjFsr2 &c, VkMemoryRequirements req, VkMemoryPropertyFlags flags,
-              VkDeviceMemory &memory, Error err) {
+bool allocate_flags(NjFsr2 &c, VkMemoryRequirements req, VkMemoryPropertyFlags flags,
+                     VkDeviceMemory &memory, Error err) {
     VkPhysicalDeviceMemoryProperties props;
     vkGetPhysicalDeviceMemoryProperties(c.vk.physical, &props);
     for (uint32_t i = 0; i < props.memoryTypeCount; i++) {
@@ -190,6 +190,18 @@ bool allocate(NjFsr2 &c, VkMemoryRequirements req, VkMemoryPropertyFlags flags,
         return true;
     }
     return err.fail("No suitable Vulkan memory allocation");
+}
+
+/* The CPU bridge is read back every frame, so require cached host memory: a
+ * write-combined heap makes the per-pixel readback cost around 200 ns per
+ * pixel (69 ms for a 480x640 frame). Fall back to any host-visible type when
+ * the device exposes no cached one. */
+bool allocate(NjFsr2 &c, VkMemoryRequirements req, VkMemoryPropertyFlags flags,
+              VkDeviceMemory &memory, Error err) {
+    if ((flags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) &&
+        allocate_flags(c, req, flags | VK_MEMORY_PROPERTY_HOST_CACHED_BIT, memory, err))
+        return true;
+    return allocate_flags(c, req, flags, memory, err);
 }
 
 bool create_cpu_io(NjFsr2 &c, Error err) {
@@ -367,9 +379,15 @@ bool dispatch_cpu(NjFsr2 &c, const NjFsr2Frame &f, uint32_t *out, Error err) {
                          0, 1, &host, 0, nullptr, 0, nullptr);
     if (!finish(c, err)) return false;
     if (!c.coherent) CHECK_RESULT(vkInvalidateMappedMemoryRanges(c.vk.device, 1, &range));
-    const uint8_t *p = bytes + c.offset[3];
-    for (size_t i = 0; i < size_t(c.output.width) * c.output.height; i++, p += 4)
-        out[i] = 0xff000000u | (uint32_t(p[0]) << 16) | (uint32_t(p[1]) << 8) | p[2];
+    /* The image is R8G8B8A8, so a little-endian word is 0xAABBGGRR; swap red
+     * and blue instead of touching one byte at a time. */
+    size_t pixels_out = size_t(c.output.width) * c.output.height;
+    const uint32_t *p = reinterpret_cast<const uint32_t *>(bytes + c.offset[3]);
+    for (size_t i = 0; i < pixels_out; i++) {
+        uint32_t v = p[i];
+        out[i] = 0xff000000u | ((v & 0x000000ffu) << 16) | (v & 0x0000ff00u) |
+                 ((v >> 16) & 0x000000ffu);
+    }
     return true;
 }
 } // namespace
