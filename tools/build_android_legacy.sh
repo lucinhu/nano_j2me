@@ -77,8 +77,8 @@ if [ "$NATIVE_ONLY" = 1 ]; then
     echo "== ok: $OUT/libnj2me.so"; exit 0
 fi
 VERSION="$(sed -n 's/^project(nano_j2me VERSION \([0-9][0-9.]*\).*/\1/p' "$ROOT/CMakeLists.txt" | head -1)"
-[ -n "$VERSION" ] || VERSION=0.0.0
-VERSION_CODE="${VERSION//./}"
+[ -n "$VERSION" ] || { echo 'missing CMake project version' >&2; exit 2; }
+VERSION_CODE=$((10#${VERSION//./}))
 echo '== resources and API 5 manifest'
 # aapt2 output triggers StringBlock errors in Eclair's package parser.
 # aapt's UTF-16 resource format is accepted by both Eclair and Gingerbread.

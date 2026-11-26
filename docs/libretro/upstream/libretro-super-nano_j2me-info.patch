@@ -10,7 +10,7 @@ Subject: [PATCH] info: add nano_j2me (Mobile - J2ME)
 
 diff --git a/dist/info/nano_j2me_libretro.info b/dist/info/nano_j2me_libretro.info
 new file mode 100644
-index 0000000..cb1b17a
+index 0000000..e1d2485
 --- /dev/null
 +++ b/dist/info/nano_j2me_libretro.info
 @@ -0,0 +1,31 @@
@@ -27,7 +27,7 @@ index 0000000..cb1b17a
 +# Preserve all applicable MIT, OFL and Apache license/notice files in packages.
 +license = "MIT|OFL-1.1|Apache-2.0"
 +permissions = ""
-+display_version = "0.5.49"
++display_version = "0.5.50"
 +supports_no_game = "false"
 +# Manual states only; architecture/ABI/build dependent, with external resources omitted.
 +savestate = "true"

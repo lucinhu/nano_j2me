@@ -36,11 +36,10 @@ set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PKG=com.lucinhu.nj2me
-# The version comes from CMakeLists.txt, so an APK can never claim a version
-# the release does not have.  versionCode stays 1 until there is a second one.
+# Read the release version from CMake and pass a decimal Android version code.
 VERSION="$(sed -n 's/^project(nano_j2me VERSION \([0-9][0-9.]*\).*/\1/p' "$ROOT/CMakeLists.txt" | head -1)"
-[ -n "$VERSION" ] || VERSION=0.0.0
-VERSION_CODE="${VERSION//./}"
+[ -n "$VERSION" ] || { echo 'missing CMake project version' >&2; exit 2; }
+VERSION_CODE=$((10#${VERSION//./}))
 ABIS=""
 FSR2_SDK=""
 MIN_API=21

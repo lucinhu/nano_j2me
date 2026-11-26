@@ -14,6 +14,8 @@ The [follow-up measurements](notes/2026-11-26-smooth-jit-upload.md) cover smooth
 conditional expressions in the JIT, and mutable GLES2 texture uploads.
 The [four-sample AA, interpreter dispatch and Vulkan RGB565 benchmarks](notes/2026-11-26-ssaa-dispatch-vulkan.md)
 compare software frame times, Minecraft world generation and synchronous triangle draws on two GPUs.
+The [0.5.50 release measurements](RELEASE_0.5.50.md#性能) cover smooth scanline reuse in two games
+and shared interpreter exits during Minecraft world generation.
 
 ## How to measure
 
