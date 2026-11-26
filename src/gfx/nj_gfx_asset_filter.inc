@@ -97,8 +97,9 @@ static void hd_filter_bitmap(nj_surface *dst, int k, const nj_u1 *src, nj_s8 str
     nj_trans_size(transform, sw, sh, &tw, &th);
     if (cached) for (int n = 0; n < k; ++n) weights[n] = hd_asset_weight(n, k);
     nj_s8 step = nj_trans_row_step(transform, bpp, stride);
-    int first = (int)(x0 - dx);
-    for (int y = y0 * k; y < (y1 + 1) * k; ++y) {
+    int first = (int)(x0 - dx), width = x1 - x0 + 1;
+    int end_y = (y1 + 1) * k;
+    for (int y = y0 * k; y < end_y; ++y) {
         int j = (int)(y / k - dy), phase_y = y % k - k / 2;
         if (phase_y < 0) { --j; phase_y += k; }
         unsigned wy = cached ? weights[phase_y] : hd_asset_weight(phase_y, k);
@@ -108,7 +109,24 @@ static void hd_filter_bitmap(nj_surface *dst, int k, const nj_u1 *src, nj_s8 str
         nj_trans_inverse(transform, 0, j + 1 < th ? j + 1 : th - 1, sw, sh, &u, &v);
         nj_s8 bot = (sy + (nj_s8)v) * stride + (sx + (nj_s8)u) * bpp;
         nj_u1 *row = (nj_u1 *)dst->pixels + (nj_s8)y * dst->stride + (nj_s8)x0 * k * 4;
-        int count = (x1 - x0 + 1) * k, i = first - 1, phase = k - k / 2;
+        int count = width * k, i = first - 1, phase = k - k / 2;
+        int rows = 1;
+        nj_u1 *row_start = row;
+        /* Identical opaque source rows produce the same horizontal filter at
+         * every vertical phase. Include both halo texels outside the clip:
+         * even one translucent neighbour makes output depend on the backdrop. */
+        if (width >= 16 && step == bpp && (phase_y == 0 || y == y0 * k)) {
+            int left = first > 0 ? first - 1 : 0;
+            int last = first + width < tw ? first + width : tw - 1;
+            int samples = last - left + 1;
+            const nj_u1 *a = src + top + (nj_s8)left * bpp;
+            const nj_u1 *b = src + bot + (nj_s8)left * bpp;
+            if ((a == b || !memcmp(a, b, (size_t)samples * bpp)) &&
+                (format != NJ_PIXFMT_ARGB8888 || nj_argb_row_opaque(a, samples))) {
+                rows = k - phase_y;
+                if (rows > end_y - y) rows = end_y - y;
+            }
+        }
         /* Adjacent output intervals share a source column. Reuse its vertical
          * interpolation across the boundary, including for rotated frames. */
         nj_s8 offset = (i < 0 ? 0 : i) * step;
@@ -131,5 +149,7 @@ static void hd_filter_bitmap(nj_surface *dst, int k, const nj_u1 *src, nj_s8 str
             l = r;
             ++i;
         }
+        hd_repeat_row(row_start, dst->stride, (size_t)(row - row_start), rows);
+        y += rows - 1;
     }
 }

@@ -163,7 +163,8 @@ static void run_hd(const char *name, int w, int h, int scale, int transform,
     for (int i = 0; i < w * h; ++i) {
         unsigned a = mixed_alpha ? (i % 7 == 0 ? 0u : i % 5 == 0 ? 127u : 255u) : 255u;
         unsigned rgb = ((unsigned)i * 78541u + 19u) & 0xffffffu;
-        if (bands) rgb = ((i / w + i % w) / 12) % 2 ? 0x225533u : 0xeecc33u;
+        if (bands == 1) rgb = ((i / w + i % w) / 12) % 2 ? 0x225533u : 0xeecc33u;
+        if (bands == 2) rgb = 0x225533u;
         source[i] = (a << 24) | rgb;
     }
     nj_image image = {w, h, NJ_PIXFMT_ARGB8888, source, mixed_alpha};
@@ -204,6 +205,7 @@ int main(int argc, char **argv)
         return 0;
     }
     if (argc == 2 && strcmp(argv[1], "--smooth") == 0) {
+        run_hd("smooth-solid-240x320-3x", 240, 320, 3, NJ_TRANS_NONE, 0, 40, NJ_ASSET_SMOOTH, 2);
         run_hd("smooth-diagonals-240x320-3x", 240, 320, 3, NJ_TRANS_NONE, 0, 40, NJ_ASSET_SMOOTH, 1);
         run_hd("smooth-detail-240x320-4x", 240, 320, 4, NJ_TRANS_NONE, 0, 40, NJ_ASSET_SMOOTH, 0);
         run_hd("smooth-sprite-37x29-rot90-4x", 37, 29, 4, NJ_TRANS_ROT90, 1, 1800, NJ_ASSET_SMOOTH, 1);

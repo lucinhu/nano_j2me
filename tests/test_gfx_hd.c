@@ -545,8 +545,45 @@ static void wide_bitmap_rows(void)
     }
 }
 
+/* Adjacent opaque source rows can share filtered output, but a translucent
+ * texel just outside the clip still samples each physical backdrop row. Use
+ * single-column clips as an independent check of the wide-row shortcut. */
+static void smooth_repeated_rows(void)
+{
+    enum { W = 24, H = 5, S = 3, PITCH = W * S * 4 + 3 };
+    nj_u4 colors[W * H], low[W * H];
+    nj_u1 high[1 + PITCH * H * S], expected[sizeof high];
+    nj_image image = {W, H, NJ_PIXFMT_ARGB8888, colors, 0};
+    nj_surface a = {low, W, H, W * 4, NJ_PIXFMT_ARGB8888, 4};
+    nj_surface b = {high + 1, W * S, H * S, PITCH, NJ_PIXFMT_ARGB8888, 4};
+    nj_render_mirror m = {.target = &b, .scale = S, .smooth_assets = NJ_ASSET_SMOOTH};
+    const int transforms[] = {NJ_TRANS_NONE, NJ_TRANS_MIRROR_ROT180};
+    for (int y = 0; y < H; ++y) for (int x = 0; x < W; ++x)
+        colors[y * W + x] = BG | (nj_u4)x * 0x090715u;
+    for (int edge = 0; edge < 3; ++edge) {
+        /* Left halo differs vertically; right halo blends onto the target. */
+        if (edge == 1) colors[2 * W + 1] = WHITE;
+        if (edge == 2) for (int y = 0; y < H; ++y) colors[y * W + W - 2] = 0x804020ffu;
+        for (int t = 0; t < 2; ++t) for (int wide = 0; wide <= 1; ++wide) {
+            nj_gfx ctx;
+            nj_gfx_init(&ctx, &a);
+            ctx.mirror = &m;
+            memset(low, 0, sizeof low);
+            for (size_t i = 0; i < sizeof high; ++i) high[i] = (nj_u1)(i * 17u);
+            int width = wide ? W - 4 : 1;
+            for (int x = 2; x < W - 2; x += width) {
+                nj_gfx_set_clip(&ctx, x, 1, width, H - 2);
+                nj_gfx_draw_image_rop(&ctx, &image, 0, 0, 0, 0, W, H, NJ_ROP_PAINT, transforms[t]);
+            }
+            if (!wide) memcpy(expected, high, sizeof high);
+            else assert(!memcmp(expected, high, sizeof high));
+        }
+    }
+}
+
 int main(void)
 {
+    smooth_repeated_rows();
     wide_bitmap_rows();
     geometry();
     images();
