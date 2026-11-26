@@ -313,6 +313,8 @@ typedef struct android_state {
     android_gl_settings gl_present; /* copied with the window under lock */
     int gl_present_logged;          /* run-thread one-shot diagnostic */
     int gl_present_log_reset;       /* consumed with the settings snapshot */
+    int gl_window_changed;          /* UI replaced/detached the native window */
+    int gl_window_fallback;         /* run thread: CPU producer owns this queue */
 #endif
 #if !NJ_ANDROID_LEGACY
     ANativeWindow *window;
@@ -1616,17 +1618,7 @@ static int android_gl_present_frame(android_state *s, ANativeWindow *win,
         return 0;
     }
     if (s->width <= 0 || s->height <= 0) return 0;
-    /* The GL present switch is independent from the 3D accelerator toggle: a
-     * 2D-only game still needs the private EGL context here.  Start it lazily
-     * on the run thread the first time the setting is on. */
-    if (!s->gles2.initialized) {
-        nj_android_gles2_start_mode(&s->gles2, 1);
-        if (!s->gles2.initialized) {
-            if (!s->gl_present_logged) { s->gl_present_logged = 1; __android_log_print(ANDROID_LOG_INFO, LOG_TAG,
-                "present: GL path cannot start EGL; software presentation"); }
-            return 0;
-        }
-    }
+    /* Attaching a window lazily starts EGL even for software-rendered games. */
     if (!nj_android_gles2_set_window(&s->gles2, win)) {
         if (!s->gl_present_logged) { s->gl_present_logged = 1; __android_log_print(ANDROID_LOG_INFO, LOG_TAG,
             "present: GL path has no window surface (window_ok=%d)", s->gles2.window_ok); }
@@ -1673,6 +1665,7 @@ static void android_present_frame(void *ud, const nj_surface *frame)
     int density = 1;
 #if NJ_ANDROID_GLES2
     android_gl_settings gl;
+    int window_changed;
 #endif
 #endif
     /*
@@ -1709,6 +1702,8 @@ static void android_present_frame(void *ud, const nj_surface *frame)
     win = s->window;
 #if NJ_ANDROID_GLES2
     gl = s->gl_present;
+    window_changed = s->gl_window_changed;
+    s->gl_window_changed = 0;
     if (s->gl_present_log_reset) {
         s->gl_present_logged = 0;
         s->gl_present_log_reset = 0;
@@ -1718,6 +1713,14 @@ static void android_present_frame(void *ud, const nj_surface *frame)
         ANativeWindow_acquire(win);
     }
     pthread_mutex_unlock(&s->lock);
+#if NJ_ANDROID_GLES2
+    if (window_changed) {
+        if (s->gles2_bound && s->gles2.window_ptr)
+            (void)nj_android_gles2_set_window(&s->gles2, NULL);
+        s->gl_window_fallback = 0;
+        s->gl_present_logged = 0;
+    }
+#endif
     if (!win || s->quit) {
         if (win) {
             ANativeWindow_release(win);
@@ -1733,9 +1736,15 @@ static void android_present_frame(void *ud, const nj_surface *frame)
     }
     if (!s->det_done) android_detect(s);
 #if NJ_ANDROID_GLES2
-    if (android_gl_present_frame(s, win, &gl, frame, density)) {
-        ANativeWindow_release(win);
-        goto presented;
+    if (gl.enabled && !s->gl_window_fallback) {
+        if (android_gl_present_frame(s, win, &gl, frame, density)) {
+            ANativeWindow_release(win);
+            goto presented;
+        }
+        /* Software locking connects a CPU producer until this queue is retired. */
+        s->gl_window_fallback = 1;
+        if (s->gles2_bound && s->gles2.window_ptr)
+            (void)nj_android_gles2_set_window(&s->gles2, NULL);
     }
 #endif
     if (ANativeWindow_lock(win, &buf, NULL) != 0) {
@@ -5685,11 +5694,15 @@ void nj_port_android_set_window(nj_port *port, void *native_window)
         return;
     }
     s = AS(port->ud);
-    if (s->window == (ANativeWindow *)native_window) {
-        return;
-    }
     pthread_mutex_lock(&s->lock);
     old = s->window;
+    if (old == (ANativeWindow *)native_window) {
+        pthread_mutex_unlock(&s->lock);
+        return;
+    }
+#if NJ_ANDROID_GLES2
+    s->gl_window_changed = 1;
+#endif
     s->window = (ANativeWindow *)native_window;
     if (s->window) {
         ANativeWindow_acquire(s->window);

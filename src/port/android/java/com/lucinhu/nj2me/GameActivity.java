@@ -84,6 +84,8 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
     private volatile boolean finishing;
 
     private SurfaceView surfaceView;
+    private boolean surfaceAttached;
+    private int surfaceGlPresent;
     private PadView pad;
     private PadConfig padConfig;
     private TextView status;
@@ -508,10 +510,7 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
 
         FrameLayout root = new FrameLayout(this);
         this.root = root;
-        surfaceView = new SurfaceView(this);
-        surfaceView.getHolder().addCallback(this);
-        root.addView(surfaceView, new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        installGameSurface();
 
         pad = new PadView(this, padConfig);
         pad.setSink(this);
@@ -715,7 +714,7 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
         ui.removeCallbacks(statusTick);
         ui.post(statusTick);
         synchronized (lock) {
-            if (handle != 0) {
+            if (handle != 0 && surfaceAttached) {
                 nativeSetActive(handle, true);
             }
         }
@@ -838,10 +837,23 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
 
     /* --------------------------------------------------------------- surface */
 
+    private void installGameSurface() {
+        surfaceGlPresent = glPresent;
+        surfaceView = new SurfaceView(this);
+        surfaceView.getHolder().addCallback(this);
+        root.addView(surfaceView, 0, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+    }
+
     @Override
     public void surfaceCreated(SurfaceHolder holder) {
         synchronized (lock) {
+            if (holder != surfaceView.getHolder() || finishing || (handle == 0 && runThread != null)) {
+                return;
+            }
+            surfaceAttached = true;
             if (handle == 0) {
+                surfaceGlPresent = glPresent;
                 handle = nativeCreate(holder.getSurface(), jarPath, screenW, screenH,
                                       heapMB, JarStore.rmsRoot(this).getAbsolutePath(),
                                       JarStore.fsRoot(this).getAbsolutePath());
@@ -874,12 +886,11 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
                     }
                 }, "nj2me-vm");
                 applyView();
+                nativeSetActive(handle, resumed);
                 runThread.start();
             } else {
-                /* Coming back from the background: the old surface is gone and
-                 * the port must be pointed at the new one. */
                 nativeSetSurface(handle, holder.getSurface());
-                nativeSetActive(handle, true);
+                nativeSetActive(handle, resumed);
             }
         }
     }
@@ -891,7 +902,7 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
          * size when it started, so it cannot see this on its own: tell it, and
          * it re-asks for buffers and re-fits the picture to the new window. */
         synchronized (lock) {
-            if (handle != 0) {
+            if (holder == surfaceView.getHolder() && surfaceAttached && handle != 0) {
                 nativeSetWindowSize(handle, width, height);
             }
         }
@@ -900,8 +911,11 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
     @Override
     public void surfaceDestroyed(SurfaceHolder holder) {
         synchronized (lock) {
+            if (holder != surfaceView.getHolder()) return;
+            surfaceAttached = false;
             if (handle != 0) {
                 nativeSetActive(handle, false);
+                nativeSetSurface(handle, null);
             }
         }
     }
@@ -1331,7 +1345,17 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
     private void applyGlPresentSettings() {
         synchronized (lock) {
             if (handle != 0 && graphicsSupported()) {
+                boolean replace = surfaceGlPresent != glPresent;
+                if (replace) {
+                    // ANativeWindow_lock connects a CPU producer for the lifetime of its
+                    // Surface. EGL needs a fresh BufferQueue when the producer changes.
+                    nativeSetSurface(handle, null);
+                    surfaceAttached = false;
+                    surfaceView.getHolder().removeCallback(this);
+                    root.removeView(surfaceView);
+                }
                 nativeSetGlPresent(handle, glPresent, glPresentMode, glPresentScale, glPresentSharp);
+                if (replace) installGameSurface();
             }
         }
     }
@@ -1727,7 +1751,7 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
                 "GPU 呈现时叠加扫描线；只作用于窗口显示",
                 "GPU 呈现时叠加 LCD 网格；只作用于窗口显示",
                 "GPU 呈现时叠加 CRT 扫描线/荫罩效果；只作用于窗口显示",
-                "AMD FSR1（EASU 边缘重建 + RCAS 锐化）；画面更平滑，开销略高",
+                "放大时使用 FSR1 重建边缘并锐化，等大时保留原像素，缩小时按覆盖面积采样",
                 "双三次（Catmull-Rom）插值；文字与像素画更自然，光晕少" };
         int checked = 0;
         for (int i = 0; i < modes.length; i++) {

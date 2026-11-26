@@ -37,6 +37,11 @@ static uint32_t checksum(void)
 int main(void)
 {
     char error[256] = {0};
+    /* Reject either axis just outside the envelope before opening Vulkan. */
+    if (nj_fsr2_create(W,H,3*W+1,3*H,error,sizeof(error)) ||
+        !strstr(error,"dimensions") ||
+        nj_fsr2_create(W,H,3*W,3*H+1,error,sizeof(error)) ||
+        !strstr(error,"dimensions")) return 1;
     NjFsr2 *ctx = nj_fsr2_create(W,H,OW,OH,error,sizeof(error));
     if (!ctx) {
         fprintf(stderr, "%s\n",error);

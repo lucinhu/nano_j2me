@@ -13219,6 +13219,7 @@ typedef struct {
     int hd_pixel_art;
     nj_ref hd_self;
 #if NJ_ENABLE_FSR2
+    int hd_temporal;              /* capture enabled for this mesh */
     nj_ref hd_vb, hd_ib, hd_node;
 #endif
 #if NJ_ENABLE_GFX_ACCEL
@@ -14081,7 +14082,7 @@ static void jr_emit(m3g_jr *r, const jr_vtx *v0, const jr_vtx *v1,
 #endif
         if (r->hd_scale) {
 #if NJ_ENABLE_FSR2
-            if (r->vm->render_quality.fsr2)
+            if (r->hd_temporal)
                 m3g_temporal_triangle(r, v0, v1, v2, xy, inv, depth, st, rgb, rgb2);
 #endif
             for (int i = 0; i < 6; ++i) xy[i] *= (float)r->hd_scale;
@@ -16296,12 +16297,16 @@ static int jr_hd_mesh(m3g_jr *r)
     m3g_jr hd;
     if (jr_hd_target(r, &hd)) {
 #if NJ_ENABLE_FSR2
-        if (r->vm->render_quality.fsr2) m3g_temporal_mesh(&hd);
+        hd.hd_temporal = r->vm->render_quality.fsr2 && m3g_temporal_mesh(&hd);
+        /* A live capture must visit each original face exactly once. When the
+         * binding falls back, draw it through the configured HD backend. */
+        if (hd.hd_temporal) {
+            jr_draw_walk(&hd);
+            return 1;
+        }
 #endif
 #if NJ_ENABLE_GFX_ACCEL
-        /* Temporal capture records each original face during this walk. A
-         * declined transaction must never record a second set of samples. */
-        if (!r->vm->render_quality.fsr2 && jr_draw_accel(&hd)) return 1;
+        if (jr_draw_accel(&hd)) return 1;
 #endif
         jr_draw_walk(&hd);
         return 1;

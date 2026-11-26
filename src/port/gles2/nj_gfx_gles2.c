@@ -4,6 +4,7 @@
 #include "nj2me/nj_gfx_gles2.h"
 #include "nj2me/nj_gl_api.h"
 #include "nj2me/nj_gfx_triangles.h"
+#include <limits.h>
 #include <math.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -51,9 +52,11 @@ struct nj_gles2 {
      * the output target above. */
     GLuint present_stage_tex, present_stage_fbo;
     texture_storage present_stage_storage;
-    GLuint present_fsr_easu, present_fsr_rcas;
-    GLint present_fsr_easu_sampler, present_fsr_easu_insize, present_fsr_easu_outsize;
-    GLint present_fsr_easu_con[4];
+    GLuint present_fsr_easu, present_fsr_rcas, present_area;
+    GLuint present_reduce_tex;
+    texture_storage present_reduce_storage;
+    GLint present_area_sampler, present_area_insize, present_area_footprint, present_area_decode;
+    GLint present_fsr_easu_sampler, present_fsr_easu_insize;
     GLint present_fsr_rcas_sampler, present_fsr_rcas_texel, present_fsr_rcas_sharp;
     struct frame_slot { nj_surface *surface; GLuint fbo, tex; int w, h, stride;
                         int format, bpp, dirty, x0, y0, x1, y1, stale;

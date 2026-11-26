@@ -1,17 +1,7 @@
-/* Offscreen GLSL presentation pass (goal 7e37f74a item A1).
- *
- * Included at the end of nj_gfx_gles2.c so it can use the private struct and
- * the static helpers above.  The pass uploads a game frame as an RGBA
- * texture, renders it into an offscreen framebuffer through one of the
- * pluggable post-process shaders and reads the result back.  It never touches
- * the software framebuffer, and it is only run by a frontend that explicitly
- * asks for it (env-gated in the SDL2 port), so the default presentation path
- * is unchanged.
- *
- * Output convention: the quad is drawn without a V flip, so glReadPixels
- * returns top-down rows (framebuffer row 0 is the source top row).  Callers
- * get a tightly packed RGBA8888 buffer, out_w*out_h*4 bytes.
- */
+/* Shared GLES2 presentation filters, included by nj_gfx_gles2.c. The input
+ * texture starts with the game's top row. Offscreen readback returns top-down
+ * RGBA8888. The final window draw flips V and its raw capture is bottom-up.
+ * Presentation never writes to the game's framebuffer. */
 
 static const char present_vs[] =
     "attribute vec2 position; attribute vec2 texcoord; varying highp vec2 uv;"
@@ -69,12 +59,7 @@ static const char present_fs_crt[] =
     " vec2 q=gl_FragCoord.xy/outsize-0.5; c.rgb*=1.0-0.30*dot(q,q);"
     " gl_FragColor=c; }";
 
-/* 5: FSR1 (EASU + RCAS).  Two passes: EASU edge-adaptive upscale into
- * present_stage_tex, then RCAS contrast-adaptive sharpening into the
- * output framebuffer.  Translated from the MIT-licensed AMD FidelityFX
- * FSR 1* reference (ffx_fsr1.h); textureGather is rebuilt with four
- * texture2D taps because GLSL ES 1.0 has no gather instruction.
- * The RCAS sharpness is the reference default of 0.2 stops. */
+/* 6: Catmull-Rom bicubic. */
 static const char present_fs_bicubic[] =
     PRESENT_FRAME_SAMPLE
     "#ifdef GL_ES\nprecision highp float;\n#endif\n"
@@ -103,37 +88,17 @@ static const char present_fs_bicubic[] =
     "  gl_FragColor = vec4(acc.rgb, 1.0);\n"
     "}\n";
 
+/* FSR1 EASU. Fetch the reference stencil directly by source texel offset.
+ * After the MIT-licensed AMD FidelityFX FSR1 reference (ffx_fsr1.h).
+ * GLES2 has no textureGather, and its row-major emulation would not have
+ * the (01,11,10,00) lane order expected by the reference. */
 static const char present_fs_easu[] =
     PRESENT_FRAME_SAMPLE
-    "#ifdef GL_ES\n"
-    "precision highp float;\n"
-    "#endif\n"
+    "#ifdef GL_ES\nprecision highp float;\n#endif\n"
     "varying highp vec2 uv;\n"
     "uniform highp sampler2D image;\n"
     "uniform vec2 insize;\n"
-    "uniform vec2 outsize;\n"
-    "uniform vec4 con0;\n"
-    "uniform vec4 con1;\n"
-    "uniform vec4 con2;\n"
-    "uniform vec4 con3;\n"
-    "\n"
-    "/* Manual textureGather for GLSL ES 1.0: the four texels a bilinear tap\n"
-    " * would combine, in the (x,y) (x+1,y) (x,y+1) (x+1,y+1) order the FSR1\n"
-    " * reference reads from textureGather(). */\n"
-    "void easu_gather(vec2 p, out vec4 r, out vec4 g, out vec4 b)\n"
-    "{\n"
-    "    vec2 ij = floor(p * insize - 0.5);\n"
-    "    vec2 base = (ij + 0.5) / insize;\n"
-    "    vec2 st = 1.0 / insize;\n"
-    "    vec4 t00 = frameSample(base);\n"
-    "    vec4 t10 = frameSample(base + vec2(st.x, 0.0));\n"
-    "    vec4 t01 = frameSample(base + vec2(0.0, st.y));\n"
-    "    vec4 t11 = frameSample(base + st);\n"
-    "    r = vec4(t00.r, t10.r, t01.r, t11.r);\n"
-    "    g = vec4(t00.g, t10.g, t01.g, t11.g);\n"
-    "    b = vec4(t00.b, t10.b, t01.b, t11.b);\n"
-    "}\n"
-    "\n"
+    "float luma(vec3 c) { return dot(c, vec3(0.5, 1.0, 0.5)); }\n"
     "void easu_tap(inout vec3 aC, inout float aW, vec2 off, vec2 dir,\n"
     "              vec2 len2, float lob, float clp, vec3 c)\n"
     "{\n"
@@ -163,7 +128,7 @@ static const char present_fs_easu[] =
     "    float dc = lD - lC;\n"
     "    float cb = lC - lB;\n"
     "    float lenX = max(abs(dc), abs(cb));\n"
-    "    lenX = 1.0 / lenX;\n"
+    "    lenX = 1.0 / max(lenX, 1.0 / 32768.0);\n"
     "    float dirX = lD - lB;\n"
     "    dir.x += dirX * w;\n"
     "    lenX = clamp(abs(dirX) * lenX, 0.0, 1.0);\n"
@@ -172,7 +137,7 @@ static const char present_fs_easu[] =
     "    float ec = lE - lC;\n"
     "    float ca = lC - lA;\n"
     "    float lenY = max(abs(ec), abs(ca));\n"
-    "    lenY = 1.0 / lenY;\n"
+    "    lenY = 1.0 / max(lenY, 1.0 / 32768.0);\n"
     "    float dirY = lE - lA;\n"
     "    dir.y += dirY * w;\n"
     "    lenY = clamp(abs(dirY) * lenY, 0.0, 1.0);\n"
@@ -182,38 +147,24 @@ static const char present_fs_easu[] =
     "\n"
     "void main()\n"
     "{\n"
-    "    vec2 ip = uv * outsize - 0.5;\n"
-    "    vec2 pp = ip * con0.xy + con0.zw;\n"
-    "    vec2 fp = floor(pp);\n"
-    "    pp -= fp;\n"
-    "    vec2 p0 = fp * con1.xy + con1.zw;\n"
-    "    vec2 p1 = p0 + con2.xy;\n"
-    "    vec2 p2 = p0 + con2.zw;\n"
-    "    vec2 p3 = p0 + con3.xy;\n"
-    "    vec4 bczzR, bczzG, bczzB, ijfeR, ijfeG, ijfeB;\n"
-    "    vec4 klhgR, klhgG, klhgB, zzonR, zzonG, zzonB;\n"
-    "    easu_gather(p0, bczzR, bczzG, bczzB);\n"
-    "    easu_gather(p1, ijfeR, ijfeG, ijfeB);\n"
-    "    easu_gather(p2, klhgR, klhgG, klhgB);\n"
-    "    easu_gather(p3, zzonR, zzonG, zzonB);\n"
-    "    vec4 bczzL = bczzB * 0.5 + (bczzR * 0.5 + bczzG);\n"
-    "    vec4 ijfeL = ijfeB * 0.5 + (ijfeR * 0.5 + ijfeG);\n"
-    "    vec4 klhgL = klhgB * 0.5 + (klhgR * 0.5 + klhgG);\n"
-    "    vec4 zzonL = zzonB * 0.5 + (zzonR * 0.5 + zzonG);\n"
-    "    float bL = bczzL.x, cL = bczzL.y;\n"
-    "    float iL = ijfeL.x, jL = ijfeL.y, fL = ijfeL.z, eL = ijfeL.w;\n"
-    "    float kL = klhgL.x, lL = klhgL.y, hL = klhgL.z, gL = klhgL.w;\n"
-    "    float oL = zzonL.z, nL = zzonL.w;\n"
+    "    vec2 pos = uv * insize - 0.5;\n"
+    "    vec2 pp = fract(pos);\n"
+    "    vec2 base = floor(pos) + 0.5;\n"
+    "#define TAP(x,y) frameSample((base + vec2(x,y)) / insize).rgb\n"
+    "    vec3 b = TAP(0.,-1.), c = TAP(1.,-1.);\n"
+    "    vec3 e = TAP(-1.,0.), f = TAP(0.,0.), g = TAP(1.,0.), h = TAP(2.,0.);\n"
+    "    vec3 i = TAP(-1.,1.), j = TAP(0.,1.), k = TAP(1.,1.), l = TAP(2.,1.);\n"
+    "    vec3 n = TAP(0.,2.), o = TAP(1.,2.);\n"
     "    vec2 dir = vec2(0.0);\n"
     "    float len = 0.0;\n"
-    "    easu_set(dir, len, pp, 0, bL, eL, fL, gL, jL);\n"
-    "    easu_set(dir, len, pp, 1, cL, fL, gL, hL, kL);\n"
-    "    easu_set(dir, len, pp, 2, fL, iL, jL, kL, nL);\n"
-    "    easu_set(dir, len, pp, 3, gL, jL, kL, lL, oL);\n"
+    "    easu_set(dir, len, pp, 0, luma(b), luma(e), luma(f), luma(g), luma(j));\n"
+    "    easu_set(dir, len, pp, 1, luma(c), luma(f), luma(g), luma(h), luma(k));\n"
+    "    easu_set(dir, len, pp, 2, luma(f), luma(i), luma(j), luma(k), luma(n));\n"
+    "    easu_set(dir, len, pp, 3, luma(g), luma(j), luma(k), luma(l), luma(o));\n"
     "    vec2 dir2 = dir * dir;\n"
     "    float dirR = dir2.x + dir2.y;\n"
     "    bool zro = dirR < (1.0 / 32768.0);\n"
-    "    dirR = inversesqrt(dirR);\n"
+    "    dirR = inversesqrt(max(dirR, 1.0 / 32768.0));\n"
     "    dirR = zro ? 1.0 : dirR;\n"
     "    dir.x = zro ? 1.0 : dir.x;\n"
     "    dir *= dirR;\n"
@@ -223,28 +174,57 @@ static const char present_fs_easu[] =
     "    vec2 len2 = vec2(1.0 + (stretch - 1.0) * len, 1.0 + (-0.5) * len);\n"
     "    float lob = 0.5 + ((0.25 - 0.04) - 0.5) * len;\n"
     "    float clp = 1.0 / lob;\n"
-    "    vec3 c0 = vec3(ijfeR.z, ijfeG.z, ijfeB.z);\n"
-    "    vec3 c1 = vec3(klhgR.w, klhgG.w, klhgB.w);\n"
-    "    vec3 c2 = vec3(ijfeR.y, ijfeG.y, ijfeB.y);\n"
-    "    vec3 c3 = vec3(klhgR.x, klhgG.x, klhgB.x);\n"
-    "    vec3 min4 = min(min(c0, c1), min(c2, c3));\n"
-    "    vec3 max4 = max(max(c0, c1), max(c2, c3));\n"
+    "    vec3 min4 = min(min(f, g), min(j, k));\n"
+    "    vec3 max4 = max(max(f, g), max(j, k));\n"
     "    vec3 aC = vec3(0.0);\n"
     "    float aW = 0.0;\n"
-    "    easu_tap(aC, aW, vec2(0.0, -1.0) - pp, dir, len2, lob, clp, vec3(bczzR.x, bczzG.x, bczzB.x));\n"
-    "    easu_tap(aC, aW, vec2(1.0, -1.0) - pp, dir, len2, lob, clp, vec3(bczzR.y, bczzG.y, bczzB.y));\n"
-    "    easu_tap(aC, aW, vec2(-1.0, 1.0) - pp, dir, len2, lob, clp, vec3(ijfeR.x, ijfeG.x, ijfeB.x));\n"
-    "    easu_tap(aC, aW, vec2(0.0, 1.0) - pp, dir, len2, lob, clp, vec3(ijfeR.y, ijfeG.y, ijfeB.y));\n"
-    "    easu_tap(aC, aW, vec2(0.0, 0.0) - pp, dir, len2, lob, clp, vec3(ijfeR.z, ijfeG.z, ijfeB.z));\n"
-    "    easu_tap(aC, aW, vec2(-1.0, 0.0) - pp, dir, len2, lob, clp, vec3(ijfeR.w, ijfeG.w, ijfeB.w));\n"
-    "    easu_tap(aC, aW, vec2(1.0, 1.0) - pp, dir, len2, lob, clp, vec3(klhgR.x, klhgG.x, klhgB.x));\n"
-    "    easu_tap(aC, aW, vec2(2.0, 1.0) - pp, dir, len2, lob, clp, vec3(klhgR.y, klhgG.y, klhgB.y));\n"
-    "    easu_tap(aC, aW, vec2(2.0, 0.0) - pp, dir, len2, lob, clp, vec3(klhgR.z, klhgG.z, klhgB.z));\n"
-    "    easu_tap(aC, aW, vec2(1.0, 0.0) - pp, dir, len2, lob, clp, vec3(klhgR.w, klhgG.w, klhgB.w));\n"
-    "    easu_tap(aC, aW, vec2(1.0, 2.0) - pp, dir, len2, lob, clp, vec3(zzonR.z, zzonG.z, zzonB.z));\n"
-    "    easu_tap(aC, aW, vec2(0.0, 2.0) - pp, dir, len2, lob, clp, vec3(zzonR.w, zzonG.w, zzonB.w));\n"
+    "    easu_tap(aC, aW, vec2(0.0, -1.0) - pp, dir, len2, lob, clp, b);\n"
+    "    easu_tap(aC, aW, vec2(1.0, -1.0) - pp, dir, len2, lob, clp, c);\n"
+    "    easu_tap(aC, aW, vec2(-1.0, 1.0) - pp, dir, len2, lob, clp, i);\n"
+    "    easu_tap(aC, aW, vec2(0.0, 1.0) - pp, dir, len2, lob, clp, j);\n"
+    "    easu_tap(aC, aW, vec2(0.0, 0.0) - pp, dir, len2, lob, clp, f);\n"
+    "    easu_tap(aC, aW, vec2(-1.0, 0.0) - pp, dir, len2, lob, clp, e);\n"
+    "    easu_tap(aC, aW, vec2(1.0, 1.0) - pp, dir, len2, lob, clp, k);\n"
+    "    easu_tap(aC, aW, vec2(2.0, 1.0) - pp, dir, len2, lob, clp, l);\n"
+    "    easu_tap(aC, aW, vec2(2.0, 0.0) - pp, dir, len2, lob, clp, h);\n"
+    "    easu_tap(aC, aW, vec2(1.0, 0.0) - pp, dir, len2, lob, clp, g);\n"
+    "    easu_tap(aC, aW, vec2(1.0, 2.0) - pp, dir, len2, lob, clp, o);\n"
+    "    easu_tap(aC, aW, vec2(0.0, 2.0) - pp, dir, len2, lob, clp, n);\n"
     "    vec3 pix = min(max4, max(min4, aC * (1.0 / aW)));\n"
     "    gl_FragColor = vec4(pix, 1.0);\n"
+    "}\n";
+
+/* A box integral in source-texel space. A linear sample combines two adjacent
+ * texels in each dimension with their exact covered lengths. At most nine
+ * texels intersect an 8-wide fractional interval. Intermediate reductions
+ * retain upload byte order, and the final pass decodes RGB. */
+static const char present_fs_area[] =
+    "#ifdef GL_ES\nprecision highp float;\n#endif\n"
+    "varying highp vec2 uv;\n"
+    "uniform highp sampler2D image;\n"
+    "uniform vec2 insize, footprint;\n"
+    "uniform int decode;\n"
+    "vec2 pair(float left, float span, float index) {\n"
+    "    float a = clamp(left + span - index, 0.0, 1.0) - clamp(left - index, 0.0, 1.0);\n"
+    "    float b = clamp(left + span - index - 1.0, 0.0, 1.0) - clamp(left - index - 1.0, 0.0, 1.0);\n"
+    "    return vec2(index + 0.5 + b / max(a + b, 1.0e-8), (a + b) / span);\n"
+    "}\n"
+    "void main() {\n"
+    "    vec2 left = uv * insize - 0.5 * footprint;\n"
+    "    vec2 start = floor(left);\n"
+    "    vec3 sum = vec3(0.0);\n"
+    "    for (int y = 0; y < 5; ++y) {\n"
+    "        float row = start.y + float(2*y);\n"
+    "        if (row >= left.y + footprint.y) break;\n"
+    "        vec2 wy = pair(left.y, footprint.y, row);\n"
+    "        for (int x = 0; x < 5; ++x) {\n"
+    "            float col = start.x + float(2*x);\n"
+    "            if (col >= left.x + footprint.x) break;\n"
+    "            vec2 wx = pair(left.x, footprint.x, col);\n"
+    "            sum += texture2D(image, vec2(wx.x, wy.x) / insize).rgb * (wx.y * wy.y);\n"
+    "        }\n"
+    "    }\n"
+    "    gl_FragColor = vec4(decode != 0 ? sum.bgr : sum, 1.0);\n"
     "}\n";
 
 #undef PRESENT_FRAME_SAMPLE
@@ -277,22 +257,15 @@ static const char present_fs_rcas[] =
     "    float range = max3(bL, dL, max3(eL, fL, hL)) - min3(bL, dL, min3(eL, fL, hL));\n"
     "    nz = clamp(abs(nz) / max(range, 1.0 / 32768.0), 0.0, 1.0);\n"
     "    nz = -0.5 * nz + 1.0;\n"
-    "    float mnR = min3(b.r, d.r, f.r); mnR = min(mnR, h.r);\n"
-    "    float mnG = min3(b.g, d.g, f.g); mnG = min(mnG, h.g);\n"
-    "    float mnB = min3(b.b, d.b, f.b); mnB = min(mnB, h.b);\n"
-    "    float mxR = max3(b.r, d.r, f.r); mxR = max(mxR, h.r);\n"
-    "    float mxG = max3(b.g, d.g, f.g); mxG = max(mxG, h.g);\n"
-    "    float mxB = max3(b.b, d.b, f.b); mxB = max(mxB, h.b);\n"
-    "    float hitMinR = min(mnR, e.r) / (4.0 * mxR);\n"
-    "    float hitMinG = min(mnG, e.g) / (4.0 * mxG);\n"
-    "    float hitMinB = min(mnB, e.b) / (4.0 * mxB);\n"
-    "    float hitMaxR = (1.0 - max(mxR, e.r)) / (4.0 * mnR - 4.0);\n"
-    "    float hitMaxG = (1.0 - max(mxG, e.g)) / (4.0 * mnG - 4.0);\n"
-    "    float hitMaxB = (1.0 - max(mxB, e.b)) / (4.0 * mnB - 4.0);\n"
-    "    float lobeR = max(-hitMinR, hitMaxR);\n"
-    "    float lobeG = max(-hitMinG, hitMaxG);\n"
-    "    float lobeB = max(-hitMinB, hitMaxB);\n"
-    "    float lobe = max(-0.1875, min(max3(lobeR, lobeG, lobeB), 0.0)) * sharp;\n"
+    "    vec3 mn = min(min(b, d), min(f, h));\n"
+    "    vec3 mx = max(max(b, d), max(f, h));\n"
+    "    vec3 hitMin = min(mn, e) / max(4.0 * mx, vec3(1.0 / 32768.0));\n"
+    "    vec3 hitMax = (1.0 - max(mx, e)) / min(4.0 * mn - 4.0, vec3(-1.0 / 32768.0));\n"
+    /* A constant zero/one ring cannot violate its corresponding bound. */
+    "    hitMin += 1.0 - step(vec3(1.0 / 32768.0), mx);\n"
+    "    hitMax -= 1.0 - step(vec3(1.0 / 32768.0), 1.0 - mn);\n"
+    "    vec3 limits = max(-hitMin, hitMax);\n"
+    "    float lobe = clamp(max3(limits.r, limits.g, limits.b), -0.1875, 0.0) * sharp;\n"
     "    lobe *= nz;\n"
     "    vec3 res = (lobe * b + lobe * d + lobe * h + lobe * f + e) / (4.0 * lobe + 1.0);\n"
     "    gl_FragColor = vec4(res, 1.0);\n"
@@ -308,6 +281,11 @@ static void present_delete(nj_gles2 *s)
         s->present_texel[i] = -1;
         s->present_outsize[i] = -1;
     }
+    if (s->present_reduce_tex) s->gl.DeleteTextures(1, &s->present_reduce_tex);
+    s->present_reduce_tex = 0;
+    memset(&s->present_reduce_storage, 0, sizeof s->present_reduce_storage);
+    if (s->present_area) s->gl.DeleteProgram(s->present_area);
+    s->present_area = 0;
     if (s->present_stage_tex) s->gl.DeleteTextures(1, &s->present_stage_tex);
     if (s->present_stage_fbo) s->gl.DeleteFramebuffers(1, &s->present_stage_fbo);
     s->present_stage_tex = s->present_stage_fbo = 0;
@@ -408,23 +386,22 @@ static int present_init(nj_gles2 *s)
     }
     s->present_fsr_easu = present_simple_program(s, present_fs_easu);
     s->present_fsr_rcas = present_simple_program(s, present_fs_rcas);
-    if (!s->present_fsr_easu || !s->present_fsr_rcas) {
+    s->present_area = present_simple_program(s, present_fs_area);
+    if (!s->present_fsr_easu || !s->present_fsr_rcas || !s->present_area) {
         goto fail;
     }
     s->present_fsr_easu_sampler = s->gl.GetUniformLocation(s->present_fsr_easu, "image");
     s->present_fsr_easu_insize = s->gl.GetUniformLocation(s->present_fsr_easu, "insize");
-    s->present_fsr_easu_outsize = s->gl.GetUniformLocation(s->present_fsr_easu, "outsize");
-    s->present_fsr_easu_con[0] = s->gl.GetUniformLocation(s->present_fsr_easu, "con0");
-    s->present_fsr_easu_con[1] = s->gl.GetUniformLocation(s->present_fsr_easu, "con1");
-    s->present_fsr_easu_con[2] = s->gl.GetUniformLocation(s->present_fsr_easu, "con2");
-    s->present_fsr_easu_con[3] = s->gl.GetUniformLocation(s->present_fsr_easu, "con3");
+    s->present_area_sampler = s->gl.GetUniformLocation(s->present_area, "image");
+    s->present_area_insize = s->gl.GetUniformLocation(s->present_area, "insize");
+    s->present_area_footprint = s->gl.GetUniformLocation(s->present_area, "footprint");
+    s->present_area_decode = s->gl.GetUniformLocation(s->present_area, "decode");
     s->present_fsr_rcas_sampler = s->gl.GetUniformLocation(s->present_fsr_rcas, "image");
     s->present_fsr_rcas_texel = s->gl.GetUniformLocation(s->present_fsr_rcas, "texel");
     s->present_fsr_rcas_sharp = s->gl.GetUniformLocation(s->present_fsr_rcas, "sharp");
     if (s->present_fsr_easu_sampler < 0 || s->present_fsr_easu_insize < 0 ||
-        s->present_fsr_easu_outsize < 0 || s->present_fsr_easu_con[0] < 0 ||
-        s->present_fsr_easu_con[1] < 0 || s->present_fsr_easu_con[2] < 0 ||
-        s->present_fsr_easu_con[3] < 0 || s->present_fsr_rcas_sampler < 0 ||
+        s->present_area_sampler < 0 || s->present_area_insize < 0 ||
+        s->present_area_footprint < 0 || s->present_area_decode < 0 || s->present_fsr_rcas_sampler < 0 ||
         s->present_fsr_rcas_texel < 0 || s->present_fsr_rcas_sharp < 0) goto fail;
     s->gl.GenTextures(1, &s->present_input);
     s->gl.GenTextures(1, &s->present_target);
@@ -441,78 +418,6 @@ fail:
         (void)clean_errors(s);
     }
     return 0;
-}
-
-/* FSR1: EASU upscales the uploaded input into present_stage_tex, then RCAS
- * sharpens that into present_target.  Both draws use the shared quad. */
-static int present_fsr(nj_gles2 *s, int in_w, int in_h, int out_w, int out_h,
-                       nj_u1 *out)
-{
-    static const GLfloat quad[8] = {-1, -1, 1, -1, -1, 1, 1, 1};
-    static const GLfloat uvs[8] = {0, 0, 1, 0, 0, 1, 1, 1};
-    GLfloat iw = (GLfloat)in_w, ih = (GLfloat)in_h;
-    GLfloat ow = (GLfloat)out_w, oh = (GLfloat)out_h;
-    GLfloat sx = iw / ow, sy = ih / oh;
-    GLfloat con0[4] = {sx, sy, 0.5f * sx - 0.5f, 0.5f * sy - 0.5f};
-    GLfloat con1[4] = {1.0f / iw, 1.0f / ih, 1.0f / iw, -1.0f / ih};
-    GLfloat con2[4] = {-1.0f / iw, 2.0f / ih, 1.0f / iw, 2.0f / ih};
-    GLfloat con3[4] = {0.0f, 4.0f / ih, 0.0f, 0.0f};
-
-    texture(s, s->present_stage_tex);
-    if (!texture_upload(s, &s->present_stage_storage, out_w, out_h, GL_RGBA, NULL))
-        return 0;
-    s->gl.BindFramebuffer(GL_FRAMEBUFFER, s->present_stage_fbo);
-    s->gl.FramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
-                               s->present_stage_tex, 0);
-    if (s->gl.CheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
-        return 0;
-    }
-    s->gl.Viewport(0, 0, out_w, out_h);
-    s->gl.UseProgram(s->present_fsr_easu);
-    s->gl.ActiveTexture(GL_TEXTURE0);
-    s->gl.BindTexture(GL_TEXTURE_2D, s->present_input);
-    s->gl.Uniform1i(s->present_fsr_easu_sampler, 0);
-    s->gl.Uniform2f(s->present_fsr_easu_insize, iw, ih);
-    s->gl.Uniform2f(s->present_fsr_easu_outsize, ow, oh);
-    s->gl.Uniform4f(s->present_fsr_easu_con[0], con0[0], con0[1], con0[2], con0[3]);
-    s->gl.Uniform4f(s->present_fsr_easu_con[1], con1[0], con1[1], con1[2], con1[3]);
-    s->gl.Uniform4f(s->present_fsr_easu_con[2], con2[0], con2[1], con2[2], con2[3]);
-    s->gl.Uniform4f(s->present_fsr_easu_con[3], con3[0], con3[1], con3[2], con3[3]);
-    s->gl.EnableVertexAttribArray(0); s->gl.EnableVertexAttribArray(1);
-    s->gl.VertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, quad);
-    s->gl.VertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 0, uvs);
-    s->gl.DrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-    s->gl.DisableVertexAttribArray(0); s->gl.DisableVertexAttribArray(1);
-
-    texture(s, s->present_target);
-    if (!texture_upload(s, &s->present_target_storage, out_w, out_h, GL_RGBA, NULL)) {
-        return 0;
-    }
-    s->gl.BindFramebuffer(GL_FRAMEBUFFER, s->present_fbo);
-    s->gl.FramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
-                               s->present_target, 0);
-    if (s->gl.CheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
-        return 0;
-    }
-    s->gl.Viewport(0, 0, out_w, out_h);
-    s->gl.UseProgram(s->present_fsr_rcas);
-    s->gl.ActiveTexture(GL_TEXTURE0);
-    s->gl.BindTexture(GL_TEXTURE_2D, s->present_stage_tex);
-    s->gl.Uniform1i(s->present_fsr_rcas_sampler, 0);
-    s->gl.Uniform2f(s->present_fsr_rcas_texel, 1.0f / ow, 1.0f / oh);
-    s->gl.Uniform1f(s->present_fsr_rcas_sharp, s->present_sharp);
-    s->gl.EnableVertexAttribArray(0); s->gl.EnableVertexAttribArray(1);
-    s->gl.VertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, quad);
-    s->gl.VertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 0, uvs);
-    s->gl.DrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-    s->gl.DisableVertexAttribArray(0); s->gl.DisableVertexAttribArray(1);
-    s->gl.VertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, NULL);
-    s->gl.VertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 0, NULL);
-
-    s->gl.PixelStorei(GL_PACK_ALIGNMENT, 1);
-    s->gl.ReadPixels(0, 0, out_w, out_h, GL_RGBA, GL_UNSIGNED_BYTE, out);
-    s->gl.BindFramebuffer(GL_FRAMEBUFFER, 0);
-    return 1;
 }
 
 /* A physical presentation frame has its own budget, separate from draw ROIs. */
@@ -562,15 +467,14 @@ static int present_upload(nj_gles2 *s, const nj_surface *src)
     return texture_upload(s, &s->present_input_storage, src->width, src->height, GL_RGBA, pixels);
 }
 
-/* Render one frame through the offscreen shader pass.  Returns 1 on success,
- * 0 when the GL context is not current or the pass failed (the caller then
- * falls back to the software presentation unchanged).  Same surface formats
- * as the rest of the backend are accepted. */
-int nj_gles2_present(void *ud, const nj_surface *src, int mode, int out_w, int out_h,
-                     nj_u1 *out)
+/* All destinations use the same spatial filter, with the final quad flipped
+ * vertically only for a window (or its capture). */
+static int present_draw(nj_gles2 *s, int mode, int sw, int sh, GLuint fbo,
+                        int x, int y, int w, int h, int flip);
+
+static int present_offscreen(void *ud, const nj_surface *src, int mode, int out_w, int out_h,
+                             GLenum read_format, nj_u1 *out)
 {
-    static const GLfloat quad[8] = {-1,-1, 1,-1, -1,1, 1,1};
-    static const GLfloat uv[8] = {0,0, 1,0, 0,1, 1,1};
     nj_gles2 *s = (nj_gles2 *)ud;
 #if !defined(__ANDROID__)
 #define NJ_PRESENT_DBG(why) do { \
@@ -590,12 +494,6 @@ int nj_gles2_present(void *ud, const nj_surface *src, int mode, int out_w, int o
         NJ_PRESENT_DBG("out size"); return 0;
     }
     if (!present_upload(s, src)) { NJ_PRESENT_DBG("input upload"); return 0; }
-    if (mode == 5) {
-        if (!present_fsr(s, src->width, src->height, out_w, out_h, out)) {
-            return 0;
-        }
-        return clean_errors(s);
-    }
     texture(s, s->present_target);
     if (!texture_upload(s, &s->present_target_storage, out_w, out_h, GL_RGBA, NULL)) {
         NJ_PRESENT_DBG("target upload"); return 0;
@@ -606,76 +504,132 @@ int nj_gles2_present(void *ud, const nj_surface *src, int mode, int out_w, int o
     if (s->gl.CheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
         NJ_PRESENT_DBG("fbo incomplete"); return 0;
     }
-    s->gl.Viewport(0, 0, out_w, out_h);
-    s->gl.UseProgram(s->present_program[mode]);
-    s->gl.ActiveTexture(GL_TEXTURE0);
-    s->gl.BindTexture(GL_TEXTURE_2D, s->present_input);
-    s->gl.Uniform1i(s->present_sampler[mode], 0);
-    if (s->present_texel[mode] >= 0)
-        s->gl.Uniform2f(s->present_texel[mode], 1.0f / (float)src->width, 1.0f / (float)src->height);
-    if (s->present_outsize[mode] >= 0)
-        s->gl.Uniform2f(s->present_outsize[mode], (float)out_w, (float)out_h);
-    s->gl.EnableVertexAttribArray(0); s->gl.EnableVertexAttribArray(1);
-    s->gl.VertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, quad);
-    s->gl.VertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 0, uv);
-    s->gl.DrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-    s->gl.DisableVertexAttribArray(0); s->gl.DisableVertexAttribArray(1);
-    s->gl.VertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, NULL);
-    s->gl.VertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 0, NULL);
+    if (!present_draw(s, mode, src->width, src->height, s->present_fbo, 0, 0, out_w, out_h, 0))
+        return 0;
     s->gl.PixelStorei(GL_PACK_ALIGNMENT, 1);
-    s->gl.ReadPixels(0, 0, out_w, out_h, GL_RGBA, GL_UNSIGNED_BYTE, out);
+    s->gl.ReadPixels(0, 0, out_w, out_h, read_format, GL_UNSIGNED_BYTE, out);
     s->gl.BindFramebuffer(GL_FRAMEBUFFER, 0);
     return clean_errors(s);
 }
 
-/*
- * Draw the presentation quad for the loaded input texture.  The caller has
- * already bound the destination framebuffer and set the viewport.
- */
-static int present_draw_quad(nj_gles2 *s, int mode, int src_w, int src_h,
-                             int out_w, int out_h, int flip)
+int nj_gles2_present(void *ud, const nj_surface *src, int mode, int out_w, int out_h,
+                     nj_u1 *out)
 {
-    static const GLfloat quad[8] = {-1, -1, 1, -1, -1, 1, 1, 1};
-    static const GLfloat uv_flat[8] = {0, 0, 1, 0, 1, 1, 0, 1};
-    static const GLfloat uv_flip[8] = {1, 1, 0, 1, 0, 0, 1, 0};
-    static const GLfloat uv_vflip[8] = {0, 1, 1, 1, 0, 0, 1, 0};
-    const GLfloat *uv = (flip == 2) ? uv_vflip : (flip ? uv_flip : uv_flat);
-
-    s->gl.UseProgram(s->present_program[mode]);
-    s->gl.ActiveTexture(GL_TEXTURE0);
-    s->gl.BindTexture(GL_TEXTURE_2D, s->present_input);
-    s->gl.Uniform1i(s->present_sampler[mode], 0);
-    if (s->present_texel[mode] >= 0)
-        s->gl.Uniform2f(s->present_texel[mode], 1.0f / (float)src_w, 1.0f / (float)src_h);
-    if (s->present_outsize[mode] >= 0)
-        s->gl.Uniform2f(s->present_outsize[mode], (float)out_w, (float)out_h);
-    s->gl.EnableVertexAttribArray(0);
-    s->gl.EnableVertexAttribArray(1);
-    s->gl.VertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, quad);
-    s->gl.VertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 0, uv);
-    s->gl.DrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-    s->gl.DisableVertexAttribArray(0);
-    s->gl.DisableVertexAttribArray(1);
-    s->gl.VertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, NULL);
-    s->gl.VertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 0, NULL);
-    return clean_errors(s);
+    return present_offscreen(ud, src, mode, out_w, out_h, GL_RGBA, out);
 }
 
-/*
- * On-screen variant: render the presentation shader straight into the
- * current draw framebuffer (framebuffer 0) with no readback.  Used by the
- * Android window presentation path; the desktop SDL2 port keeps using
- * nj_gles2_present() so its PPM comparison tooling stays unchanged.
- *
- * FSR1 draws EASU into an intermediate texture, then RCAS into the window.
- */
-/* Debug aid: draw the same on-screen quad into a temporary offscreen
- * framebuffer of the full drawable and read it back.  Unlike a window-surface
- * readback this works on drivers that cannot read the window surface before
- * the swap; it answers "is the picture we draw correct?" independently of the
- * system compositor. */
-static int present_fsr_screen(nj_gles2 *s, int in_w, int in_h, int vp_x, int vp_y,
-                              int vp_w, int vp_h);
+int nj_gles2_present_bgra(void *ud, const nj_surface *src, int mode, int out_w, int out_h,
+                          nj_u1 *out)
+{
+    const GLenum bgra = 0x80E1; /* GL_BGRA_EXT, absent from core ES2 headers */
+    return present_offscreen(ud, src, mode, out_w, out_h, bgra, out);
+}
+
+static void present_quad(nj_gles2 *s, int flip)
+{
+    static const GLfloat quad[8] = {-1, -1, 1, -1, -1, 1, 1, 1};
+    static const GLfloat flat[8] = {0, 0, 1, 0, 0, 1, 1, 1};
+    static const GLfloat flipped[8] = {0, 1, 1, 1, 0, 0, 1, 0};
+    s->gl.EnableVertexAttribArray(0); s->gl.EnableVertexAttribArray(1);
+    s->gl.VertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, quad);
+    s->gl.VertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 0, flip ? flipped : flat);
+    s->gl.DrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    s->gl.DisableVertexAttribArray(0); s->gl.DisableVertexAttribArray(1);
+    s->gl.VertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, NULL);
+    s->gl.VertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 0, NULL);
+}
+
+/* Bind a reusable intermediate target, separate from the source and the final
+ * destination. The second texture is needed only for successive wide reductions. */
+static int present_stage(nj_gles2 *s, GLuint tex, texture_storage *storage, int w, int h)
+{
+    if (w > s->max_viewport[0] || h > s->max_viewport[1]) return 0;
+    texture(s, tex);
+    if (!texture_upload(s, storage, w, h, GL_RGBA, NULL)) return 0;
+    s->gl.BindFramebuffer(GL_FRAMEBUFFER, s->present_stage_fbo);
+    s->gl.FramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, tex, 0);
+    if (s->gl.CheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) return 0;
+    s->gl.Viewport(0, 0, w, h);
+    return 1;
+}
+
+static void present_area_pass(nj_gles2 *s, GLuint src, int sw, int sh,
+                              int w, int h, int decode, int flip)
+{
+    s->gl.UseProgram(s->present_area);
+    s->gl.BindTexture(GL_TEXTURE_2D, src);
+    s->gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    s->gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    s->gl.Uniform1i(s->present_area_sampler, 0);
+    s->gl.Uniform2f(s->present_area_insize, (float)sw, (float)sh);
+    /* Unit width on an expanding axis gives linear interpolation there. */
+    s->gl.Uniform2f(s->present_area_footprint, sw > w ? (float)sw/w : 1.0f,
+                    sh > h ? (float)sh/h : 1.0f);
+    s->gl.Uniform1i(s->present_area_decode, decode);
+    present_quad(s, flip);
+}
+
+static int present_draw(nj_gles2 *s, int mode, int sw, int sh, GLuint fbo,
+                        int x, int y, int w, int h, int flip)
+{
+    GLuint src = s->present_input;
+    s->gl.ActiveTexture(GL_TEXTURE0);
+    if (mode == 5 && sw == w && sh == h) mode = 0; /* exact native copy */
+    if (mode != 5) {
+        s->gl.UseProgram(s->present_program[mode]);
+        s->gl.BindTexture(GL_TEXTURE_2D, src);
+        s->gl.Uniform1i(s->present_sampler[mode], 0);
+        if (s->present_texel[mode] >= 0)
+            s->gl.Uniform2f(s->present_texel[mode], 1.0f/sw, 1.0f/sh);
+        if (s->present_outsize[mode] >= 0)
+            s->gl.Uniform2f(s->present_outsize[mode], (float)w, (float)h);
+    } else if (sw > w || sh > h) {
+        /* Bound the shader loop on ES2 even for a huge frame in a tiny viewport. */
+        while ((sw-1)/8 >= w || (sh-1)/8 >= h) {
+            int nw = (sw-1)/8 >= w ? (sw+7)/8 : sw;
+            int nh = (sh-1)/8 >= h ? (sh+7)/8 : sh;
+            GLuint next = s->present_stage_tex;
+            texture_storage *storage = &s->present_stage_storage;
+            if (src == next) {
+                if (!s->present_reduce_tex) s->gl.GenTextures(1, &s->present_reduce_tex);
+                next = s->present_reduce_tex;
+                storage = &s->present_reduce_storage;
+            }
+            if (!next || !present_stage(s, next, storage, nw, nh)) return 0;
+            present_area_pass(s, src, sw, sh, nw, nh, 0, 0);
+            src = next; sw = nw; sh = nh;
+        }
+        s->gl.BindFramebuffer(GL_FRAMEBUFFER, fbo);
+        s->gl.Viewport(x, y, w, h);
+        present_area_pass(s, src, sw, sh, w, h, 1, flip);
+        return clean_errors(s);
+    } else {
+        /* EASU's performance preset reconstructs at 2x per axis. For a larger
+         * display, reconstruct at that density and interpolate the RCAS cross
+         * on that same grid. This keeps sharpening in reconstructed texels. */
+        int rw = w > 2*sw ? 2*sw : w;
+        int rh = h > 2*sh ? 2*sh : h;
+        if (!present_stage(s, s->present_stage_tex, &s->present_stage_storage, rw, rh)) return 0;
+        s->gl.UseProgram(s->present_fsr_easu);
+        s->gl.BindTexture(GL_TEXTURE_2D, src);
+        s->gl.Uniform1i(s->present_fsr_easu_sampler, 0);
+        s->gl.Uniform2f(s->present_fsr_easu_insize, (float)sw, (float)sh);
+        present_quad(s, 0);
+        s->gl.UseProgram(s->present_fsr_rcas);
+        s->gl.BindTexture(GL_TEXTURE_2D, s->present_stage_tex);
+        if (rw != w || rh != h) {
+            s->gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+            s->gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        }
+        s->gl.Uniform1i(s->present_fsr_rcas_sampler, 0);
+        s->gl.Uniform2f(s->present_fsr_rcas_texel, 1.0f/rw, 1.0f/rh);
+        s->gl.Uniform1f(s->present_fsr_rcas_sharp, s->present_sharp);
+    }
+    s->gl.BindFramebuffer(GL_FRAMEBUFFER, fbo);
+    s->gl.Viewport(x, y, w, h);
+    present_quad(s, flip);
+    return clean_errors(s);
+}
 
 int nj_gles2_present_onscreen_capture(void *ud, const nj_surface *src, int mode,
                                       int vp_x, int vp_y, int vp_w, int vp_h,
@@ -690,8 +644,9 @@ int nj_gles2_present_onscreen_capture(void *ud, const nj_surface *src, int mode,
     if (!current(s) || !present_init(s)) return 0;
     if (!present_dimensions(s, out_w, out_h) ||
         out_w > s->max_viewport[0] || out_h > s->max_viewport[1]) return 0;
-    if (vp_w <= 0 || vp_h <= 0 || vp_x < 0 || vp_y < 0) return 0;
-    if (vp_x > out_w - vp_w || vp_y > out_h - vp_h) return 0;
+    if (vp_w <= 0 || vp_h <= 0 || vp_w > s->max_viewport[0] || vp_h > s->max_viewport[1] ||
+        (nj_s8)vp_x + vp_w > INT_MAX || (nj_s8)vp_y + vp_h > INT_MAX ||
+        (mode == 5 && !present_dimensions(s, vp_w, vp_h))) return 0;
     w = out_w;
     h = out_h;
     if (!present_upload(s, src)) return 0;
@@ -713,9 +668,7 @@ int nj_gles2_present_onscreen_capture(void *ud, const nj_surface *src, int mode,
         s->gl.Viewport(0, 0, w, h);
         s->gl.ClearColor(0.0f, 0.0f, 0.0f, 1.0f);
         s->gl.Clear(GL_COLOR_BUFFER_BIT);
-        s->gl.Viewport(vp_x, vp_y, vp_w, vp_h);
-        if (mode == 5 ? present_fsr_screen(s, src->width, src->height, vp_x, vp_y, vp_w, vp_h)
-                      : present_draw_quad(s, mode, src->width, src->height, vp_w, vp_h, 2)) {
+        if (present_draw(s, mode, src->width, src->height, fbo, vp_x, vp_y, vp_w, vp_h, 1)) {
             s->gl.PixelStorei(GL_PACK_ALIGNMENT, 1);
             s->gl.ReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, out_rgba);
             ok = clean_errors(s);
@@ -740,69 +693,6 @@ int nj_gles2_present_readback(void *ud, int w, int h, nj_u1 *out_rgba)
     return clean_errors(s);
 }
 
-/* Two-pass FSR1 (EASU -> RCAS) straight into the current framebuffer.  The
- * EASU stage is an offscreen texture the size of the destination viewport;
- * RCAS then draws it into the bound framebuffer (window or capture FBO) with
- * the vertical flip the window path needs.  No readback happens here. */
-static int present_fsr_screen(nj_gles2 *s, int in_w, int in_h, int vp_x, int vp_y,
-                              int vp_w, int vp_h)
-{
-    static const GLfloat quad[8] = {-1, -1, 1, -1, -1, 1, 1, 1};
-    static const GLfloat uvs[8] = {0, 0, 1, 0, 0, 1, 1, 1};
-    static const GLfloat uvs_vflip[8] = {0, 1, 1, 1, 0, 0, 1, 0};
-    GLint binding = 0;
-    GLfloat iw = (GLfloat)in_w, ih = (GLfloat)in_h;
-    GLfloat ow = (GLfloat)vp_w, oh = (GLfloat)vp_h;
-    GLfloat sx = iw / ow, sy = ih / oh;
-    GLfloat con0[4] = {sx, sy, 0.5f * sx - 0.5f, 0.5f * sy - 0.5f};
-    GLfloat con1[4] = {1.0f / iw, 1.0f / ih, 1.0f / iw, -1.0f / ih};
-    GLfloat con2[4] = {-1.0f / iw, 2.0f / ih, 1.0f / iw, 2.0f / ih};
-    GLfloat con3[4] = {0.0f, 4.0f / ih, 0.0f, 0.0f};
-
-    s->gl.GetIntegerv(GL_FRAMEBUFFER_BINDING, &binding);
-    texture(s, s->present_stage_tex);
-    if (!texture_upload(s, &s->present_stage_storage, vp_w, vp_h, GL_RGBA, NULL))
-        return 0;
-    s->gl.BindFramebuffer(GL_FRAMEBUFFER, s->present_stage_fbo);
-    s->gl.FramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
-                               s->present_stage_tex, 0);
-    if (s->gl.CheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
-        return 0;
-    s->gl.Viewport(0, 0, vp_w, vp_h);
-    s->gl.UseProgram(s->present_fsr_easu);
-    s->gl.ActiveTexture(GL_TEXTURE0);
-    s->gl.BindTexture(GL_TEXTURE_2D, s->present_input);
-    s->gl.Uniform1i(s->present_fsr_easu_sampler, 0);
-    s->gl.Uniform2f(s->present_fsr_easu_insize, iw, ih);
-    s->gl.Uniform2f(s->present_fsr_easu_outsize, ow, oh);
-    s->gl.Uniform4f(s->present_fsr_easu_con[0], con0[0], con0[1], con0[2], con0[3]);
-    s->gl.Uniform4f(s->present_fsr_easu_con[1], con1[0], con1[1], con1[2], con1[3]);
-    s->gl.Uniform4f(s->present_fsr_easu_con[2], con2[0], con2[1], con2[2], con2[3]);
-    s->gl.Uniform4f(s->present_fsr_easu_con[3], con3[0], con3[1], con3[2], con3[3]);
-    s->gl.EnableVertexAttribArray(0); s->gl.EnableVertexAttribArray(1);
-    s->gl.VertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, quad);
-    s->gl.VertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 0, uvs);
-    s->gl.DrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-    s->gl.DisableVertexAttribArray(0); s->gl.DisableVertexAttribArray(1);
-
-    s->gl.BindFramebuffer(GL_FRAMEBUFFER, (GLuint)binding);
-    s->gl.Viewport(vp_x, vp_y, vp_w, vp_h);
-    s->gl.UseProgram(s->present_fsr_rcas);
-    s->gl.ActiveTexture(GL_TEXTURE0);
-    s->gl.BindTexture(GL_TEXTURE_2D, s->present_stage_tex);
-    s->gl.Uniform1i(s->present_fsr_rcas_sampler, 0);
-    s->gl.Uniform2f(s->present_fsr_rcas_texel, 1.0f / ow, 1.0f / oh);
-    s->gl.Uniform1f(s->present_fsr_rcas_sharp, s->present_sharp);
-    s->gl.EnableVertexAttribArray(0); s->gl.EnableVertexAttribArray(1);
-    s->gl.VertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, quad);
-    s->gl.VertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 0, uvs_vflip);
-    s->gl.DrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-    s->gl.DisableVertexAttribArray(0); s->gl.DisableVertexAttribArray(1);
-    s->gl.VertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, NULL);
-    s->gl.VertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 0, NULL);
-    return clean_errors(s);
-}
-
 int nj_gles2_present_onscreen(void *ud, const nj_surface *src, int mode,
                               int vp_x, int vp_y, int vp_w, int vp_h)
 {
@@ -811,10 +701,10 @@ int nj_gles2_present_onscreen(void *ud, const nj_surface *src, int mode,
     if (!s || !src || !src->pixels) return 0;
     if (mode < 0 || mode >= NJ_GL_PRESENT_MODES) return 0;
     if (!current(s) || !present_init(s)) return 0;
-    if (vp_w <= 0 || vp_h <= 0 || vp_x < 0 || vp_y < 0) return 0;
-    if (vp_x > s->max_viewport[0] - vp_w || vp_y > s->max_viewport[1] - vp_h ||
-        (mode == 5 && !present_dimensions(s, vp_w, vp_h)))
-        return 0;
+    /* Zoomed windows may crop a viewport whose origin is outside the drawable. */
+    if (vp_w <= 0 || vp_h <= 0 || vp_w > s->max_viewport[0] || vp_h > s->max_viewport[1] ||
+        (nj_s8)vp_x + vp_w > INT_MAX || (nj_s8)vp_y + vp_h > INT_MAX ||
+        (mode == 5 && !present_dimensions(s, vp_w, vp_h))) return 0;
     if (!present_upload(s, src)) return 0;
 
     /* The window path fills the whole drawable: black bars first, then the
@@ -824,13 +714,7 @@ int nj_gles2_present_onscreen(void *ud, const nj_surface *src, int mode,
     s->gl.Viewport(0, 0, s->max_viewport[0], s->max_viewport[1]);
     s->gl.ClearColor(0.0f, 0.0f, 0.0f, 1.0f);
     s->gl.Clear(GL_COLOR_BUFFER_BIT);
-    s->gl.Viewport(vp_x, vp_y, vp_w, vp_h);
-    if (mode == 5)
-        return present_fsr_screen(s, src->width, src->height, vp_x, vp_y, vp_w, vp_h);
-    /* A window framebuffer's row 0 is the bottom of the visible window, so the
-     * texture needs its vertical axis flipped; horizontal orientation matches
-     * the CPU framebuffer. */
-    return present_draw_quad(s, mode, src->width, src->height, vp_w, vp_h, 2);
+    return present_draw(s, mode, src->width, src->height, 0, vp_x, vp_y, vp_w, vp_h, 1);
 }
 
 

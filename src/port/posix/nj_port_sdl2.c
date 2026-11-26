@@ -186,6 +186,10 @@ typedef struct sdl2_gles2 {
     nj_u8 fills, blits, rasters, declines, triangles, batches;
     /* A1 offscreen presentation shader pass (NJ_GL_PRESENT* env). */
     int present_mode, present_scale, present_left, present_index;
+    int present_bgra;
+    unsigned int present_frames;
+    unsigned char *present_readback;
+    size_t present_readback_bytes;
     char present_prefix[512];
     int present_window;      /* NJ_GL_PRESENT: present through the shader pass */
     int present_ok;          /* this frame has a shader-presented texture ready */
@@ -454,6 +458,9 @@ static void sdl2_gles2_triangles_abort(void *ud)
  * and only then abandon CPU state; never issue GL deletes in another context. */
 static void sdl2_gles2_close(sdl2_gles2 *s)
 {
+    free(s->present_readback);
+    s->present_readback = NULL;
+    s->present_readback_bytes = 0;
     if (s->present_texture) {
         SDL_DestroyTexture(s->present_texture);
         s->present_texture = NULL;
@@ -624,7 +631,7 @@ static void sdl2_gles2_open(sdl2_gles2 *s)
                         "gfx: NJ_GL_PRESENT needs --graphics gles2; using software path");
         } else {
             mode = mode_env && mode_env[0] ? SDL_atoi(mode_env) : 0;
-            s->present_scale = scale_env ? SDL_atoi(scale_env) : 2;
+            s->present_scale = scale_env ? SDL_atoi(scale_env) : (mode == 5 ? 0 : 2);
             s->present_left = count_env ? SDL_atoi(count_env) : 1;
             if (s->present_scale < 0) s->present_scale = 1;
             if (s->present_scale > 8) s->present_scale = 8;
@@ -639,11 +646,15 @@ static void sdl2_gles2_open(sdl2_gles2 *s)
                 SDL_snprintf(s->present_prefix, sizeof s->present_prefix, "%s",
                              dump_prefix);
             }
+            s->present_bgra = !s->present_prefix[0] &&
+                              (config.desktop_gl || SDL_GL_ExtensionSupported("GL_EXT_read_format_bgra"));
+            char scale_label[24] = "drawable fit";
+            if (s->present_scale)
+                SDL_snprintf(scale_label, sizeof scale_label, "scale x%d", s->present_scale);
             SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
-                        "gfx: presentation shader pass mode %d%s%s; scale x%d",
+                        "gfx: presentation shader pass mode %d%s%s; %s",
                         mode, s->present_window ? " (window)" : "",
-                        s->present_prefix[0] ? " (dumping PPM)" : "",
-                        s->present_scale);
+                        s->present_prefix[0] ? " (dumping PPM)" : "", scale_label);
         }
     }
 done:
@@ -674,6 +685,7 @@ typedef struct sdl_state {
     SDL_Window   *window;
     SDL_Renderer *renderer;
     SDL_Texture  *texture;
+    int logical_texture_current; /* safe to upload just the next dirty rectangle */
 #if NJ_SDL2_GLES2
     sdl2_gles2 gfx;
 #endif
@@ -1170,6 +1182,7 @@ static int sdl_display_init(void *ud, int *w, int *h, int *stride, void **px)
         if (s->text_always) { SDL_StartTextInput(); }
     }
 
+    s->logical_texture_current = 0;
     s->texture = SDL_CreateTexture(s->renderer, sdl_pixel_format(NJ_PIXFMT),
                                    SDL_TEXTUREACCESS_STREAMING,
                                    s->width, s->height);
@@ -2591,9 +2604,8 @@ static void sdl_draw_filter(sdl_state *s)
 }
 
 #if NJ_SDL2_GLES2
-/* A1: render one frame through the offscreen presentation shader pass and
- * write it as a PPM for frame-parity comparison.  Optional and env-gated: it
- * never runs unless NJ_GL_PRESENT_DUMP is set. */
+/* Shader output is sized in drawable pixels. An explicit multiplier still
+ * selects a fixed intermediate for captures and controlled comparisons. */
 static void sdl2_gles2_present_frame(sdl2_gles2 *s, SDL_Renderer *renderer,
                                      int width, int height,
                                      int stride, int format, void *pixels,
@@ -2601,87 +2613,121 @@ static void sdl2_gles2_present_frame(sdl2_gles2 *s, SDL_Renderer *renderer,
 {
     sdl2_gl_binding previous;
     nj_surface src;
-    unsigned char *rgba, *row;
-    char path[600];
-    FILE *f;
-    clock_t started;
-    int out_w, out_h, ok, x, y;
+    unsigned char *rgba = NULL;
+    size_t bytes;
+    int out_w, out_h, ok = 0, locked = 0;
+    int dumping = s->present_prefix[0] && s->present_left > 0;
+    int log_frame;
+    Uint64 started;
 
-    if (!s->backend || width <= 0 || height <= 0) return;
-    if (!s->present_window && (!s->present_prefix[0] || s->present_left <= 0)) return;
-    if (s->present_scale > 0) {
-        out_w = width * s->present_scale;
-        out_h = height * s->present_scale;
-    } else {
-        /* auto: one shader output pixel per displayed pixel */
-        out_w = area_w;
-        out_h = area_h;
-        if (out_w < width) out_w = width;
-        if (out_h < height) out_h = height;
+    s->present_ok = 0;
+    if (!s->backend || (!s->present_window && !dumping)) return;
+    if (width <= 0 || height <= 0 ||
+        (unsigned)width > NJ_GL_PRESENT_MAX_PIXELS / (unsigned)height) return;
+    out_w = s->present_scale ? width * s->present_scale : area_w;
+    out_h = s->present_scale ? height * s->present_scale : area_h;
+    if (out_w <= 0 || out_h <= 0 ||
+        (unsigned)out_w > NJ_GL_PRESENT_MAX_PIXELS / (unsigned)out_h) return;
+    log_frame = (++s->present_frames <= 3 || s->present_frames % 300 == 0);
+    if (s->present_mode == 5 && !dumping && width == out_w && height == out_h) {
+        /* SDL already has an upload path for the unfiltered native frame. */
+        if (log_frame) SDL_LogDebug(SDL_LOG_CATEGORY_RENDER,
+                                    "present: FSR native copy %dx%d", out_w, out_h);
+        return;
     }
-    rgba = (unsigned char *)malloc((size_t)out_w * (size_t)out_h * 4u);
-    row = (unsigned char *)malloc((size_t)out_w * 3u);
-    if (!rgba || !row) { free(rgba); free(row); return; }
+    if (s->present_window) {
+        if (!s->present_texture || s->present_out_w != out_w || s->present_out_h != out_h) {
+            Uint32 texture_format = s->present_bgra ? SDL_PIXELFORMAT_BGRA32 : SDL_PIXELFORMAT_RGBA32;
+            SDL_DestroyTexture(s->present_texture);
+            s->present_texture = SDL_CreateTexture(renderer, texture_format,
+                                                   SDL_TEXTUREACCESS_STREAMING, out_w, out_h);
+            s->present_out_w = out_w;
+            s->present_out_h = out_h;
+        }
+        if (!s->present_texture && !dumping) {
+            s->present_bgra = 0;
+            return;
+        }
+        if (s->present_texture && !dumping) {
+            void *dst = NULL;
+            int pitch = 0;
+            if (SDL_LockTexture(s->present_texture, NULL, &dst, &pitch) == 0) {
+                /* ES2 glReadPixels packs rows tightly. Honour wider SDL pitches
+                 * via the normal UpdateTexture path below. */
+                if (pitch == out_w * 4) {
+                    rgba = (unsigned char *)dst;
+                    locked = 1;
+                } else {
+                    SDL_UnlockTexture(s->present_texture);
+                }
+            }
+        }
+    }
+    if (!locked) {
+        bytes = (size_t)out_w * (size_t)out_h * 4u;
+        if (bytes > s->present_readback_bytes) {
+            rgba = (unsigned char *)realloc(s->present_readback, bytes);
+            if (!rgba) return;
+            s->present_readback = rgba;
+            s->present_readback_bytes = bytes;
+        }
+        rgba = s->present_readback;
+    }
     memset(&src, 0, sizeof src);
     src.pixels = pixels; src.width = width; src.height = height;
     src.stride = stride; src.format = format;
     src.bpp = format == NJ_PIXFMT_RGB565 ? 2 : format == NJ_PIXFMT_RGB888 ? 3 : 4;
-    started = clock();
-    if (!sdl2_gles2_enter(s, &previous)) { free(rgba); free(row); return; }
-    ok = nj_gles2_present(s->backend, &src, s->present_mode, out_w, out_h, rgba);
-    sdl2_gles2_leave(s, previous);
+    started = log_frame ? SDL_GetPerformanceCounter() : 0;
+    if (sdl2_gles2_enter(s, &previous)) {
+        ok = s->present_bgra ? nj_gles2_present_bgra(s->backend, &src, s->present_mode, out_w, out_h, rgba)
+                             : nj_gles2_present(s->backend, &src, s->present_mode, out_w, out_h, rgba);
+        sdl2_gles2_leave(s, previous);
+    }
+    if (locked) SDL_UnlockTexture(s->present_texture);
+    if (!ok && s->present_bgra) {
+        /* Some ES drivers only accept RGBA for this attachment. Recreate
+         * the SDL texture in the guaranteed layout on the next frame. */
+        s->present_bgra = 0;
+        s->present_out_w = 0;
+    }
     if (ok) {
-        if (s->present_window) {
-            if (!s->present_texture || s->present_out_w != out_w ||
-                s->present_out_h != out_h) {
-                if (s->present_texture) SDL_DestroyTexture(s->present_texture);
-                s->present_texture = SDL_CreateTexture(
-                    renderer, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STREAMING,
-                    out_w, out_h);
-                s->present_out_w = out_w;
-                s->present_out_h = out_h;
-            }
-            if (s->present_texture &&
-                SDL_UpdateTexture(s->present_texture, NULL, rgba,
-                                  out_w * 4) == 0) {
-                s->present_ok = 1;
-            }
+        if (s->present_window && s->present_texture) {
+            s->present_ok = locked || SDL_UpdateTexture(s->present_texture, NULL,
+                                                         rgba, out_w * 4) == 0;
         }
-        if (s->present_prefix[0] && s->present_left > 0) {
+        if (dumping) {
+            char path[600];
+            FILE *f;
+            int x, y;
             SDL_snprintf(path, sizeof path, "%s%05d.ppm",
-                         s->present_prefix, s->present_index);
+                         s->present_prefix, s->present_index++);
             f = fopen(path, "wb");
             if (f) {
                 fprintf(f, "P6\n%d %d\n255\n", out_w, out_h);
                 for (y = 0; y < out_h; ++y) {
-                    const unsigned char *p = rgba + (size_t)y * (size_t)out_w * 4u;
+                    unsigned char *row = rgba + (size_t)y * (size_t)out_w * 4u;
+                    /* SDL has consumed this frame. Compact each row in place. */
                     for (x = 0; x < out_w; ++x) {
-                        row[x*3+0] = p[x*4+0];
-                        row[x*3+1] = p[x*4+1];
-                        row[x*3+2] = p[x*4+2];
+                        row[x*3+0] = row[x*4+0];
+                        row[x*3+1] = row[x*4+1];
+                        row[x*3+2] = row[x*4+2];
                     }
                     fwrite(row, 1, (size_t)out_w * 3u, f);
                 }
                 fclose(f);
             }
-            s->present_index++;
         }
-        if (s->present_index < 3 || (s->present_index % 300) == 0) {
-            fprintf(stderr, "present: mode=%d out=%dx%d ok (%ld ms)%s\n",
-                    s->present_mode, out_w, out_h,
-                    (long)((clock() - started) * 1000 / CLOCKS_PER_SEC),
-                    s->present_prefix[0] ? " (dumping)" : "");
+        if (log_frame) {
+            double ms = (double)(SDL_GetPerformanceCounter() - started) * 1000.0 /
+                        (double)SDL_GetPerformanceFrequency();
+            fprintf(stderr, "present: mode=%d out=%dx%d ok (%.2f ms)%s\n",
+                    s->present_mode, out_w, out_h, ms, dumping ? " (dumping)" : "");
         }
-    } else {
-        s->present_ok = 0;
-        if (s->present_index < 3) {
-            fprintf(stderr, "present: mode=%d declined, using software path\n",
-                    s->present_mode);
-        }
+    } else if (log_frame) {
+        fprintf(stderr, "present: mode=%d declined, using software path\n",
+                s->present_mode);
     }
-    if (s->present_left > 0) s->present_left--;
-    free(rgba);
-    free(row);
+    if (dumping) s->present_left--;
 }
 #endif /* NJ_SDL2_GLES2 */
 
@@ -3192,6 +3238,8 @@ static void sdl_display_frame(void *ud, int x, int y, int w, int h, const nj_sur
     if (r.w <= 0 || r.h <= 0) {
         r.x = 0; r.y = 0; r.w = s->width; r.h = s->height;
     }
+    /* A resize/fullscreen event above may have changed the drawable. */
+    sdl_layout(s);
 #if NJ_SDL2_GLES2
     sdl2_gles2_flush_frame(&s->gfx);
     sdl2_gles2_yield(&s->gfx);
@@ -3204,10 +3252,10 @@ static void sdl_display_frame(void *ud, int x, int y, int w, int h, const nj_sur
     if (s->gfx.present_ok) {
         /* A2: the frame already went through the GL presentation shaders; show
          * that texture instead of the software one. */
-        sdl_layout(s);
         SDL_RenderClear(s->renderer);
         SDL_RenderCopy(s->renderer, s->gfx.present_texture, NULL, &s->game_dst);
         s->gfx.present_ok = 0;
+        s->logical_texture_current = 0;
     } else
 #endif
     {
@@ -3221,12 +3269,15 @@ static void sdl_display_frame(void *ud, int x, int y, int w, int h, const nj_sur
         }
         if (hd && s->hd_texture && SDL_UpdateTexture(s->hd_texture, NULL, hd->pixels, hd->stride) == 0) {
             active = s->hd_texture;
+            s->logical_texture_current = 0;
+        } else if (!s->logical_texture_current) {
+            /* The previous frame used another texture, or this one is new. */
+            s->logical_texture_current = SDL_UpdateTexture(active, NULL, s->pixels, s->stride) == 0;
         } else {
-            SDL_UpdateTexture(active, &r,
+            s->logical_texture_current = SDL_UpdateTexture(active, &r,
                 (const nj_u1 *)s->pixels + (size_t)r.y * s->stride +
-                (size_t)r.x * sdl_bytes_per_pixel(s->format), s->stride);
+                (size_t)r.x * sdl_bytes_per_pixel(s->format), s->stride) == 0;
         }
-        sdl_layout(s);
         SDL_RenderClear(s->renderer);
         SDL_RenderCopy(s->renderer, active, NULL, &s->game_dst);
     }

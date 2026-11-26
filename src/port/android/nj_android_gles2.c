@@ -24,7 +24,7 @@ static void publish(nj_android_gles2 *s)
 {
     nj_android_gles2_info info;
     memset(&info, 0, sizeof info);
-    info.state = s->stopped ? 4 : s->failed ? 3 : s->backend ? 2 : s->requested ? 1 : 0;
+    info.state = s->stopped ? 4 : !s->requested ? 0 : s->failed ? 3 : s->backend ? 2 : 1;
     info.requested = s->requested;
     info.fills = s->stats.fills; info.blits = s->stats.blits;
     info.rasters = s->stats.rasters; info.declines = s->stats.declines;
@@ -132,7 +132,7 @@ static int fill_rect(void *ud, const nj_gfx *g, int x, int y, int w, int h)
     nj_android_gles2 *s = (nj_android_gles2 *)ud;
     int result = NJ_GFX_ACCEL_DECLINE;
     pthread_mutex_lock(&s->lock);
-    if (s->backend && make_current(s)) {
+    if (s->requested && s->backend && make_current(s)) {
         result = nj_gles2_backend()->fill_rect(s->backend, g, x, y, w, h);
         /* Loss may occur during backend work, whose error handling drains GL
          * errors. Probe again without changing its CPU commit/decline result. */
@@ -150,7 +150,7 @@ static int blit(void *ud, const nj_gfx *g, const nj_gfx_blit *b)
     nj_android_gles2 *s = (nj_android_gles2 *)ud;
     int result = NJ_GFX_ACCEL_DECLINE;
     pthread_mutex_lock(&s->lock);
-    if (s->backend && make_current(s)) {
+    if (s->requested && s->backend && make_current(s)) {
         result = nj_gles2_backend()->blit(s->backend, g, b);
         (void)usable(s);
     }
@@ -166,7 +166,7 @@ static int raster(void *ud, const nj_gfx_raster *packet, nj_u4 *drawn)
     nj_android_gles2 *s = (nj_android_gles2 *)ud;
     int result = NJ_GFX_ACCEL_DECLINE;
     pthread_mutex_lock(&s->lock);
-    if (s->backend && make_current(s)) {
+    if (s->requested && s->backend && make_current(s)) {
         result = nj_gles2_raster(s->backend, packet, drawn);
         /* DONE has already committed colour/depth and *drawn. A late reset
          * disables future calls, but must not trigger a second software merge. */
@@ -184,7 +184,7 @@ static int triangles(void *ud, const nj_gfx_triangles *packet, nj_u4 *submitted)
     nj_android_gles2 *s = (nj_android_gles2 *)ud;
     int result = NJ_GFX_ACCEL_DECLINE;
     pthread_mutex_lock(&s->lock);
-    if (s->backend && make_current(s)) {
+    if (s->requested && s->backend && make_current(s)) {
         result = nj_gles2_triangles(s->backend, packet, submitted);
         /* DONE has committed colour, depth and *submitted. A later reset may
          * retire this backend, but must never replay the batch in software. */
@@ -207,7 +207,7 @@ static int triangles_list(void *ud, const nj_gfx_triangles_list *list,
     nj_android_gles2 *s = (nj_android_gles2 *)ud;
     int result = NJ_GFX_ACCEL_DECLINE;
     pthread_mutex_lock(&s->lock);
-    if (s->backend && make_current(s)) {
+    if (s->requested && s->backend && make_current(s)) {
         result = nj_gles2_triangles_list(s->backend, list, submitted);
         (void)usable(s);
     }
@@ -227,7 +227,7 @@ static int triangles_begin(void *ud, const nj_gfx_triangles_session *session)
     nj_android_gles2 *s = (nj_android_gles2 *)ud;
     int result = NJ_GFX_ACCEL_DECLINE;
     pthread_mutex_lock(&s->lock);
-    if (s->backend && make_current(s)) {
+    if (s->requested && s->backend && make_current(s)) {
         result = nj_gles2_triangles_begin(s->backend, session);
         (void)usable(s);
     }
@@ -242,7 +242,7 @@ static int triangles_end(void *ud, nj_u4 *submitted)
     nj_android_gles2 *s = (nj_android_gles2 *)ud;
     int result = NJ_GFX_ACCEL_DECLINE;
     pthread_mutex_lock(&s->lock);
-    if (s->backend && make_current(s)) {
+    if (s->requested && s->backend && make_current(s)) {
         result = nj_gles2_triangles_end(s->backend, submitted);
         (void)usable(s);
     }
@@ -261,7 +261,7 @@ static void triangles_abort(void *ud)
 {
     nj_android_gles2 *s = (nj_android_gles2 *)ud;
     pthread_mutex_lock(&s->lock);
-    if (s->backend && make_current(s)) nj_gles2_triangles_abort(s->backend);
+    if (s->requested && s->backend && make_current(s)) nj_gles2_triangles_abort(s->backend);
     pthread_mutex_unlock(&s->lock);
 }
 
@@ -369,7 +369,7 @@ static void release(nj_android_gles2 *s)
     s->reset_status = NULL;
 }
 
-void nj_android_gles2_start_mode(nj_android_gles2 *s, int mode)
+static void start(nj_android_gles2 *s, int mode, int presentation_only)
 {
     static const EGLint config_attrs[] = {
         EGL_SURFACE_TYPE, EGL_PBUFFER_BIT,
@@ -393,23 +393,29 @@ void nj_android_gles2_start_mode(nj_android_gles2 *s, int mode)
 
     if (!s || mode < -1 || mode > 1) return;
     pthread_mutex_lock(&s->lock);
-    if (s->owner_set || s->stopped) {
-        pthread_mutex_unlock(&s->lock);
-        return;
-    }
-    s->owner = pthread_self();
-    s->owner_set = 1;
-    if (mode != -1) s->mode = mode;
-    if (s->mode == -1) {
-        prop[0] = '\0';
-        (void)__system_property_get("debug.nj2me.gles2", prop);
-        s->requested = strcmp(prop, "1") == 0;
+    if (presentation_only) {
+        if (!owning_thread(s) || s->stopped || s->failed || s->initialized) {
+            pthread_mutex_unlock(&s->lock);
+            return;
+        }
     } else {
-        s->requested = s->mode == 1;
+        if (s->owner_set || s->stopped) {
+            pthread_mutex_unlock(&s->lock);
+            return;
+        }
+        s->owner = pthread_self();
+        s->owner_set = 1;
+        if (mode != -1) s->mode = mode;
+        if (s->mode == -1) {
+            prop[0] = '\0';
+            (void)__system_property_get("debug.nj2me.gles2", prop);
+            s->requested = strcmp(prop, "1") == 0;
+        } else {
+            s->requested = s->mode == 1;
+        }
+        publish(s);
+        if (!s->requested) goto done;
     }
-    /* Publish pending before the first driver call, which may be slow. */
-    publish(s);
-    if (!s->requested) goto done;
     /* Do not disturb a context belonging to a native embedder on this thread. */
     if (eglGetCurrentContext() != EGL_NO_CONTEXT) {
         failed(s, "run thread already has an EGL context", EGL_SUCCESS);
@@ -479,6 +485,11 @@ done:
     pthread_mutex_unlock(&s->lock);
 }
 
+void nj_android_gles2_start_mode(nj_android_gles2 *s, int mode)
+{
+    start(s, mode, 0);
+}
+
 void nj_android_gles2_start(nj_android_gles2 *s)
 {
     nj_android_gles2_start_mode(s, -1);
@@ -526,44 +537,37 @@ int nj_android_gles2_set_window(nj_android_gles2 *s, void *native_window)
 {
     int ok = 0;
     if (!s) return 0;
+    if (native_window && !s->initialized) start(s, -1, 1);
     pthread_mutex_lock(&s->lock);
-    if (owning_thread(s) && !s->failed && s->initialized &&
+    if (owning_thread(s) && (!native_window || !s->failed) && s->initialized &&
         s->display != EGL_NO_DISPLAY) {
-        if (!native_window) {
-            if (s->window != EGL_NO_SURFACE) {
-                (void)eglDestroySurface(s->display, s->window);
-                s->window = EGL_NO_SURFACE;
-            }
-            s->window_ptr = NULL;
-            ok = 1;
-        } else if (s->window_ptr == native_window && s->window_ok &&
-                   s->window != EGL_NO_SURFACE) {
-            ok = 1;
-        } else {
+        if (s->window_ptr != native_window || !native_window) {
             if (s->window != EGL_NO_SURFACE) {
                 (void)eglDestroySurface(s->display, s->window);
                 s->window = EGL_NO_SURFACE;
             }
             s->window_ptr = native_window;
-            if (s->window_ok && s->config != NULL) {
+            s->surface_w = s->surface_h = 0;
+        }
+        if (!native_window) {
+            ok = 1;
+        } else if (s->window_ok && s->config != NULL) {
+            EGLint sw = 0, sh = 0;
+            if (s->window == EGL_NO_SURFACE) {
                 s->window = eglCreateWindowSurface(
                     s->display, s->config, (EGLNativeWindowType)native_window, NULL);
-                if (s->window != EGL_NO_SURFACE) {
-                    EGLint sw = 0, sh = 0;
-                    if (eglQuerySurface(s->display, s->window, EGL_WIDTH, &sw) &&
-                        eglQuerySurface(s->display, s->window, EGL_HEIGHT, &sh) &&
-                        sw > 0 && sh > 0) {
-                        s->surface_w = (int)sw;
-                        s->surface_h = (int)sh;
-                    }
-                }
-                if (s->window == EGL_NO_SURFACE) {
+                if (s->window == EGL_NO_SURFACE)
                     __android_log_print(ANDROID_LOG_WARN, GLES2_TAG,
                                         "gles2: no window surface (EGL 0x%x); software presentation",
                                         (unsigned int)eglGetError());
-                } else {
-                    ok = 1;
-                }
+            }
+            /* The same SurfaceView/ANativeWindow can be resized between swaps. */
+            if (s->window != EGL_NO_SURFACE &&
+                eglQuerySurface(s->display, s->window, EGL_WIDTH, &sw) &&
+                eglQuerySurface(s->display, s->window, EGL_HEIGHT, &sh) && sw > 0 && sh > 0) {
+                s->surface_w = (int)sw;
+                s->surface_h = (int)sh;
+                ok = 1;
             }
         }
     }
@@ -586,9 +590,7 @@ int nj_android_gles2_present(nj_android_gles2 *s, const nj_surface *src,
             if (usable(s)) {
                 /* vp_y arrives in window (top-down) pixels; glViewport is
                  * bottom-up, so convert through the real surface height. */
-                int gl_h = (s->surface_h > 0) ? s->surface_h : (vp_y + vp_h);
-                int gl_y = gl_h - (vp_y + vp_h);
-                if (gl_y < 0) gl_y = 0;
+                int gl_y = s->surface_h - vp_y - vp_h;
                 if (mode == 5 && s->applied_sharp != sharp) {
                     nj_gles2_present_set_sharp(s->backend, sharp);
                     s->applied_sharp = sharp;
@@ -602,20 +604,19 @@ int nj_android_gles2_present(nj_android_gles2 *s, const nj_surface *src,
                 char prop[PROP_VALUE_MAX];
                 prop[0] = '\0';
                 (void)__system_property_get("debug.nj2me.gldump", prop);
-                if (prop[0] != '\0' && s->surface_w > 0 && s->surface_h > 0) {
+                if (prop[0] != '\0' && s->surface_w > 0 && s->surface_h > 0 &&
+                    (unsigned)s->surface_w <= NJ_GL_PRESENT_MAX_PIXELS / (unsigned)s->surface_h) {
                     size_t bytes = (size_t)s->surface_w * (size_t)s->surface_h * 4u;
                     unsigned char *px = (unsigned char *)malloc(bytes);
                     if (px != NULL) {
                         int y;
-                        FILE *fp;
-                        int gw = (s->surface_w > 0) ? s->surface_w : (vp_x + vp_w);
-                        int gh = (s->surface_h > 0) ? s->surface_h : (vp_y + vp_h);
-                        int gy = gh - (vp_y + vp_h);
-                        if (gy < 0) gy = 0;
-                        (void)nj_gles2_present_onscreen_capture(
-                            s->backend, src, mode, vp_x, gy, vp_w, vp_h,
-                            gw, gh, px);
-                        fp = fopen(prop, "wb");
+                        int gy = s->surface_h - vp_y - vp_h;
+                        /* Some window drivers return black for framebuffer 0.
+                         * Replay the same clipped viewport into a readable FBO. */
+                        FILE *fp = NULL;
+                        if (nj_gles2_present_onscreen_capture(s->backend, src, mode,
+                                vp_x, gy, vp_w, vp_h, s->surface_w, s->surface_h, px))
+                            fp = fopen(prop, "wb");
                         if (fp != NULL) {
                             fprintf(fp, "P6\n%d %d\n255\n", s->surface_w, s->surface_h);
                             for (y = s->surface_h - 1; y >= 0; --y) {
@@ -639,13 +640,24 @@ int nj_android_gles2_present(nj_android_gles2 *s, const nj_surface *src,
                     }
                 }
             }
-            (void)eglSwapBuffers(s->display, s->window);
-            /* The 3D accelerator expects the pbuffer current between frames. */
+            /* A failed swap must let the caller present this frame in software.
+             * Bind the pbuffer before releasing a resized/lost window surface. */
+            if (ok && !eglSwapBuffers(s->display, s->window)) {
+                EGLint error = eglGetError();
+                ok = 0;
+                if (error == EGL_CONTEXT_LOST)
+                    failed(s, "eglSwapBuffers lost context", error);
+            }
             if (!eglMakeCurrent(s->display, s->pbuffer, s->pbuffer, s->context)) {
                 failed(s, "eglMakeCurrent(pbuffer restore) failed", eglGetError());
             } else {
                 s->current = 1;
                 s->version_ok = 0;
+            }
+            if (!ok) {
+                (void)eglDestroySurface(s->display, s->window);
+                s->window = EGL_NO_SURFACE;
+                s->surface_w = s->surface_h = 0;
             }
         }
         publish(s);

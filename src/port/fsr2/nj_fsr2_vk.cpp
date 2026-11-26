@@ -60,7 +60,8 @@ bool choose_device(NjFsr2 &c, VkPhysicalDevice physical) {
         !(subgroup.supportedStages & VK_SHADER_STAGE_COMPUTE_BIT)) return false;
     VkSubgroupFeatureFlags needed = VK_SUBGROUP_FEATURE_BASIC_BIT | VK_SUBGROUP_FEATURE_QUAD_BIT;
     if ((subgroup.supportedOperations & needed) != needed ||
-        props.properties.limits.maxComputeWorkGroupInvocations < 256) return false;
+        props.properties.limits.maxComputeWorkGroupInvocations < 256 ||
+        props.properties.limits.maxComputeWorkGroupSize[0] < 256) return false;
     uint32_t num_extensions = 0;
     if (vkEnumerateDeviceExtensionProperties(physical, nullptr, &num_extensions, nullptr) != VK_SUCCESS) return false;
     std::unique_ptr<VkExtensionProperties[]> ext(new(std::nothrow) VkExtensionProperties[num_extensions]);
@@ -375,9 +376,10 @@ bool dispatch_cpu(NjFsr2 &c, const NjFsr2Frame &f, uint32_t *out, Error err) {
 
 NjFsr2 *nj_fsr2_create(int rw, int rh, int ow, int oh, char *error, size_t cap) {
     Error err = {error, cap};
-    // The SDK's SPD luminance pyramid uses fixed levels and at most 12 mips.
+    // The SPD luminance pyramid uses fixed levels and at most 12 mips.
+    // Bound reconstruction to AMD's Ultra Performance envelope (3x per axis).
     if (rw < 32 || rh < 32 || (rw < 64 && rh < 64) || rw > 4096 || rh > 4096 || ow < rw || oh < rh ||
-        ow > 16384 || oh > 16384 || ow > 4 * rw || oh > 4 * rh) {
+        ow > 3 * rw || oh > 3 * rh) {
         err.fail("Unsupported FSR2 input/output dimensions");
         return nullptr;
     }

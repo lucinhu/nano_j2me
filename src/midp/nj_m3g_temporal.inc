@@ -79,7 +79,7 @@ static void m3g_temporal_bind(nj_vm *vm, const void *target, int w, int h,
     s->oh = oh;
     s->ctx = nj_fsr2_create(w, h, ow, oh, error, sizeof(error));
     if (!s->ctx && getenv("NJ_FSR2_TRACE"))
-      fprintf(stderr, "FSR2 context: %s\n", error);
+      fprintf(stderr, "FSR2 context %dx%d -> %dx%d: %s\n", w, h, ow, oh, error);
     if (!s->ctx)
       return; /* Memoize unsupported dimensions/device. */
     s->scratch.width = w;
@@ -157,10 +157,10 @@ static void m3g_temporal_clear(nj_vm *vm, const nj_surface *logical, int full) {
   s->draw = 0;
 }
 
-static void m3g_temporal_mesh(m3g_jr *r) {
+static int m3g_temporal_mesh(m3g_jr *r) {
   temporal_state *s = temporal_get(r->vm);
   if (!s || !s->active || !s->valid)
-    return;
+    return 0;
   const float *p = r->proj;
   /* Conventional finite, centered perspective. FSR2 requires physical
    * camera planes and vertical field of view for the input depth buffer. */
@@ -176,19 +176,19 @@ static void m3g_temporal_mesh(m3g_jr *r) {
               s->cleared, p[14], p[5], p[10], p[11], r->sw.depth_near,
               r->sw.depth_far, r->sw.dtest, r->sw.dwrite, r->sw.blend);
     s->valid = 0;
-    return;
+    return 0;
   }
   float near_z = p[11] / (p[10] - 1), far_z = p[11] / (p[10] + 1),
         fovy = 2 * atanf(1 / p[5]);
   if (!isfinite(near_z) || !isfinite(far_z) || !isfinite(fovy) ||
       !(far_z > near_z && near_z > 0)) {
     s->valid = 0;
-    return;
+    return 0;
   }
   if (s->near_z != near_z || s->far_z != far_z || s->fovy != fovy) {
     if (s->draw) {
       s->valid = 0;
-      return;
+      return 0;
     }
     s->reset = 1;
   }
@@ -196,6 +196,7 @@ static void m3g_temporal_mesh(m3g_jr *r) {
   s->far_z = far_z;
   s->fovy = fovy;
   ++s->draw;
+  return 1;
 }
 
 static temporal_face *temporal_append(temporal_history *h) {

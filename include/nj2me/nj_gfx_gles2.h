@@ -94,6 +94,10 @@ int nj_gles2_frame_active(const void *ud);
 #define NJ_GL_PRESENT_MODES 7
 int nj_gles2_present(void *ud, const nj_surface *src, int mode, int out_w, int out_h,
                      nj_u1 *out_rgba);
+/* Variant for a port with desktop GL or GL_EXT_read_format_bgra. The output
+ * has B,G,R,A byte order, suitable for a native SDL window blit. */
+int nj_gles2_present_bgra(void *ud, const nj_surface *src, int mode, int out_w, int out_h,
+                          nj_u1 *out_bgra);
 /* Tune the RCAS sharpen amount of the FSR1 path (0.05 soft .. 1.0 sharp;
  * AMD reference default is 0.87). Applied to later presentation calls. */
 void nj_gles2_present_set_sharp(void *ud, float sharp);

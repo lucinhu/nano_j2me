@@ -733,10 +733,112 @@ static void test_present_filters(nj_gles2 *state)
         CHECK(!memcmp(expected, actual, sizeof expected));
         CHECK(nj_gles2_present(state, &padded.surface, mode, 23, 17, actual));
         CHECK(!memcmp(expected, actual, sizeof expected));
+        /* BGRA readback is optional on ES2. An accepted read must have the
+         * same row order and colours as the mandatory RGBA path. */
+        if (nj_gles2_present_bgra(state, &argb.surface, mode, 23, 17, actual)) {
+            for (size_t i = 0; i < sizeof expected; i += 4) {
+                CHECK(actual[i] == expected[i+2] && actual[i+1] == expected[i+1] &&
+                      actual[i+2] == expected[i] && actual[i+3] == expected[i+3]);
+            }
+        }
         CHECK(nj_gles2_present_onscreen_capture(state, &argb.surface, mode, 0, 0, 23, 17, 23, 17, actual));
         /* Check the window flip independently for the unmodulated nearest pass. */
         if (!mode) for (int y = 0; y < 17; ++y)
             CHECK(!memcmp(actual + y*23*4, expected + (16-y)*23*4, 23*4));
+    }
+}
+
+/* The checker, thin strokes and unequal channel values expose a one-texel
+ * shift, channel swaps or a second V flip that uniform test colors would miss. */
+static nj_u4 spatial_color(int x, int y)
+{
+    if (y < 5) return (x == 2 || (y == 1 && x < 9)) ? 0x11ffe832u : 0x25152478u;
+    if (x < 7) return ((x + y) & 1) ? 0x47ecae81u : 0x60371909u;
+    return (x & 7) == (y & 7) ? 0x90e3b622u : 0x853197c5u;
+}
+
+static void test_present_spatial(nj_gles2 *state)
+{
+    enum { W = 17, H = 13, MAX = 64 };
+    nj_u4 pixels[W*H];
+    nj_u1 result[MAX*MAX*4], screen[MAX*MAX*4];
+    nj_surface src = { .width=W, .height=H, .stride=4*W,
+                       .format=NJ_PIXFMT_ARGB8888, .pixels=pixels };
+    const int outputs[][2] = {{W,H}, {18,14}, {27,21}, {W*3,H*3}, {7,5}, {2,1}};
+    for (int y = 0; y < H; ++y) for (int x = 0; x < W; ++x)
+        pixels[y*W+x] = spatial_color(x,y);
+    for (unsigned n = 0; n < sizeof outputs/sizeof outputs[0]; ++n) {
+        int w = outputs[n][0], h = outputs[n][1];
+        snprintf(scenario, sizeof scenario, "FSR1 %dx%d -> %dx%d", W,H,w,h);
+        CHECK(nj_gles2_present(state, &src, 5, w, h, result));
+        CHECK(nj_gles2_present_onscreen_capture(state, &src, 5, 3,2,w,h, MAX,MAX,screen));
+        CHECK(screen[0] == 0 && screen[1] == 0 && screen[2] == 0 && screen[3] == 255);
+        for (int y = 0; y < h; ++y) for (int x = 0; x < w; ++x) {
+            const nj_u1 *a = result + 4*(y*w+x);
+            const nj_u1 *b = screen + 4*((2+h-1-y)*MAX+3+x);
+            CHECK(a[3] == 255 && b[3] == 255);
+            for (int k = 0; k < 3; ++k) CHECK(abs(a[k]-b[k]) <= 1);
+            if (w == W && h == H) {
+                nj_u4 c = pixels[y*W+x];
+                CHECK(a[0] == (nj_u1)(c>>16) && a[1] == (nj_u1)(c>>8) && a[2] == (nj_u1)c);
+            }
+            /* At 3x the central output pixel of a replicated texel is exactly
+             * on its source center. High contrast one-pixel strokes must stay
+             * on their own row and column, including at the clamped border. */
+            if (w == W*3 && x%3 == 1 && y%3 == 1 && y/3 < 5) {
+                int bright = a[0] > 127;
+                CHECK(bright == ((pixels[(y/3)*W+x/3] >> 16 & 255) > 127));
+            }
+            if (w == 7) {
+                /* Exact box overlap in integer units of 1/w by 1/h. */
+                int sum[3] = {0,0,0};
+                for (int sy = y*H/h; sy*h < (y+1)*H; ++sy) {
+                    int top = sy*h > y*H ? sy*h : y*H;
+                    int bottom = (sy+1)*h < (y+1)*H ? (sy+1)*h : (y+1)*H;
+                    for (int sx = x*W/w; sx*w < (x+1)*W; ++sx) {
+                        int left = sx*w > x*W ? sx*w : x*W;
+                        int right = (sx+1)*w < (x+1)*W ? (sx+1)*w : (x+1)*W;
+                        nj_u4 c = pixels[sy*W+sx];
+                        for (int k = 0; k < 3; ++k)
+                            sum[k] += (nj_u1)(c >> (16-8*k)) * (right-left) * (bottom-top);
+                    }
+                }
+                for (int k = 0; k < 3; ++k) CHECK(abs(a[k] - (sum[k]+W*H/2)/(W*H)) <= 2);
+            }
+        }
+    }
+    snprintf(scenario, sizeof scenario, "FSR1 zoom crops signed viewport without changing phase");
+    CHECK(nj_gles2_present(state, &src, 5, 27,21, result));
+    CHECK(nj_gles2_present_onscreen(state, &src, 5, -4,-3,27,21));
+    CHECK(nj_gles2_present_readback(state, 23,18,screen));
+    for (int y = 0; y < 18; ++y) for (int x = 0; x < 23; ++x)
+        for (int k = 0; k < 4; ++k)
+            CHECK(abs(screen[4*(y*23+x)+k] - result[4*((17-y)*27+x+4)+k]) <= 1);
+    CHECK(nj_gles2_present_onscreen_capture(state, &src, 5, -4,-3,27,21,23,18,screen));
+    for (int y = 0; y < 18; ++y) for (int x = 0; x < 23; ++x)
+        for (int k = 0; k < 4; ++k)
+            CHECK(abs(screen[4*(y*23+x)+k] - result[4*((17-y)*27+x+4)+k]) <= 1);
+    snprintf(scenario, sizeof scenario, "RCAS strength adjusts an enlarged frame");
+    nj_gles2_present_set_sharp(state, 0.05f);
+    CHECK(nj_gles2_present(state, &src, 5, 27,21,screen));
+    CHECK(memcmp(screen,result,27*21*4) != 0);
+    nj_gles2_present_set_sharp(state, 0.87055056f);
+
+    /* At 8x and beyond the average includes texels far outside a 12-tap
+     * EASU neighbourhood. A narrow bright stripe catches sparse subsampling. */
+    {
+        nj_u4 stripe[128*8];
+        src.width = 128; src.height = 8; src.stride = 128*4; src.pixels = stripe;
+        for (int i = 0; i < 128*8; ++i)
+            stripe[i] = i%8 == 3 ? 0x79f81020u : 0x000070c0u;
+        for (int w = 1; w <= 16; w *= 4) {
+            snprintf(scenario, sizeof scenario, "FSR1 strip averaging at %d:1", 128/w);
+            CHECK(nj_gles2_present(state, &src, 5, w,1,result));
+            for (int x = 0; x < w; ++x) {
+                const nj_u1 *a = result+4*x;
+                CHECK(abs(a[0]-31) <= 1 && abs(a[1]-100) <= 1 && abs(a[2]-172) <= 1 && a[3] == 255);
+            }
+        }
     }
 }
 
@@ -902,6 +1004,7 @@ int main(int argc, char **argv)
     test_present_hd(&gate[0]);
     test_present_rows(state[0]);
     test_present_filters(state[0]);
+    test_present_spatial(state[0]);
     test_fills(state[0]); test_readback_spacing(state[0]);
     test_images(state[0]); test_padded_sources(state[0]);
     test_rgb(state[0]); test_direct_declines(state[0]); test_fallback_matrix(state[0]);

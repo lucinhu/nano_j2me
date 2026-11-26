@@ -340,6 +340,28 @@ static void dpi_test_game(void)
     DPI_CHECK(port.input_poll(port.ud, &event) && event.type == NJ_EV_KEY_DOWN &&
               event.key == NJ_KEY_UP, "small-window 300% Up key is clickable");
     dpi_shot(s->renderer, "game-small-overlay-300");
+    /* After HD or shader presentation, a dirty rectangle alone cannot repair the
+     * logical texture. Read its next composition before the SDL swap. */
+    {
+        SDL_Surface *image = SDL_CreateRGBSurfaceWithFormat(0, 2*w, 2*h, 32, SDL_PIXELFORMAT_ARGB8888);
+        DPI_CHECK(image != NULL, "allocate physical frame for the texture switch");
+        if (image) {
+            nj_surface hd = {image->pixels, image->w, image->h, image->pitch, NJ_PIXFMT_ARGB8888, 4};
+            SDL_Rect logical = {0, 0, w, h}, sample = {21, 45, 1, 1};
+            Uint8 rgb[3] = {0};
+            memset(image->pixels, 255, (size_t)image->pitch * image->h);
+            memset(pixels, 255, (size_t)stride * h);
+            port.display_hd(port.ud, &hd);
+            /* Pixel (21,45) is white in the current frame, but was grey in the
+             * last ordinary SDL upload. Only (20,45) is being refreshed. */
+            port.display_present(port.ud, 20, 45, 1, 1);
+            DPI_CHECK(SDL_RenderCopy(s->renderer, s->texture, NULL, &logical) == 0 &&
+                      SDL_RenderReadPixels(s->renderer, &sample, SDL_PIXELFORMAT_RGB24, rgb, 3) == 0 &&
+                      rgb[0] == 255 && rgb[1] == 255 && rgb[2] == 255,
+                      "partial update after a texture switch restores the background");
+            SDL_FreeSurface(image);
+        }
+    }
     printf("game DPI=%.2f window=%dx%d drawable=%dx%d Java=%dx%d integer=%d\n",
            s->dpi.pixels, s->dpi.window_w, s->dpi.window_h,
            s->dpi.output_w, s->dpi.output_h, w, h, s->scale);
