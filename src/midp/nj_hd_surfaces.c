@@ -203,12 +203,28 @@ int nj_midp_hd_present(nj_vm *vm)
         nj_surface *out = &vm->hd_store->resolve;
         int x, y;
         if (!hd_surface(vm, out, frame->width / 2, frame->height / 2)) return 0;
-        for (y = 0; y < out->height; ++y) {
-            const nj_u4 *top = (const nj_u4 *)frame->pixels + (nj_size)y * 2 * frame->width;
-            const nj_u4 *bottom = top + frame->width;
-            nj_u4 *dst = (nj_u4 *)out->pixels + (nj_size)y * out->width;
-            for (x = 0; x < out->width; ++x)
-                dst[x] = hd_average(top[2*x], top[2*x+1], bottom[2*x], bottom[2*x+1]);
+        const int width = out->width, height = out->height, samples = frame->width;
+        const size_t row_bytes = (size_t)frame->stride;
+        for (y = 0; y < height; ++y) {
+            const nj_u4 *top = (const nj_u4 *)frame->pixels + (nj_size)y * 2 * samples;
+            const nj_u4 *bottom = top + samples;
+            nj_u4 *dst = (nj_u4 *)out->pixels + (nj_size)y * width;
+            /* The physical raster has tightly packed rows. A repeated pair
+             * resolves to the preceding output row, even with partial alpha. */
+            if (y && bottom[samples-1] == top[-1] &&
+                memcmp(top, top - 2 * samples, 2 * row_bytes) == 0) {
+                memcpy(dst, dst - width, (size_t)width * sizeof(*dst));
+            } else if (top[samples-1] == bottom[samples-1] && memcmp(top, bottom, row_bytes) == 0) {
+                /* Each source sample occurs twice. For each byte the rounded
+                 * mean is (a | b) - floor((a ^ b) / 2). */
+                for (x = 0; x < width; ++x) {
+                    nj_u4 a = top[2*x], b = top[2*x+1];
+                    dst[x] = (a | b) - (((a ^ b) >> 1) & 0x7f7f7f7fu);
+                }
+            } else {
+                for (x = 0; x < width; ++x)
+                    dst[x] = hd_average(top[2*x], top[2*x+1], bottom[2*x], bottom[2*x+1]);
+            }
         }
         frame = out;
     }

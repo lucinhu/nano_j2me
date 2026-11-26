@@ -4,6 +4,7 @@
 #include "nj_midp.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #define CHECK(test) do { if (!(test)) { fprintf(stderr, "%s:%d: %s\n", \
     __FILE__, __LINE__, #test); exit(1); } } while (0)
@@ -152,6 +153,67 @@ static void check_raw_rgb(nj_vm *vm, nj_ref image)
     vm->render_quality.smooth_assets = 0;
 }
 
+static const nj_surface *resolve_source;
+
+static void check_resolved_frame(void *ud, const nj_surface *out)
+{
+    (void)ud;
+    CHECK(2 * out->width == resolve_source->width && 2 * out->height == resolve_source->height);
+    for (int y = 0; y < out->height; ++y) for (int x = 0; x < out->width; ++x) {
+        nj_u4 expected = 0;
+        for (int shift = 0; shift < 32; shift += 8) {
+            unsigned sum = 0;
+            for (int dy = 0; dy < 2; ++dy) for (int dx = 0; dx < 2; ++dx)
+                sum += (nj_surface_get(resolve_source, 2*x+dx, 2*y+dy) >> shift) & 255u;
+            expected |= (nj_u4)((sum + 2) / 4) << shift;
+        }
+        CHECK(nj_surface_get(out, x, y) == expected);
+    }
+    ++frames;
+}
+
+static void check_resolve_rows(void)
+{
+    nj_port port = {0};
+    /* The odd output width exercises the end of a row. The first 256 output
+     * rows exhaust the 65,536 pairs of byte values for the two-sample mean. */
+    CHECK(nj_port_headless_ex(&port, 257, 262, 0, NULL) == NJ_OK);
+    port.render_scale = 1; port.render_ssaa = 2; port.display_hd = check_resolved_frame;
+    nj_vm *vm = nj_vm_create(&port, 1024u * 1024u);
+    CHECK(vm);
+    nj_render_mirror *mirror = nj_midp_hd_target(vm, nj_midp_screen(vm));
+    CHECK(mirror);
+    nj_surface *s = mirror->target;
+    resolve_source = s;
+    nj_u4 seed = 71;
+    for (int y = 0; y < s->height; ++y) for (int x = 0; x < s->width; ++x) {
+        nj_u4 v = (unsigned)((x & 1) ? y/2 : x/2) & 255u;
+        nj_u4 pixel = v << 24 | (255u - v) << 16 | ((v ^ 127u) << 8) | v;
+        seed = seed * 1664525u + 1013904223u;
+        nj_surface_set(s, x, y, y < 512 ? pixel : seed);
+    }
+    /* Exercise identical row pairs, pairs differing only in the middle or at
+     * the last sample, and vertical neighbors with one inner mismatch. */
+    nj_u4 *rows = s->pixels;
+    size_t pair_bytes = (size_t)s->stride * 2;
+    int pair_width = s->width * 2;
+    memcpy(rows + 257*pair_width, rows + 256*pair_width, pair_bytes);
+    memcpy(rows + 258*pair_width, rows + 257*pair_width, pair_bytes);
+    rows[258*pair_width + s->width/2] ^= 0xff0000ffu;
+    memcpy(rows + 259*pair_width, rows + 258*pair_width, pair_bytes);
+    rows[260*pair_width - 1] ^= 0x00ffff00u;
+    nj_u4 *last = rows + 261*pair_width;
+    memcpy(last + s->width, last, (size_t)s->stride);
+    last[s->width + 1] ^= 0xff00ff00u;
+    unsigned before = frames;
+    CHECK(nj_midp_hd_present(vm) && frames == before + 1);
+    rows[0] ^= 0xff00ffffu;
+    CHECK(nj_midp_hd_present(vm) && frames == before + 2);
+    resolve_source = NULL;
+    nj_vm_destroy(vm);
+    nj_port_shutdown(&port);
+}
+
 int main(void)
 {
     nj_port port = {0};
@@ -209,5 +271,6 @@ int main(void)
     CHECK(dst->lookup(dst->ud, key, 6, 4) == NULL);
     nj_vm_destroy(vm);
     nj_port_shutdown(&port);
+    check_resolve_rows();
     return 0;
 }
