@@ -12,6 +12,8 @@ The [software rendering, JIT and GPU measurements from November 26](notes/2026-1
 cover two retail game replays, Minecraft world generation and synchronous GPU calls.
 The [follow-up measurements](notes/2026-11-26-smooth-jit-upload.md) cover smooth HD sprites,
 conditional expressions in the JIT, and mutable GLES2 texture uploads.
+The [four-sample AA, interpreter dispatch and Vulkan RGB565 benchmarks](notes/2026-11-26-ssaa-dispatch-vulkan.md)
+compare software frame times, Minecraft world generation and synchronous triangle draws on two GPUs.
 
 ## How to measure
 

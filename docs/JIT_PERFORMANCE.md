@@ -2,7 +2,8 @@
 
 The measurements below cover the earlier JIT. Later benchmarks cover the
 [resolved-field cache](JIT_CACHE_LOOKUP.md), [hot-loop counting and cache readmission](notes/2026-11-26-render-jit-performance.md#jit),
-and [conditional branches in Minecraft world generation](notes/2026-11-26-smooth-jit-upload.md#jit).
+[conditional branches in Minecraft world generation](notes/2026-11-26-smooth-jit-upload.md#jit),
+and [the cost of JIT probing during bytecode dispatch](notes/2026-11-26-ssaa-dispatch-vulkan.md#虚拟机执行).
 
 This work responds to a second board report, against `fe974fc` — the commit
 that carried the previous probe/dispatch optimisation set. It landed in several
