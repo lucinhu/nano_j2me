@@ -268,9 +268,12 @@ static int lr_thread_equal(lr_thread_id a, lr_thread_id b) { return pthread_equa
 /* Save-state request queue (frontend thread asks, VM thread serves). */
 #define LR_REQ_NONE 0
 #define LR_REQ_SAVE 1
-/* How long retro_serialize() waits for a frame boundary before it gives up.
- * The frontend is blocked while it waits, so this may not be forever: a
- * MIDlet stuck inside a native call must not hang RetroArch. */
+/* How long retro_serialize() waits without any progress before it gives up.
+ * The frontend is blocked while it waits, so this may not be forever: a MIDlet
+ * stuck inside a native call must not hang RetroArch.  The deadline restarts
+ * whenever the VM advances a frame or the request changes phase, so a request
+ * that keeps moving is never refused merely because the host is loaded or the
+ * state is large; only a genuinely stalled request hits the watchdog. */
 #define LR_STATE_TIMEOUT_MS 4000u
 /* A save requested while the frontend is paused cannot be served until the
  * current frame ends.  Titles that busy-wait on System.currentTimeMillis() at
@@ -3133,7 +3136,8 @@ static void lr_serve_state_request(nj_lr *s)
 static int lr_request_state(nj_lr *s, int kind, const void *input,
                             nj_size input_size, nj_u1 **out, nj_size *out_size)
 {
-    uint64_t deadline;
+    uint64_t deadline, seen_frames;
+    int seen_busy;
     nj_u1 *copy = NULL;
     int rc = NJ_ERR_STATE;
     if (out) *out = NULL;
@@ -3165,8 +3169,21 @@ static int lr_request_state(nj_lr *s, int kind, const void *input,
     s->req_size = input_size;
     lr_cond_broadcast(&s->cond);
     deadline = lr_real_ms() + LR_STATE_TIMEOUT_MS;
+    seen_frames = s->req_start_frames;
+    seen_busy = 0;
     while (!s->req_done && !s->vm_done) {
         uint64_t now = lr_real_ms();
+        uint64_t frames = s->vm ? nj_vm_frames(s->vm) : 0u;
+        if (frames != seen_frames || s->req_busy != seen_busy) {
+            /* The VM is still making progress, just slowly (a loaded machine, a
+             * big state, or a frame that only ends when the clock advances).
+             * The watchdog exists to catch a stalled request, not to cap the
+             * time a request that keeps moving may take; LR_STATE_CLOCK_MAX_FRAMES
+             * still bounds how much clock assistance can be spent on it. */
+            seen_frames = frames;
+            seen_busy = s->req_busy;
+            deadline = now + LR_STATE_TIMEOUT_MS;
+        }
         if (now >= deadline && !s->req_busy) break;
         (void)lr_cond_wait_ms(&s->cond, &s->lock, 100u);
     }

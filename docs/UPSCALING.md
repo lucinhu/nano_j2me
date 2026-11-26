@@ -132,12 +132,14 @@ Android 的常规包提供软件和 GLES2。arm64 增强包在画面面板增加
 | --- | --- |
 | 尺寸相同 | 逐像素复制。SDL2 可直接提交原帧。 |
 | 放大（任意倍率） | 用立方核（Keys 曲线，A=0.10）直接从原始纹素的包围盒重建到视口尺寸，再按所选锐度用 RCAS 在重建后的像素上锐化。 |
+
+锐度（RCAS `sharp`，0.05–1.0，桌面 `NJ_GL_PRESENT_SHARP`/`--upscale-sharp`，Android「FSR1 锐度」）默认取 AMD 参考值 `exp2(-0.2)=0.87055056`。实测误差对锐度是单调的（参考图取面积平均，本身偏软），且收益随倍率衰减：2× 时降到 0.05 只改善 MAE 5.6%，8× 时 0.5%。因此不按倍率区分锐度，保留这个偏锐的默认值，具体见[锐度灵敏度](notes/2026-11-27-fsr1-sharpness-and-present-cost.md)。
 | 放大，选 bicubic | 同一个立方核重建，但跳过 RCAS 锐化，画面更柔和。 |
 | 任一轴缩小 | 按目标像素覆盖的源区域加权平均。超过 8 倍的缩小分阶段处理，保留细线和交错色块的平均亮度。 |
 
 立方核的 A 参数由原生高分真值扫得：A=0.10 在 2D 文字、斜线和 3D 场景上同时比 Catmull-Rom（A=-0.5）的过冲和旧版 FSR1 的 2× 重建网格更接近原生画面。整数倍率时采样相位均匀（每 s 个输出像素有一个正落在纹素中心），边缘粗细一致，不会出现非整数倍放大的相位抖动；只有 1× 是逐像素复制，2× 以上仍是立方核插值。
 
-桌面默认适配窗口内游戏区域，`--upscale-scale 2` 等显式倍率仍可指定中间输出尺寸。Android 直接绘制到 EGL 窗口。`--fsr2` 则用于提供深度和运动数据的 M3G 绘制，见上面的内部渲染设置。[跨分辨率实测](notes/2026-11-26-fsr-resolution.md)、[立方核重建与原生高分对照](notes/2026-11-27-fsr-cubic-reconstruction.md)、[缩放矩阵、整数倍率与缩小路径](notes/2026-11-27-fsr-scale-matrix.md)、[FSR2 画质对照与回读耗时](notes/2026-11-27-fsr2-accuracy-and-readback.md)、[Android Vulkan 与 FSR2 路径验证](notes/2026-11-27-android-vulkan-fsr2.md)
+桌面默认适配窗口内游戏区域，`--upscale-scale 2` 等显式倍率仍可指定中间输出尺寸。Android 直接绘制到 EGL 窗口。`--fsr2` 则用于提供深度和运动数据的 M3G 绘制，见上面的内部渲染设置。[跨分辨率实测](notes/2026-11-26-fsr-resolution.md)、[立方核重建与原生高分对照](notes/2026-11-27-fsr-cubic-reconstruction.md)、[缩放矩阵、整数倍率与缩小路径](notes/2026-11-27-fsr-scale-matrix.md)、[FSR2 画质对照与回读耗时](notes/2026-11-27-fsr2-accuracy-and-readback.md)、[Android Vulkan 与 FSR2 路径验证](notes/2026-11-27-android-vulkan-fsr2.md)、[FSR1 锐度灵敏度与 4×/8× 呈现耗时](notes/2026-11-27-fsr1-sharpness-and-present-cost.md)
 
 ### Android 版：软件呈现滤镜（已实现，0.5.43+）
 
