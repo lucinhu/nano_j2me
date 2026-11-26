@@ -65,8 +65,10 @@ static const char present_fs_crt[] =
  * a single cubic pass with mild smoothing was closest in RGB MAE, SSIM and
  * gradient error from 2x through 8x on 2D text and 3D scenes, beating both
  * Catmull-Rom (A = -0.5) overshoot and the FSR1 2x reconstruction preset.
- * Integer scales collapse to exact texel replication because every off-centre
- * weight is zero at f = 0. */
+ * At integer scales the sample phases are uniform fractions of a texel (one in
+ * every scale-factor pixels lands exactly on a texel centre), so edges keep a
+ * constant width instead of the uneven phases a fractional factor produces.
+ * Only 1x is a literal texel copy; 2x and above are still reconstructed. */
 static const char present_fs_bicubic[] =
     PRESENT_FRAME_SAMPLE
     "#ifdef GL_ES\nprecision highp float;\n#endif\n"
