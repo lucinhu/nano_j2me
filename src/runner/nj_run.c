@@ -997,6 +997,15 @@ int nj_run(const nj_port *port_in, const nj_run_opts *opts)
     run_hook_ctx hook_ctx;
 
     vm = nj_vm_create_with_heap_limit(&port, opts->heap_bytes, opts->heap_limit);
+    if (vm && opts->deterministic) {
+        /*
+         * Replay: default-constructed java.util.Random instances take their
+         * seeds from a per-VM counter instead of the host clock.  The port
+         * side of determinism (a virtual clock) is the port's own business;
+         * the headless one offers it through --deterministic as well.
+         */
+        nj_vm_set_deterministic(vm, 1);
+    }
     if (vm && opts->verbose > 0) {
         /* Raised before the application opens, so the class library's own
          * startup lines and the first media decisions are at the asked level

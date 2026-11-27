@@ -1025,6 +1025,18 @@ typedef struct nj_run_opts {
      * and info); 1..3 select that exact level, where 3 adds decoder and media
      * decisions.  See nj_vm_set_verbose(). */
     int         verbose;
+
+    /*
+     * Deterministic replay (diagnostics only): construct java.util.Random
+     * instances from a fixed per-VM counter instead of the host clock, and
+     * let the port run a virtual clock when it has one.  The headless port
+     * does, once nj_port_headless_set_virtual_clock() has been called, so
+     * two runs of the same input script stop at the same game state and
+     * their frame dumps can be compared bit for bit.  It changes
+     * timing-visible behaviour on purpose; do not use it for a benchmark of
+     * perceived speed.
+     */
+    int         deterministic;
 } nj_run_opts;
 
 /*

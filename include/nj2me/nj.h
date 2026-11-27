@@ -90,6 +90,20 @@ nj_status nj_port_headless_enable_network(nj_port *port);
  * prefix that names an existing directory dumps inside it. */
 void nj_port_headless_set_dump(void *ud, const char *prefix, int every);
 
+/*
+ * Deterministic replay clock for the headless port.
+ *
+ * On, the port's millisecond clock becomes a virtual counter rather than wall
+ * time: a displayed frame advances it by a fixed step (1000/30 ms), a sleep
+ * advances it by the requested amount and returns at once, and the
+ * time-of-day hook moves with the same counter instead of reading the host
+ * clock.  Two runs of the same input script then see the same elapsed time at
+ * the same frame even when one host was busy, so their frame dumps can be
+ * compared bit for bit.  Off by default; enable it from nj_run_opts
+ * .deterministic consumers (the CLI's --deterministic).
+ */
+void nj_port_headless_set_virtual_clock(void *ud, int enabled);
+
 /* Push a synthetic input event into a port that supports it (headless). */
 void nj_port_push_event(nj_port *port, const nj_event *ev);
 

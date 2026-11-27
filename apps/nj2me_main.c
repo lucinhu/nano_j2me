@@ -201,6 +201,9 @@ static void usage(const char *argv0)
 "  --rms-dir <path>     where RecordStore files are kept\n"
 "  --fps <n>            frame rate cap (default: the port's own; 0 = uncapped)\n"
 "  --run-frames <n>     stop after n presented frames (for benchmarks)\n"
+"  --deterministic      replay with a virtual clock and seeded Random: the\n"
+"                       same script stops at the same game state, so dumps\n"
+"                       can be compared byte for byte (headless port)\n"
 "  --save-state <file>  write a VM snapshot at a frame boundary and keep going\n"
 "  --save-state-frame <n>  presented frame to snapshot at, or the first\n"
 "                        boundary after it (default: 1).\n"
@@ -342,6 +345,7 @@ typedef struct cli {
     int         network;
     int         where;
     int         run_frames;
+    int         deterministic;   /* --deterministic: replay clock and RNGs   */
     int         verbose;
     const char *keys;
     const char *cheat_file;         /* --cheat-file: one code per line      */
@@ -1046,6 +1050,8 @@ int main(int argc, char **argv)
             c.where = 1;
         } else if (strcmp(a, "--run-frames") == 0 && i + 1 < argc) {
             c.run_frames = atoi(argv[++i]);
+        } else if (strcmp(a, "--deterministic") == 0) {
+            c.deterministic = 1;
         } else if (strcmp(a, "--verbose") == 0 && i + 1 < argc) {
             c.verbose = atoi(argv[++i]);
             if (c.verbose < 1) {
@@ -1136,6 +1142,7 @@ int main(int argc, char **argv)
     opts.stats_every = (nj_u4)c.stats_every;
     opts.where = c.where;
     opts.run_frames = (nj_u4)(c.run_frames > 0 ? c.run_frames : 0);
+    opts.deterministic = c.deterministic;
     opts.verbose = c.verbose;
     opts.keys = c.keys;
     opts.cheat_file = c.cheat_file;
@@ -1247,6 +1254,14 @@ int main(int argc, char **argv)
         int prc = setup_port(&c, &port, &settings);
         if (prc != 0) {
             return prc;
+        }
+        if (c.deterministic && strcmp(c.port_name, "headless") == 0) {
+            /*
+             * The VM half of the replay contract is nj_run_opts.deterministic;
+             * the clock half belongs to the port, and only the headless one
+             * has a virtual clock to offer.  A real window keeps wall time.
+             */
+            nj_port_headless_set_virtual_clock(port.ud, 1);
         }
     }
 

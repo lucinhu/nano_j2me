@@ -63,6 +63,22 @@ typedef struct nj_headless_state {
 
     int    frame;
     int    dump_every;      /* 0 = never */
+    /*
+     * Deterministic replay clock.  Off by default; when on, millis() is a
+     * virtual counter advanced by presented frames and sleeps instead of the
+     * host clock, so the same input script reaches the same game state on a
+     * busy host and on an idle one.  See nj_port_headless_set_virtual_clock().
+     */
+    int    virtual_clock;
+    nj_u4  virtual_ms;
+    nj_u4  virtual_step_ms;
+    /*
+     * Owning port, so a replay can install its calendar hook on request.  The
+     * hook is only installed when the replay clock is switched on: harnesses
+     * that swap port->ud for a sentinel to check the other callbacks (the JIT
+     * tests do) then still see now == NULL, exactly as before.
+     */
+    nj_port *port;
     const char *dump_prefix;
     int    use_ansi;
     int    quit;
@@ -138,12 +154,33 @@ typedef struct nj_headless_state {
 
 #define HS(ud) ((nj_headless_state *)(ud))
 
+/*
+ * The one state a replay clock was switched on for.  Every other void* that
+ * reaches millis/sleep_ms/now belongs to a harness that deliberately replaced
+ * port->ud with a sentinel, and must not be dereferenced as a state.
+ */
+static nj_headless_state *hl_virtual_state;
+
 /* ------------------------------------------------------------------ */
 /* Time                                                                */
 /* ------------------------------------------------------------------ */
 static nj_u4 hl_millis(void *ud)
 {
-    (void)ud;
+    nj_headless_state *s = HS(ud);
+
+    /*
+     * Replay: the emulated clock, not the host's.
+     *
+     * A deterministic run compares frame dumps byte for byte, and a game that
+     * reads System.currentTimeMillis() - Doom 3 does, twice - turns whatever
+     * the host clock says into game state.  Two runs on the same machine then
+     * diverge as soon as one happened to be slower, which is exactly what
+     * happened when the 8x HD journaling path was validated against fixed
+     * frame hashes that turned out not to be reproducible.
+     */
+    if (s && s == hl_virtual_state && s->virtual_clock) {
+        return s->virtual_ms;
+    }
     /*
      * WALL time, not CPU time.
      *
@@ -174,7 +211,18 @@ static nj_u4 hl_millis(void *ud)
 
 static void hl_sleep_ms(void *ud, nj_u4 ms)
 {
-    (void)ud;
+    nj_headless_state *s = HS(ud);
+
+    if (s && s == hl_virtual_state && s->virtual_clock) {
+        /*
+         * Fast-forward the emulated clock instead of waiting.  A MIDlet that
+         * sleeps to pace its own loop must still see the time pass, or the
+         * loop never advances; a real wait would put host timing back into
+         * the run and defeat the whole point.
+         */
+        s->virtual_ms += ms;
+        return;
+    }
     /*
      * Actually sleep.  This was a no-op, which quietly disabled the frame
      * limiter on the reference port: --fps was accepted, stored, and then
@@ -204,6 +252,66 @@ static void hl_sleep_ms(void *ud, nj_u4 ms)
 static void hl_idle(void *ud)
 {
     (void)ud;
+}
+
+/*
+ * Days since 1970-01-01 to a Gregorian date, after Howard Hinnant's
+ * civil_from_days.  Only used by the replay clock, where the date has to be a
+ * pure function of the virtual millisecond counter.
+ */
+static void hl_civil_from_days(nj_s8 z, int *year, int *month, int *day)
+{
+    nj_s8 era, doe, yoe, doy, mp;
+    int y, m, d;
+
+    z += 719468;
+    era = (z >= 0 ? z : z - 146096) / 146097;
+    doe = z - era * 146097;
+    yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    y = (int)(yoe + era * 400);
+    doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    mp = (5 * doy + 2) / 153;
+    d = (int)(doy - (153 * mp + 2) / 5 + 1);
+    m = (int)(mp < 10 ? mp + 3 : mp - 9);
+    if (m <= 2) {
+        y++;
+    }
+    *year = y;
+    *month = m - 1;             /* nj_datetime months are 0..11 */
+    *day = d;
+}
+
+static int hl_now(void *ud, nj_datetime *out)
+{
+    nj_headless_state *s = HS(ud);
+    nj_s8 ms, days, rest;
+    int y, m, d;
+
+    if (!s || s != hl_virtual_state || !s->virtual_clock) {
+        return nj_posix_now(ud, out);
+    }
+    if (!out) {
+        return 0;
+    }
+    /*
+     * 2000-01-01T00:00:00Z plus the replay counter.  A title that reads the
+     * calendar sees it move with emulated time, so date maths stays sane,
+     * while two replays of one script still see exactly the same instant.
+     */
+    ms = 946684800000LL + (nj_s8)s->virtual_ms;
+    days = ms / 86400000LL;
+    rest = ms % 86400000LL;
+    hl_civil_from_days(days, &y, &m, &d);
+    out->year = (nj_s4)y;
+    out->month = (nj_s4)m;
+    out->day = (nj_s4)d;
+    out->hour = (nj_s4)(rest / 3600000LL);
+    out->minute = (nj_s4)((rest / 60000LL) % 60LL);
+    out->second = (nj_s4)((rest / 1000LL) % 60LL);
+    out->millis = (nj_s4)(rest % 1000LL);
+    out->weekday = (nj_s4)(((days % 7LL) + 11LL) % 7LL); /* 0 = Sunday */
+    out->tz_offset = 0;
+    return 1;
 }
 
 static int hl_input_push(void *ud, const nj_event *ev);
@@ -780,6 +888,16 @@ static void hl_display_frame(void *ud, const nj_surface *hd)
     char path[256];
 
     s->frame++;
+    if (s->virtual_clock) {
+        /*
+         * One presented frame is one fixed step of emulated time.  It is
+         * advanced here rather than in the frame pacer because a real host
+         * cannot promise a frame started when it said it did; a 33 ms step
+         * gives a title the same 30 fps timeslice on every run, and the
+         * pacer then sees the deadline already met and does not sleep.
+         */
+        s->virtual_ms += s->virtual_step_ms;
+    }
     if (s->dump_every > 0 && (s->frame % s->dump_every) == 0 && s->dump_prefix) {
         /*
          * A prefix that names an existing directory gets the separator.
@@ -1245,6 +1363,7 @@ nj_status nj_port_headless_ex(nj_port *out, int width, int height,
     s->auto_quit_frames = 0;
 
     memset(out, 0, sizeof(*out));
+    s->port = out;
     out->name = "headless";
     out->first_paint_early = 1;
     /* Handset-like show events are opt-in while the event-thread model is
@@ -1256,7 +1375,8 @@ nj_status nj_port_headless_ex(nj_port *out, int width, int height,
     }
     out->ud = s;
     out->millis = hl_millis;
-    out->now = nj_posix_now;
+    /* out->now stays NULL until a replay requests the virtual calendar; see
+     * nj_port_headless_set_virtual_clock(). */
     out->sleep_ms = hl_sleep_ms;
     out->idle = hl_idle;
     out->device_property = hl_device_property;
@@ -1373,6 +1493,27 @@ void nj_port_headless_set_dump(void *ud, const char *prefix, int every)
     if (s) {
         s->dump_prefix = prefix;
         s->dump_every = every;
+    }
+}
+
+void nj_port_headless_set_virtual_clock(void *ud, int enabled)
+{
+    nj_headless_state *s = HS(ud);
+    if (!s) {
+        return;
+    }
+    s->virtual_clock = enabled != 0;
+    /* The calendar hook exists only for replays, and only while the port is
+     * still the one this state belongs to. */
+    hl_virtual_state = s->virtual_clock ? s : NULL;
+    if (s->port) {
+        s->port->now = s->virtual_clock ? hl_now : NULL;
+    }
+    if (s->virtual_clock) {
+        /* 30 fps: the panel rate every one of these titles was written for,
+         * and a whole number of milliseconds. */
+        s->virtual_step_ms = 1000u / 30u;
+        s->virtual_ms = 0u;
     }
 }
 
