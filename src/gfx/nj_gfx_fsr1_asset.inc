@@ -202,6 +202,77 @@ static void hd_fsr1_store(nj_u1 *dst, int r, int g, int b)
     memcpy(dst, &color, sizeof color);
 }
 
+#if defined(__x86_64__) || defined(__i386__)
+#include <smmintrin.h>
+/* The four-tap reconstruction is the hot loop, and it is pure integer math on
+ * four adjacent output samples whose phases are consecutive, so one SSE4.1
+ * multiply-add lane group handles four pixels at once. Runtime-detected: the
+ * project builds without -msse4.1 and 32-bit x86 hosts may lack it. */
+#if defined(__ANDROID__)
+/* The Android x86_64 ABI baseline is SSE4.2, so this kernel is available
+ * unconditionally there. Probing with __builtin_cpu_supports on this target
+ * would also add 28 bytes of writable BSS for the compiler's CPU model, which
+ * the project's no-static-state gate rejects. */
+static int hd_fsr1_sse41(void) { return 1; }
+#else
+static int hd_fsr1_sse41(void)
+{
+    /* No cached flag: the project forbids writable global state. */
+    return __builtin_cpu_supports("sse4.1");
+}
+#endif
+
+__attribute__((target("sse4.1")))
+static int hd_fsr1_span_sse41(nj_u1 *out, int n, int phase,
+                              const hd_fsr1_kernel *kernel,
+                              const hd_fsr1_row *row, int c0, int c1, int c2,
+                              int c3, const int *lo, const int *hi)
+{
+    const __m128i unit = _mm_set1_epi32(0xff);
+    int done = 0;
+    while (done + 4 <= n) {
+        __m128i k0 = _mm_loadu_si128((const __m128i *)(kernel->tap[0] + phase + done));
+        __m128i k1 = _mm_loadu_si128((const __m128i *)(kernel->tap[1] + phase + done));
+        __m128i k2 = _mm_loadu_si128((const __m128i *)(kernel->tap[2] + phase + done));
+        __m128i k3 = _mm_loadu_si128((const __m128i *)(kernel->tap[3] + phase + done));
+        __m128i res[3];
+        __m128i bytes[4];
+        for (int ch = 0; ch < 3; ++ch) {
+            __m128i a = _mm_mullo_epi32(k0, _mm_set1_epi32(row->vert[ch][c0]));
+            __m128i b = _mm_mullo_epi32(k1, _mm_set1_epi32(row->vert[ch][c1]));
+            __m128i c = _mm_mullo_epi32(k2, _mm_set1_epi32(row->vert[ch][c2]));
+            __m128i d = _mm_mullo_epi32(k3, _mm_set1_epi32(row->vert[ch][c3]));
+            __m128i sign;
+            a = _mm_add_epi32(_mm_add_epi32(a, b), _mm_add_epi32(c, d));
+            /* Round half away from zero before the Q16 shift, like
+             * hd_fsr1_shift(): +32768 for positive, -32768 for negative. */
+            sign = _mm_srai_epi32(a, 31);
+            a = _mm_add_epi32(a, _mm_or_si128(_mm_and_si128(sign, _mm_set1_epi32(-65536)),
+                                              _mm_set1_epi32(0x8000)));
+            a = _mm_srai_epi32(a, 16);
+            a = _mm_max_epi32(a, _mm_set1_epi32(lo[ch]));
+            a = _mm_min_epi32(a, _mm_set1_epi32(hi[ch]));
+            res[ch] = a;
+        }
+        for (int ch = 0; ch < 4; ++ch) {
+            __m128i values = ch == 3 ? unit : res[ch == 0 ? 2 : ch == 1 ? 1 : 0];
+            if (ch == 3) values = _mm_set1_epi32(0xff);
+            values = _mm_packus_epi32(values, values);
+            bytes[ch] = _mm_packus_epi16(values, values);
+        }
+        /* b,g then r,a: two 16-bit words per pixel, low then high half. */
+        {
+            __m128i bg = _mm_unpacklo_epi8(bytes[0], bytes[1]);
+            __m128i ra = _mm_unpacklo_epi8(bytes[2], bytes[3]);
+            _mm_storeu_si128((__m128i *)(out + (size_t)done * 4),
+                             _mm_unpacklo_epi16(bg, ra));
+        }
+        done += 4;
+    }
+    return done;
+}
+#endif
+
 static void hd_fsr1_span(nj_u1 *out, int n, int phase, const hd_fsr1_kernel *kernel,
                          const hd_fsr1_row *row, int c0, int c1, int c2, int c3)
 {
@@ -220,6 +291,19 @@ static void hd_fsr1_span(nj_u1 *out, int n, int phase, const hd_fsr1_kernel *ker
         for (int i = 1; i < n; ++i) memcpy(out + (size_t)i * 4, out, 4);
         return;
     }
+    {
+        int done = 0;
+#if defined(__x86_64__) || defined(__i386__)
+        if (n >= 4 && hd_fsr1_sse41())
+            done = hd_fsr1_span_sse41(out, n, phase, kernel, row, c0, c1, c2, c3,
+                                      lo, hi);
+#endif
+        if (done) {
+            out += (size_t)done * 4;
+            phase += done;
+            n -= done;
+        }
+    }
     for (int i = 0; i < n; ++i) {
         int ph = phase + i;
         int k0 = kernel->tap[0][ph], k1 = kernel->tap[1][ph];
@@ -237,6 +321,8 @@ static void hd_fsr1_span(nj_u1 *out, int n, int phase, const hd_fsr1_kernel *ker
         hd_fsr1_store(out + (size_t)i * 4, r, g, b);
     }
 }
+
+
 
 static void hd_fsr1_bitmap(nj_surface *dst, int k, const nj_u1 *src, nj_s8 stride,
                            int format, int bpp, int sx, int sy, int sw, int sh, int transform,

@@ -158,3 +158,40 @@ python3 .local-tools/debug-runs/fsr1-assets/r10_avd.py
 
 结论：FSR1 选在 4×–8× 时每帧最多多花一次全屏拷制的 17 ms 左右；是否值得取决于游戏的
 重绘量。真正能再快一档的路线是 `hd_fsr1_span` 的 SIMD 重写，已列为后续候选。
+
+## 附二：`hd_fsr1_span` 的 SSE4.1 重写（2026-11-27 实测）
+
+四个输出像素的相位是连续的，因此四个抽头系数在内存里也连续：一次就够了。实现把热循环改成
+"每 4 个输出像素一组"的 SSE4.1 内核（`hd_fsr1_span_sse41`）：
+
+- 每个通道 4 次 `pmulld` + 3 次 `paddd`，再按 `hd_fsr1_shift` 的"四舍五入到最近"规则
+  加 ±32768 后算术右移 16，用 `pmaxsd`/`pminsd` 钳到 4×4 抽头窗口的 min/max；
+- 三个通道 `packus` 到字节后，用两组 `unpack` 直接交织成 `B,G,R,A` 四像素 16 字节写出；
+- 桌面端运行时用 `__builtin_cpu_supports("sse4.1")` 探测（不设静态变量，项目禁止可写全局
+  状态，`no_statics` 测试会检查），不可用或 ARM 上自动落回原标量路径；Android x86_64 的
+  ABI 基线本身就是 SSE4.2，因此该平台直接启用、不做探测——用 Clang 的 `__builtin_cpu_supports`
+  反而会为编译器 CPU 模型引入 28 字节可写 BSS，被 `tools/build_android.sh` 的零静态状态门禁
+  拒绝（已实测）；
+- 余数（每组不足 4 像素）仍走标量循环，半透明路径完全未改。
+
+逐字节等价性：同一张 8× / 4× 素材拷制输出与旧实现 `cmp` 完全一致；`bench_gfx --fsr1`
+的四个 fixture 哈希（`ce5c8ae9`/`82e0ab5c`/`82ad1670`/`9847a79a`）与旧实现逐一相同。
+
+性能（`bench_gfx --fsr1`，每 fixture 40 次全屏拷制）：
+
+| fixture | 旧 | SSE4.1 | 变化 |
+| --- | --- | --- | --- |
+| detail 240×320 → 4× | 0.298 s | 0.208 s | −30% |
+| stripes → 4×（`--filters`） | 0.231 s | 0.186 s | −19% |
+| photo → 4×（`--filters`） | 0.301 s | 0.209 s | −30% |
+| 24-bit 画稿 → 8×（40 次） | 0.857 s | 0.532 s | −38% |
+
+8× 那组扣除 PPM 落盘与基准噪声后，滤镜本身约从 13.3 ms 降到 5.2 ms（≈2.6×）。
+
+尚未做 NEON 版本：ARM64 上仍走标量路径（结果同样正确，只是没有这份加速）。若需要，可把
+同一内核用 `vmlaq_s32`/`vmaxq`/`vminq` + `vqmovn` 平移过去，逻辑完全一致。
+
+Android 模拟器实测（x86_64，Doom3 1080×2400，高清 8×，素材采样 FSR1 锐利）：`present stats`
+`draw` 中位 4.8–7.0 ms、`frame` 中位 141–268 ms（8× 三维原本就受 GPU 等待限制，见
+`2026-11-27-hd-triangle-transfer.md`），无 EGL/FATAL 错误；同样的 8× 下柔和平滑 `draw` 中位
+6.0–8.3 ms，两者在同一噪声区间内。
