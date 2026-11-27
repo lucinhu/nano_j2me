@@ -233,6 +233,7 @@ void nj_midp_hd_collect(nj_vm *vm)
 {
     int i;
 #if NJ_ENABLE_M3G
+    if (vm->m3g_journal) nj_m3g_flush(vm);
     if (vm->m3g_hd_state) nj_m3g_hd_collect(vm);
 #endif
     if (!vm->hd_store) return;
@@ -246,6 +247,7 @@ void nj_midp_hd_dispose(nj_vm *vm)
 {
     int i;
 #if NJ_ENABLE_M3G
+    if (vm->m3g_journal) nj_m3g_flush(vm);
     if (vm->m3g_hd_state) nj_m3g_hd_dispose(vm);
 #endif
     if (!vm->hd_store) return;

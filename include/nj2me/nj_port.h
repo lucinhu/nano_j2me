@@ -887,6 +887,7 @@ typedef struct nj_port {
     nj_gfx_triangles_fn gfx_hd_triangles;
     void *gfx_hd_triangles_ud;
     void (*gfx_hd_destroy)(void *ud); /* optional owned backend, released at shutdown */
+    int gfx_hd_journal; /* opt the physical path into journal list transactions */
 #endif
 
     /* Optional high-resolution output. Zero-initialized ports use the logical

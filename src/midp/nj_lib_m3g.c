@@ -16183,7 +16183,7 @@ static int jr_draw_accel(m3g_jr *r)
     }
     /* Queue into the journal only when the port can commit a whole list in
      * one transaction; otherwise keep the original synchronous callback. */
-    journaled = !r->hd_scale && port->gfx_triangles_list != NULL;
+    journaled = port->gfx_triangles_list != NULL && (!r->hd_scale || port->gfx_hd_journal);
     memset(&c, 0, sizeof(c));
     collector = *r;
     collector.triangles = &c;
@@ -16293,6 +16293,19 @@ static int jr_hd_target(m3g_jr *r, m3g_jr *hd)
     return 1;
 }
 
+/* A queued physical batch holds mirror pixels by pointer and imports them at
+ * flush time; software writers must therefore commit first. */
+static void jr_hd_flush_queued(m3g_jr *r)
+{
+#if NJ_ENABLE_GFX_ACCEL
+    nj_port *port = r->vm->port;
+    if (r->hd_scale && port && port->gfx_hd_journal && r->vm->m3g_journal)
+        m3g_journal_flush(r->vm, NJ_M3G_FLUSH_SOFTWARE);
+#else
+    (void)r;
+#endif
+}
+
 static int jr_hd_mesh(m3g_jr *r)
 {
     m3g_jr hd;
@@ -16302,6 +16315,7 @@ static int jr_hd_mesh(m3g_jr *r)
          * HD triangle counter used to report only logical raster work. */
         nj_u4 base = r->drawn;
 #if NJ_ENABLE_FSR2
+        jr_hd_flush_queued(r);
         hd.hd_temporal = r->vm->render_quality.fsr2 && m3g_temporal_mesh(&hd);
         /* A live capture must visit each original face exactly once. When the
          * binding falls back, draw it through the configured HD backend. */
@@ -16317,6 +16331,7 @@ static int jr_hd_mesh(m3g_jr *r)
             return 1;
         }
 #endif
+        jr_hd_flush_queued(r);
         jr_draw_walk(&hd);
         r->drawn += hd.drawn - base;
         return 1;
@@ -16333,7 +16348,8 @@ static nj_u4 jr_draw(m3g_jr *r)
     if (r->vm->render_quality.scale > 1 || r->vm->render_quality.ssaa > 1 ||
         r->vm->render_quality.fsr2) {
 #if NJ_ENABLE_GFX_ACCEL
-        if (r->vm->port && r->vm->port->gfx_hd_triangles && nj_m3g_pending(r->vm))
+        if (r->vm->port && r->vm->port->gfx_hd_triangles && !r->vm->port->gfx_hd_journal &&
+            nj_m3g_pending(r->vm))
             m3g_journal_flush(r->vm, NJ_M3G_FLUSH_ORDER);
 #endif
         hd = jr_hd_mesh(r);
@@ -16344,7 +16360,8 @@ static nj_u4 jr_draw(m3g_jr *r)
     if ((hd && r->vm->port && r->vm->port->gfx_hd_triangles) || !jr_draw_accel(r)) {
         /* A journaled frame must stay ordered: commit queued draws before the
          * software path writes the same target for this call. */
-        if (r->vm->m3g_journal) m3g_journal_flush(r->vm, NJ_M3G_FLUSH_SOFTWARE);
+        if (r->vm->m3g_journal && !(hd && r->vm->port && r->vm->port->gfx_hd_journal))
+            m3g_journal_flush(r->vm, NJ_M3G_FLUSH_SOFTWARE);
         jr_draw_walk(r);
     }
 #else
