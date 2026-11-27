@@ -16297,19 +16297,28 @@ static int jr_hd_mesh(m3g_jr *r)
 {
     m3g_jr hd;
     if (jr_hd_target(r, &hd)) {
+        /* hd is a copy that walks the physical target, so its triangle counter
+         * starts at the logical count and must be folded back: --stats and the
+         * HD triangle counter used to report only logical raster work. */
+        nj_u4 base = r->drawn;
 #if NJ_ENABLE_FSR2
         hd.hd_temporal = r->vm->render_quality.fsr2 && m3g_temporal_mesh(&hd);
         /* A live capture must visit each original face exactly once. When the
          * binding falls back, draw it through the configured HD backend. */
         if (hd.hd_temporal) {
             jr_draw_walk(&hd);
+            r->drawn += hd.drawn - base;
             return 1;
         }
 #endif
 #if NJ_ENABLE_GFX_ACCEL
-        if (jr_draw_accel(&hd)) return 1;
+        if (jr_draw_accel(&hd)) {
+            r->drawn += hd.drawn - base;
+            return 1;
+        }
 #endif
         jr_draw_walk(&hd);
+        r->drawn += hd.drawn - base;
         return 1;
     }
 #if NJ_ENABLE_FSR2

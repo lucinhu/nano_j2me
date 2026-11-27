@@ -147,7 +147,7 @@ Android 的常规包提供软件和 GLES2。arm64 增强包在画面面板增加
 
 立方核的 A 参数由原生高分真值扫得：A=0.10 在 2D 文字、斜线和 3D 场景上同时比 Catmull-Rom（A=-0.5）的过冲和旧版 FSR1 的 2× 重建网格更接近原生画面。整数倍率时采样相位均匀（每 s 个输出像素有一个正落在纹素中心），边缘粗细一致，不会出现非整数倍放大的相位抖动；只有 1× 是逐像素复制，2× 以上仍是立方核插值。
 
-桌面默认适配窗口内游戏区域，`--upscale-scale 2` 等显式倍率仍可指定中间输出尺寸。Android 直接绘制到 EGL 窗口。`--fsr2` 则用于提供深度和运动数据的 M3G 绘制，见上面的内部渲染设置。[跨分辨率实测](notes/2026-11-26-fsr-resolution.md)、[立方核重建与原生高分对照](notes/2026-11-27-fsr-cubic-reconstruction.md)、[缩放矩阵、整数倍率与缩小路径](notes/2026-11-27-fsr-scale-matrix.md)、[FSR2 画质对照与回读耗时](notes/2026-11-27-fsr2-accuracy-and-readback.md)、[Android Vulkan 与 FSR2 路径验证](notes/2026-11-27-android-vulkan-fsr2.md)、[FSR1 锐度灵敏度与 4×/8× 呈现耗时](notes/2026-11-27-fsr1-sharpness-and-present-cost.md)、[桌面 present stats](notes/2026-11-27-desktop-present-stats.md)、[高清素材采样的 FSR1 模式](notes/2026-11-27-fsr1-asset-sampling.md)、[高清面片批处理的取舍](notes/2026-11-27-hd-journal-batching.md)
+桌面默认适配窗口内游戏区域，`--upscale-scale 2` 等显式倍率仍可指定中间输出尺寸。Android 直接绘制到 EGL 窗口。`--fsr2` 则用于提供深度和运动数据的 M3G 绘制，见上面的内部渲染设置。[跨分辨率实测](notes/2026-11-26-fsr-resolution.md)、[立方核重建与原生高分对照](notes/2026-11-27-fsr-cubic-reconstruction.md)、[缩放矩阵、整数倍率与缩小路径](notes/2026-11-27-fsr-scale-matrix.md)、[FSR2 画质对照与回读耗时](notes/2026-11-27-fsr2-accuracy-and-readback.md)、[Android Vulkan 与 FSR2 路径验证](notes/2026-11-27-android-vulkan-fsr2.md)、[FSR1 锐度灵敏度与 4×/8× 呈现耗时](notes/2026-11-27-fsr1-sharpness-and-present-cost.md)、[桌面 present stats](notes/2026-11-27-desktop-present-stats.md)、[高清素材采样的 FSR1 模式](notes/2026-11-27-fsr1-asset-sampling.md)、[高清面片批处理的取舍](notes/2026-11-27-hd-journal-batching.md)、[高清面片的颜色/深度往返](notes/2026-11-27-hd-triangle-transfer.md)
 
 ### Android 版：软件呈现滤镜（已实现，0.5.43+）
 
