@@ -457,15 +457,15 @@ int nj_vk_renderer_attach(nj_port *port) {
         return 0;
     port->gfx_hd_triangles = port->gfx_triangles = nj_vk_renderer_triangles;
     port->gfx_hd_triangles_ud = port->gfx_triangles_ud = r;
-    port->gfx_triangles_list = nj_vk_renderer_triangles_list;
-    port->gfx_triangles_list_ud = r;
-    /* The physical path may opt into journal transactions, but the batching
-     * experiment changed pixels at 8x, so it stays off until the missing host
-     * write fence is found. NJ_VK_HD_JOURNAL=1 re-enables it for debugging. */
-    {
-        const char *on = getenv("NJ_VK_HD_JOURNAL");
-        port->gfx_hd_journal = on && on[0] == '1';
-    }
+    /* Keep the exact single-packet path and leave the journal off.  A
+     * multi-packet list callback produced unreproducible pixels at 1x and 8x
+     * even when the recorded packet stream and the imported colour/depth were
+     * bit-identical, and it was slower than the single-packet path.  The list
+     * entry point is still compiled and tested for frontends that group
+     * transactions elsewhere; M3G only uses it when a port registers it. */
+    port->gfx_triangles_list = NULL;
+    port->gfx_triangles_list_ud = NULL;
+    port->gfx_hd_journal = 0;
     port->gfx_triangles_begin = NULL;
     port->gfx_triangles_end = NULL;
     port->gfx_triangles_abort = NULL;

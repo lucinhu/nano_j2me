@@ -283,6 +283,166 @@ static void order_and_fallback(nj_vk_renderer *r) {
     submit(r, &f);
     CHECK(f.colors[4][4] == 0xff5500cc && f.colors[12][18] == background);
 }
+/* The list callback promises exactly the same result as calling the
+ * single-packet callback for every packet in order.  This scene mixes
+ * overlapping and disjoint ROIs, a bilinear RGBA texture, alpha blending, fog
+ * and depth writes over a varied starting depth buffer.  No two surfaces are
+ * within one depth step of each other, so colour must be byte-identical and
+ * depth keys may move by at most one step: the reference requantises keys
+ * after every packet while a batch keeps the D32 attachment across the group. */
+static void batch_equivalence(nj_vk_renderer *r) {
+    enum { BW = 48, BH = 40, ZS = BW + 3, NP = 5 };
+    static nj_u4 colors[BH][BW], base_colors[BH][BW], want[BH][BW], again[BH][BW];
+    static nj_s4 keys[BH][ZS], base_keys[BH][ZS], want_keys[BH][ZS];
+    static nj_u1 tex[4 * 4 * 4];
+    nj_surface s = {(nj_u4 *)colors, BW, BH, BW * 4, NJ_PIXFMT_ARGB8888, 4};
+    nj_gfx_triangle_cmd cmds[NP][2];
+    nj_gfx_triangles p[NP];
+    const nj_gfx_triangles *pp[NP];
+    nj_gfx_triangles_list l = {NJ_GFX_TRIANGLES_LIST_VERSION, &s, &keys[0][0], ZS, pp, NP};
+    nj_u4 submitted = 0, total = 0;
+    int i, x, y;
+
+    for (i = 0; i < (int)sizeof tex; ++i)
+        tex[i] = (nj_u1)(13 + i * 29 + (i >> 2) * 7);
+    for (y = 0; y < BH; ++y) {
+        for (x = 0; x < BW; ++x)
+            colors[y][x] = background;
+        for (x = 0; x < ZS; ++x)
+            keys[y][x] = x < BW ? (((x * 5 + y * 3) & 3) ? 9000 : 2000) : -12345;
+    }
+    memcpy(base_colors, colors, sizeof colors);
+    memcpy(base_keys, keys, sizeof keys);
+    memset(cmds, 0, sizeof cmds);
+    cmds[0][0] = triangle(0xffcc4422u, 0.30);
+    cmds[0][1] = triangle(0xff113355u, 0.70);
+    cmds[1][0] = triangle(0xffffffffu, 0.10);
+    cmds[2][0] = triangle(0x80aabbccu, 0.60);
+    cmds[3][0] = triangle(0xff3355aau, 0.20);
+    cmds[4][0] = triangle(0xff22dd77u, 0.05);
+    for (i = 0; i < NP; ++i) {
+        int j;
+        for (j = 0; j < 2; ++j) {
+            cmds[i][j].vertices[0].x = (float)(2 + i * 3);
+            cmds[i][j].vertices[0].y = (float)(3 + i * 2);
+            cmds[i][j].vertices[1].x = (float)(20 + i * 5);
+            cmds[i][j].vertices[1].y = (float)(4 + i * 3);
+            cmds[i][j].vertices[2].x = (float)(4 + i * 2);
+            cmds[i][j].vertices[2].y = (float)(19 + i * 3);
+        }
+    }
+    cmds[1][0].texture = tex;
+    cmds[1][0].texture_width = cmds[1][0].texture_height = 4;
+    cmds[1][0].texture_bpp = 4;
+    cmds[1][0].filter = 209;
+    cmds[1][0].wrap_s = cmds[1][0].wrap_t = 240;
+    cmds[1][0].texture_function = 226;
+    for (i = 0; i < 3; ++i) {
+        cmds[1][0].vertices[i].u = (float)(i * 1.7);
+        cmds[1][0].vertices[i].v = (float)(i * 1.3);
+    }
+    /* Every packet samples its own texture so the batch's global texture
+     * offsets differ from zero for all but the first packet. */
+    {
+        static nj_u1 texs[NP][8 * 8 * 4];
+        static const int side[NP] = {2, 4, 3, 5, 8};
+        int i, k;
+        for (i = 0; i < NP; ++i)
+            for (k = 0; k < side[i] * side[i] * 4; ++k)
+                texs[i][k] = (nj_u1)(11 + i * 57 + k * 13);
+        for (i = 0; i < NP; ++i) {
+            int j;
+            cmds[i][0].texture = texs[i];
+            cmds[i][0].texture_width = cmds[i][0].texture_height = side[i];
+            cmds[i][0].texture_bpp = 4;
+            cmds[i][0].filter = 208;
+            cmds[i][0].wrap_s = cmds[i][0].wrap_t = 240;
+            cmds[i][0].texture_function = 226;
+            for (j = 0; j < 3; ++j) {
+                cmds[i][0].vertices[j].u = (float)(j * (side[i] - 1) / 2);
+                cmds[i][0].vertices[j].v = (float)(j * (side[i] - 1) / 2);
+            }
+        }
+    }
+    cmds[2][0].blend = 64;
+    cmds[2][0].depth_write = 0;
+    cmds[3][0].fog = 80;
+    cmds[3][0].fog_color = 0x8745a9u;
+    cmds[3][0].fog_near = 0.1f;
+    cmds[3][0].fog_far = 2;
+    cmds[3][0].fog_density = 0.7f;
+    static const int rx[NP] = {1, 15, 5, 30, 20}, ry[NP] = {2, 12, 22, 3, 25};
+    static const int rw[NP] = {22, 25, 30, 16, 14}, rh[NP] = {18, 20, 15, 14, 12};
+    static const nj_u4 rc[NP] = {2, 1, 1, 1, 1};
+    for (i = 0; i < NP; ++i) {
+        p[i] = (nj_gfx_triangles){NJ_GFX_TRIANGLES_VERSION, &s, &keys[0][0], ZS, rx[i], ry[i],
+                                  rw[i], rh[i],      cmds[i],          rc[i]};
+        pp[i] = &p[i];
+        total += rc[i];
+    }
+    for (i = 0; i < NP; ++i) {
+        int rc;
+        submitted = 0;
+        if (!nj_gfx_triangles_validate(&p[i], &submitted)) {
+            fprintf(stderr, "packet %d fails validate: x=%d y=%d w=%d h=%d count=%u\n", i, p[i].x,
+                    p[i].y, p[i].width, p[i].height, p[i].count);
+            exit(1);
+        }
+        rc = nj_vk_renderer_triangles(r, &p[i], &submitted);
+        if (rc != NJ_GFX_ACCEL_DONE || submitted != p[i].count) {
+            fprintf(stderr, "packet %d declined rc=%d submitted=%u count=%u\n", i, rc, submitted,
+                    p[i].count);
+            exit(1);
+        }
+    }
+    memcpy(want, colors, sizeof colors);
+    memcpy(want_keys, keys, sizeof keys);
+    {
+        int changed = 0, kchanged = 0;
+        for (y = 0; y < BH; ++y)
+            for (x = 0; x < BW; ++x) {
+                if (colors[y][x] != base_colors[y][x])
+                    ++changed;
+                if (keys[y][x] != base_keys[y][x])
+                    ++kchanged;
+            }
+        printf("reference touched %d colour samples, %d depth keys\n", changed, kchanged);
+    }
+    memcpy(colors, base_colors, sizeof colors);
+    memcpy(keys, base_keys, sizeof keys);
+    CHECK(nj_vk_renderer_triangles_list(r, &l, &submitted) == NJ_GFX_ACCEL_DONE && submitted == total);
+    if (memcmp(colors, want, sizeof colors)) {
+        fprintf(stderr, "batch colour differs from per-packet reference\n");
+        exit(1);
+    }
+    {
+        int maxdiff = 0, dpx = 0;
+        for (y = 0; y < BH; ++y)
+            for (x = 0; x < ZS; ++x) {
+                int d = keys[y][x] - want_keys[y][x];
+                if (d < 0)
+                    d = -d;
+                if (d > maxdiff)
+                    maxdiff = d;
+                if (d)
+                    ++dpx;
+            }
+        printf("batch equivalence: colour identical, depth max step %d over %d samples\n", maxdiff,
+               dpx);
+        if (maxdiff > 1) {
+            fprintf(stderr, "batch depth differs by %d steps\n", maxdiff);
+            exit(1);
+        }
+    }
+    /* A second identical transaction must not reuse staged bytes from the
+     * previous one. */
+    memcpy(again, colors, sizeof colors);
+    memcpy(colors, base_colors, sizeof colors);
+    memcpy(keys, base_keys, sizeof keys);
+    CHECK(nj_vk_renderer_triangles_list(r, &l, &submitted) == NJ_GFX_ACCEL_DONE && submitted == total);
+    CHECK(!memcmp(colors, again, sizeof colors));
+}
+
 static double millis(void) {
 #ifdef _WIN32
     LARGE_INTEGER t, hz;
@@ -454,6 +614,7 @@ int main(int argc, char **argv) {
     textures(r);
     materials(r);
     rgb565_packets(r, 24, 16, 0);
+    batch_equivalence(r);
     if (argc > 1 && !strcmp(argv[1], "--bench-rgb565")) {
         rgb565_packets(r, 243, 322, 1);
         rgb565_packets(r, 1283, 722, 1);
@@ -478,9 +639,8 @@ int main(int argc, char **argv) {
         CHECK(port.gfx_triangles == nj_vk_renderer_triangles &&
               port.gfx_hd_triangles == nj_vk_renderer_triangles &&
               port.gfx_triangles_ud == port.gfx_hd_triangles_ud && port.gfx_hd_destroy &&
-              port.gfx_triangles_list == nj_vk_renderer_triangles_list &&
-              port.gfx_triangles_list_ud == port.gfx_triangles_ud &&
-              !port.gfx_triangles_auto && !port.gfx_triangles_session_ud);
+              port.gfx_triangles_list == NULL && port.gfx_triangles_list_ud == NULL &&
+              !port.gfx_hd_journal && !port.gfx_triangles_auto && !port.gfx_triangles_session_ud);
         memcpy(&saved, &port, sizeof saved);
         CHECK(!nj_vk_renderer_attach(&port) && !memcmp(&saved, &port, sizeof port));
         port.gfx_hd_destroy(port.gfx_hd_triangles_ud);
