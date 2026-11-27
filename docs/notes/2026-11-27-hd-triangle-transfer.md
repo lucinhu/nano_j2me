@@ -268,6 +268,12 @@ UNDEFINED→TRANSFER_DST 与 render pass 的布局转换），逐位一致但耗
 
 ### 12.3 多包事务的决定性缺陷（本次实验的核心发现）
 
+> **2026-11-27 深夜更正**：本节把「多包事务输出不可复现」归因于 Vulkan host 侧的未初始化读取，
+> 这个结论是错的。真正原因在 M3G journal 内部：纹理池扩容后没有把已排队三角形里的纹理指针
+> 一起搬走，导致后续读取释放后的旧池。修复后多包事务（含 8× HD 会话）完全确定，详见 §十三。
+> 本节其余测量（耗时、图像差、ASLR/MALLOC_PERTURB_ 现象）仍然有效，只是解释换了。
+
+
 1× 回放（`--render-scale 1` 也会进 journal）复现最快，3-4 秒一次：
 
 - `NJ_M3G_JOURNAL_MAX=1`（每事务 1 包）连跑三次，帧 300/400 全部为
@@ -312,3 +318,87 @@ UNDEFINED→TRANSFER_DST 与 render pass 的布局转换），逐位一致但耗
 闸门，并解决多包事务的未初始化读取；本机没有 Vulkan validation layer（
 `/usr/share/vulkan/explicit_layer.d` 不存在），需要先安装或在另一台机器上用 validation/RenderDoc
 复现。
+
+### 十三、多包事务的真正根因与 GPU 常驻会话（2026-11-27 深夜）
+
+#### 13.1 根因：journal 纹理池扩容后留下悬垂指针
+
+`m3g_journal_append`（`src/midp/nj_lib_m3g.c`）把每个新出现的纹理快照进 `j->pool`，并把已排队
+命令里的 `texture` 指针改写成 `j->pool + offset`。`m3g_journal_reserve` 的 pool 扩容分支会
+`alloc + memcpy + nj_host_free(old)`，**但没有把已排队 entries 里指向旧 pool 的纹理指针搬到新
+pool**。于是扩容之后，先前排队的三角形继续从已释放的内存采样：读到的是堆上残留字节，随 ASLR 和
+`MALLOC_PERTURB_` 变化，于是出现「同一二进制、同一 guest 状态、图片每次不同」以及 §12.3 记录的
+彩虹马赛克伪影。
+
+只有多包事务会触发：单包事务里 pool 在首次 append 后立即 flush/销毁，永远不会扩容；多包事务
+（`NJ_M3G_JOURNAL_MAX>1`、批处理 list、常驻会话）才会在事务内追加纹理并踩到旧指针。这也解释了
+为什么「每事务 1 包」的逐位对照全部精确、而 cap≥2 立刻分叉。
+
+#### 13.2 证据
+
+profile 构建里给会话加临时 trace（`[vsess] record … v=<顶点哈希> t=<纹理哈希>`、
+`[vsess] view … src=<单片纹理哈希>`）：两次运行的顶点哈希相同，但**上传给 GPU 的纹理字节哈希从
+某一记录开始不同**，且同一 `texture_view` 的源字节哈希在两次运行间不同。由于 journal 的命令流
+（包数、矩形、三角字段、池内容）此前已被证明逐位相同，剩下唯一变量就是 journal 实际交给渲染器
+的 `texture` 指针所指向的字节——正好是旧 pool。
+
+#### 13.3 修复
+
+`m3g_journal_reserve` 的 pool 分支保存 `old = j->pool`、`used = j->pool_used`，扩容后遍历所有
+已排队 entry 的三角形，把落在 `[old, old+used)` 的 `texture` 指针改成 `new + (tex - old)`，再释放
+旧池。注释写明「已排队的三角形直指 pool，移动 pool 必须同步移动这些指针」。
+
+#### 13.4 修复后的确定性验证
+
+- 1× 400 帧、dump-every 20、与 journal 关闭基线逐帧对比：`NJ_M3G_JOURNAL_MAX=1/2/4` 与默认
+  8192 全部两次运行逐位相同；cap=1/2/4 与基线**每一帧都相同**。默认 cap 与基线在帧 220–400
+  不同，但每帧只有 2–5 个像素、最大通道差 8：这是会话内保持 float 深度、不逐包 requantize 的
+  语义差（契约允许 half-LSB 内 ±1 key 的深度量化），不是缺陷。
+- 8× 确定性闸门（200 帧、dump-every 60）：journal 关 = 会话开 = `846057676cfed67a` /
+  `c65baebe4730fcbe` / `dc5cb60109dd03cb`，两次会话运行也完全一致。
+- 8× 场内 400 帧：会话两次运行逐位相同；与关闭 journal 相比帧 300/400 差 13,633 px（0.28%，
+  最大通道差 22，>8 的 2,173 px），同样是深度量化语义差，且不再随运行变化。
+
+#### 13.5 Vulkan 常驻会话（M1）
+
+`include/nj2me/nj_gfx_vulkan.h` 与 `src/port/vulkan/nj_gfx_vulkan.c` / `tri_draw.inc` 实现
+`nj_gfx_triangles_session` 的 Vulkan 后端：
+
+- begin：校验 surface/矩形/深度，创建会话用的 render pass（final layout = TRANSFER_DST）与
+  framebuffer，把颜色（以及深度）一次性导入常驻附件，返回 DONE；会话期间 CPU 缓冲允许 stale。
+- 提交：每次 `gfx_triangles`/`gfx_triangles_list` 都只记录一个 command buffer——**整批只开一次
+  render pass**，用动态 viewport/scissor 把每个包放到自己的矩形，提交并等待 fence，不导出。
+- end：颜色附件（写过深度时连同深度）各一次 `copyImageToBuffer`，写回 CPU 表面后关闭会话；
+  abort 丢弃，不碰 CPU 表面。
+- 状态全部放在 `nj_vk_renderer` 内（无全局变量，满足 `tools/check_no_statics.sh`）。
+- 默认路径完全不变：只有 `NJ_VK_SESSION=1` 时 `nj_vk_renderer_attach` 才注册
+  list/begin/end/abort 并打开 `gfx_hd_journal`；默认仍是精确单包路径。
+- `tests/test_gfx_vulkan.c` 新增 `session_equivalence`：会话逐包提交 / 会话内一次 list 提交 4 包，
+  分别与逐包参考对比（颜色逐字节一致、深度 keys 差 ≤1），并覆盖 abort 不改像素、越界包 decline、
+  重复 grouped 事务可复现。
+
+#### 13.6 8× 实测：批处理仍不划算
+
+profile 构建、8× 场内 400 帧（keys 200/205/215/216）：
+
+| 路径 | walk | append | pump | commit |
+| --- | --- | --- | --- | --- |
+| journal 关（逐包 GPU） | 513 ms | 30,212 ms | 0.2 ms | 0.4 ms |
+| 会话（NJ_VK_SESSION=1） | 461 ms | 157 ms | 21,899 ms | 10,507 ms |
+
+会话把 38,162 次提交收成 619 次，但 GPU 侧总时间反而略高（32.4 s vs 30.2 s）：会话矩形大多是
+整屏（619 个会话里 369 个是 1920×2560，即颜色+深度各约 19.7 MB，一次导入+导出约 39 MB），
+传输量与逐包 ROI 之和相当。release 二进制 8× 场内 400 帧墙钟 关闭 51.6/52.5 s、会话
+52.1/76.3 s（第二次受机器负载干扰），没有可测量的收益。
+
+结论：会话基础设施保留（deterministic、单测覆盖、opt-in），但不默认开启。真正能省的是**把
+CPU↔GPU 往返本身去掉**，而不是把多次往返合成一次。
+
+#### 13.7 下一步：镜面/深度 GPU 驻留与脏代次
+
+1. 给物理镜面/深度加 CPU 写入代次与脏矩形：`m3g_clear` 的清屏改为 GPU 侧清理，2D 图元只累计
+   脏矩形。
+2. 会话 begin 只导入「自上次导出以来 CPU 写过」的矩形（大多数帧只有 HUD 的几小块），其余像素
+   GPU 附件本来就是对的；深度同理。
+3. 导出推迟到真正观察点（present 读回、createImage、软件回退、FSR2 采样），并只导出必要矩形。
+4. 继续推进方案 B：把 2D 合成也放到 GPU，让 present 直接消费 GPU 图像，去掉每帧整屏读回。

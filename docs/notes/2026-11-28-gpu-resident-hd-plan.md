@@ -8,7 +8,8 @@
 
 目标②：让高清镜面（颜色）和深度缓冲在 GPU 上常驻，跨多个 M3G 提交只付一次
 导入/导出，而不是每个提交都做一次全 ROI 往返。这是上一轮 §4/§5/§8 指向的方向，
-也是 §12 之后的唯一剩余杠杆（多包合并已经证明不可用）。
+也是 §12 之后的唯一剩余杠杆（多包合并当年被误判为不可用，实际是 journal 的 bug，见
+[§十三](2026-11-27-hd-triangle-transfer.md#十三多包事务的真正根因与-gpu-常驻会话2026-11-27-深夜)）。
 
 ## 二、实测依据（上一轮的数据）
 
@@ -90,3 +91,29 @@ present 直接消费 GPU 图像（`display_hd` 需要能接 GPU 帧，headless �
 
 实现 Vulkan session 钩子 + 单元测试，先不接 M3G；用 1×/2× 的 test_m3g_hd 与
 test_gfx_vulkan 验证像素等价，再接 M3G HD 路径跑确定性闸门与耗时。
+
+## 八、进展（2026-11-27 深夜）
+
+- **M1 完成**：Vulkan 持久会话已实现并通过单测 `session_equivalence`（会话逐包 / 会话内一次
+  list 提交 4 包，与逐包参考颜色逐字节一致、深度 keys 差 ≤1；abort 不改像素；越界包 decline；
+  grouped 事务可复现）。`NJ_VK_SESSION=1` 时 `nj_vk_renderer_attach` 注册 list + begin/end/abort
+  并打开 `gfx_hd_journal`，默认路径不变。代码：`src/port/vulkan/nj_gfx_vulkan.c`（session pass/
+  framebuffer/状态）、`src/port/vulkan/tri_draw.inc`（session_record/begin/end/abort）、
+  `include/nj2me/nj_gfx_vulkan.h`、`tests/test_gfx_vulkan.c`。
+- **关键更正**：上一轮把「多包事务输出不可复现」归因于 Vulkan host 侧未初始化读取是错的。根因
+  是 M3G journal 纹理池扩容后没有搬走已排队三角形里的纹理指针（`m3g_journal_reserve`），修复后
+  多包事务（含 8× HD 会话）完全确定。详见 hd-triangle-transfer.md §13。
+- **验证**：8× 闸门（帧 60/120/180）与关闭 journal 逐位一致（`846057676cfed67a`/
+  `c65baebe4730fcbe`/`dc5cb60109dd03cb`）；1× 400 帧 cap=1/2/4 与基线逐帧一致，默认 cap 只差
+  2–5 px（最大通道差 8，深度量化语义差）；8× 场内 400 帧会话两次运行逐位相同，与关闭 journal
+  差 13,633 px（0.28%，最大 22，确定性）。
+- **耗时结论（不达标）**：8× 场内 400 帧 M3GPROF——关闭 journal：append 30.2 s；会话：pump
+  21.9 s + commit 10.5 s ≈ 32.4 s。release 墙钟无可测收益（51.6/52.5 s vs 52.1 s，另一次 76 s
+  受共享机器负载干扰）。原因：619 个会话里 369 个是整屏 1920×2560，一次导入+导出约 39 MB，
+  与逐包 ROI 之和相当 ⇒ **把多次往返合成一次并不省字节，只是减少提交次数**。因此会话保持
+  opt-in，不默认开启。
+- **修正后的下一步**：真正省的是去掉 CPU↔GPU 往返本身——(1) 物理镜面/深度加 CPU 写入代次与
+  脏矩形，`m3g_clear` 改 GPU 侧清屏，2D 图元只累计脏矩形；(2) 会话只导入自上次导出以来 CPU
+  写过的矩形（多数帧只有 HUD 几小块），深度同理；(3) 导出推迟到观察点（present / createImage /
+  软件回退 / FSR2 采样）且只导必要矩形；(4) 之后再做方案 B（2D 上 GPU、present 直接消费 GPU
+  图像）。目标仍是 8× 场内 ≥20% 才默认开启。

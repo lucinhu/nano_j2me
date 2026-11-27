@@ -44,3 +44,23 @@
   216:fire:up --fs-dir .local-tools/debug-runs/fsr-quality-round3-3d/doom-8x/fs/
   --rms-dir .local-tools/debug-runs/fsr-quality-round3-3d/doom-8x/rms/ tests/games/毁灭战士3_10598.jar`
   （注意 `--dump-frames` 目录必须先建好，否则不会写盘）。
+
+## 2026-11-27 深夜进展（下一轮起点）
+
+- **更正**：多包事务「读取未初始化宿主内存」的结论是错的，根因是 M3G journal 的纹理池扩容后没
+  有搬走已排队三角形里的纹理指针。修复后多包事务、批处理 list、8× HD 会话全部确定（见
+  [hd-triangle-transfer.md §十三](2026-11-27-hd-triangle-transfer.md)）。
+- **Vulkan 持久会话（M1）已完成**：`nj_vk_renderer_triangles_begin/end/abort`，会话期间附件常驻，
+  每批只开一次 render pass（动态 viewport/scissor），颜色/深度各导入导出一次；`NJ_VK_SESSION=1`
+  opt-in，默认路径不变；`tests/test_gfx_vulkan.c` 的 `session_equivalence` 覆盖逐包/一次 list 提交、
+  abort、越界 decline 与 grouped 事务可复现。
+- **确定性**：8× 闸门（帧 60/120/180）与单包路径逐位一致；1× 400 帧 cap=1/2/4 与基线逐帧一致，
+  默认 cap 只差 2–5 px（最大通道差 8，深度量化语义差）；8× 场内 400 帧会话两次运行逐位相同。
+- **耗时**：8× 场内 400 帧，会话把 38,162 次提交收成 619 次，但 M3GPROF GPU 段 32.4 s vs 单包
+  30.2 s，release 墙钟无可测收益。原因：619 个会话里 369 个是整屏矩形，一次导入+导出约 39 MB，
+  与逐包 ROI 之和相当 ⇒ 不默认开启（保持 opt-in）。
+- **修正后的下一步**：物理镜面/深度加 CPU 写入代次与脏矩形；`m3g_clear` 改 GPU 侧清屏；会话只
+  导入「自上次导出以来 CPU 写过」的矩形；导出推迟到 present/createImage/软件回退/FSR2 观察点并
+  只导必要矩形；之后再评估 2D 上 GPU。旧的「多包事务不可复现、以后不要再碰」的说法作废，但批处理
+  本身仍无收益，不要重启。
+- 验证：236/236、222/222、check_android_java 33/33、no_statics OK。
