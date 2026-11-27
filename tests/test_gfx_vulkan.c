@@ -478,8 +478,9 @@ int main(int argc, char **argv) {
         CHECK(port.gfx_triangles == nj_vk_renderer_triangles &&
               port.gfx_hd_triangles == nj_vk_renderer_triangles &&
               port.gfx_triangles_ud == port.gfx_hd_triangles_ud && port.gfx_hd_destroy &&
-              !port.gfx_triangles_auto && !port.gfx_triangles_session_ud &&
-              !port.gfx_triangles_list_ud);
+              port.gfx_triangles_list == nj_vk_renderer_triangles_list &&
+              port.gfx_triangles_list_ud == port.gfx_triangles_ud &&
+              !port.gfx_triangles_auto && !port.gfx_triangles_session_ud);
         memcpy(&saved, &port, sizeof saved);
         CHECK(!nj_vk_renderer_attach(&port) && !memcmp(&saved, &port, sizeof port));
         port.gfx_hd_destroy(port.gfx_hd_triangles_ud);
