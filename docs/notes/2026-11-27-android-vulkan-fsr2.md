@@ -76,6 +76,12 @@ vulkan: renderer ready on Goldfish GFXStream (NVIDIA GeForce RTX 5080 Laptop GPU
 （960×1280）下 draw 中位数 0.40–1.03 ms、swap 中位数 13.1–14.3 ms。也就是说在
 模拟器上，每帧成本主要落在窗口提交，而不是图层过滤。
 
+第 9 轮给这里补了按呈现间隔统计的第三行 `present stats: frame ms`：`frame − draw − swap`
+就是游戏自身的生产耗时。8× 高清下实测 draw 4.19 / swap 8.36 / frame 28.59 ms，
+即约 16.0 ms/帧（约 35 fps）花在游戏与 2D 镜像生产，而不是 GL 上传——这把
+"8× 为什么掉帧"从猜测变成了可归因的数字。桌面版有同名行与同一套读法，见
+[桌面 present stats](2026-11-27-desktop-present-stats.md)。
+
 ## 三、问题 2：FSR2 时域历史被同一帧的第二次绑定重置
 
 **现象**：打开 FSR2 后，逐帧日志显示每次 dispatch 都是 `reset=1`，时域历史每帧

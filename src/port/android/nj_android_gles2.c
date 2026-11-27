@@ -51,19 +51,30 @@ static int present_stats_cmp(const void *a, const void *b)
     return x < y ? -1 : (x > y ? 1 : 0);
 }
 
-static void present_stats_record(nj_android_gles2 *s, unsigned long long draw_ns,
-                                 unsigned long long swap_ns, int mode, int w, int h)
+static void present_stats_record(nj_android_gles2 *s, unsigned long long present_ns,
+                                 unsigned long long draw_ns, unsigned long long swap_ns,
+                                 int mode, int w, int h)
 {
-    if (!s->present_stats.enabled || w <= 0 || h <= 0) return;
+    unsigned long long frame_ns;
+    if (!s->present_stats.enabled || w <= 0 || h <= 0) {
+        s->present_stats.last_present = 0;
+        return;
+    }
     if (s->present_stats.frames == NJ_ANDROID_PRESENT_STATS || s->present_stats.mode != mode ||
         s->present_stats.w != w || s->present_stats.h != h) {
         s->present_stats.frames = 0;
         s->present_stats.mode = mode;
         s->present_stats.w = w;
         s->present_stats.h = h;
+        s->present_stats.last_present = 0;
     }
+    frame_ns = s->present_stats.last_present && present_ns > s->present_stats.last_present
+                   ? present_ns - s->present_stats.last_present
+                   : 0;
+    s->present_stats.last_present = present_ns;
     s->present_stats.draw[s->present_stats.frames] = draw_ns;
     s->present_stats.swap[s->present_stats.frames] = swap_ns;
+    s->present_stats.frame[s->present_stats.frames] = frame_ns;
     if (++s->present_stats.frames < NJ_ANDROID_PRESENT_STATS) return;
     {
         unsigned long long sorted[NJ_ANDROID_PRESENT_STATS];
@@ -81,6 +92,13 @@ static void present_stats_record(nj_android_gles2 *s, unsigned long long draw_ns
         qsort(sorted, NJ_ANDROID_PRESENT_STATS, sizeof sorted[0], present_stats_cmp);
         __android_log_print(ANDROID_LOG_INFO, GLES2_TAG,
                             "present stats: swap ms min=%.3f median=%.3f p95=%.3f",
+                            (double)sorted[0] / 1e6,
+                            (double)sorted[NJ_ANDROID_PRESENT_STATS / 2] / 1e6,
+                            (double)sorted[(NJ_ANDROID_PRESENT_STATS * 95) / 100] / 1e6);
+        memcpy(sorted, s->present_stats.frame, sizeof sorted);
+        qsort(sorted, NJ_ANDROID_PRESENT_STATS, sizeof sorted[0], present_stats_cmp);
+        __android_log_print(ANDROID_LOG_INFO, GLES2_TAG,
+                            "present stats: frame ms min=%.3f median=%.3f p95=%.3f",
                             (double)sorted[0] / 1e6,
                             (double)sorted[NJ_ANDROID_PRESENT_STATS / 2] / 1e6,
                             (double)sorted[(NJ_ANDROID_PRESENT_STATS * 95) / 100] / 1e6);
@@ -727,7 +745,7 @@ int nj_android_gles2_present(nj_android_gles2 *s, const nj_surface *src,
                     failed(s, "eglSwapBuffers lost context", error);
             }
             if (ok)
-                present_stats_record(s, t1 > t0 ? t1 - t0 : 0,
+                present_stats_record(s, t0, t1 > t0 ? t1 - t0 : 0,
                                      present_now_ns() - (t1 > t0 ? t1 : t0),
                                      mode, s->surface_w, s->surface_h);
             if (!eglMakeCurrent(s->display, s->pbuffer, s->pbuffer, s->context)) {

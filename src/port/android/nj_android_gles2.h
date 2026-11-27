@@ -34,16 +34,21 @@ typedef struct nj_android_gles2_info {
  * the shared object is built with zero writable static data (data+bss=0, see
  * tools/build_android.sh). nj_android_gles2_present() samples the
  * debug.nj2me.present_stats property once a second and logs min/median/p95 of
- * the draw and of the swap every NJ_ANDROID_PRESENT_STATS frames. */
+ * the draw, the swap and the frame period every NJ_ANDROID_PRESENT_STATS
+ * frames. */
 #define NJ_ANDROID_PRESENT_STATS 120
 typedef struct nj_android_gles2_present_stats {
     int enabled;     /* last sampled value of the debug property */
     int refresh;     /* frames left before the property is sampled again */
-    unsigned frames; /* samples held in draw/swap */
+    unsigned frames; /* samples held in draw/swap/frame */
     int mode;        /* present mode the samples belong to */
     int w, h;        /* window size the samples belong to */
     unsigned long long draw[NJ_ANDROID_PRESENT_STATS];
     unsigned long long swap[NJ_ANDROID_PRESENT_STATS];
+    /* Present-to-present interval: the frame period the window actually shows.
+     * production = frame - (draw + swap) is the game's own frame cost. */
+    unsigned long long frame[NJ_ANDROID_PRESENT_STATS];
+    unsigned long long last_present;
 } nj_android_gles2_present_stats;
 
 /* Embedded in android_state: port/Graphics userdata never points at a backend

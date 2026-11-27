@@ -208,6 +208,8 @@ typedef struct sdl2_gles2 {
     int stats_mode, stats_w, stats_h;
     unsigned long long stats_draw[NJ_SDL2_PRESENT_STATS_FRAMES];
     unsigned long long stats_swap[NJ_SDL2_PRESENT_STATS_FRAMES];
+    unsigned long long stats_frame[NJ_SDL2_PRESENT_STATS_FRAMES];
+    unsigned long long stats_last; /* start of the previous frame, ns */
 } sdl2_gles2;
 
 static int present_stats_cmp(const void *a, const void *b)
@@ -235,21 +237,30 @@ static void present_stats_probe(sdl2_gles2 *s)
     s->stats_wanted = v && *v && *v != '0';
 }
 
-static void present_stats_record(sdl2_gles2 *s, int mode, int w, int h,
+static void present_stats_record(sdl2_gles2 *s, Uint64 frame_start, int mode, int w, int h,
                                  unsigned long long draw_ns,
                                  unsigned long long swap_ns)
 {
     unsigned long long sorted[NJ_SDL2_PRESENT_STATS_FRAMES];
-    if (!s->stats_wanted || w <= 0 || h <= 0) return;
+    unsigned long long frame_ns, now_ns;
+    if (!s->stats_wanted || w <= 0 || h <= 0) {
+        s->stats_last = 0;
+        return;
+    }
+    now_ns = present_stats_ns(frame_start);
+    frame_ns = s->stats_last && now_ns > s->stats_last ? now_ns - s->stats_last : 0;
+    s->stats_last = now_ns;
     if (s->stats_frames == NJ_SDL2_PRESENT_STATS_FRAMES || s->stats_mode != mode ||
         s->stats_w != w || s->stats_h != h) {
         s->stats_frames = 0;
         s->stats_mode = mode;
         s->stats_w = w;
         s->stats_h = h;
+        frame_ns = 0; /* no period for the first sample of a window */
     }
     s->stats_draw[s->stats_frames] = draw_ns;
     s->stats_swap[s->stats_frames] = swap_ns;
+    s->stats_frame[s->stats_frames] = frame_ns;
     if (++s->stats_frames < NJ_SDL2_PRESENT_STATS_FRAMES) return;
     memcpy(sorted, s->stats_draw, sizeof sorted);
     qsort(sorted, NJ_SDL2_PRESENT_STATS_FRAMES, sizeof sorted[0], present_stats_cmp);
@@ -264,6 +275,12 @@ static void present_stats_record(sdl2_gles2 *s, int mode, int w, int h,
     memcpy(sorted, s->stats_swap, sizeof sorted);
     qsort(sorted, NJ_SDL2_PRESENT_STATS_FRAMES, sizeof sorted[0], present_stats_cmp);
     fprintf(stderr, "present stats: swap ms min=%.3f median=%.3f p95=%.3f\n",
+            (double)sorted[0] / 1e6,
+            (double)sorted[NJ_SDL2_PRESENT_STATS_FRAMES / 2] / 1e6,
+            (double)sorted[(NJ_SDL2_PRESENT_STATS_FRAMES * 95) / 100] / 1e6);
+    memcpy(sorted, s->stats_frame, sizeof sorted);
+    qsort(sorted, NJ_SDL2_PRESENT_STATS_FRAMES, sizeof sorted[0], present_stats_cmp);
+    fprintf(stderr, "present stats: frame ms min=%.3f median=%.3f p95=%.3f\n",
             (double)sorted[0] / 1e6,
             (double)sorted[NJ_SDL2_PRESENT_STATS_FRAMES / 2] / 1e6,
             (double)sorted[(NJ_SDL2_PRESENT_STATS_FRAMES * 95) / 100] / 1e6);
@@ -3435,8 +3452,8 @@ capture_done: ;
         SDL_RenderPresent(s->renderer);
 #if NJ_SDL2_GLES2
         if (stats_timed) {
-            present_stats_record(&s->gfx, s->gfx.present_mode, s->dpi.output_w,
-                                 s->dpi.output_h, stats_draw,
+            present_stats_record(&s->gfx, stats_start, s->gfx.present_mode,
+                                 s->dpi.output_w, s->dpi.output_h, stats_draw,
                                  present_stats_ns(SDL_GetPerformanceCounter() -
                                                   swap_start));
         }
