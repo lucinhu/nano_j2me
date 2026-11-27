@@ -164,10 +164,11 @@ static material get_material(const nj_gfx_triangle_cmd *t, const packet_info *p)
     }
     return m;
 }
-static void upload_geometry(nj_vk_renderer *r, const nj_gfx_triangles *p, const packet_info *info) {
+static void upload_geometry_at(nj_vk_renderer *r, const nj_gfx_triangles *p, const packet_info *info,
+                               size_t vertex_base, nj_u4 texel_base) {
     int j;
     nj_u4 i;
-    vertex *out = r->vertices.map;
+    vertex *out = (vertex *)((uint8_t *)r->vertices.map + vertex_base);
     for (i = 0; i < p->count; ++i)
         for (j = 0; j < 3; ++j, ++out) {
             const nj_gfx_triangle_vertex *v = &p->triangles[i].vertices[j];
@@ -184,7 +185,7 @@ static void upload_geometry(nj_vk_renderer *r, const nj_gfx_triangles *p, const 
         }
     for (j = 0; j < info->count; ++j) {
         const texture_view *v = &info->views[j];
-        uint32_t *texels = (uint32_t *)r->textures.map + v->offset;
+        uint32_t *texels = (uint32_t *)r->textures.map + texel_base + v->offset;
         const uint8_t *src = v->pixels;
         const uint32_t one = 1;
         size_t count = (size_t)v->width * v->height;
@@ -198,6 +199,9 @@ static void upload_geometry(nj_vk_renderer *r, const nj_gfx_triangles *p, const 
             texels[k] = src[0] | ((uint32_t)src[1] << 8) | ((uint32_t)src[2] << 16) |
                         ((v->bpp == 4 ? (uint32_t)src[3] : 255u) << 24);
     }
+}
+static void upload_geometry(nj_vk_renderer *r, const nj_gfx_triangles *p, const packet_info *info) {
+    upload_geometry_at(r, p, info, 0, 0);
 }
 /* The colour round trip copies up to a whole physical frame per packet. Plain
  * stores would fetch every cache line before overwriting it, so copy large
@@ -298,66 +302,79 @@ static void depth_export(nj_s4 *keys, const float *values, int width) {
         keys[x] = 16777216 - (nj_s4)(values[x] * 16777216.0f);
 }
 
-static void transfer_cpu(nj_vk_renderer *r, const nj_gfx_triangles *p, int depth, int output) {
-    const nj_surface *s = p->surface;
+/* Copies one surface rectangle between caller storage and the staging buffer.
+ * `bgra` points at the first staged colour pixel and `pitch` is the staged row
+ * stride in pixels, so a rectangle carved out of a larger staged image works
+ * unchanged. `z` points at the first staged depth float of the rectangle. */
+static void transfer_rect(nj_surface *s, nj_s4 *keys, int keys_stride, int x, int y, int width, int height,
+                          uint8_t *bgra, int pitch, float *z, int depth, int output) {
     int bpp = s->format == NJ_PIXFMT_ARGB8888 ? 4 : s->format == NJ_PIXFMT_RGB888 ? 3 : 2;
-    size_t n = (size_t)p->width * p->height;
-    uint8_t *bytes = r->stage.map;
-    float *z = (float *)(bytes + n * 4);
-    int x, y;
-    const int width = p->width;
-    for (y = 0; y < p->height; ++y) {
-        uint8_t *row = (uint8_t *)s->pixels + (size_t)(p->y + y) * s->stride + (size_t)p->x * bpp;
-        uint8_t *bgra = bytes + (size_t)y * p->width * 4;
-        /* Vulkan platforms supported by this backend use little-endian packed ARGB. */
+    int r;
+    for (r = 0; r < height; ++r) {
+        uint8_t *row = (uint8_t *)s->pixels + (size_t)(y + r) * s->stride + (size_t)x * bpp;
+        uint8_t *dst = bgra + (size_t)r * pitch * 4;
+        int c;
         if (bpp == 4) {
             if (output)
-                copy_words(row, bgra, (size_t)p->width * 4);
+                copy_words(row, dst, (size_t)width * 4);
             else
-                copy_words(bgra, row, (size_t)p->width * 4);
+                copy_words(dst, row, (size_t)width * 4);
         } else if (bpp == 2) {
             if (output)
-                export_rgb565(row, bgra, width);
+                export_rgb565(row, dst, width);
             else
-                import_rgb565(bgra, row, width);
+                import_rgb565(dst, row, width);
         } else {
-            for (x = 0; x < width; ++x, row += 3, bgra += 4) {
+            for (c = 0; c < width; ++c, row += 3, dst += 4) {
                 if (output) {
-                    row[0] = bgra[2];
-                    row[1] = bgra[1];
-                    row[2] = bgra[0];
+                    row[0] = dst[2];
+                    row[1] = dst[1];
+                    row[2] = dst[0];
                 } else {
-                    bgra[2] = row[0];
-                    bgra[1] = row[1];
-                    bgra[0] = row[2];
-                    bgra[3] = 255;
+                    dst[2] = row[0];
+                    dst[1] = row[1];
+                    dst[0] = row[2];
+                    dst[3] = 255;
                 }
             }
         }
         if (depth) {
-            nj_s4 *keys = p->depth + (size_t)(p->y + y) * p->depth_stride + p->x;
-            float *values = z + (size_t)y * p->width;
+            nj_s4 *row_keys = keys + (size_t)(y + r) * keys_stride + x;
+            float *row_z = z + (size_t)r * pitch;
             if (output)
-                depth_export(keys, values, width);
+                depth_export(row_keys, row_z, width);
             else
-                depth_import(keys, values, width);
+                depth_import(row_keys, row_z, width);
         }
     }
 }
-static void draws(nj_vk_renderer *r, const nj_gfx_triangles *p, const packet_info *info) {
+static void transfer_cpu(nj_vk_renderer *r, const nj_gfx_triangles *p, int depth, int output) {
+    size_t n = (size_t)p->width * p->height;
+    uint8_t *bytes = r->stage.map;
+    transfer_rect(p->surface, p->depth, p->depth_stride, p->x, p->y, p->width, p->height, bytes, p->width,
+                  (float *)(bytes + n * 4), depth, output);
+}
+static void pass_begin(nj_vk_renderer *r, int width, int height) {
     VkRenderPassBeginInfo begin = VK_INIT(RENDER_PASS_BEGIN_INFO);
-    VkViewport vp = {0, 0, (float)p->width, (float)p->height, 0, 1};
     VkDeviceSize zero = 0;
-    nj_u4 i;
-    unsigned prev_index = PIPELINES;
     begin.renderPass = r->pass;
     begin.framebuffer = r->fb;
-    begin.renderArea.extent = (VkExtent2D){(uint32_t)p->width, (uint32_t)p->height};
+    begin.renderArea.extent = (VkExtent2D){(uint32_t)width, (uint32_t)height};
     vkCmdBeginRenderPass(r->cmd, &begin, VK_SUBPASS_CONTENTS_INLINE);
-    vkCmdSetViewport(r->cmd, 0, 1, &vp);
-    vkCmdSetScissor(r->cmd, 0, 1, &begin.renderArea);
     vkCmdBindVertexBuffers(r->cmd, 0, 1, &r->vertices.id, &zero);
     vkCmdBindDescriptorSets(r->cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->layout, 0, 1, &r->set, 0, NULL);
+}
+/* Records one packet inside an open render pass. `offset_x/offset_y` place the
+ * packet rectangle inside the pass area; `base_triangles` is its first vertex
+ * slot inside the shared vertex buffer. */
+static void pass_packet(nj_vk_renderer *r, const nj_gfx_triangles *p, const packet_info *info,
+                        nj_u4 base_triangles, int offset_x, int offset_y, unsigned *prev) {
+    VkViewport vp = {(float)offset_x, (float)offset_y, (float)p->width, (float)p->height, 0, 1};
+    VkRect2D scissor = {{offset_x, offset_y}, {(uint32_t)p->width, (uint32_t)p->height}};
+    unsigned prev_index = prev ? *prev : PIPELINES;
+    nj_u4 i;
+    vkCmdSetViewport(r->cmd, 0, 1, &vp);
+    vkCmdSetScissor(r->cmd, 0, 1, &scissor);
     for (i = 0; i < p->count;) {
         const nj_gfx_triangle_cmd *t = &p->triangles[i];
         unsigned index = pipeline_index(t);
@@ -375,9 +392,15 @@ static void draws(nj_vk_renderer *r, const nj_gfx_triangles *p, const packet_inf
             prev_index = index;
         }
         vkCmdPushConstants(r->cmd, r->layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof m, &m);
-        vkCmdDraw(r->cmd, (end - i) * 3, 1, i * 3, 0);
+        vkCmdDraw(r->cmd, (end - i) * 3, 1, (base_triangles + i) * 3, 0);
         i = end;
     }
+    if (prev)
+        *prev = prev_index;
+}
+static void draws(nj_vk_renderer *r, const nj_gfx_triangles *p, const packet_info *info) {
+    pass_begin(r, p->width, p->height);
+    pass_packet(r, p, info, 0, 0, 0, NULL);
     vkCmdEndRenderPass(r->cmd);
 }
 static int execute(nj_vk_renderer *r, const nj_gfx_triangles *p, const packet_info *info) {
@@ -482,22 +505,157 @@ int nj_vk_renderer_triangles(void *ud, const nj_gfx_triangles *p, nj_u4 *submitt
  * validated and executed exactly as a standalone submission, in order, and the
  * whole list declines if any packet declines. Correctness first; a batched
  * command stream can replace this once it is proven pixel-identical. */
+/* Runs a whole list transaction as one command buffer: one union-rect seed,
+ * one render pass whose per-packet viewports are placed at their own offsets,
+ * one union export and one submit/fence. Within one list call no host writes
+ * can occur between packets, so drawing the packets back to back over a single
+ * attachment state is equivalent to the per-packet reference: every later
+ * packet would have re-imported exactly the pixels the previous packet left on
+ * the GPU. */
+static int execute_batch(nj_vk_renderer *r, const nj_gfx_triangles_list *l, const packet_info *infos,
+                         const nj_u4 *bases, int ux, int uy, int uw, int uh, int seed, int write) {
+    VkCommandBufferBeginInfo cb = VK_INIT(COMMAND_BUFFER_BEGIN_INFO);
+    VkImageMemoryBarrier barriers[2] = {VK_INIT(IMAGE_MEMORY_BARRIER), VK_INIT(IMAGE_MEMORY_BARRIER)};
+    VkBufferImageCopy copies[2] = {{0}};
+    VkMemoryBarrier host = VK_INIT(MEMORY_BARRIER);
+    VkSubmitInfo submit = VK_INIT(SUBMIT_INFO);
+    unsigned prev = PIPELINES;
+    nj_u4 i;
+    int k;
+    cb.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    if (vkBeginCommandBuffer(r->cmd, &cb) != VK_SUCCESS)
+        return 0;
+    for (k = 0; k < 2; ++k) {
+        barriers[k].dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        barriers[k].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        barriers[k].newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        barriers[k].srcQueueFamilyIndex = barriers[k].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barriers[k].image = r->attachments[k].id;
+        barriers[k].subresourceRange = (VkImageSubresourceRange){aspects[k], 0, 1, 0, 1};
+        copies[k].bufferOffset = (VkDeviceSize)k * (VkDeviceSize)uw * (VkDeviceSize)uh * 4u;
+        copies[k].imageSubresource = (VkImageSubresourceLayers){aspects[k], 0, 0, 1};
+        copies[k].imageExtent = (VkExtent3D){(uint32_t)uw, (uint32_t)uh, 1};
+    }
+    vkCmdPipelineBarrier(r->cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL,
+                         0, NULL, 2, barriers);
+    for (k = 0; k < 1 + seed; ++k)
+        vkCmdCopyBufferToImage(r->cmd, r->stage.id, r->attachments[k].id, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                               1, &copies[k]);
+    pass_begin(r, uw, uh);
+    for (i = 0; i < l->count; ++i) {
+        const nj_gfx_triangles *p = l->packets[i];
+        pass_packet(r, p, &infos[i], bases[i], p->x - ux, p->y - uy, &prev);
+    }
+    vkCmdEndRenderPass(r->cmd);
+    for (k = 0; k < 1 + write; ++k)
+        vkCmdCopyImageToBuffer(r->cmd, r->attachments[k].id, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, r->stage.id,
+                               1, &copies[k]);
+    host.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    host.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
+    vkCmdPipelineBarrier(r->cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, 1, &host, 0, NULL,
+                         0, NULL);
+    if (vkEndCommandBuffer(r->cmd) != VK_SUCCESS || vkResetFences(r->dev, 1, &r->fence) != VK_SUCCESS)
+        return 0;
+    submit.commandBufferCount = 1;
+    submit.pCommandBuffers = &r->cmd;
+    if (vkQueueSubmit(r->queue, 1, &submit, r->fence) != VK_SUCCESS ||
+        vkWaitForFences(r->dev, 1, &r->fence, VK_TRUE, UINT64_MAX) != VK_SUCCESS) {
+        r->lost = 1;
+        return 0;
+    }
+    return sync_buffer(r, &r->stage, 1);
+}
 int nj_vk_renderer_triangles_list(void *ud, const nj_gfx_triangles_list *l, nj_u4 *submitted) {
     nj_vk_renderer *r = ud;
-    nj_u4 total = 0, done = 0, i;
-    int rc = NJ_GFX_ACCEL_DECLINE;
-    if (!r || !l || !submitted || !nj_gfx_triangles_list_validate(l, submitted))
+    packet_info *infos = NULL;
+    nj_u4 *bases = NULL;
+    const nj_gfx_triangles *first;
+    const nj_surface *surface;
+    VkDescriptorBufferInfo desc = {0};
+    VkWriteDescriptorSet write_set = VK_INIT(WRITE_DESCRIPTOR_SET);
+    nj_u4 total = 0, i;
+    int texels = 0, seed = 0, write = 0, x0 = 0, y0 = 0, x1 = 0, y1 = 0, ok = 0;
+    size_t stage_size;
+    int j;
+    if (!r || r->lost || !l || !submitted || l->count == 0 || !nj_gfx_triangles_list_validate(l, submitted))
         return NJ_GFX_ACCEL_DECLINE;
+    first = l->packets[0];
+    surface = first->surface;
+    infos = calloc(l->count, sizeof *infos);
+    bases = calloc(l->count, sizeof *bases);
+    if (!infos || !bases)
+        goto done;
     for (i = 0; i < l->count; ++i) {
-        nj_u4 one = 0;
-        if (nj_vk_renderer_triangles(r, l->packets[i], &one) != NJ_GFX_ACCEL_DONE)
-            return NJ_GFX_ACCEL_DECLINE; /* rare: the journal replays in software */
-        total += one;
-        done = i + 1;
+        const nj_gfx_triangles *p = l->packets[i];
+        bases[i] = total;
+        if (p->width <= 0 || p->height <= 0 || !analyze(r, p, &infos[i]))
+            goto done;
+        for (j = 0; j < infos[i].count; ++j)
+            infos[i].views[j].offset += texels;
+        texels += infos[i].texels;
+        total += p->count;
+        seed |= infos[i].seed_depth;
+        write |= infos[i].write_depth;
+        if (i == 0) {
+            x0 = p->x;
+            y0 = p->y;
+            x1 = p->x + p->width;
+            y1 = p->y + p->height;
+        } else {
+            x0 = p->x < x0 ? p->x : x0;
+            y0 = p->y < y0 ? p->y : y0;
+            x1 = p->x + p->width > x1 ? p->x + p->width : x1;
+            y1 = p->y + p->height > y1 ? p->y + p->height : y1;
+        }
     }
-    (void)done;
+    if (x1 <= x0 || y1 <= y0 || (uint64_t)(x1 - x0) * (unsigned)(y1 - y0) > MAX_PIXELS ||
+        (unsigned)(x1 - x0) > r->max_image_width || (unsigned)(y1 - y0) > r->max_image_height ||
+        (unsigned)(x1 - x0) > r->properties.limits.maxFramebufferWidth ||
+        (unsigned)(y1 - y0) > r->properties.limits.maxFramebufferHeight ||
+        (unsigned)(x1 - x0) > r->properties.limits.maxViewportDimensions[0] ||
+        (unsigned)(y1 - y0) > r->properties.limits.maxViewportDimensions[1])
+        goto done;
+    /* The studio image is the staged union rectangle; depth follows colour. */
+    stage_size = (size_t)(x1 - x0) * (unsigned)(y1 - y0) * 4u * (size_t)(1 + seed);
+    if (vkResetCommandPool(r->dev, r->pool, 0) != VK_SUCCESS || !target(r, x1 - x0, y1 - y0) ||
+        !reserve_buffer(r, &r->stage, stage_size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT) ||
+        !reserve_buffer(r, &r->vertices, (size_t)total * 3 * sizeof(vertex), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT) ||
+        !reserve_buffer(r, &r->textures, texels > 0 ? (unsigned)texels * 4u : 4u, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT))
+        goto done;
+    desc.buffer = r->textures.id;
+    desc.range = texels > 0 ? (unsigned)texels * 4u : 4u;
+    if (desc.range > r->properties.limits.maxStorageBufferRange)
+        goto done;
+    if (!r->desc_valid || desc.buffer != r->desc_buffer || desc.range > r->desc_range) {
+        write_set.dstSet = r->set;
+        write_set.descriptorCount = 1;
+        write_set.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        write_set.pBufferInfo = &desc;
+        vkUpdateDescriptorSets(r->dev, 1, &write_set, 0, NULL);
+        r->desc_buffer = desc.buffer;
+        r->desc_range = desc.range;
+        r->desc_valid = 1;
+    }
+    for (i = 0; i < l->count; ++i)
+        upload_geometry_at(r, l->packets[i], &infos[i], (size_t)bases[i] * 3 * sizeof(vertex), 0);
+    transfer_rect((nj_surface *)surface, first->depth, first->depth_stride, x0, y0, x1 - x0, y1 - y0,
+                  r->stage.map, x1 - x0, (float *)((uint8_t *)r->stage.map + (size_t)(x1 - x0) * (y1 - y0) * 4u),
+                  seed, 0);
+    if (!sync_buffer(r, &r->vertices, 0) || !sync_buffer(r, &r->textures, 0) || !sync_buffer(r, &r->stage, 0) ||
+        !execute_batch(r, l, infos, bases, x0, y0, x1 - x0, y1 - y0, seed, write))
+        goto done;
+    for (i = 0; i < l->count; ++i) {
+        const nj_gfx_triangles *p = l->packets[i];
+        size_t off = (size_t)(p->y - y0) * (size_t)(x1 - x0) + (size_t)(p->x - x0);
+        transfer_rect(p->surface, p->depth, p->depth_stride, p->x, p->y, p->width, p->height,
+                      (uint8_t *)r->stage.map + off * 4, x1 - x0,
+                      (float *)((uint8_t *)r->stage.map + (size_t)(x1 - x0) * (y1 - y0) * 4u) + off,
+                      infos[i].write_depth, 1);
+    }
     *submitted = total;
-    rc = NJ_GFX_ACCEL_DONE;
-    return rc;
+    ok = 1;
+done:
+    free(infos);
+    free(bases);
+    return ok ? NJ_GFX_ACCEL_DONE : NJ_GFX_ACCEL_DECLINE;
 }
-
