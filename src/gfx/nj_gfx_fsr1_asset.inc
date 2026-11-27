@@ -156,52 +156,6 @@ static void hd_fsr1_column(hd_fsr1_row *row, int c, nj_u4 p0, nj_u4 p1, nj_u4 p2
     row->opaque[c] = ((p0 & p1 & p2 & p3) >> 24) == 255u;
 }
 
-static void hd_fsr1_row_build(hd_fsr1_row *row, int columns, int tw, nj_s8 step,
-                              const nj_u1 *src, const nj_s8 *rows, const nj_s4 *kern,
-                              int format)
-{
-    int c;
-    if (format == NJ_PIXFMT_ARGB8888) {
-        /* The HD mirror is always ARGB8888, so the common path reads the words
-         * directly instead of calling the format-dispatching accessor for every
-         * tap. That branch was a measurable part of the row cost. */
-        const nj_u1 *row0 = src + rows[0], *row1 = src + rows[1];
-        const nj_u1 *row2 = src + rows[2], *row3 = src + rows[3];
-        for (c = 0; c < columns; ++c) {
-            int index = c - HD_FSR1_SLACK;
-            nj_s8 off;
-            nj_u4 p0, p1, p2, p3;
-            if (index < 0) index = 0;
-            if (index >= tw) index = tw - 1;
-            off = (nj_s8)index * step;
-            memcpy(&p0, row0 + off, sizeof p0);
-            memcpy(&p1, row1 + off, sizeof p1);
-            memcpy(&p2, row2 + off, sizeof p2);
-            memcpy(&p3, row3 + off, sizeof p3);
-            hd_fsr1_column(row, c, p0, p1, p2, p3, kern);
-        }
-        return;
-    }
-    for (c = 0; c < columns; ++c) {
-        int index = c - HD_FSR1_SLACK;
-        nj_s8 off;
-        if (index < 0) index = 0;
-        if (index >= tw) index = tw - 1;
-        off = (nj_s8)index * step;
-        hd_fsr1_column(row, c,
-                       nj_src_pixel(src + rows[0], off, format),
-                       nj_src_pixel(src + rows[1], off, format),
-                       nj_src_pixel(src + rows[2], off, format),
-                       nj_src_pixel(src + rows[3], off, format), kern);
-    }
-}
-
-static void hd_fsr1_store(nj_u1 *dst, int r, int g, int b)
-{
-    nj_u4 color = 0xff000000u | ((nj_u4)r << 16) | ((nj_u4)g << 8) | (nj_u4)b;
-    memcpy(dst, &color, sizeof color);
-}
-
 #if defined(__x86_64__) || defined(__i386__)
 #include <smmintrin.h>
 /* The four-tap reconstruction is the hot loop, and it is pure integer math on
@@ -272,6 +226,124 @@ static int hd_fsr1_span_sse41(nj_u1 *out, int n, int phase,
     return done;
 }
 #endif
+
+__attribute__((target("sse4.1")))
+static void hd_fsr1_row_sse41(hd_fsr1_row *row, int c, const nj_u1 *src0,
+                              const nj_u1 *src1, const nj_u1 *src2,
+                              const nj_u1 *src3, nj_s8 base, const nj_s4 *kern)
+{
+    /* Little-endian ARGB8888 keeps blue in the low byte, so channel 0 (the
+     * row's red slot, see hd_fsr1_column) picks byte 2, green byte 1, blue 0. */
+    const __m128i pick[3] = {
+        _mm_setr_epi8(2, 6, 10, 14, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1),
+        _mm_setr_epi8(1, 5, 9, 13, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1),
+        _mm_setr_epi8(0, 4, 8, 12, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1)
+    };
+    const __m128i one = _mm_set1_epi8(1);
+    __m128i p0 = _mm_loadu_si128((const __m128i *)(src0 + base));
+    __m128i p1 = _mm_loadu_si128((const __m128i *)(src1 + base));
+    __m128i p2 = _mm_loadu_si128((const __m128i *)(src2 + base));
+    __m128i p3 = _mm_loadu_si128((const __m128i *)(src3 + base));
+    int ch;
+
+    /* Opaque means every one of the sixteen taps has alpha 255: AND the four
+     * colour words (the alpha byte is included) and compare the bytes. */
+    {
+        __m128i alphas = _mm_and_si128(_mm_and_si128(p0, p1), _mm_and_si128(p2, p3));
+        __m128i opaque = _mm_cmpeq_epi8(alphas, _mm_set1_epi8((char)0xff));
+        __m128i low = _mm_shuffle_epi8(opaque,
+            _mm_setr_epi8(3, 7, 11, 15, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1));
+        nj_u4 bits = (nj_u4)_mm_cvtsi128_si32(_mm_and_si128(low, one));
+        memcpy(&row->opaque[c], &bits, 4);
+    }
+    for (ch = 0; ch < 3; ++ch) {
+        __m128i v0 = _mm_cvtepu8_epi32(_mm_shuffle_epi8(p0, pick[ch]));
+        __m128i v1 = _mm_cvtepu8_epi32(_mm_shuffle_epi8(p1, pick[ch]));
+        __m128i v2 = _mm_cvtepu8_epi32(_mm_shuffle_epi8(p2, pick[ch]));
+        __m128i v3 = _mm_cvtepu8_epi32(_mm_shuffle_epi8(p3, pick[ch]));
+        __m128i lo = _mm_min_epi32(_mm_min_epi32(v0, v1), _mm_min_epi32(v2, v3));
+        __m128i hi = _mm_max_epi32(_mm_max_epi32(v0, v1), _mm_max_epi32(v2, v3));
+        __m128i acc = _mm_add_epi32(
+            _mm_add_epi32(_mm_mullo_epi32(v0, _mm_set1_epi32(kern[0])),
+                          _mm_mullo_epi32(v1, _mm_set1_epi32(kern[1]))),
+            _mm_add_epi32(_mm_mullo_epi32(v2, _mm_set1_epi32(kern[2])),
+                          _mm_mullo_epi32(v3, _mm_set1_epi32(kern[3]))));
+        _mm_storeu_si128((__m128i *)&row->vert[ch][c], acc);
+        _mm_storeu_si128((__m128i *)&row->lo[ch][c], lo);
+        _mm_storeu_si128((__m128i *)&row->hi[ch][c], hi);
+    }
+}
+
+
+/* One column of the vertical pass: read the same texel from the four scan
+ * rows and fold them into the Q8 cubic, the per-channel 4-tap envelope and the
+ * opacity flag. */
+static void hd_fsr1_row_one(hd_fsr1_row *row, int c, int tw, nj_s8 step,
+                            const nj_u1 *row0, const nj_u1 *row1,
+                            const nj_u1 *row2, const nj_u1 *row3,
+                            const nj_s4 *kern)
+{
+    int index = c - HD_FSR1_SLACK;
+    nj_s8 off;
+    nj_u4 p0, p1, p2, p3;
+    if (index < 0) index = 0;
+    if (index >= tw) index = tw - 1;
+    off = (nj_s8)index * step;
+    memcpy(&p0, row0 + off, sizeof p0);
+    memcpy(&p1, row1 + off, sizeof p1);
+    memcpy(&p2, row2 + off, sizeof p2);
+    memcpy(&p3, row3 + off, sizeof p3);
+    hd_fsr1_column(row, c, p0, p1, p2, p3, kern);
+}
+
+static void hd_fsr1_row_build(hd_fsr1_row *row, int columns, int tw, nj_s8 step,
+                              const nj_u1 *src, const nj_s8 *rows, const nj_s4 *kern,
+                              int format)
+{
+    int c = 0;
+    if (format == NJ_PIXFMT_ARGB8888) {
+        /* The HD mirror is always ARGB8888, so the common path reads the words
+         * directly instead of calling the format-dispatching accessor for every
+         * tap. That branch was a measurable part of the row cost. */
+        const nj_u1 *row0 = src + rows[0], *row1 = src + rows[1];
+        const nj_u1 *row2 = src + rows[2], *row3 = src + rows[3];
+#if defined(__x86_64__) || defined(__i386__)
+        if (step == 4 && hd_fsr1_sse41()) {
+            /* The interior columns read four consecutive texels per scan row,
+             * so four columns share one load per row. Only the clamped edges
+             * need the scalar column helper. */
+            int tail = tw + HD_FSR1_SLACK - 3;
+            if (tail > columns) tail = columns;
+            for (; c < HD_FSR1_SLACK && c < columns; ++c)
+                hd_fsr1_row_one(row, c, tw, step, row0, row1, row2, row3, kern);
+            for (; c + 4 <= tail; c += 4)
+                hd_fsr1_row_sse41(row, c, row0, row1, row2, row3,
+                                  (nj_s8)(c - HD_FSR1_SLACK) * 4, kern);
+        }
+#endif
+        for (; c < columns; ++c)
+            hd_fsr1_row_one(row, c, tw, step, row0, row1, row2, row3, kern);
+        return;
+    }
+    for (; c < columns; ++c) {
+        int index = c - HD_FSR1_SLACK;
+        nj_s8 off;
+        if (index < 0) index = 0;
+        if (index >= tw) index = tw - 1;
+        off = (nj_s8)index * step;
+        hd_fsr1_column(row, c,
+                       nj_src_pixel(src + rows[0], off, format),
+                       nj_src_pixel(src + rows[1], off, format),
+                       nj_src_pixel(src + rows[2], off, format),
+                       nj_src_pixel(src + rows[3], off, format), kern);
+    }
+}
+
+static void hd_fsr1_store(nj_u1 *dst, int r, int g, int b)
+{
+    nj_u4 color = 0xff000000u | ((nj_u4)r << 16) | ((nj_u4)g << 8) | (nj_u4)b;
+    memcpy(dst, &color, sizeof color);
+}
 
 static void hd_fsr1_span(nj_u1 *out, int n, int phase, const hd_fsr1_kernel *kernel,
                          const hd_fsr1_row *row, int c0, int c1, int c2, int c3)
