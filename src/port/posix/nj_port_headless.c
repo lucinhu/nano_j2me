@@ -154,13 +154,6 @@ typedef struct nj_headless_state {
 
 #define HS(ud) ((nj_headless_state *)(ud))
 
-/*
- * The one state a replay clock was switched on for.  Every other void* that
- * reaches millis/sleep_ms/now belongs to a harness that deliberately replaced
- * port->ud with a sentinel, and must not be dereferenced as a state.
- */
-static nj_headless_state *hl_virtual_state;
-
 /* ------------------------------------------------------------------ */
 /* Time                                                                */
 /* ------------------------------------------------------------------ */
@@ -178,7 +171,7 @@ static nj_u4 hl_millis(void *ud)
      * happened when the 8x HD journaling path was validated against fixed
      * frame hashes that turned out not to be reproducible.
      */
-    if (s && s == hl_virtual_state && s->virtual_clock) {
+    if (s && s->virtual_clock) {
         return s->virtual_ms;
     }
     /*
@@ -213,7 +206,7 @@ static void hl_sleep_ms(void *ud, nj_u4 ms)
 {
     nj_headless_state *s = HS(ud);
 
-    if (s && s == hl_virtual_state && s->virtual_clock) {
+    if (s && s->virtual_clock) {
         /*
          * Fast-forward the emulated clock instead of waiting.  A MIDlet that
          * sleeps to pace its own loop must still see the time pass, or the
@@ -287,7 +280,7 @@ static int hl_now(void *ud, nj_datetime *out)
     nj_s8 ms, days, rest;
     int y, m, d;
 
-    if (!s || s != hl_virtual_state || !s->virtual_clock) {
+    if (!s || !s->virtual_clock) {
         return nj_posix_now(ud, out);
     }
     if (!out) {
@@ -1503,9 +1496,10 @@ void nj_port_headless_set_virtual_clock(void *ud, int enabled)
         return;
     }
     s->virtual_clock = enabled != 0;
-    /* The calendar hook exists only for replays, and only while the port is
-     * still the one this state belongs to. */
-    hl_virtual_state = s->virtual_clock ? s : NULL;
+    /* The calendar hook exists only for replays: harnesses that swap port->ud
+     * for a sentinel (the JIT tests do) never enable the virtual clock, so
+     * they still see now == NULL and cannot reach hl_now() with a foreign
+     * pointer. */
     if (s->port) {
         s->port->now = s->virtual_clock ? hl_now : NULL;
     }

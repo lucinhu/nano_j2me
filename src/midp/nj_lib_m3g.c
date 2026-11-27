@@ -15295,6 +15295,8 @@ typedef struct m3g_journal {
     nj_gfx_triangles *descriptors;
     const nj_gfx_triangles **packets;
     nj_u4 scratch;
+    /* Diagnostic limit from NJ_M3G_JOURNAL_MAX (0 = protocol maximum). */
+    nj_u4 batch_cap;
 } m3g_journal;
 
 static void m3g_journal_destroy(nj_vm *vm)
@@ -15838,22 +15840,6 @@ static void m3g_journal_flush(nj_vm *vm, int why)
     if (!vm || !vm->m3g_journal) return;
     m3g_journal_commit(vm);
 }
-/* Diagnostic only: cap how many packets one list transaction may carry.
- * The default is the protocol maximum, so nothing changes unless a caller
- * sets NJ_M3G_JOURNAL_MAX.  Forcing one transaction per packet makes a
- * multi-packet batching bug show up as a difference from the reference
- * ladder (per-packet draws and single-packet transactions must agree). */
-static nj_u4 m3g_journal_batch_cap(void)
-{
-    static int cap = -1;
-    if (cap < 0) {
-        const char *s = getenv("NJ_M3G_JOURNAL_MAX");
-        cap = s && s[0] ? atoi(s) : 0;
-        if (cap < 0) cap = 0;
-    }
-    return (nj_u4)cap;
-}
-
 static int m3g_journal_append(m3g_jr *r, const nj_gfx_triangles *p)
 {
     nj_vm *vm = r->vm;
@@ -15867,6 +15853,15 @@ static int m3g_journal_append(m3g_jr *r, const nj_gfx_triangles *p)
         j = (m3g_journal *)nj_host_alloc(vm, sizeof(*j));
         if (!j) return 0;
         memset(j, 0, sizeof(*j));
+        {
+            /* Diagnostic only: cap how many packets one list transaction may
+             * carry.  The default is the protocol maximum, so nothing changes
+             * unless a caller sets NJ_M3G_JOURNAL_MAX.  Forcing one packet per
+             * transaction is how the per-packet and single-packet paths were
+             * shown to agree exactly. */
+            const char *cap = getenv("NJ_M3G_JOURNAL_MAX");
+            j->batch_cap = cap && cap[0] ? (nj_u4)atoi(cap) : 0;
+        }
         j->surface_copy = *p->surface;
         j->surface = &j->surface_copy;
         j->depth = p->depth;
@@ -15885,7 +15880,7 @@ static int m3g_journal_append(m3g_jr *r, const nj_gfx_triangles *p)
         return m3g_journal_append(r, p);
     }
     {
-        nj_u4 cap = m3g_journal_batch_cap();
+        nj_u4 cap = j->batch_cap;
         if (j->count >= NJ_GFX_TRIANGLES_LIST_MAX_PACKETS ||
             (cap && j->count >= cap) ||
             p->count > NJ_GFX_TRIANGLES_LIST_MAX_TOTAL - j->total ||
