@@ -4,6 +4,10 @@
 对象：`src/port/vulkan/tri_draw.inc`、`include/nj2me/nj_port.h`、`src/midp/nj_lib_m3g.c`
 关联：[高清面片的颜色/深度往返](2026-11-27-hd-triangle-transfer.md)、[高清面片批处理的取舍](2026-11-27-hd-journal-batching.md)
 
+> **状态（2026-11-27 晚）**：本文的列表事务实验已被后续的确定性回放证伪——多包事务在输入逐位
+> 相同的情况下输出不可复现（读到未初始化宿主内存）、有可见伪影且比逐包更慢，实现已回退，Vulkan
+> 端口不再注册列表回调。完整证据与结论见 [高清面片的颜色/深度往返](2026-11-27-hd-triangle-transfer.md) §十二。
+
 ## 一、目的
 
 前一轮用 `-DNJ_M3G_PROFILE=1` 测得 8× 原生高清的 M3G 记录开销集中在每次事务的
