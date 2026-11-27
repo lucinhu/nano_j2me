@@ -110,6 +110,7 @@ static int texture_index(const packet_info *p, const nj_gfx_triangle_cmd *t) {
     }
     return i;
 }
+
 static int analyze(nj_vk_renderer *r, const nj_gfx_triangles *p, packet_info *info) {
     nj_u4 i;
     for (i = 0; i < p->count; ++i) {
@@ -164,10 +165,10 @@ static material get_material(const nj_gfx_triangle_cmd *t, const packet_info *p)
     }
     return m;
 }
-static void upload_geometry(nj_vk_renderer *r, const nj_gfx_triangles *p, const packet_info *info) {
+static void upload_geometry_at(nj_vk_renderer *r, const nj_gfx_triangles *p, const packet_info *info,
+                               vertex *out) {
     int j;
     nj_u4 i;
-    vertex *out = r->vertices.map;
     for (i = 0; i < p->count; ++i)
         for (j = 0; j < 3; ++j, ++out) {
             const nj_gfx_triangle_vertex *v = &p->triangles[i].vertices[j];
@@ -298,23 +299,25 @@ static void depth_export(nj_s4 *keys, const float *values, int width) {
         keys[x] = 16777216 - (nj_s4)(values[x] * 16777216.0f);
 }
 
-static void transfer_cpu(nj_vk_renderer *r, const nj_gfx_triangles *p, int depth, int output) {
-    const nj_surface *s = p->surface;
+/* Copy one rectangle between the staged image (colour plane followed by a
+ * float depth plane) and the caller's surface / depth keys. A session uses it
+ * once for the framed import and once for the framed export. */
+static void transfer_rect(nj_vk_renderer *r, const nj_surface *s, nj_s4 *depth, int depth_stride,
+                          int rx, int ry, int width, int height, int want_depth, int output) {
     int bpp = s->format == NJ_PIXFMT_ARGB8888 ? 4 : s->format == NJ_PIXFMT_RGB888 ? 3 : 2;
-    size_t n = (size_t)p->width * p->height;
+    size_t n = (size_t)width * height;
     uint8_t *bytes = r->stage.map;
     float *z = (float *)(bytes + n * 4);
     int x, y;
-    const int width = p->width;
-    for (y = 0; y < p->height; ++y) {
-        uint8_t *row = (uint8_t *)s->pixels + (size_t)(p->y + y) * s->stride + (size_t)p->x * bpp;
-        uint8_t *bgra = bytes + (size_t)y * p->width * 4;
+    for (y = 0; y < height; ++y) {
+        uint8_t *row = (uint8_t *)s->pixels + (size_t)(ry + y) * s->stride + (size_t)rx * bpp;
+        uint8_t *bgra = bytes + (size_t)y * width * 4;
         /* Vulkan platforms supported by this backend use little-endian packed ARGB. */
         if (bpp == 4) {
             if (output)
-                copy_words(row, bgra, (size_t)p->width * 4);
+                copy_words(row, bgra, (size_t)width * 4);
             else
-                copy_words(bgra, row, (size_t)p->width * 4);
+                copy_words(bgra, row, (size_t)width * 4);
         } else if (bpp == 2) {
             if (output)
                 export_rgb565(row, bgra, width);
@@ -334,9 +337,9 @@ static void transfer_cpu(nj_vk_renderer *r, const nj_gfx_triangles *p, int depth
                 }
             }
         }
-        if (depth) {
-            nj_s4 *keys = p->depth + (size_t)(p->y + y) * p->depth_stride + p->x;
-            float *values = z + (size_t)y * p->width;
+        if (want_depth) {
+            nj_s4 *keys = depth + (size_t)(ry + y) * depth_stride + rx;
+            float *values = z + (size_t)y * width;
             if (output)
                 depth_export(keys, values, width);
             else
@@ -344,20 +347,14 @@ static void transfer_cpu(nj_vk_renderer *r, const nj_gfx_triangles *p, int depth
         }
     }
 }
-static void draws(nj_vk_renderer *r, const nj_gfx_triangles *p, const packet_info *info) {
-    VkRenderPassBeginInfo begin = VK_INIT(RENDER_PASS_BEGIN_INFO);
-    VkViewport vp = {0, 0, (float)p->width, (float)p->height, 0, 1};
-    VkDeviceSize zero = 0;
-    nj_u4 i;
+static void transfer_cpu(nj_vk_renderer *r, const nj_gfx_triangles *p, int depth, int output) {
+    transfer_rect(r, p->surface, p->depth, p->depth_stride, p->x, p->y, p->width, p->height, depth,
+                  output);
+}
+static void draws_body(nj_vk_renderer *r, const nj_gfx_triangles *p, const packet_info *info,
+                       nj_u4 vertex_base) {
     unsigned prev_index = PIPELINES;
-    begin.renderPass = r->pass;
-    begin.framebuffer = r->fb;
-    begin.renderArea.extent = (VkExtent2D){(uint32_t)p->width, (uint32_t)p->height};
-    vkCmdBeginRenderPass(r->cmd, &begin, VK_SUBPASS_CONTENTS_INLINE);
-    vkCmdSetViewport(r->cmd, 0, 1, &vp);
-    vkCmdSetScissor(r->cmd, 0, 1, &begin.renderArea);
-    vkCmdBindVertexBuffers(r->cmd, 0, 1, &r->vertices.id, &zero);
-    vkCmdBindDescriptorSets(r->cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->layout, 0, 1, &r->set, 0, NULL);
+    nj_u4 i;
     for (i = 0; i < p->count;) {
         const nj_gfx_triangle_cmd *t = &p->triangles[i];
         unsigned index = pipeline_index(t);
@@ -375,9 +372,25 @@ static void draws(nj_vk_renderer *r, const nj_gfx_triangles *p, const packet_inf
             prev_index = index;
         }
         vkCmdPushConstants(r->cmd, r->layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof m, &m);
-        vkCmdDraw(r->cmd, (end - i) * 3, 1, i * 3, 0);
+        vkCmdDraw(r->cmd, (end - i) * 3, 1, vertex_base + i * 3, 0);
         i = end;
     }
+}
+/* Render one packet into the framebuffer-sized attachments (all packets share
+ * the same staged import, so the pass extent is the packet rectangle). */
+static void draws(nj_vk_renderer *r, const nj_gfx_triangles *p, const packet_info *info) {
+    VkRenderPassBeginInfo begin = VK_INIT(RENDER_PASS_BEGIN_INFO);
+    VkViewport vp = {0, 0, (float)p->width, (float)p->height, 0, 1};
+    VkDeviceSize zero = 0;
+    begin.renderPass = r->pass;
+    begin.framebuffer = r->fb;
+    begin.renderArea.extent = (VkExtent2D){(uint32_t)p->width, (uint32_t)p->height};
+    vkCmdBeginRenderPass(r->cmd, &begin, VK_SUBPASS_CONTENTS_INLINE);
+    vkCmdSetViewport(r->cmd, 0, 1, &vp);
+    vkCmdSetScissor(r->cmd, 0, 1, &begin.renderArea);
+    vkCmdBindVertexBuffers(r->cmd, 0, 1, &r->vertices.id, &zero);
+    vkCmdBindDescriptorSets(r->cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->layout, 0, 1, &r->set, 0, NULL);
+    draws_body(r, p, info, 0);
     vkCmdEndRenderPass(r->cmd);
 }
 static int execute(nj_vk_renderer *r, const nj_gfx_triangles *p, const packet_info *info) {
@@ -426,6 +439,329 @@ static int execute(nj_vk_renderer *r, const nj_gfx_triangles *p, const packet_in
     }
     return sync_buffer(r, &r->stage, 1);
 }
+/* ------------------------------------------------------------------------- */
+/* Persistent sessions                                                       */
+/*                                                                           */
+/* A session keeps the colour and depth attachments resident in device       */
+/* memory. begin() imports the framed rectangle once, every submission       */
+/* renders its packets into the resident attachments without reading        */
+/* anything back, and end() exports the rectangle exactly once. Each         */
+/* submission is still submitted and waited on its own, so staging buffers   */
+/* may be reallocated between calls; the contract only forbids observing the */
+/* target while the session is open.                                         */
+/* ------------------------------------------------------------------------- */
+static int session_surface_matches(const nj_vk_renderer *r, const nj_gfx_triangles *p) {
+    const nj_surface *s = p->surface;
+    if (!s)
+        return 0;
+    return s->pixels == r->session_surface.pixels && s->width == r->session_surface.width &&
+           s->height == r->session_surface.height && s->format == r->session_surface.format &&
+           s->bpp == r->session_surface.bpp && s->stride == r->session_surface.stride &&
+           p->depth == r->session_depth && p->depth_stride == r->session_depth_stride;
+}
+static int session_contains(const nj_vk_renderer *r, const nj_gfx_triangles *p) {
+    return p->x >= r->session_x && p->y >= r->session_y &&
+           p->x + p->width <= r->session_x + r->session_width &&
+           p->y + p->height <= r->session_y + r->session_height;
+}
+/* Queue a batch of packets into the open session and submit it. Returns 0 on
+ * failure (the caller must then abort the session), 1 with the triangle count
+ * on success. */
+static int session_record(nj_vk_renderer *r, const nj_gfx_triangles *const *packets, nj_u4 count,
+                          nj_u4 *triangles) {
+    packet_info *infos;
+    VkDescriptorBufferInfo desc = {0};
+    VkWriteDescriptorSet write = VK_INIT(WRITE_DESCRIPTOR_SET);
+    VkCommandBufferBeginInfo cb = VK_INIT(COMMAND_BUFFER_BEGIN_INFO);
+    VkMemoryBarrier sync = VK_INIT(MEMORY_BARRIER);
+    VkSubmitInfo submit = VK_INIT(SUBMIT_INFO);
+    nj_u4 i, texels = 0, vertices = 0, vertex_base = 0, total = 0;
+    if (r->session_failed || !count)
+        return 0;
+    infos = (packet_info *)r->session_infos;
+    if (r->session_infos_cap < count) {
+        packet_info *grown = (packet_info *)realloc(infos, (size_t)count * sizeof(*infos));
+        if (!grown)
+            return 0;
+        r->session_infos = infos = grown;
+        r->session_infos_cap = count;
+    }
+    for (i = 0; i < count; ++i) {
+        const nj_gfx_triangles *p = packets[i];
+        nj_u4 one = 0, j;
+        memset(&infos[i], 0, sizeof infos[i]);
+        if (!p || !session_surface_matches(r, p) || !session_contains(r, p) ||
+            !nj_gfx_triangles_validate(p, &one) || !analyze(r, p, &infos[i])) {
+            r->session_failed = 1;
+            return 0;
+        }
+        for (j = 0; j < (nj_u4)infos[i].count; ++j)
+            infos[i].views[j].offset += (int)texels;
+        texels += (nj_u4)infos[i].texels;
+        vertices += p->count * 3u;
+        total += p->count;
+    }
+    if (!reserve_buffer(r, &r->vertices, (VkDeviceSize)vertices * sizeof(vertex),
+                        VK_BUFFER_USAGE_VERTEX_BUFFER_BIT) ||
+        !reserve_buffer(r, &r->textures, texels ? (VkDeviceSize)texels * 4u : 4u,
+                        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT)) {
+        r->session_failed = 1;
+        return 0;
+    }
+    desc.buffer = r->textures.id;
+    desc.range = texels ? (VkDeviceSize)texels * 4u : 4u;
+    if (desc.range > r->properties.limits.maxStorageBufferRange) {
+        r->session_failed = 1;
+        return 0;
+    }
+    if (!r->desc_valid || desc.buffer != r->desc_buffer || desc.range > r->desc_range) {
+        write.dstSet = r->set;
+        write.descriptorCount = 1;
+        write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        write.pBufferInfo = &desc;
+        vkUpdateDescriptorSets(r->dev, 1, &write, 0, NULL);
+        r->desc_buffer = desc.buffer;
+        r->desc_range = desc.range;
+        r->desc_valid = 1;
+    }
+    for (i = 0; i < count; ++i) {
+        upload_geometry_at(r, packets[i], &infos[i], (vertex *)r->vertices.map + vertex_base);
+        vertex_base += packets[i]->count * 3u;
+    }
+    if (!sync_buffer(r, &r->vertices, 0) || !sync_buffer(r, &r->textures, 0))
+        return 0;
+    if (vkResetCommandPool(r->dev, r->pool, 0) != VK_SUCCESS)
+        return 0;
+    cb.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    if (vkBeginCommandBuffer(r->cmd, &cb) != VK_SUCCESS)
+        return 0;
+    /* The previous submission (or the import) wrote colour, depth or staging
+     * memory; make those writes visible to the incoming fragment work. */
+    sync.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+                         VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT |
+                         VK_ACCESS_TRANSFER_WRITE_BIT;
+    sync.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT |
+                         VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+                         VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
+                         VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    vkCmdPipelineBarrier(r->cmd,
+                         VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT, 0, 1, &sync, 0, NULL, 0, NULL);
+    {
+        VkDeviceSize zero = 0;
+        vkCmdBindVertexBuffers(r->cmd, 0, 1, &r->vertices.id, &zero);
+        vkCmdBindDescriptorSets(r->cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->layout, 0, 1, &r->set, 0,
+                                NULL);
+    }
+    /* One render pass covers the whole batch: dynamic viewport and scissor
+     * keep each packet in its own rectangle while the attachments are loaded
+     * once and stored once for the whole session. */
+    {
+        VkRect2D full = {(VkOffset2D){0, 0},
+                         (VkExtent2D){(uint32_t)r->session_width, (uint32_t)r->session_height}};
+        VkRenderPassBeginInfo begin = VK_INIT(RENDER_PASS_BEGIN_INFO);
+        begin.renderPass = r->session_pass;
+        begin.framebuffer = r->session_fb;
+        begin.renderArea = full;
+        vkCmdBeginRenderPass(r->cmd, &begin, VK_SUBPASS_CONTENTS_INLINE);
+        vertex_base = 0;
+        for (i = 0; i < count; ++i) {
+            const nj_gfx_triangles *p = packets[i];
+            VkViewport vp = {(float)(p->x - r->session_x), (float)(p->y - r->session_y),
+                             (float)p->width, (float)p->height, 0, 1};
+            VkRect2D area = {(VkOffset2D){p->x - r->session_x, p->y - r->session_y},
+                             (VkExtent2D){(uint32_t)p->width, (uint32_t)p->height}};
+            vkCmdSetViewport(r->cmd, 0, 1, &vp);
+            vkCmdSetScissor(r->cmd, 0, 1, &area);
+            draws_body(r, p, &infos[i], vertex_base);
+            if (infos[i].write_depth)
+                r->session_depth_written = 1;
+            vertex_base += p->count * 3u;
+        }
+        vkCmdEndRenderPass(r->cmd);
+    }
+    if (vkEndCommandBuffer(r->cmd) != VK_SUCCESS ||
+        vkResetFences(r->dev, 1, &r->fence) != VK_SUCCESS)
+        return 0;
+    submit.commandBufferCount = 1;
+    submit.pCommandBuffers = &r->cmd;
+    if (vkQueueSubmit(r->queue, 1, &submit, r->fence) != VK_SUCCESS ||
+        vkWaitForFences(r->dev, 1, &r->fence, VK_TRUE, UINT64_MAX) != VK_SUCCESS) {
+        r->lost = 1;
+        return 0;
+    }
+    r->session_submitted += total;
+    *triangles = total;
+    return 1;
+}
+int nj_vk_renderer_triangles_begin(void *ud, const nj_gfx_triangles_session *s) {
+    nj_vk_renderer *r = ud;
+    VkCommandBufferBeginInfo cb = VK_INIT(COMMAND_BUFFER_BEGIN_INFO);
+    VkImageMemoryBarrier barriers[2] = {VK_INIT(IMAGE_MEMORY_BARRIER), VK_INIT(IMAGE_MEMORY_BARRIER)};
+    VkBufferImageCopy copies[2] = {{0}};
+    VkMemoryBarrier sync = VK_INIT(MEMORY_BARRIER);
+    VkSubmitInfo submit = VK_INIT(SUBMIT_INFO);
+    nj_u4 n;
+    int i, depth;
+    if (!r || r->lost || !s || s->version != NJ_GFX_TRIANGLES_SESSION_VERSION || !s->surface)
+        return NJ_GFX_ACCEL_DECLINE;
+    if (s->width <= 0 || s->height <= 0 || s->x < 0 || s->y < 0)
+        return NJ_GFX_ACCEL_DECLINE;
+    if (s->width > s->surface->width - s->x || s->height > s->surface->height - s->y)
+        return NJ_GFX_ACCEL_DECLINE;
+    n = (nj_u4)s->width * (nj_u4)s->height;
+    if (n > MAX_PIXELS || (unsigned)s->width > r->max_image_width ||
+        (unsigned)s->height > r->max_image_height ||
+        (unsigned)s->width > r->properties.limits.maxFramebufferWidth ||
+        (unsigned)s->height > r->properties.limits.maxFramebufferHeight ||
+        (unsigned)s->width > r->properties.limits.maxViewportDimensions[0] ||
+        (unsigned)s->height > r->properties.limits.maxViewportDimensions[1])
+        return NJ_GFX_ACCEL_DECLINE;
+    depth = s->depth ? 1 : 0;
+    if (depth && s->depth_stride < s->width)
+        return NJ_GFX_ACCEL_DECLINE;
+    nj_vk_renderer_triangles_abort(r);
+    r->session_surface = *s->surface;
+    r->session_depth = s->depth;
+    r->session_depth_stride = s->depth_stride;
+    r->session_x = s->x;
+    r->session_y = s->y;
+    r->session_width = s->width;
+    r->session_height = s->height;
+    r->session_depth_written = 0;
+    r->session_submitted = 0;
+    if (!target(r, s->width, s->height) ||
+        !reserve_buffer(r, &r->stage, (VkDeviceSize)n * 4u * (VkDeviceSize)(1 + depth),
+                        VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT))
+        return NJ_GFX_ACCEL_DECLINE;
+    transfer_rect(r, s->surface, s->depth, s->depth_stride, s->x, s->y, s->width, s->height, depth, 0);
+    if (!sync_buffer(r, &r->stage, 0) || vkResetCommandPool(r->dev, r->pool, 0) != VK_SUCCESS)
+        return NJ_GFX_ACCEL_DECLINE;
+    cb.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    if (vkBeginCommandBuffer(r->cmd, &cb) != VK_SUCCESS)
+        return NJ_GFX_ACCEL_DECLINE;
+    for (i = 0; i < 2; ++i) {
+        barriers[i].dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        barriers[i].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        barriers[i].newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        barriers[i].srcQueueFamilyIndex = barriers[i].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barriers[i].image = r->attachments[i].id;
+        barriers[i].subresourceRange = (VkImageSubresourceRange){aspects[i], 0, 1, 0, 1};
+        copies[i].bufferOffset = (VkDeviceSize)i * n * 4u;
+        copies[i].imageSubresource = (VkImageSubresourceLayers){aspects[i], 0, 0, 1};
+        copies[i].imageExtent = (VkExtent3D){(uint32_t)s->width, (uint32_t)s->height, 1};
+    }
+    vkCmdPipelineBarrier(r->cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         0, 0, NULL, 0, NULL, 2, barriers);
+    for (i = 0; i < 1 + depth; ++i)
+        vkCmdCopyBufferToImage(r->cmd, r->stage.id, r->attachments[i].id,
+                               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copies[i]);
+    sync.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    sync.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT |
+                         VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+                         VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
+                         VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    vkCmdPipelineBarrier(r->cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT,
+                         0, 1, &sync, 0, NULL, 0, NULL);
+    if (vkEndCommandBuffer(r->cmd) != VK_SUCCESS ||
+        vkResetFences(r->dev, 1, &r->fence) != VK_SUCCESS)
+        return NJ_GFX_ACCEL_DECLINE;
+    submit.commandBufferCount = 1;
+    submit.pCommandBuffers = &r->cmd;
+    if (vkQueueSubmit(r->queue, 1, &submit, r->fence) != VK_SUCCESS ||
+        vkWaitForFences(r->dev, 1, &r->fence, VK_TRUE, UINT64_MAX) != VK_SUCCESS) {
+        r->lost = 1;
+        return NJ_GFX_ACCEL_DECLINE;
+    }
+    r->session_open = 1;
+    r->session_failed = 0;
+    return NJ_GFX_ACCEL_DONE;
+}
+int nj_vk_renderer_triangles_end(void *ud, nj_u4 *submitted) {
+    nj_vk_renderer *r = ud;
+    VkCommandBufferBeginInfo cb = VK_INIT(COMMAND_BUFFER_BEGIN_INFO);
+    VkImageMemoryBarrier barriers[2] = {VK_INIT(IMAGE_MEMORY_BARRIER), VK_INIT(IMAGE_MEMORY_BARRIER)};
+    VkBufferImageCopy copies[2] = {{0}};
+    VkMemoryBarrier host = VK_INIT(MEMORY_BARRIER);
+    VkSubmitInfo submit = VK_INIT(SUBMIT_INFO);
+    int i, depth;
+    nj_u4 total;
+    if (!r || !submitted || !r->session_open)
+        return NJ_GFX_ACCEL_DECLINE;
+    if (r->session_failed) {
+        r->session_open = 0;
+        return NJ_GFX_ACCEL_DECLINE;
+    }
+    total = r->session_submitted;
+    if (!total) {
+        r->session_open = 0;
+        *submitted = 0;
+        return NJ_GFX_ACCEL_DONE;
+    }
+    depth = r->session_depth && r->session_depth_written;
+    cb.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    if (vkResetCommandPool(r->dev, r->pool, 0) != VK_SUCCESS ||
+        vkBeginCommandBuffer(r->cmd, &cb) != VK_SUCCESS) {
+        r->lost = 1;
+        r->session_open = 0;
+        return NJ_GFX_ACCEL_DECLINE;
+    }
+    for (i = 0; i < 2; ++i) {
+        barriers[i].srcAccessMask = i ? VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT
+                                      : VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        barriers[i].dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+        barriers[i].oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        barriers[i].newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        barriers[i].srcQueueFamilyIndex = barriers[i].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barriers[i].image = r->attachments[i].id;
+        barriers[i].subresourceRange = (VkImageSubresourceRange){aspects[i], 0, 1, 0, 1};
+        copies[i].bufferOffset =
+            (VkDeviceSize)i * (unsigned)r->session_width * (unsigned)r->session_height * 4u;
+        copies[i].imageSubresource = (VkImageSubresourceLayers){aspects[i], 0, 0, 1};
+        copies[i].imageExtent =
+            (VkExtent3D){(uint32_t)r->session_width, (uint32_t)r->session_height, 1};
+    }
+    vkCmdPipelineBarrier(r->cmd, VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         0, 0, NULL, 0, NULL, 2, barriers);
+    for (i = 0; i < 1 + depth; ++i)
+        vkCmdCopyImageToBuffer(r->cmd, r->attachments[i].id, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                               r->stage.id, 1, &copies[i]);
+    host.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    host.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
+    vkCmdPipelineBarrier(r->cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, 1,
+                         &host, 0, NULL, 0, NULL);
+    if (vkEndCommandBuffer(r->cmd) != VK_SUCCESS ||
+        vkResetFences(r->dev, 1, &r->fence) != VK_SUCCESS) {
+        r->lost = 1;
+        r->session_open = 0;
+        return NJ_GFX_ACCEL_DECLINE;
+    }
+    submit.commandBufferCount = 1;
+    submit.pCommandBuffers = &r->cmd;
+    if (vkQueueSubmit(r->queue, 1, &submit, r->fence) != VK_SUCCESS ||
+        vkWaitForFences(r->dev, 1, &r->fence, VK_TRUE, UINT64_MAX) != VK_SUCCESS) {
+        r->lost = 1;
+        r->session_open = 0;
+        return NJ_GFX_ACCEL_DECLINE;
+    }
+    if (!sync_buffer(r, &r->stage, 1)) {
+        r->lost = 1;
+        r->session_open = 0;
+        return NJ_GFX_ACCEL_DECLINE;
+    }
+    r->session_open = 0;
+    transfer_rect(r, &r->session_surface, r->session_depth, r->session_depth_stride, r->session_x,
+                  r->session_y, r->session_width, r->session_height, depth, 1);
+    *submitted = total;
+    return NJ_GFX_ACCEL_DONE;
+}
+void nj_vk_renderer_triangles_abort(void *ud) {
+    nj_vk_renderer *r = ud;
+    if (!r)
+        return;
+    r->session_open = 0;
+    r->session_failed = 0;
+}
 int nj_vk_renderer_triangles(void *ud, const nj_gfx_triangles *p, nj_u4 *submitted) {
     nj_vk_renderer *r = ud;
     packet_info info = {0};
@@ -434,6 +770,16 @@ int nj_vk_renderer_triangles(void *ud, const nj_gfx_triangles *p, nj_u4 *submitt
     uint64_t n;
     if (!r || r->lost || !p || p->width <= 0 || p->height <= 0)
         return NJ_GFX_ACCEL_DECLINE;
+    if (r->session_open) {
+        const nj_gfx_triangles *one = p;
+        nj_u4 triangles = 0;
+        if (!session_record(r, &one, 1u, &triangles)) {
+            r->session_failed = 1;
+            return NJ_GFX_ACCEL_DECLINE;
+        }
+        *submitted = triangles;
+        return NJ_GFX_ACCEL_DONE;
+    }
     n = (uint64_t)p->width * (unsigned)p->height;
     if (n > MAX_PIXELS || (unsigned)p->width > r->max_image_width ||
         (unsigned)p->height > r->max_image_height ||
@@ -468,7 +814,7 @@ int nj_vk_renderer_triangles(void *ud, const nj_gfx_triangles *p, nj_u4 *submitt
         r->desc_range = desc.range;
         r->desc_valid = 1;
     }
-    upload_geometry(r, p, &info);
+    upload_geometry_at(r, p, &info, (vertex *)r->vertices.map);
     transfer_cpu(r, p, info.seed_depth, 0);
     if (!sync_buffer(r, &r->vertices, 0) || !sync_buffer(r, &r->textures, 0) ||
         !sync_buffer(r, &r->stage, 0) || !execute(r, p, &info))
@@ -488,6 +834,15 @@ int nj_vk_renderer_triangles_list(void *ud, const nj_gfx_triangles_list *l, nj_u
     int rc = NJ_GFX_ACCEL_DECLINE;
     if (!r || !l || !submitted || !nj_gfx_triangles_list_validate(l, submitted))
         return NJ_GFX_ACCEL_DECLINE;
+    if (r->session_open) {
+        nj_u4 triangles = 0;
+        if (!session_record(r, l->packets, l->count, &triangles)) {
+            r->session_failed = 1;
+            return NJ_GFX_ACCEL_DECLINE;
+        }
+        *submitted = triangles;
+        return NJ_GFX_ACCEL_DONE;
+    }
     for (i = 0; i < l->count; ++i) {
         nj_u4 one = 0;
         if (nj_vk_renderer_triangles(r, l->packets[i], &one) != NJ_GFX_ACCEL_DONE)

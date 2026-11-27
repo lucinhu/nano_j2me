@@ -56,11 +56,13 @@ struct nj_vk_renderer {
     VkDescriptorSetLayout set_layout;
     VkPipelineLayout layout;
     VkRenderPass pass;
+    VkRenderPass session_pass; /* keeps the attachments in TRANSFER_DST between packets */
     VkDescriptorPool descriptors;
     VkDescriptorSet set;
     VkPipeline pipelines[PIPELINES];
     attachment attachments[2];
     VkFramebuffer fb;
+    VkFramebuffer session_fb;
     uint32_t width, height;
     uint32_t max_image_width, max_image_height;
     buffer stage, vertices, textures;
@@ -69,6 +71,18 @@ struct nj_vk_renderer {
     VkDeviceSize desc_range;
     int desc_valid;
     int lost;
+    /* Optional persistent triangle session: while open the attachments own the
+     * authoritative rectangle and the CPU colour/depth buffers are stale until
+     * end() exports them. All state lives here, never in a global. */
+    nj_surface session_surface; /* copy: the caller's nj_surface may be a stack copy */
+    nj_s4 *session_depth;
+    int session_depth_stride;
+    int session_x, session_y, session_width, session_height;
+    int session_open, session_failed;
+    int session_depth_written;
+    nj_u4 session_submitted;
+    void *session_infos; /* packet_info scratch, typed inside tri_draw.inc */
+    unsigned session_infos_cap;
 };
 static const VkFormat formats[] = {VK_FORMAT_B8G8R8A8_UNORM, VK_FORMAT_D32_SFLOAT};
 static const VkImageUsageFlags usages[] = {
@@ -143,7 +157,10 @@ static int sync_buffer(nj_vk_renderer *r, const buffer *b, int readback) {
 static void release_target(nj_vk_renderer *r) {
     int i;
     vkDestroyFramebuffer(r->dev, r->fb, NULL);
-    r->fb = VK_NULL_HANDLE;
+    vkDestroyFramebuffer(r->dev, r->session_fb, NULL);
+    r->fb = r->session_fb = VK_NULL_HANDLE;
+    r->session_open = 0;
+    r->session_failed = 0;
     for (i = 0; i < 2; ++i) {
         attachment *a = &r->attachments[i];
         vkDestroyImageView(r->dev, a->view, NULL);
@@ -202,6 +219,9 @@ static int target(nj_vk_renderer *r, uint32_t w, uint32_t h) {
     fb.height = h;
     fb.layers = 1;
     if (vkCreateFramebuffer(r->dev, &fb, NULL, &r->fb) != VK_SUCCESS)
+        goto fail;
+    fb.renderPass = r->session_pass;
+    if (vkCreateFramebuffer(r->dev, &fb, NULL, &r->session_fb) != VK_SUCCESS)
         goto fail;
     r->width = w;
     r->height = h;
@@ -262,7 +282,7 @@ static int choose_gpu(nj_vk_renderer *r) {
     }
     return 0;
 }
-static int create_pass(nj_vk_renderer *r) {
+static int create_pass(nj_vk_renderer *r, VkImageLayout final_layout, VkRenderPass *out) {
     VkAttachmentDescription attachments[2] = {{0}};
     VkAttachmentReference color = {0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
     VkAttachmentReference depth = {1, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL};
@@ -283,7 +303,7 @@ static int create_pass(nj_vk_renderer *r) {
         attachments[i].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
         attachments[i].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
         attachments[i].initialLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-        attachments[i].finalLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        attachments[i].finalLayout = final_layout;
     }
     sub.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
     sub.colorAttachmentCount = 1;
@@ -308,7 +328,7 @@ static int create_pass(nj_vk_renderer *r) {
     info.pSubpasses = &sub;
     info.dependencyCount = 2;
     info.pDependencies = deps;
-    return vkCreateRenderPass(r->dev, &info, NULL, &r->pass) == VK_SUCCESS;
+    return vkCreateRenderPass(r->dev, &info, NULL, out) == VK_SUCCESS;
 }
 nj_vk_renderer *nj_vk_renderer_create(void) {
     nj_vk_renderer *r = calloc(1, sizeof *r);
@@ -372,7 +392,8 @@ nj_vk_renderer *nj_vk_renderer_create(void) {
     if ((stage = vkCreateFence(r->dev, &fence, NULL, &r->fence)) != VK_SUCCESS)
         goto fail;
     stage_name = "render pass";
-    if (!create_pass(r)) {
+    if (!create_pass(r, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, &r->pass) ||
+        !create_pass(r, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &r->session_pass)) {
         stage = VK_ERROR_INITIALIZATION_FAILED;
         goto fail;
     }
@@ -434,10 +455,12 @@ void nj_vk_renderer_destroy(nj_vk_renderer *r) {
         vkDestroyDescriptorSetLayout(r->dev, r->set_layout, NULL);
         vkDestroyShaderModule(r->dev, r->vs, NULL);
         vkDestroyShaderModule(r->dev, r->fs, NULL);
+        vkDestroyRenderPass(r->dev, r->session_pass, NULL);
         vkDestroyRenderPass(r->dev, r->pass, NULL);
         vkDestroyFence(r->dev, r->fence, NULL);
         vkDestroyDevice(r->dev, NULL);
     }
+    free(r->session_infos);
     if (r->instance)
         vkDestroyInstance(r->instance, NULL);
     free(r);
@@ -457,12 +480,16 @@ int nj_vk_renderer_attach(nj_port *port) {
         return 0;
     port->gfx_hd_triangles = port->gfx_triangles = nj_vk_renderer_triangles;
     port->gfx_hd_triangles_ud = port->gfx_triangles_ud = r;
-    /* Keep the exact single-packet path and leave the journal off.  A
-     * multi-packet list callback produced unreproducible pixels at 1x and 8x
-     * even when the recorded packet stream and the imported colour/depth were
-     * bit-identical, and it was slower than the single-packet path.  The list
-     * entry point is still compiled and tested for frontends that group
-     * transactions elsewhere; M3G only uses it when a port registers it. */
+    /* The default is the exact single-packet path with the journal off.  A
+     * multi-packet list transaction produced unreproducible pixels at 1x and
+     * 8x even when the recorded packet stream and the imported colour/depth
+     * were bit-identical, and it was slower than the single-packet path.
+     *
+     * The persistent session path is the remaining lever on the 8x colour and
+     * depth round trip: it keeps the attachments resident across submissions
+     * and pays import/export once per session instead of once per packet. It
+     * is still opt-in (NJ_VK_SESSION=1) until the deterministic gates and the
+     * timing comparison clear it. */
     port->gfx_triangles_list = NULL;
     port->gfx_triangles_list_ud = NULL;
     port->gfx_hd_journal = 0;
@@ -471,6 +498,18 @@ int nj_vk_renderer_attach(nj_port *port) {
     port->gfx_triangles_abort = NULL;
     port->gfx_triangles_session_ud = NULL;
     port->gfx_triangles_auto = 0;
+    {
+        const char *session = getenv("NJ_VK_SESSION");
+        if (session && session[0] == '1') {
+            port->gfx_triangles_list = nj_vk_renderer_triangles_list;
+            port->gfx_triangles_list_ud = r;
+            port->gfx_triangles_begin = nj_vk_renderer_triangles_begin;
+            port->gfx_triangles_end = nj_vk_renderer_triangles_end;
+            port->gfx_triangles_abort = nj_vk_renderer_triangles_abort;
+            port->gfx_triangles_session_ud = r;
+            port->gfx_hd_journal = 1;
+        }
+    }
     port->gfx_hd_destroy = destroy_owned_renderer;
     return 1;
 #else
