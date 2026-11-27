@@ -11,6 +11,7 @@ typedef struct nj_vk_renderer nj_vk_renderer;
 nj_vk_renderer *nj_vk_renderer_create(void);
 void nj_vk_renderer_destroy(nj_vk_renderer *);
 int nj_vk_renderer_triangles(void *ud, const nj_gfx_triangles *packet, nj_u4 *submitted);
+int nj_vk_renderer_triangles_list(void *ud, const nj_gfx_triangles_list *list, nj_u4 *submitted);
 #ifdef __cplusplus
 }
 #endif

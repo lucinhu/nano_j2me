@@ -477,3 +477,27 @@ int nj_vk_renderer_triangles(void *ud, const nj_gfx_triangles *p, nj_u4 *submitt
     *submitted = p->count;
     return NJ_GFX_ACCEL_DONE;
 }
+/* A list transaction may commit several packets of one surface. This backend
+ * keeps the per-packet path as the reference implementation: each packet is
+ * validated and executed exactly as a standalone submission, in order, and the
+ * whole list declines if any packet declines. Correctness first; a batched
+ * command stream can replace this once it is proven pixel-identical. */
+int nj_vk_renderer_triangles_list(void *ud, const nj_gfx_triangles_list *l, nj_u4 *submitted) {
+    nj_vk_renderer *r = ud;
+    nj_u4 total = 0, done = 0, i;
+    int rc = NJ_GFX_ACCEL_DECLINE;
+    if (!r || !l || !submitted || !nj_gfx_triangles_list_validate(l, submitted))
+        return NJ_GFX_ACCEL_DECLINE;
+    for (i = 0; i < l->count; ++i) {
+        nj_u4 one = 0;
+        if (nj_vk_renderer_triangles(r, l->packets[i], &one) != NJ_GFX_ACCEL_DONE)
+            return NJ_GFX_ACCEL_DECLINE; /* rare: the journal replays in software */
+        total += one;
+        done = i + 1;
+    }
+    (void)done;
+    *submitted = total;
+    rc = NJ_GFX_ACCEL_DONE;
+    return rc;
+}
+

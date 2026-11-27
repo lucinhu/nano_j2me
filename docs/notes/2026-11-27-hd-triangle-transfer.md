@@ -190,3 +190,24 @@ UNDEFINED→TRANSFER_DST 与 render pass 的布局转换），逐位一致但耗
 逐包 vs 列表的逐位对照验证到 1× 也完全一致，再重测高清 journal 批处理；只有逐位一致后的耗时
 数据才算数。
 
+## 十、Vulkan 列表回调的参考实现与逐位对照
+
+给 `src/port/vulkan/tri_draw.inc` 补上了 `nj_vk_renderer_triangles_list`：它不做任何批处理，
+按顺序对每个包调用单包参考实现，任何一个包 decline 就让整个列表 decline（调用方随后软件重放），
+`*submitted` 为各包之和。这样 Vulkan 后端就能进入 M3G journal 的列表事务路径，同时保持
+「先正确、后优化」的顺序。注册在 `nj_vk_renderer_attach`（`gfx_triangles_list` +
+`gfx_triangles_list_ud`），高清驻留/会话回调仍为 NULL。
+
+逐位对照（确定性 1× 回放，`--render-scale 1`，转场前的帧）：
+
+| 帧 | 逐包基线 | 列表参考实现 |
+| --- | --- | --- |
+| 00100 | `7bfa322b77576619…` | `7bfa322b77576619…` |
+| 00200 | `8169fa658281e1de…` | `8169fa658281e1de…` |
+
+（转场之后的帧不可用作对照：Doom3 在 NEW GAME 后对时序敏感，同一二进制两次运行也会分叉。）
+
+结论：列表契约在 Vulkan 后端的实现本身是逐位精确的，因此第九节里 8× 批处理的像素差异
+只可能来自「并集矩形 + 驻留」的批处理层，而不是列表接线错误；下一轮可以在这个参考实现
+之上做真正的并把逐位对照作为闸门。
+

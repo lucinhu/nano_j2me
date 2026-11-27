@@ -457,8 +457,8 @@ int nj_vk_renderer_attach(nj_port *port) {
         return 0;
     port->gfx_hd_triangles = port->gfx_triangles = nj_vk_renderer_triangles;
     port->gfx_hd_triangles_ud = port->gfx_triangles_ud = r;
-    port->gfx_triangles_list = NULL;
-    port->gfx_triangles_list_ud = NULL;
+    port->gfx_triangles_list = nj_vk_renderer_triangles_list;
+    port->gfx_triangles_list_ud = r;
     port->gfx_triangles_begin = NULL;
     port->gfx_triangles_end = NULL;
     port->gfx_triangles_abort = NULL;
