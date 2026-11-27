@@ -199,6 +199,31 @@ static void upload_geometry(nj_vk_renderer *r, const nj_gfx_triangles *p, const 
                         ((v->bpp == 4 ? (uint32_t)src[3] : 255u) << 24);
     }
 }
+/* The colour round trip copies up to a whole physical frame per packet. Plain
+ * stores would fetch every cache line before overwriting it, so copy large
+ * aligned runs with non-temporal stores. Same bytes, only the store hint
+ * differs. */
+static void copy_words(uint8_t *restrict dst, const uint8_t *restrict src, size_t bytes) {
+#if !defined(NJ_VK_NO_STREAM) && defined(__SSE2__)
+    size_t i = 0;
+    if ((((uintptr_t)dst | (uintptr_t)src) & 15u) == 0) {
+        for (; i + 64 <= bytes; i += 64) {
+            _mm_stream_si128((__m128i *)(dst + i), _mm_loadu_si128((const __m128i *)(src + i)));
+            _mm_stream_si128((__m128i *)(dst + i + 16), _mm_loadu_si128((const __m128i *)(src + i + 16)));
+            _mm_stream_si128((__m128i *)(dst + i + 32), _mm_loadu_si128((const __m128i *)(src + i + 32)));
+            _mm_stream_si128((__m128i *)(dst + i + 48), _mm_loadu_si128((const __m128i *)(src + i + 48)));
+        }
+        for (; i + 16 <= bytes; i += 16)
+            _mm_stream_si128((__m128i *)(dst + i), _mm_loadu_si128((const __m128i *)(src + i)));
+        _mm_sfence();
+    }
+    if (i < bytes)
+        memcpy(dst + i, src + i, bytes - i);
+#else
+    memcpy(dst, src, bytes);
+#endif
+}
+
 /* Mapped staging and caller storage are disjoint. Fixed-size memcpy permits
  * odd surface addresses and strides, and a fixed width leaves each color loop
  * independent of writes through caller-provided byte pointers. */
@@ -287,9 +312,9 @@ static void transfer_cpu(nj_vk_renderer *r, const nj_gfx_triangles *p, int depth
         /* Vulkan platforms supported by this backend use little-endian packed ARGB. */
         if (bpp == 4) {
             if (output)
-                memcpy(row, bgra, (size_t)p->width * 4);
+                copy_words(row, bgra, (size_t)p->width * 4);
             else
-                memcpy(bgra, row, (size_t)p->width * 4);
+                copy_words(bgra, row, (size_t)p->width * 4);
         } else if (bpp == 2) {
             if (output)
                 export_rgb565(row, bgra, width);
@@ -430,11 +455,19 @@ int nj_vk_renderer_triangles(void *ud, const nj_gfx_triangles *p, nj_u4 *submitt
     desc.range = info.texels ? (unsigned)info.texels * 4u : 4u;
     if (desc.range > r->properties.limits.maxStorageBufferRange)
         return NJ_GFX_ACCEL_DECLINE;
-    write.dstSet = r->set;
-    write.descriptorCount = 1;
-    write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    write.pBufferInfo = &desc;
-    vkUpdateDescriptorSets(r->dev, 1, &write, 0, NULL);
+    /* Only rewrite the texture descriptor when the pooled buffer changed or the
+     * packet needs a bigger range; doing it for every packet is measurable
+     * driver overhead once the physical target is large. */
+    if (!r->desc_valid || desc.buffer != r->desc_buffer || desc.range > r->desc_range) {
+        write.dstSet = r->set;
+        write.descriptorCount = 1;
+        write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        write.pBufferInfo = &desc;
+        vkUpdateDescriptorSets(r->dev, 1, &write, 0, NULL);
+        r->desc_buffer = desc.buffer;
+        r->desc_range = desc.range;
+        r->desc_valid = 1;
+    }
     upload_geometry(r, p, &info);
     transfer_cpu(r, p, info.seed_depth, 0);
     if (!sync_buffer(r, &r->vertices, 0) || !sync_buffer(r, &r->textures, 0) ||

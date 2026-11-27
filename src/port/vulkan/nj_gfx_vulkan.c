@@ -64,6 +64,10 @@ struct nj_vk_renderer {
     uint32_t width, height;
     uint32_t max_image_width, max_image_height;
     buffer stage, vertices, textures;
+    /* What the pooled texture storage descriptor currently points at. */
+    VkBuffer desc_buffer;
+    VkDeviceSize desc_range;
+    int desc_valid;
     int lost;
 };
 static const VkFormat formats[] = {VK_FORMAT_B8G8R8A8_UNORM, VK_FORMAT_D32_SFLOAT};
