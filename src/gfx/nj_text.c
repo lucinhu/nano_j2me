@@ -229,7 +229,11 @@ static unsigned glyph_filter_weight(nj_s8 position, nj_s8 period, int crisp)
 static void blit_filtered_bitmap(nj_gfx *physical, const nj_gfx *logical, const glyph *gl,
                                  int pen, int baseline, int scale)
 {
-    int crisp = logical->mirror->smooth_assets == NJ_ASSET_PIXEL_ART;
+    int mode = logical->mirror->smooth_assets;
+    /* FSR1 sharpens the artwork with a cubic plus clipped contrast, so the
+     * glyph coverage curve gets the same treatment as pixel art instead of
+     * the softer smooth ramp. */
+    int crisp = mode == NJ_ASSET_PIXEL_ART || mode == NJ_ASSET_FSR1;
     nj_s8 left = ((nj_s8)pen + logical->translate_x) * scale;
     nj_s8 top = ((nj_s8)baseline - gl->ascent + logical->translate_y) * scale;
     nj_s8 right = left + (nj_s8)gl->w * scale, bottom = top + (nj_s8)gl->h * scale;

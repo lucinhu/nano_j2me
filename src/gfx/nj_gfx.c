@@ -84,6 +84,7 @@
 #include <limits.h>
 #include <math.h>
 #include <stdint.h>
+#include <stdlib.h>   /* malloc/free: HD asset-filter row scratch */
 #include <string.h>   /* memcpy: alignment-safe 16/32-bit pixel access */
 
 #ifdef NJ_GFX_2D_STATS
@@ -2262,6 +2263,7 @@ static void nj_region_draw(nj_gfx *g, const nj_u1 *src, nj_s8 src_stride_bytes,
 
 #include "nj_gfx_asset_filter.inc"
 #include "nj_gfx_pixel_art.inc"
+#include "nj_gfx_fsr1_asset.inc"
 
 /* Walk clipped logical destination cells and transform their physical samples
  * inside the cell separately. Thus even a rotated 1x1 HD source region keeps
@@ -2295,6 +2297,9 @@ static void hd_blit(nj_gfx *g, const nj_u1 *src, nj_s8 stride, int format,
             if (g->mirror->smooth_assets == NJ_ASSET_PIXEL_ART)
                 hd_pixel_art_bitmap(p.surf, k, src, stride, format, bpp, sx, sy, sw, sh,
                                     transform, dx, dy, x0, y0, x1, y1);
+            else if (g->mirror->smooth_assets == NJ_ASSET_FSR1)
+                hd_fsr1_bitmap(p.surf, k, src, stride, format, bpp, sx, sy, sw, sh,
+                               transform, dx, dy, x0, y0, x1, y1);
             else
                 hd_filter_bitmap(p.surf, k, src, stride, format, bpp, sx, sy, sw, sh,
                                  transform, dx, dy, x0, y0, x1, y1);

@@ -16284,7 +16284,8 @@ static int jr_hd_target(m3g_jr *r, m3g_jr *hd)
     /* The physical material feeds the software sampler and both GPU packets.
      * Java's Texture2D still supplies the filter and mip policy for readback. */
     hd->hd_pixel_art = m->smooth_assets == NJ_ASSET_PIXEL_ART;
-    if (m->smooth_assets == NJ_ASSET_SMOOTH) hd->sw.filt_image = 209; /* FILTER_LINEAR */
+    if (m->smooth_assets != NJ_ASSET_NEAREST && m->smooth_assets != NJ_ASSET_PIXEL_ART)
+        hd->sw.filt_image = 209; /* FILTER_LINEAR */
     hd->sw.vx *= m->scale; hd->sw.vy *= m->scale;
     hd->sw.vw *= m->scale; hd->sw.vh *= m->scale;
     /* Depth offset is specified in logical viewport pixels. */

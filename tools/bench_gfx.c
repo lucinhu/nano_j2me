@@ -211,12 +211,36 @@ int main(int argc, char **argv)
         run_hd("smooth-sprite-37x29-rot90-4x", 37, 29, 4, NJ_TRANS_ROT90, 1, 1800, NJ_ASSET_SMOOTH, 1);
         return 0;
     }
+    if (argc == 2 && strcmp(argv[1], "--fsr1") == 0) {
+        run_hd("fsr1-solid-240x320-3x", 240, 320, 3, NJ_TRANS_NONE, 0, 40, NJ_ASSET_FSR1, 2);
+        run_hd("fsr1-diagonals-240x320-3x", 240, 320, 3, NJ_TRANS_NONE, 0, 40, NJ_ASSET_FSR1, 1);
+        run_hd("fsr1-detail-240x320-4x", 240, 320, 4, NJ_TRANS_NONE, 0, 40, NJ_ASSET_FSR1, 0);
+        run_hd("fsr1-sprite-37x29-rot90-4x", 37, 29, 4, NJ_TRANS_ROT90, 1, 1800, NJ_ASSET_FSR1, 1);
+        return 0;
+    }
+    if (argc == 2 && strcmp(argv[1], "--filters") == 0) {
+        /* Identical fixtures through every asset filter so the table in
+         * docs/UPSCALING.md can compare them directly. */
+        static const char *names[4] = {"nearest", "smooth", "pixel-art", "fsr1"};
+        int modes[4] = {NJ_ASSET_NEAREST, NJ_ASSET_SMOOTH, NJ_ASSET_PIXEL_ART,
+                        NJ_ASSET_FSR1};
+        for (int i = 0; i < 4; ++i) {
+            char name[64];
+            snprintf(name, sizeof(name), "stripes-240x320-4x-%s", names[i]);
+            run_hd(name, 240, 320, 4, NJ_TRANS_NONE, 0, 40, modes[i], 1);
+            snprintf(name, sizeof(name), "photo-240x320-4x-%s", names[i]);
+            run_hd(name, 240, 320, 4, NJ_TRANS_NONE, 0, 40, modes[i], 0);
+            snprintf(name, sizeof(name), "sprite-37x29-rot90-4x-%s", names[i]);
+            run_hd(name, 37, 29, 4, NJ_TRANS_ROT90, 1, 600, modes[i], 1);
+        }
+        return 0;
+    }
     if (argc == 2 && strcmp(argv[1], "--alpha") == 0) {
         run_alpha_cases();
         return 0;
     }
     if (argc != 1) {
-        fprintf(stderr, "usage: %s [--alpha|--hd|--assets|--smooth]\n", argv[0]);
+        fprintf(stderr, "usage: %s [--alpha|--hd|--assets|--smooth|--fsr1|--filters]\n", argv[0]);
         return 2;
     }
     run("565-mirror-1x1", NJ_PIXFMT_RGB565,1,1,NJ_TRANS_MIRROR,NJ_ROP_PAINT,0);

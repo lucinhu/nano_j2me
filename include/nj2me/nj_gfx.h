@@ -261,7 +261,11 @@ int nj_font_chars_that_fit(const nj_font *f, const nj_u2 *s, int len, int avail)
 enum nj_asset_filter {
     NJ_ASSET_NEAREST   = 0,
     NJ_ASSET_SMOOTH    = 1,
-    NJ_ASSET_PIXEL_ART = 2
+    NJ_ASSET_PIXEL_ART = 2,
+    /* FSR1-style cubic sampling with clamped contrast sharpening. Only the
+     * opaque interior of an image is reshaped; translucent edges keep the
+     * exact smooth composite. */
+    NJ_ASSET_FSR1      = 3
 };
 
 typedef struct nj_render_mirror {

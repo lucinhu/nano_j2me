@@ -4,6 +4,7 @@
 #include <limits.h>
 #include <math.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #define N 12
@@ -458,6 +459,171 @@ static void pixel_art_frames(void)
     printf("pixel-art: %d physical samples refined on seven two-colour diagonals\n", changed);
 }
 
+
+/* FSR1 artwork sampling: the cubic may reshape the opaque interior, flat runs
+ * reproduce their texels exactly, a fully translucent image falls back to the
+ * smooth path byte for byte, stencils bypass the filter, and transformed or
+ * clipped draws stay consistent with the same pixels produced as a physical
+ * image and blitted by the raw path. */
+static void fsr1_frames(void)
+{
+    enum { W = 8, H = 6, MAXK = 8, SIDE = N * MAXK };
+    nj_u4 art[W * H], soft[W * H], grown[W * H * MAXK * MAXK];
+    nj_u4 output[SIDE][SIDE + 1], snapshot[SIDE][SIDE + 1];
+    nj_u4 mask_pixels[W * H], frame[P][P + 1], expected[P][P + 1];
+    nj_image img = {W, H, NJ_PIXFMT_ARGB8888, art, 1};
+    nj_image soft_img = {W, H, NJ_PIXFMT_ARGB8888, soft, 1};
+    nj_image stencil = {W, H, NJ_PIXFMT_ARGB8888, mask_pixels, 1};
+    const int scales[] = {2, 3, 4, 5, 8};
+    const int dark = 0x20, light = 0xe0;
+    for (int i = 0; i < W * H; ++i) {
+        int x = i % W, alpha = 0x30 + (i * 29) % 0x90;
+        nj_u4 level = (nj_u4)(x < W / 2 ? dark : light);
+        art[i] = 0xff000000u | level << 16 | level << 8 | level;
+        soft[i] = (nj_u4)alpha << 24 | (nj_u4)(0x40 + (i * 13) % 0x80) << 16 |
+                  (nj_u4)(0x30 + (i * 7) % 0x90) << 8 | (nj_u4)(0x20 + (i * 5) % 0xa0);
+        mask_pixels[i] = i % 2 ? 0xffffffffu : 0xff000000u;
+    }
+    /* An isolated highlight verifies the 4x4 clamp: the cubic must not ring
+     * past the neighbourhood's brightest value. */
+    art[2 * W + 2] = 0xffffffffu;
+
+    for (size_t n = 0; n < sizeof scales / sizeof *scales; ++n) {
+        int k = scales[n];
+        nj_surface target = {output, N * k, N * k, sizeof output[0], NJ_PIXFMT_ARGB8888, 4};
+        nj_render_mirror m;
+        int row = (H / 2) * k + k / 2;
+        int refined = 0, refined_step = 0, smooth = 0, smooth_step = 0, previous = -1;
+        memset(&m, 0, sizeof m);
+        m.target = &target;
+        m.scale = k;
+        m.smooth_assets = NJ_ASSET_FSR1;
+        nj_gfx_init(&g, &lo);
+        g.mirror = &m;
+        nj_gfx_clear(&g, BG);
+        nj_gfx_draw_image(&g, &img, 0, 0, 0, 0, W, H);
+        for (int y = 0; y < H * k; ++y)
+            for (int x = 0; x < W * k; ++x) {
+                nj_u4 c = output[y][x];
+                assert((c >> 24) == 255u);
+                for (int ch = 0; ch < 3; ++ch) {
+                    int v = (int)((c >> (ch * 8)) & 255u);
+                    assert(v >= dark && v <= 255);
+                }
+            }
+        /* Columns right of the edge keep a clean 4x4 neighbourhood, so their
+         * texels must survive the filter unchanged. */
+        for (int y = 0; y < H * k; ++y)
+            for (int x = (W / 2 + 1) * k; x < W * k; ++x)
+                assert(output[y][x] == (0xff000000u | (nj_u4)light << 16 |
+                                        (nj_u4)light << 8 | (nj_u4)light));
+        for (int x = (W / 2 - 1) * k; x < (W / 2 + 1) * k; ++x) {
+            int v = (int)((output[row][x] >> 16) & 255u);
+            if (v != dark && v != light) ++refined;
+            if (previous >= 0 && abs(v - previous) > refined_step) refined_step = abs(v - previous);
+            previous = v;
+        }
+        m.smooth_assets = NJ_ASSET_SMOOTH;
+        nj_gfx_init(&g, &lo);
+        g.mirror = &m;
+        nj_gfx_clear(&g, BG);
+        nj_gfx_draw_image(&g, &img, 0, 0, 0, 0, W, H);
+        previous = -1;
+        for (int x = (W / 2 - 1) * k; x < (W / 2 + 1) * k; ++x) {
+            int v = (int)((output[row][x] >> 16) & 255u);
+            if (v != dark && v != light) ++smooth;
+            if (previous >= 0 && abs(v - previous) > smooth_step) smooth_step = abs(v - previous);
+            previous = v;
+        }
+        assert(refined <= smooth);
+        assert(refined_step >= smooth_step);
+
+        /* Translucent artwork takes the smooth branch verbatim. */
+        m.smooth_assets = NJ_ASSET_SMOOTH;
+        nj_gfx_init(&g, &lo);
+        g.mirror = &m;
+        nj_gfx_clear(&g, BG);
+        nj_gfx_draw_image(&g, &soft_img, 0, 0, 0, 0, W, H);
+        for (int y = 0; y < H * k; ++y) memcpy(snapshot[y], output[y], (size_t)W * k * 4);
+        m.smooth_assets = NJ_ASSET_FSR1;
+        nj_gfx_init(&g, &lo);
+        g.mirror = &m;
+        nj_gfx_clear(&g, BG);
+        nj_gfx_draw_image(&g, &soft_img, 0, 0, 0, 0, W, H);
+        for (int y = 0; y < H * k; ++y)
+            assert(!memcmp(output[y], snapshot[y], (size_t)W * k * 4));
+
+        /* A stencil bypasses the filter exactly like the nearest mode. */
+        m.smooth_assets = NJ_ASSET_NEAREST;
+        nj_gfx_init(&g, &lo);
+        g.mirror = &m;
+        nj_gfx_clear(&g, BG);
+        nj_gfx_draw_region(&g, &img, 0, 0, W, H, NJ_TRANS_NONE, 0, 0, &stencil, 0, 0,
+                           NJ_ROP_PAINT);
+        for (int y = 0; y < H * k; ++y) memcpy(snapshot[y], output[y], (size_t)W * k * 4);
+        m.smooth_assets = NJ_ASSET_FSR1;
+        nj_gfx_init(&g, &lo);
+        g.mirror = &m;
+        nj_gfx_clear(&g, BG);
+        nj_gfx_draw_region(&g, &img, 0, 0, W, H, NJ_TRANS_NONE, 0, 0, &stencil, 0, 0,
+                           NJ_ROP_PAINT);
+        for (int y = 0; y < H * k; ++y)
+            assert(!memcmp(output[y], snapshot[y], (size_t)W * k * 4));
+    }
+
+    /* Transformed and clipped draws must equal the same pixels produced as a
+     * standalone physical image and blitted by the raw path. */
+    {
+        const int k = K;
+        nj_u4 diagonal[W * H];
+        nj_image art_img = {W, H, NJ_PIXFMT_ARGB8888, diagonal, 1};
+        nj_image big = {W * k, H * k, NJ_PIXFMT_ARGB8888, grown, 1};
+        nj_surface mirror_surface = {frame, P, P, sizeof frame[0], NJ_PIXFMT_ARGB8888, 4};
+        nj_surface ref_surface = {expected, P, P, sizeof expected[0], NJ_PIXFMT_ARGB8888, 4};
+        nj_render_mirror m;
+        nj_gfx oracle;
+        for (int i = 0; i < W * H; ++i) {
+            int x = i % W, y = i / W;
+            diagonal[i] = (x + y) % 3 == 0 ? 0x80ff0000u :
+                          x < W / 2 ? 0xff202020u : 0xffe0e0e0u;
+        }
+        memset(&m, 0, sizeof m);
+        m.target = &mirror_surface;
+        m.scale = k;
+        m.smooth_assets = NJ_ASSET_FSR1;
+        memset(frame, 0x6c, sizeof frame);
+        nj_gfx_init(&g, &lo);
+        g.mirror = &m;
+        nj_gfx_clear(&g, BG);
+        nj_gfx_draw_image(&g, &art_img, 0, 0, 0, 0, W, H);
+        for (int y = 0; y < H * k; ++y)
+            for (int x = 0; x < W * k; ++x) grown[y * W * k + x] = frame[y][x];
+        for (int t = 0; t < 8; ++t) for (int clip = 0; clip < 2; ++clip) {
+            memset(frame, 0x6c, sizeof frame);
+            memset(expected, 0x6c, sizeof expected);
+            nj_gfx_init(&g, &lo);
+            g.mirror = &m;
+            nj_gfx_translate(&g, 1, 1);
+            if (clip) nj_gfx_set_clip(&g, 2, 1, 3, 4);
+            nj_gfx_clear(&g, BG);
+            nj_gfx_draw_region(&g, &art_img, 0, 0, W, H, t, 0, 0, NULL, 0, 0, NJ_ROP_PAINT);
+            nj_gfx_init(&oracle, &ref_surface);
+            nj_gfx_clear(&oracle, BG);
+            if (clip) nj_gfx_set_clip(&oracle, 3 * k, 2 * k, 3 * k, 4 * k);
+            nj_gfx_draw_image_rop(&oracle, &big, k, k, 0, 0, W * k, H * k, NJ_ROP_SET, t);
+            for (int y = 0; y < P; ++y) {
+                int bad = 0;
+                for (int x = 0; x < P; ++x) bad += frame[y][x] != expected[y][x];
+                if (bad) {
+                    fprintf(stderr, "fsr1 mismatch t=%d clip=%d row=%d bad=%d\n", t, clip, y, bad);
+                    assert(0);
+                }
+            }
+        }
+    }
+    puts("fsr1 assets: opaque interior reshaped, translucent samples and stencils unchanged");
+}
+
 /* A visible diagonal ensures the bypass checks exercise art that would
  * otherwise be reshaped. Compare physical output against the raw blitter. */
 static void pixel_art_bypass(void)
@@ -592,6 +758,7 @@ int main(void)
     smooth_opaque_ramps();
     smooth_offscreen();
     pixel_art_frames();
+    fsr1_frames();
     pixel_art_bypass();
     pixel_art_run_boundaries();
     puts("physical LCDUI geometry, image transforms, clipping and compositing passed");
