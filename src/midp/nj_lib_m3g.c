@@ -15229,19 +15229,33 @@ static double m3g_now(void)
 }
 static struct m3g_prof {
     unsigned long long walks, appends, pumps, commits, texcount;
+    unsigned long long journal_ok, journal_fail, list_ok, list_fail, replay, destroy;
     nj_size texbytes;
     double walk, append, pump, commit;
 } m3g_prof;
+static int m3g_prof_registered;
+static void m3g_prof_print(const char *when);
+static void m3g_prof_exit(void) { m3g_prof_print("exit"); }
+static void m3g_prof_init(void)
+{
+    if (!m3g_prof_registered) {
+        m3g_prof_registered = 1;
+        atexit(m3g_prof_exit);
+    }
+}
 static void m3g_prof_print(const char *when)
 {
     fprintf(stderr,
             "M3GPROF %s walks=%llu walk=%.1fms appends=%llu append=%.1fms "
             "pumps=%llu pump=%.1fms commits=%llu commit=%.1fms "
-            "tex=%llu/%.1fKB\n",
+            "tex=%llu/%.1fKB ok=%llu fail=%llu list=%llu/%llu replay=%llu destroy=%llu\n",
             when, m3g_prof.walks, m3g_prof.walk/1000.0, m3g_prof.appends,
             m3g_prof.append/1000.0, m3g_prof.pumps, m3g_prof.pump/1000.0,
             m3g_prof.commits, m3g_prof.commit/1000.0,
-            m3g_prof.texcount, (double)m3g_prof.texbytes/1024.0);
+            m3g_prof.texcount, (double)m3g_prof.texbytes/1024.0,
+            m3g_prof.journal_ok, m3g_prof.journal_fail,
+            m3g_prof.list_ok, m3g_prof.list_fail, m3g_prof.replay,
+            m3g_prof.destroy);
     fflush(stderr);
 }
 #endif
@@ -15288,6 +15302,9 @@ static void m3g_journal_destroy(nj_vm *vm)
     m3g_journal *j = (m3g_journal *)vm->m3g_journal;
     nj_u4 i;
     if (!j) return;
+#if NJ_M3G_PROFILE
+    ++m3g_prof.destroy;
+#endif
     if (j->session && vm->port && vm->port->gfx_triangles_abort) {
         vm->port->gfx_triangles_abort(vm->port->gfx_triangles_session_ud);
         j->session = 0;
@@ -15385,6 +15402,7 @@ static int m3g_journal_reserve(nj_vm *vm, m3g_journal *j, nj_u4 entries,
         while (cap < entries) cap *= 2u;
         more = (m3g_journal_entry *)nj_host_alloc(vm, (nj_size)cap * sizeof(*more));
         if (!more) return 0;
+        memset(more, 0, (nj_size)cap * sizeof(*more));
         if (j->entries) {
             memcpy(more, j->entries, (nj_size)j->count * sizeof(*more));
             nj_host_free(vm, j->entries);
@@ -15398,6 +15416,7 @@ static int m3g_journal_reserve(nj_vm *vm, m3g_journal *j, nj_u4 entries,
         while (cap < textures) cap *= 2u;
         more = (m3g_journal_tex *)nj_host_alloc(vm, (nj_size)cap * sizeof(*more));
         if (!more) return 0;
+        memset(more, 0, (nj_size)cap * sizeof(*more));
         if (j->textures) {
             memcpy(more, j->textures, (nj_size)j->ntextures * sizeof(*more));
             nj_host_free(vm, j->textures);
@@ -15411,6 +15430,7 @@ static int m3g_journal_reserve(nj_vm *vm, m3g_journal *j, nj_u4 entries,
         while (cap < pool) cap *= 2u;
         more = (nj_u1 *)nj_host_alloc(vm, cap);
         if (!more) return 0;
+        memset(more, 0, cap);
         if (j->pool) {
             memcpy(more, j->pool, j->pool_used);
             nj_host_free(vm, j->pool);
@@ -15464,6 +15484,9 @@ static void m3g_journal_replay_all(nj_vm *vm)
     m3g_journal *j = (m3g_journal *)vm->m3g_journal;
     nj_u4 i;
     if (!j) return;
+#if NJ_M3G_PROFILE
+    ++m3g_prof.replay;
+#endif
     for (i = 0; i < j->count; ++i) {
         m3g_journal_entry *e = &j->entries[i];
         nj_gfx_triangles d;
@@ -15696,6 +15719,9 @@ static void m3g_journal_commit(nj_vm *vm)
                 done = rc == NJ_GFX_ACCEL_DONE;
             }
         }
+#if NJ_M3G_PROFILE
+        if (done) ++m3g_prof.list_ok; else ++m3g_prof.list_fail;
+#endif
     }
     if (done) {
         vm->tris += submitted;
@@ -15812,6 +15838,22 @@ static void m3g_journal_flush(nj_vm *vm, int why)
     if (!vm || !vm->m3g_journal) return;
     m3g_journal_commit(vm);
 }
+/* Diagnostic only: cap how many packets one list transaction may carry.
+ * The default is the protocol maximum, so nothing changes unless a caller
+ * sets NJ_M3G_JOURNAL_MAX.  Forcing one transaction per packet makes a
+ * multi-packet batching bug show up as a difference from the reference
+ * ladder (per-packet draws and single-packet transactions must agree). */
+static nj_u4 m3g_journal_batch_cap(void)
+{
+    static int cap = -1;
+    if (cap < 0) {
+        const char *s = getenv("NJ_M3G_JOURNAL_MAX");
+        cap = s && s[0] ? atoi(s) : 0;
+        if (cap < 0) cap = 0;
+    }
+    return (nj_u4)cap;
+}
+
 static int m3g_journal_append(m3g_jr *r, const nj_gfx_triangles *p)
 {
     nj_vm *vm = r->vm;
@@ -15842,11 +15884,15 @@ static int m3g_journal_append(m3g_jr *r, const nj_gfx_triangles *p)
         m3g_journal_flush(vm, NJ_M3G_FLUSH_TARGET);
         return m3g_journal_append(r, p);
     }
-    if (j->count >= NJ_GFX_TRIANGLES_LIST_MAX_PACKETS ||
-        p->count > NJ_GFX_TRIANGLES_LIST_MAX_TOTAL - j->total ||
-        (j->total && j->total + p->count > M3G_JOURNAL_BATCH_MAX)) {
-        m3g_journal_flush(vm, NJ_M3G_FLUSH_LIMIT);
-        return m3g_journal_append(r, p);
+    {
+        nj_u4 cap = m3g_journal_batch_cap();
+        if (j->count >= NJ_GFX_TRIANGLES_LIST_MAX_PACKETS ||
+            (cap && j->count >= cap) ||
+            p->count > NJ_GFX_TRIANGLES_LIST_MAX_TOTAL - j->total ||
+            (j->total && j->total + p->count > M3G_JOURNAL_BATCH_MAX)) {
+            m3g_journal_flush(vm, NJ_M3G_FLUSH_LIMIT);
+            return m3g_journal_append(r, p);
+        }
     }
     /* Count the textures this packet needs snapshotted: one copy per distinct
      * pointer, both against the journal so far and against this packet. */
@@ -15882,6 +15928,7 @@ static int m3g_journal_append(m3g_jr *r, const nj_gfx_triangles *p)
     copy = (nj_gfx_triangle_cmd *)nj_host_alloc(
         vm, (nj_size)p->count * sizeof(*copy));
     if (!copy) return 0;
+    memset(copy, 0, (nj_size)p->count * sizeof(*copy));
     memcpy(copy, p->triangles, (nj_size)p->count * sizeof(*copy));
     for (i = 0; i < p->count; ++i) {
         nj_gfx_triangle_cmd *t = &copy[i];
@@ -15907,6 +15954,9 @@ static int m3g_journal_append(m3g_jr *r, const nj_gfx_triangles *p)
             memcpy(j->pool + j->pool_used, t->texture, bytes);
             j->pool_used += bytes;
             ++j->ntextures;
+#if NJ_M3G_PROFILE
+            ++m3g_prof.texcount; m3g_prof.texbytes += bytes;
+#endif
         } else {
             t->texture_no_alpha = j->textures[found].no_alpha;
         }
@@ -16195,6 +16245,7 @@ static int jr_draw_accel(m3g_jr *r)
 #endif
     jr_draw_walk(&collector);
 #if NJ_M3G_PROFILE
+    m3g_prof_init();
     ++m3g_prof.walks; m3g_prof.walk += m3g_now() - tw;
 #endif
     memset(&packet, 0, sizeof(packet));
@@ -16217,7 +16268,8 @@ static int jr_draw_accel(m3g_jr *r)
 #if NJ_M3G_PROFILE
                 double ta = m3g_now();
 #endif
-                if (journaled && m3g_journal_append(r, &packet)) {
+                int queued = journaled ? m3g_journal_append(r, &packet) : 0;
+                if (queued) {
                     /* The journal copied the commands; release the collector's
                      * array or every queued batch leaks one command block. */
                     nj_host_free(r->vm, c.triangles);
@@ -16231,6 +16283,10 @@ static int jr_draw_accel(m3g_jr *r)
                 }
 #if NJ_M3G_PROFILE
                 ++m3g_prof.appends; m3g_prof.append += m3g_now() - ta;
+                if (journaled) {
+                    if (queued) ++m3g_prof.journal_ok;
+                    else ++m3g_prof.journal_fail;
+                }
                 if ((m3g_prof.appends % 600u) == 0u) m3g_prof_print("600");
 #endif
             }
