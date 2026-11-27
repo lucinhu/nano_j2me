@@ -197,6 +197,8 @@ UNDEFINED→TRANSFER_DST 与 render pass 的布局转换），逐位一致但耗
 `*submitted` 为各包之和。这样 Vulkan 后端就能进入 M3G journal 的列表事务路径，同时保持
 「先正确、后优化」的顺序。注册在 `nj_vk_renderer_attach`（`gfx_triangles_list` +
 `gfx_triangles_list_ud`），高清驻留/会话回调仍为 NULL。
+（2026-11-27 晚更正：端口现已不再注册这两个回调，列表入口只保留给直接调用者与测试；
+原因是多包事务输出不可复现，详见 §十二。）
 
 逐位对照（确定性 1× 回放，`--render-scale 1`，转场前的帧）：
 

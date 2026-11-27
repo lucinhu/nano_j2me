@@ -27,9 +27,10 @@ M3G 通道合并成一个 Vulkan 列表事务，或在多包之间把深度留�
   submit + fence；失败路径 `goto decline`，一个像素都不写；
 - 单包列表直接转调原来的单包事务，保持小场景零额外开销。
 
-`nj_gfx_triangles_list` 的等价性由 `tests/test_gfx_vulkan.c` 新增的 `ordered_lists()` 覆盖：
-两个不同 ROI 的包、其中一个带纹理与深度写入，列表结果与逐包调用颜色/深度逐字节相同；
-带非法混合的包使整批 DECLINE 且不改动任何像素；单包列表与单包事务一致。
+`nj_gfx_triangles_list` 的等价性最初由 `tests/test_gfx_vulkan.c` 的 `ordered_lists()` 覆盖
+（现在叫 `batch_equivalence()`，已扩展到 5 个包、各带不同纹理/深度/雾/blend）：列表结果与
+逐包调用颜色逐字节一致、深度 keys 差 ≤1；带非法混合的包使整批 DECLINE 且不改动任何像素；
+单包列表与单包事务一致。
 
 M3G 侧另外加了 `gfx_hd_journal` 端口能力位与 `jr_hd_flush_queued()`，在 FSR2 采样与
 软件高清回退前提交队列，并在高清镜像 collect/dispose 前提交，保证 CPU 读到的镜像
