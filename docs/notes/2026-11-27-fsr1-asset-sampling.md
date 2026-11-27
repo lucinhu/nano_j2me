@@ -222,3 +222,12 @@ Android 模拟器实测（x86_64，Doom3 1080×2400，高清 8×，素材采样 
 两次 SIMD 合计后，FSR1 相对其它模式不再「显著更贵」：4× 全屏不透明素材约
 3.4 ms（条纹）/ 3.9 ms（照片），是 smooth 的 1.9×/1.4×、pixel-art 的 3.0×/3.5×；
 半透明精灵与 smooth 等价（0.15 ms）。8× 时像素量是 4× 的四倍，仍建议对大幅连续色调素材再开。
+
+设备验证（Android x86_64 模拟器，API 36，`-gpu host`）：用本轮代码构建的
+`build/android-vulkan-rowsimd/nj2me.apk`（4,327,816 B）覆盖安装后，把「高清渲染倍率」设为 8×、
+「高清素材采样」设为「FSR1 锐利」，运行 Doom3 标题场景：`gles2: enabled renderer=Android Emulator
+OpenGL ES Translator (NVIDIA GeForce RTX 5080 Laptop GPU)`、`running Doom.Doom (Doom3D 1.0)`，
+`present stats: mode=5 1080x2400 frames=120 draw ms min=2.564 median=3.317 p95=4.085`、
+`frame ms median=230.205`（8× 标题帧），无 FATAL/EGL 错误；标题画面与菜单文字正常
+（截图 `.local-tools/debug-runs/fsr-round16/avd-8x-fsr1.png`）。
+
