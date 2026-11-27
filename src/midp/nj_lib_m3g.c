@@ -15428,17 +15428,30 @@ static int m3g_journal_reserve(nj_vm *vm, m3g_journal *j, nj_u4 entries,
     }
     if (pool > j->pool_size) {
         nj_u1 *more;
+        nj_u1 *old = j->pool;
+        nj_size used = j->pool_used;
         nj_size cap = j->pool_size ? j->pool_size : 65536u;
         while (cap < pool) cap *= 2u;
         more = (nj_u1 *)nj_host_alloc(vm, cap);
         if (!more) return 0;
         memset(more, 0, cap);
-        if (j->pool) {
-            memcpy(more, j->pool, j->pool_used);
-            nj_host_free(vm, j->pool);
-        }
+        if (old) memcpy(more, old, used);
         j->pool = more;
         j->pool_size = cap;
+        if (old) {
+            /* The triangles queued so far point straight into the pool, so
+             * moving the pool has to move those pointers with it. */
+            nj_u4 e, n;
+            for (e = 0; e < j->count; ++e) {
+                nj_gfx_triangle_cmd *tris = j->entries[e].triangles;
+                for (n = 0; n < j->entries[e].count; ++n) {
+                    const nj_u1 *tex = tris[n].texture;
+                    if (tex && tex >= old && tex < old + used)
+                        tris[n].texture = more + (tex - old);
+                }
+            }
+            nj_host_free(vm, old);
+        }
     }
     return 1;
 }
