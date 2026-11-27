@@ -61,3 +61,11 @@ present stats: frame ms min=… median=… p95=…
 - `tools/check_android_java.sh` 全部检查通过；六个 APK 的包名、ABI、最低系统版本、`versionCode` 和签名在打包时逐一核对。
 - libretro 八平台核心通过 32 项提交检查与 20 项前端接口测试（含存档状态）。
 - FSR1 素材采样的实现、精度测试与开销数据见 [FSR1 高清素材采样](https://github.com/lucinhu/nano_j2me/blob/v0.5.53/docs/notes/2026-11-27-fsr1-asset-sampling.md)；呈现耗时的完整方法见 [桌面 present stats](https://github.com/lucinhu/nano_j2me/blob/v0.5.53/docs/notes/2026-11-27-desktop-present-stats.md)。
+
+## 发布包实测
+
+- 直接安装从这里下载的 `nj2me-0.5.53-x86_64.apk`（Android 14 / API 36 模拟器，`-gpu host`，宿主 RTX 5080）：`versionCode=553`、`versionName=0.5.53`，覆盖安装成功。
+- 「高清素材采样」对话框四项齐全：原始像素 / 柔和平滑 / 像素画清晰 / FSR1 锐利；选中 FSR1 后该行显示「FSR1 锐利」，强制停止并重启游戏后仍保持。
+- 4× 高清倍率下截取同一静态标题画面（重复截图逐像素相同）：柔和平滑 vs FSR1 的 RGB MAE 1.386（最大 69），22.2% 像素发生变化，平均梯度 2.207 → 2.425（约 +9.9% 更清晰），与桌面与模拟器此前的对照结论一致。
+- `present stats` 三行在发布包上正常输出：4× 田园物语标题 `draw` 中位 0.85–0.93 ms / `swap` 15.1–15.4 ms / `frame` 16.6 ms（2D 场景受垂直同步限制在 60 fps）。
+- 用发布提交构建的增强 x86_64 包在模拟器上跑 3D：`vulkan: enumerate result=0 count=1`、`vulkan: device 0 Goldfish GFXStream (NVIDIA GeForce RTX 5080 Laptop GPU) type=2 api=1.3`、`3D triangles: Vulkan ready`；FSR2 自动配对 3×，13 秒内 921 次 `FSR2 dispatched 240x320 -> 720x960`，仅 1 次启动 `reset=1`、920 次 `reset=0`（时域历史连续），`present stats` 为 `draw` 0.85 ms / `swap` 12.96 ms / `frame` 16.62 ms（约 60 fps），进程 PSS 189 MB，无 EGL 或 FATAL 错误。
