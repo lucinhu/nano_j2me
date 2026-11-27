@@ -1,3 +1,9 @@
+#if defined(__SSE2__)
+#include <emmintrin.h>
+#elif defined(__ARM_NEON)
+#include <arm_neon.h>
+#endif
+
 /* Pipeline variants and recording of one atomic transaction. */
 static unsigned pipeline_index(const nj_gfx_triangle_cmd *t) {
     return (unsigned)((t->blend - 64) * 8 + t->alpha_write * 4 + t->depth_test * 2 + t->depth_write);
@@ -214,6 +220,59 @@ static void export_rgb565(uint8_t *restrict row, const uint8_t *restrict bgra, i
         memcpy(row + 2 * (size_t)x, &rgb, sizeof rgb);
     }
 }
+/* Depth keys are integer positions on the 24-bit grid that the software
+ * rasteriser interpolates; the GPU depth attachment is D32_SFLOAT. Converting
+ * both directions per packet is a per-pixel scalar float round trip, and at
+ * physical resolution it is one of the larger per-transaction costs. These two
+ * helpers do the same arithmetic four lanes at a time (the SSE2 and NEON paths
+ * round exactly like the scalar expressions, so queued and direct draws stay
+ * bit-identical). */
+static void depth_import(nj_s4 *keys, float *values, int width) {
+    int x = 0;
+#if defined(__SSE2__)
+    const __m128i top = _mm_set1_epi32(16777216);
+    const __m128 scale = _mm_set1_ps(1.0f / 16777216.0f);
+    for (; x + 4 <= width; x += 4) {
+        __m128i k = _mm_loadu_si128((const __m128i *)(keys + x));
+        __m128 v = _mm_cvtepi32_ps(_mm_sub_epi32(top, k));
+        _mm_storeu_ps((float *)(values + x), _mm_mul_ps(v, scale));
+    }
+#elif defined(__ARM_NEON)
+    const int32x4_t top = vdupq_n_s32(16777216);
+    const float32x4_t scale = vdupq_n_f32(1.0f / 16777216.0f);
+    for (; x + 4 <= width; x += 4) {
+        int32x4_t k = vld1q_s32(keys + x);
+        float32x4_t v = vcvtq_f32_s32(vsubq_s32(top, k));
+        vst1q_f32((float *)(values + x), vmulq_f32(v, scale));
+    }
+#endif
+    for (; x < width; ++x)
+        values[x] = (float)(16777216 - keys[x]) * (1.0f / 16777216.0f);
+}
+
+static void depth_export(nj_s4 *keys, const float *values, int width) {
+    int x = 0;
+#if defined(__SSE2__)
+    const __m128 scale = _mm_set1_ps(16777216.0f);
+    const __m128i top = _mm_set1_epi32(16777216);
+    for (; x + 4 <= width; x += 4) {
+        __m128 v = _mm_loadu_ps(values + x);
+        __m128i k = _mm_cvttps_epi32(_mm_mul_ps(v, scale));
+        _mm_storeu_si128((__m128i *)(keys + x), _mm_sub_epi32(top, k));
+    }
+#elif defined(__ARM_NEON)
+    const float32x4_t scale = vdupq_n_f32(16777216.0f);
+    const int32x4_t top = vdupq_n_s32(16777216);
+    for (; x + 4 <= width; x += 4) {
+        float32x4_t v = vld1q_f32(values + x);
+        int32x4_t k = vcvtq_s32_f32(vmulq_f32(v, scale));
+        vst1q_s32(keys + x, vsubq_s32(top, k));
+    }
+#endif
+    for (; x < width; ++x)
+        keys[x] = 16777216 - (nj_s4)(values[x] * 16777216.0f);
+}
+
 static void transfer_cpu(nj_vk_renderer *r, const nj_gfx_triangles *p, int depth, int output) {
     const nj_surface *s = p->surface;
     int bpp = s->format == NJ_PIXFMT_ARGB8888 ? 4 : s->format == NJ_PIXFMT_RGB888 ? 3 : 2;
@@ -254,11 +313,9 @@ static void transfer_cpu(nj_vk_renderer *r, const nj_gfx_triangles *p, int depth
             nj_s4 *keys = p->depth + (size_t)(p->y + y) * p->depth_stride + p->x;
             float *values = z + (size_t)y * p->width;
             if (output)
-                for (x = 0; x < width; ++x)
-                    keys[x] = 16777216 - (nj_s4)(values[x] * 16777216.0f);
+                depth_export(keys, values, width);
             else
-                for (x = 0; x < width; ++x)
-                    values[x] = (float)(16777216 - keys[x]) * (1.0f / 16777216.0f);
+                depth_import(keys, values, width);
         }
     }
 }
