@@ -225,8 +225,10 @@ nj_render_mirror *nj_midp_hd_target(nj_vm *vm, const nj_surface *s)
     e->mirror.smooth_assets = vm->render_quality.smooth_assets;
     /* A resident GPU backend keeps the physical target up to date; it must be
        asked before the CPU draws on it. */
-    e->mirror.sync = vm->port ? vm->port->hd_mirror_sync : NULL;
-    e->mirror.sync_ud = vm->port ? vm->port->hd_mirror_sync_ud : NULL;
+    /* FSR2 renders the HD target on the CPU (temporal mesh walk), so a GPU
+     * resident copy must not take part in that pipeline. */
+    e->mirror.sync = vm->port && !vm->render_quality.fsr2 ? vm->port->hd_mirror_sync : NULL;
+    e->mirror.sync_ud = e->mirror.sync ? vm->port->hd_mirror_sync_ud : NULL;
     if (!e->valid) hd_seed(e, s);
     return &e->mirror;
 }

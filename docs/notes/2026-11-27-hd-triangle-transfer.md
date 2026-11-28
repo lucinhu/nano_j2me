@@ -614,3 +614,20 @@ AVD 上体现不出来，说明下一步（M4）要把 present 也接到 GPU 图
 剩余 CPU 热点（下一轮候选）：`hd_art_span` 1.13 s（32%，`nj_region_draw` 的 2D 高清图像
 blit，约 5 次全屏 drawImage/帧）、`jr_draw_walk` 对逻辑面的软件走查 1.22 s（35%，常驻模式
 下逻辑面是否仍需要可由开关验证）。两者都属于「2D 合成上 GPU / 跳过逻辑伴生面」的后续工作。
+
+### 19.1 FSR2 互斥与批量 title 冒烟（2026-11-28）
+
+- FSR2 走 CPU temporal mesh walk 写 HD 目标，常驻 GPU 镜面不能参与这条流水线，否则
+  CPU 写的 HD 目标会被下一次镜像 sync 用旧的 GPU 内容覆盖。现在：
+  - `nj_midp_hd_target` 在 `render_quality.fsr2` 时不安装 `mirror.sync`；
+  - `m3g_clear` 的 GPU 清屏与 `m3g_background_image` 的 GPU quad 都加了
+    `!vm->render_quality.fsr2` 守卫。
+  验证：Doom3 2× + `--fsr2`、120 帧确定性回放，`NJ_VK_RESIDENT=1` 与关掉输出逐位相同
+  （`5fad84a4a41dd265`/`04152f145ccade14`）。
+- 批量 title 冒烟（12 个 3D 游戏，8×、120 帧、确定性、resident 关/开各两次）：
+  - 24 次运行全部 exit 0，且两次运行逐位相同（两种模式都确定）；
+  - 11/12 的关/开输出逐位相同（这些 title 在前 120 帧还停在标题/加载画面，没有可见的
+    M3G 三角形，所以常驻路径不改变像素）；毁灭战士3 差 157,853 px（3.21%）、最大通道差
+    10，与前面帧级统计一致，属 GPU 光栅化/采样 vs CPU 参考的固有差异。
+  - 结论：常驻路径在这些 title 上不崩溃、确定性成立，但「可见 3D 内容」的覆盖仍只有
+    Doom3；默认开启前需要更多能进入 3D 场景的回归素材（脚本按键/存档）。

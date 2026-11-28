@@ -4272,7 +4272,8 @@ NJFN(m3g_clear)
     mirror = nj_midp_hd_target(vm, surface);
     /* A resident GPU mirror takes the clear itself; its CPU colour copy is
        exported lazily before the CPU next draws on or presents it. */
-    if (mirror && vm->port && vm->port->hd_mirror_clear && x1 > x0 && y1 > y0) {
+    if (mirror && vm->port && vm->port->hd_mirror_clear && !vm->render_quality.fsr2 &&
+        x1 > x0 && y1 > y0) {
         int dclear = !bg || nj_iget(vm, bg, m3g_fof(vm, NJ_C_BG, "_nj_dclear", "Z"));
         int cclear = !bg || nj_iget(vm, bg, m3g_fof(vm, NJ_C_BG, "_nj_cclear", "Z"));
         if (dclear || cclear) {
