@@ -4,6 +4,7 @@
 #include <vulkan/vulkan.h>
 #if defined(__ANDROID__)
 #include <android/log.h>
+#include <sys/system_properties.h>
 #define VK_LOG(...) __android_log_print(ANDROID_LOG_INFO, "nj2me", __VA_ARGS__)
 #else
 #define VK_LOG(...) ((void)0)
@@ -499,8 +500,22 @@ int nj_vk_renderer_attach(nj_port *port) {
     port->gfx_triangles_session_ud = NULL;
     port->gfx_triangles_auto = 0;
     {
+        int want_session = 0;
         const char *session = getenv("NJ_VK_SESSION");
-        if (session && session[0] == '1') {
+        if (session && session[0] == '1')
+            want_session = 1;
+#if defined(__ANDROID__)
+        if (!want_session) {
+            /* The emulator has no way to hand the app an environment
+             * variable, so the same opt-in is read from a debug property:
+             * `adb shell setprop debug.nj2me.vk_session 1`. */
+            char prop[PROP_VALUE_MAX];
+            if (__system_property_get("debug.nj2me.vk_session", prop) > 0 &&
+                prop[0] == '1')
+                want_session = 1;
+        }
+#endif
+        if (want_session) {
             port->gfx_triangles_list = nj_vk_renderer_triangles_list;
             port->gfx_triangles_list_ud = r;
             port->gfx_triangles_begin = nj_vk_renderer_triangles_begin;
