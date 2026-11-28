@@ -355,3 +355,17 @@ blit」的串行开销。下一步 L2：脏矩形导入（仅上传变化区域�
 | opt-out（`debug.nj2me.vk_resident=0`） | `resident=0`、`present ok=0`、GL 路径正常、无 FATAL |
 
 桌面确定性闸门不受影响：8× plain 帧 60/120/180 = `846057676cfed67a`/`c65baebe4730fcbe`/`dc5cb60109dd03cb`。
+
+## 8.8 直呈下采样改用线性过滤（画质）
+
+swapchain 直呈时，常驻镜面（8× 物理分辨率，如 1920×2560）要缩到显示矩形
+（1080×1440）。最初 `vkCmdBlitImage` 用 `VK_FILTER_NEAREST`，等于从超采样图里
+**单点抽样**，会丢超采样收益并在 3D 边缘/星点上产生闪烁。改用
+`VK_FILTER_LINEAR`：一次双线性平均覆盖 2×2 源像素，是能压掉 NEAREST 混叠的
+最低成本过滤（仍只是一次 blit，无额外 pass）。
+
+- 2D 小帧路径（8.6）本来就是 1:1 blit，过滤方式无影响。
+- AVD 冒烟：Doom3 8× 菜单 `resident=1`、present 正常、菜单/星点边缘平滑，窗口 fps 9.0
+  （与改动前同区间）；2D《傲世三国志》窗口 fps 24.8–29.0（无回退）。
+- 桌面确定性闸门不受影响（present 仅 Android），8× plain 帧 60/120/180 仍为
+  `846057676cfed67a`/`c65baebe4730fcbe`/`dc5cb60109dd03cb`。

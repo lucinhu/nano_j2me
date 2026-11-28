@@ -1282,9 +1282,12 @@ int nj_vk_renderer_present_frame(void *renderer, const nj_surface *frame) {
         return 0;
     }
     if (r->present_stats) { t_acquire = vk_prof_now() - now; now = vk_prof_now(); }
+    /* The mirror is 8x the logical frame, so presenting it needs a proper
+     * downsample: a nearest tap of the supersampled image shimmers. Linear
+     * filtering is the cheapest filter that actually averages the source. */
     if (!nj_vk_renderer_mirror_present(blit_mirror, r->present_images[index],
                                        r->present_extent.width, r->present_extent.height, x, y, w,
-                                       h, 0, r->present_semaphore)) {
+                                       h, 1, r->present_semaphore)) {
         if (r->present_attempts <= 8)
             VK_LOG("vulkan: present blit failed (%dx%d from %dx%d)", w, h, frame->width,
                    frame->height);
