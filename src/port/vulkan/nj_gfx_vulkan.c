@@ -167,6 +167,9 @@ struct nj_vk_renderer {
     int present_small_w;
     int present_small_h;
     nj_u1 *present_scratch;
+    nj_u1 *present_prev;
+    size_t present_prev_bytes;
+    size_t present_prev_size;
     unsigned present_small_frames;
     int present_soft; /* upload CPU frames at half the displayed size */
     VkSampler present_sampler;
@@ -1531,6 +1534,10 @@ static void present_small_release(nj_vk_renderer *r) {
     r->present_small = NULL;
     free(r->present_scratch);
     r->present_scratch = NULL;
+    free(r->present_prev);
+    r->present_prev = NULL;
+    r->present_prev_bytes = 0;
+    r->present_prev_size = 0;
     r->present_small_w = 0;
     r->present_small_h = 0;
 }
@@ -1550,6 +1557,14 @@ static int present_upload_small(nj_vk_renderer *r, const nj_surface *frame, int 
             present_small_release(r);
             return 0;
         }
+        r->present_prev_bytes = (size_t)w * (size_t)h * 4u;
+        r->present_prev = (nj_u1 *)malloc(r->present_prev_bytes);
+        if (!r->present_prev) {
+            present_small_release(r);
+            return 0;
+        }
+        r->present_prev_size = 0;
+        r->present_prev_size = 0;
         r->present_small_w = w;
         r->present_small_h = h;
     }
@@ -1562,6 +1577,11 @@ static int present_upload_small(nj_vk_renderer *r, const nj_surface *frame, int 
             *(nj_u4 *)(dst + (size_t)j * 4u) = *(const nj_u4 *)(src + (size_t)sx * 4u);
         }
     }
+    /* The small mirror still holds this exact frame: many 2D screens repeat
+     * their content (dialogs, menus), so skip the upload when nothing moved. */
+    if (r->present_prev_size == r->present_prev_bytes &&
+        memcmp(r->present_prev, r->present_scratch, r->present_prev_bytes) == 0)
+        return 1;
     view.pixels = r->present_scratch;
     view.width = w;
     view.height = h;
@@ -1571,6 +1591,8 @@ static int present_upload_small(nj_vk_renderer *r, const nj_surface *frame, int 
     if (!nj_vk_renderer_mirror_import_rect(r->present_small, &view, NULL, 0, 0, 0, w, h,
                                            NJ_VK_MIRROR_IMPORT_COLOUR))
         return 0;
+    memcpy(r->present_prev, r->present_scratch, r->present_prev_bytes);
+    r->present_prev_size = r->present_prev_bytes;
     r->present_small_frames++;
     return 1;
 }
