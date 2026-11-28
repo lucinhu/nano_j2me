@@ -120,6 +120,7 @@ static void m3g_hd_clear_depth(nj_vm *vm, nj_ref self, int x0, int y0,
             d->width != mirror->target->width || d->height != mirror->target->height) continue;
         for (int y = y0; y < y1; ++y)
             memset(d->keys + (size_t)y * d->width + x0, 0, (size_t)(x1-x0) * sizeof(*d->keys));
+        ++vm->hd_depth_epoch;
         return;
     }
 }

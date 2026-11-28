@@ -1017,6 +1017,15 @@ struct nj_vm {
      */
     void   *m3g_journal;
     /*
+     * Resident-session bookkeeping for the physical depth.  hd_depth_epoch is
+     * bumped whenever the CPU writes the HD depth keys; a session records the
+     * epoch it imported at, so the next session can tell whether the resident
+     * depth is still current and skip its import (depth_retain).
+     */
+    nj_u4   hd_depth_epoch;
+    nj_u4   hd_session_epoch;
+    nj_u1   hd_session_valid;
+    /*
      * Auto-selected acceleration decision for ports that set
      * `gfx_triangles_auto`: 0 unknown, 1 enabled, 2 disabled because the
      * one-time calibration measured the software rasterizer as faster.

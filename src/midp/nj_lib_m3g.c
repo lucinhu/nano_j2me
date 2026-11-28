@@ -15297,6 +15297,10 @@ typedef struct m3g_journal {
     nj_u4 scratch;
     /* Diagnostic limit from NJ_M3G_JOURNAL_MAX (0 = protocol maximum). */
     nj_u4 batch_cap;
+    /* True when the queued packets target the physical (HD) mirror.  Only the
+     * HD path touches the resident depth on the CPU, so only it may ask the
+     * backend to keep the GPU depth between sessions. */
+    int hd;
 } m3g_journal;
 
 static void m3g_journal_destroy(nj_vm *vm)
@@ -15599,6 +15603,7 @@ static void m3g_journal_pump(nj_vm *vm)
         }
         {
             nj_gfx_triangles_session desc;
+            nj_gfx_session_rect dirty;
             int x0, y0, x1, y1;
             x0 = j->entries[j->submitted].x;
             y0 = j->entries[j->submitted].y;
@@ -15618,6 +15623,23 @@ static void m3g_journal_pump(nj_vm *vm)
             desc.depth_stride = j->depth_stride;
             desc.x = x0; desc.y = y0;
             desc.width = x1 - x0; desc.height = y1 - y0;
+            /* The HD mirror is still the CPU's authority for everything the
+             * last session did not touch: ask the backend to keep its resident
+             * result and re-import only the whole session rectangle's colour.
+             * The resident depth may be skipped entirely while the CPU has not
+             * written the keys since the previous session. */
+            if (j->hd) {
+                memset(&dirty, 0, sizeof(dirty));
+                dirty.x = x0;
+                dirty.y = y0;
+                dirty.width = desc.width;
+                dirty.height = desc.height;
+                desc.retain = 1;
+                desc.dirty = &dirty;
+                desc.dirty_count = 1;
+                desc.depth_retain =
+                    vm->hd_session_valid && vm->hd_session_epoch == vm->hd_depth_epoch;
+            }
             if (vm->port->gfx_triangles_begin(
                     vm->port->gfx_triangles_session_ud, &desc) !=
                 NJ_GFX_ACCEL_DONE) {
@@ -15627,6 +15649,10 @@ static void m3g_journal_pump(nj_vm *vm)
             }
             j->session = 1;
             j->sx = x0; j->sy = y0; j->sw = desc.width; j->sh = desc.height;
+            if (j->hd) {
+                vm->hd_session_valid = 1;
+                vm->hd_session_epoch = vm->hd_depth_epoch;
+            }
         }
     }
     {
@@ -15879,6 +15905,7 @@ static int m3g_journal_append(m3g_jr *r, const nj_gfx_triangles *p)
         j->surface = &j->surface_copy;
         j->depth = p->depth;
         j->depth_stride = p->depth_stride;
+        j->hd = r->hd_scale ? 1 : 0;
         vm->m3g_journal = j;
     }
     if (j->count && (j->surface_copy.pixels != p->surface->pixels ||
@@ -16340,6 +16367,7 @@ static int jr_hd_target(m3g_jr *r, m3g_jr *hd)
                 memcpy(row + (nj_size)i*d->width, row, (nj_size)d->width * sizeof(*row));
         }
         d->fresh = 0;
+        ++r->vm->hd_depth_epoch;
     }
     *hd = *r;
     hd->sw.surf = m->target;
