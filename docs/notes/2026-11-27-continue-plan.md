@@ -80,3 +80,21 @@
   合成（~70 ms/帧 vs 1× 的 ~5 ms/帧），import/export 优化天花板低于 20% 目标。
 - 下一轮起点：方案 B（2D 合成上 GPU、present 直接消费 GPU 图像；镜面/深度常驻），以及
   GPU 侧深度清屏 + 诚实脏矩形作为会话路线的前置。
+
+### 2026-11-28 上午后半（目标③方案 B）
+
+- gprof（-pg，8× 400 帧）定位 CPU 侧：逐包 ROI 拷贝（copy_words 7.7 s）、逐包校验
+  （7.7 s）、M3G 背景图 8× 缩放（5.1 s）、视频 overlay（1.45 s）、2D 物理 span（1.24 s）、
+  区域 blit（~1.3 s）、Java 解释器（1.4 s）。
+- 新增 `test_gfx_vulkan --bench-resident`：1920×2560 全屏颜色+深度一次往返
+  min 18.40 / median 20.60 ms ⇒ 常驻模型每帧只导出一次颜色（约 5-7 ms）后，帧预算有
+  希望从 ~100 ms 降到 ~20-30 ms。
+- 方案与里程碑写入 docs/notes/2026-11-28-gpu-2d-composition-plan.md；下一轮从 M1
+  （Vulkan 常驻镜面 + 最小 2D 操作 + 单测/基准）开始。
+
+### 2026-11-28 上午末（常驻镜面 M1）
+
+- Vulkan 常驻镜面对象与 clear/fill/export API 落地，单测逐字节通过；
+  1920×2560 每帧 clear+8 fills+export 基准 min 8.32 / median 16.46 ms。
+- 下一步：M2 纹理 quad（背景图/overlay/drawImage）+ 文字接入、M3G HD 路径改画进常驻镜面，
+  逐位闸门改为截图/容差对照；全量测试与 Android present 验证后合入。

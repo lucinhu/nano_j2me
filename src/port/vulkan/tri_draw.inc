@@ -1014,3 +1014,286 @@ int nj_vk_renderer_triangles_list(void *ud, const nj_gfx_triangles_list *l, nj_u
     return rc;
 }
 
+/* ------------------------------------------------------------------------- */
+/* Resident mirror                                                           */
+/*                                                                           */
+/* A colour image that stays in device memory between calls, so the caller   */
+/* can compose the whole 8x frame on the GPU and pay one export per present. */
+/* This first cut supports solid clears, rectangle fills and colour export;  */
+/* textured 2D still uses the CPU path.                                      */
+struct nj_vk_mirror {
+    nj_vk_renderer *r;
+    int width, height, ready;
+    attachment image;
+    VkRenderPass clear_pass, load_pass;
+    VkFramebuffer clear_fb, load_fb;
+    buffer stage;
+};
+
+static VkRenderPass mirror_render_pass(nj_vk_renderer *r, VkAttachmentLoadOp load) {
+    VkAttachmentDescription att = {0};
+    VkAttachmentReference ref = {0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
+    VkSubpassDescription sub = {0};
+    VkRenderPassCreateInfo info = VK_INIT(RENDER_PASS_CREATE_INFO);
+    VkRenderPass pass = VK_NULL_HANDLE;
+    att.format = formats[0];
+    att.samples = VK_SAMPLE_COUNT_1_BIT;
+    att.loadOp = load;
+    att.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    att.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    att.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    att.initialLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    att.finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    sub.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    sub.colorAttachmentCount = 1;
+    sub.pColorAttachments = &ref;
+    info.attachmentCount = 1;
+    info.pAttachments = &att;
+    info.subpassCount = 1;
+    info.pSubpasses = &sub;
+    if (vkCreateRenderPass(r->dev, &info, NULL, &pass) != VK_SUCCESS)
+        return VK_NULL_HANDLE;
+    return pass;
+}
+
+static int mirror_framebuffer(nj_vk_mirror *m, VkRenderPass pass, VkFramebuffer *out) {
+    VkFramebufferCreateInfo info = VK_INIT(FRAMEBUFFER_CREATE_INFO);
+    info.renderPass = pass;
+    info.attachmentCount = 1;
+    info.pAttachments = &m->image.view;
+    info.width = (uint32_t)m->width;
+    info.height = (uint32_t)m->height;
+    info.layers = 1;
+    return vkCreateFramebuffer(m->r->dev, &info, NULL, out) == VK_SUCCESS;
+}
+
+static int mirror_begin(nj_vk_renderer *r) {
+    VkCommandBufferBeginInfo cb = VK_INIT(COMMAND_BUFFER_BEGIN_INFO);
+    if (vkResetCommandPool(r->dev, r->pool, 0) != VK_SUCCESS)
+        return 0;
+    cb.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    return vkBeginCommandBuffer(r->cmd, &cb) == VK_SUCCESS;
+}
+
+static int mirror_submit(nj_vk_renderer *r) {
+    VkSubmitInfo submit = VK_INIT(SUBMIT_INFO);
+    if (vkEndCommandBuffer(r->cmd) != VK_SUCCESS ||
+        vkResetFences(r->dev, 1, &r->fence) != VK_SUCCESS)
+        return 0;
+    submit.commandBufferCount = 1;
+    submit.pCommandBuffers = &r->cmd;
+    if (vkQueueSubmit(r->queue, 1, &submit, r->fence) != VK_SUCCESS ||
+        vkWaitForFences(r->dev, 1, &r->fence, VK_TRUE, UINT64_MAX) != VK_SUCCESS) {
+        r->lost = 1;
+        return 0;
+    }
+    return 1;
+}
+
+static VkClearValue mirror_clear_value(nj_u4 argb) {
+    VkClearValue value;
+    /* The attachment is B8G8R8A8, so the float order is B, G, R, A. */
+    value.color.float32[0] = (float)((argb >> 16) & 0xffu) / 255.0f;
+    value.color.float32[1] = (float)((argb >> 8) & 0xffu) / 255.0f;
+    value.color.float32[2] = (float)(argb & 0xffu) / 255.0f;
+    value.color.float32[3] = (float)((argb >> 24) & 0xffu) / 255.0f;
+    return value;
+}
+
+void nj_vk_renderer_mirror_destroy(nj_vk_mirror *m) {
+    nj_vk_renderer *r;
+    if (!m)
+        return;
+    r = m->r;
+    vkDestroyFramebuffer(r->dev, m->clear_fb, NULL);
+    vkDestroyFramebuffer(r->dev, m->load_fb, NULL);
+    vkDestroyRenderPass(r->dev, m->clear_pass, NULL);
+    vkDestroyRenderPass(r->dev, m->load_pass, NULL);
+    vkDestroyImageView(r->dev, m->image.view, NULL);
+    vkDestroyImage(r->dev, m->image.id, NULL);
+    vkFreeMemory(r->dev, m->image.memory, NULL);
+    release_buffer(r, &m->stage);
+    free(m);
+}
+
+nj_vk_mirror *nj_vk_renderer_mirror_create(void *ud, int width, int height) {
+    nj_vk_renderer *r = (nj_vk_renderer *)ud;
+    nj_vk_mirror *m;
+    VkImageCreateInfo info = VK_INIT(IMAGE_CREATE_INFO);
+    VkImageViewCreateInfo view = VK_INIT(IMAGE_VIEW_CREATE_INFO);
+    VkMemoryAllocateInfo alloc = VK_INIT(MEMORY_ALLOCATE_INFO);
+    VkMemoryRequirements req;
+    if (!r || width <= 0 || height <= 0 ||
+        (uint64_t)width * (uint64_t)height > MAX_PIXELS)
+        return NULL;
+    m = (nj_vk_mirror *)calloc(1, sizeof *m);
+    if (!m)
+        return NULL;
+    m->r = r;
+    m->width = width;
+    m->height = height;
+    info.imageType = VK_IMAGE_TYPE_2D;
+    info.extent = (VkExtent3D){(uint32_t)width, (uint32_t)height, 1};
+    info.mipLevels = info.arrayLayers = 1;
+    info.samples = VK_SAMPLE_COUNT_1_BIT;
+    info.format = formats[0];
+    info.usage = usages[0] | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+    info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    if (vkCreateImage(r->dev, &info, NULL, &m->image.id) != VK_SUCCESS)
+        goto fail;
+    vkGetImageMemoryRequirements(r->dev, m->image.id, &req);
+    alloc.allocationSize = req.size;
+    alloc.memoryTypeIndex =
+        memory_type(r, req.memoryTypeBits, 0, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    if (alloc.memoryTypeIndex == UINT32_MAX ||
+        vkAllocateMemory(r->dev, &alloc, NULL, &m->image.memory) != VK_SUCCESS ||
+        vkBindImageMemory(r->dev, m->image.id, m->image.memory, 0) != VK_SUCCESS)
+        goto fail;
+    view.image = m->image.id;
+    view.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    view.format = formats[0];
+    view.subresourceRange = (VkImageSubresourceRange){VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    if (vkCreateImageView(r->dev, &view, NULL, &m->image.view) != VK_SUCCESS)
+        goto fail;
+    m->clear_pass = mirror_render_pass(r, VK_ATTACHMENT_LOAD_OP_CLEAR);
+    m->load_pass = mirror_render_pass(r, VK_ATTACHMENT_LOAD_OP_LOAD);
+    if (m->clear_pass == VK_NULL_HANDLE || m->load_pass == VK_NULL_HANDLE)
+        goto fail;
+    if (!mirror_framebuffer(m, m->clear_pass, &m->clear_fb) ||
+        !mirror_framebuffer(m, m->load_pass, &m->load_fb))
+        goto fail;
+    if (!reserve_buffer(r, &m->stage, (VkDeviceSize)width * (VkDeviceSize)height * 4u,
+                        VK_BUFFER_USAGE_TRANSFER_DST_BIT))
+        goto fail;
+    return m;
+fail:
+    nj_vk_renderer_mirror_destroy(m);
+    return NULL;
+}
+
+int nj_vk_renderer_mirror_clear(nj_vk_mirror *m, nj_u4 argb) {
+    nj_vk_renderer *r;
+    VkRenderPassBeginInfo pass = VK_INIT(RENDER_PASS_BEGIN_INFO);
+    VkClearValue value;
+    if (!m)
+        return 0;
+    r = m->r;
+    value = mirror_clear_value(argb);
+    if (!mirror_begin(r))
+        return 0;
+    if (!m->ready) {
+        VkImageMemoryBarrier barrier = VK_INIT(IMAGE_MEMORY_BARRIER);
+        barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        barrier.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        barrier.srcQueueFamilyIndex = barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.image = m->image.id;
+        barrier.subresourceRange =
+            (VkImageSubresourceRange){VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        barrier.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        vkCmdPipelineBarrier(r->cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                             VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0, 0, NULL, 0, NULL,
+                             1, &barrier);
+    }
+    pass.renderPass = m->clear_pass;
+    pass.framebuffer = m->clear_fb;
+    pass.renderArea.extent = (VkExtent2D){(uint32_t)m->width, (uint32_t)m->height};
+    pass.clearValueCount = 1;
+    pass.pClearValues = &value;
+    vkCmdBeginRenderPass(r->cmd, &pass, VK_SUBPASS_CONTENTS_INLINE);
+    vkCmdEndRenderPass(r->cmd);
+    if (!mirror_submit(r))
+        return 0;
+    m->ready = 1;
+    return 1;
+}
+
+int nj_vk_renderer_mirror_fill(nj_vk_mirror *m, int x, int y, int width, int height, nj_u4 argb) {
+    nj_vk_renderer *r;
+    VkRenderPassBeginInfo pass = VK_INIT(RENDER_PASS_BEGIN_INFO);
+    VkClearAttachment clear;
+    VkClearRect rect;
+    VkClearValue value;
+    if (!m || !m->ready || width <= 0 || height <= 0)
+        return 0;
+    if (x < 0) {
+        width += x;
+        x = 0;
+    }
+    if (y < 0) {
+        height += y;
+        y = 0;
+    }
+    if (x + width > m->width)
+        width = m->width - x;
+    if (y + height > m->height)
+        height = m->height - y;
+    if (width <= 0 || height <= 0)
+        return 1;
+    r = m->r;
+    value = mirror_clear_value(argb);
+    clear.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    clear.colorAttachment = 0;
+    clear.clearValue = value;
+    rect.rect.offset = (VkOffset2D){x, y};
+    rect.rect.extent = (VkExtent2D){(uint32_t)width, (uint32_t)height};
+    rect.baseArrayLayer = 0;
+    rect.layerCount = 1;
+    if (!mirror_begin(r))
+        return 0;
+    pass.renderPass = m->load_pass;
+    pass.framebuffer = m->load_fb;
+    pass.renderArea.extent = (VkExtent2D){(uint32_t)m->width, (uint32_t)m->height};
+    vkCmdBeginRenderPass(r->cmd, &pass, VK_SUBPASS_CONTENTS_INLINE);
+    vkCmdClearAttachments(r->cmd, 1, &clear, 1, &rect);
+    vkCmdEndRenderPass(r->cmd);
+    return mirror_submit(r);
+}
+
+int nj_vk_renderer_mirror_export(nj_vk_mirror *m, const nj_surface *dst) {
+    nj_vk_renderer *r;
+    VkImageMemoryBarrier barriers[2] = {VK_INIT(IMAGE_MEMORY_BARRIER), VK_INIT(IMAGE_MEMORY_BARRIER)};
+    VkBufferImageCopy copy = {0};
+    VkMemoryBarrier host = VK_INIT(MEMORY_BARRIER);
+    const nj_u1 *rows;
+    nj_u8 row;
+    if (!m || !m->ready || !dst || !dst->pixels || dst->bpp != 4 || dst->width != m->width ||
+        dst->height != m->height)
+        return 0;
+    r = m->r;
+    if (!mirror_begin(r))
+        return 0;
+    barriers[0].oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    barriers[0].newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    barriers[1].oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    barriers[1].newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    barriers[1].srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    barriers[1].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    for (row = 0; row < 2; ++row) {
+        barriers[row].srcQueueFamilyIndex = barriers[row].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barriers[row].image = m->image.id;
+        barriers[row].subresourceRange =
+            (VkImageSubresourceRange){VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    }
+    barriers[0].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    barriers[0].dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    vkCmdPipelineBarrier(r->cmd, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 0, NULL, 1, &barriers[0]);
+    copy.imageSubresource = (VkImageSubresourceLayers){VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    copy.imageExtent = (VkExtent3D){(uint32_t)m->width, (uint32_t)m->height, 1};
+    vkCmdCopyImageToBuffer(r->cmd, m->image.id, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                           m->stage.id, 1, &copy);
+    vkCmdPipelineBarrier(r->cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0, 0, NULL, 0, NULL, 1,
+                         &barriers[1]);
+    host.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    host.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
+    vkCmdPipelineBarrier(r->cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, 1,
+                         &host, 0, NULL, 0, NULL);
+    if (!mirror_submit(r) || !sync_buffer(r, &m->stage, 1))
+        return 0;
+    rows = (const nj_u1 *)m->stage.map;
+    for (row = 0; row < (nj_u8)m->height; ++row)
+        memcpy((nj_u1 *)dst->pixels + (nj_u8)row * (nj_u8)dst->stride,
+               rows + (nj_u8)row * (nj_u8)m->width * 4u, (nj_u8)m->width * 4u);
+    return 1;
+}

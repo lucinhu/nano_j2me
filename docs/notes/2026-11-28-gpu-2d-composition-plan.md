@@ -1,0 +1,99 @@
+# 8× 高清路径：镜面/深度 GPU 驻留与 2D 合成上 GPU
+
+状态：设计 + 测量（目标③第一步），尚未改默认渲染路径。
+
+## 1. 为什么现在做
+
+§13/§14 已经证明：
+
+- 把多次 GPU 事务合成一次（journal 会话）没有收益：真实 8× 场内每帧仍是 619 个会话、
+  每会话整屏颜色+深度往返约 39 MB，墙钟 40.9 s vs 逐包 40.1 s（400 帧）。
+- 8× 每帧约 100 ms 墙钟里，user ≈ 64 ms/帧；其中主要两项是
+  (a) 逐包 ROI 的 CPU↔GPU 导入/导出拷贝，(b) CPU 侧 8× 的 2D/图像缩放合成。
+  1× 整场只有约 5 ms/帧，差出来的几乎全是「为 8× 服务的 CPU 工作」。
+
+结论：只要 CPU 仍是权威像素、每次 GPU 事务都要往返，任何「事务层面」的优化天花板都很低。
+必须把权威像素搬到 GPU：镜面与深度常驻，2D 与 3D 都在 GPU 上合成，CPU 只在观察点读回。
+
+## 2. 测量
+
+### 2.1 gprof（-pg 构建，8× 400 帧，journal 关，keys 200/205/215/216）
+
+墙钟 58.2 s / user 39.2 s（-pg 开销使 user 高于正常的 25.8 s）。flat profile 主要项：
+
+| 项 | self | 说明 |
+| --- | --- | --- |
+| `copy_words` | 7.7 s | `transfer_cpu` 的 ROI 行拷贝（逐包导入/导出） |
+| `nj_gfx_triangles_validate` | 7.7 s | 逐包校验（采样可能与相邻热点混叠，量级正确） |
+| `m3g_background_image` | 5.1 s | 1238 次（约 3 次/帧）全屏背景图 8× 缩放 |
+| `nj_media_video_overlay` | 1.45 s | 视频 overlay 的 8× 缩放（6%） |
+| `hd_art_span` | 1.24 s | 2D 图元写物理镜面的 span |
+| `nj_region_draw` 子树 | ~1.3 s | drawImage/drawRegion 的 HD blit |
+| `nj_run` | 1.4 s | Java 解释器 |
+
+⇒ 约 2/3 用户时间可以归为「逐包 GPU 往返」+「2D/图像 8× 缩放」。
+
+### 2.2 常驻模型的下限（`test_gfx_vulkan --bench-resident`）
+
+新增 benchmark：1920×2560、颜色+深度全屏、单次事务（CPU 导入 39 MB → GPU 画 2 个
+三角形 → 导出 39 MB → fence），30 次：
+
+```
+resident bench: 1920x2560 full colour+depth pass min 18.40 ms median 20.60 ms
+```
+
+一次全屏颜色+深度往返约 20.6 ms。常驻模型每帧只需要：
+
+- 一次颜色导出（19.7 MB，约 5-7 ms，深度默认不读回）；
+- 2D/3D 全部在 GPU 内完成（无导入）。
+
+即帧预算有希望从 100 ms 降到 ~20-30 ms 量级（含 present 上传）；这与「先消除 CPU 2D 与
+逐包往返」的判断一致。
+
+## 3. 目标架构（方案 B）
+
+1. **常驻目标**：每个高清倍率持有一组 `VkImage` 颜色（mirror 尺寸、RGBA8）与深度（D32），
+   以及 staging 环形缓冲；CPU 不再持有权威像素。1× 仍走现有 CPU 路径。
+2. **2D 管线**（按现状实现顺序）：
+   - 纯色填充/清屏：一个全屏三角形 shader + scissor/rect；
+   - 直线/多边形/曲线/圆角：CPU 只做几何细分（现有 `hd_*` 的几何部分），顶点上传 GPU 填充；
+   - 图像/背景图/视频 overlay：纹理 quad（现有缩放/旋转/透明度作为 uniform；pixel-art/FSR1
+     滤波改成采样器/自定义采样）；
+   - 文字：glyph atlas 纹理 quad；
+   - 保持与逻辑面一致的裁剪、翻转、blend/ROP 状态语义。
+3. **3D 三角形**：现有 `gfx_hd_triangles` 的 ROI 改为直接渲染进常驻颜色/深度，不导入/导出；
+   深度留在 GPU（`depth_retain` 语义变成常态）。CPU 需要读回的场景（createImage、
+   software fallback、把镜面当 Java 数组访问）才导出。
+4. **导出点**：present 前导出一次颜色（可选按脏矩形）；Android 目前用 GL 上传 CPU 像素，
+   短期保持「导出 → GL 上传」，长期再评估 `VK_KHR_external_memory`/GL 共享或 Vulkan swapchain。
+5. **回退**：单包路径与现有 CPU 2D 完整保留；常驻模式用端口能力与运行时开关选择。
+
+## 4. 里程碑
+
+- **M0（完成）**：数据与设计；`--bench-resident` 基准。
+- **M1（完成）**：Vulkan 常驻镜面对象与最小 API（`nj_vk_renderer_mirror_create/clear/fill/export`）
+  + 单测 + 基准：320×240 全屏 clear 与两个矩形 fill 与 CPU 参考逐字节一致
+  （`resident mirror: 0 mismatched pixels`）；1920×2560 每帧「clear + 8 个矩形 fill + 一次导出」
+  `min 8.32 ms / median 16.46 ms`（30 次，机器有并发负载），对比逐包全屏三角形往返
+  （20.6 ms）已明显更低；尚未接入 M3G/2D 调用方。
+- **M2**：图像 quad（背景图/overlay/drawImage）+ solid 图元接入，M3G HD 路径改画进常驻镜面；
+  8× 画质对照（截图/容差，文本与滤波路径单独比对）与性能 A/B（目标 ≥20%）。
+- **M3**：文字、曲线、视频 overlay；脏矩形导出。
+- **M4**：present 集成与 Android 验证（present stats）、全量测试（236/222/check_android_java/
+  test_gfx_vulkan/no_statics）、文档与提交。
+
+## 5. 风险
+
+- **逐位一致性**：GPU 光栅化与 CPU 2D 的像素细节（覆盖率、圆角、曲线、字体 hinting）不同，
+  需要按「像素差容差 + 参考截图」验证，不能沿用逐位闸门；3D 与 2D 的合成顺序必须严格保持。
+- **present 互操作**：Android present 走 GLES2 纹理上传；短期导出后上传可行，但 19.7 MB/帧的
+  读回与上传仍是成本，长期需外存共享/Vulkan swapchain。
+- **双后端**：GLES2 也有 HD 2D 路径，架构必须保持「后端可选」，不能把 Vulkan 细节漏进
+  `nj_gfx` 公共层。
+- **契约与测试**：常驻镜面需要新的端口能力描述与测试夹具；现有 session v2 可以复用一部分
+  （保留附件、dirty 导入），但 2D 绘制不进 session 契约，需要独立接口。
+
+## 6. 下一轮起点
+
+M1：给 `nj_vk_renderer` 加常驻镜面对象与最小 2D 操作（clear/fill/纹理 quad/export），
+在 `test_gfx_vulkan` 里与 CPU 参考对比并基准；先不接 M3G，保证独立可测。

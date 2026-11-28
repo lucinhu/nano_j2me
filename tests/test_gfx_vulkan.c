@@ -886,6 +886,162 @@ static void rgb565_packets(nj_vk_renderer *r, int w, int h, int measure) {
     free(storage);
 }
 
+/* Per-frame cost of the residency model: one full-screen colour+depth pass
+ * through the single-packet transaction (CPU import, GPU draw, CPU export).
+ * This is the floor a GPU-resident mirror can reach once 2D composition also
+ * happens on the GPU. */
+static void bench_resident(nj_vk_renderer *r) {
+    enum { W = 1920, H = 2560, REPS = 30 };
+    nj_u4 *colors = (nj_u4 *)malloc((size_t)W * H * 4);
+    nj_s4 *keys = (nj_s4 *)malloc((size_t)W * H * sizeof *keys);
+    nj_surface s;
+    nj_gfx_triangle_cmd cmds[2];
+    nj_gfx_triangles p;
+    double best = -1, total = 0, median;
+    double times[REPS];
+    nj_u4 submitted;
+    int i, k, c;
+    if (!colors || !keys) {
+        fprintf(stderr, "resident bench: out of memory\n");
+        exit(1);
+    }
+    for (i = 0; i < W * H; ++i) {
+        colors[i] = 0xff204060u;
+        keys[i] = 12000;
+    }
+    s = (nj_surface){colors, W, H, W * 4, NJ_PIXFMT_ARGB8888, 4};
+    memset(cmds, 0, sizeof cmds);
+    for (k = 0; k < 2; ++k) {
+        cmds[k].blend = 68;
+        cmds[k].depth_test = cmds[k].depth_write = cmds[k].alpha_write = 1;
+        for (i = 0; i < 3; ++i) {
+            cmds[k].vertices[i].inv_w = 1;
+            cmds[k].vertices[i].color = 0xff5070a0u;
+            cmds[k].vertices[i].depth = 0.5;
+        }
+    }
+    cmds[0].vertices[0].x = 0;
+    cmds[0].vertices[0].y = 0;
+    cmds[0].vertices[1].x = (float)W;
+    cmds[0].vertices[1].y = 0;
+    cmds[0].vertices[2].x = 0;
+    cmds[0].vertices[2].y = (float)H;
+    cmds[1].vertices[0].x = (float)W;
+    cmds[1].vertices[0].y = (float)H;
+    cmds[1].vertices[1].x = (float)W;
+    cmds[1].vertices[1].y = 0;
+    cmds[1].vertices[2].x = 0;
+    cmds[1].vertices[2].y = (float)H;
+    p = (nj_gfx_triangles){NJ_GFX_TRIANGLES_VERSION, &s, keys, W, 0, 0, W, H, cmds, 2};
+    for (c = 0; c < REPS; ++c) {
+        double t;
+        submitted = 0;
+        t = millis();
+        CHECK(nj_vk_renderer_triangles(r, &p, &submitted) == NJ_GFX_ACCEL_DONE && submitted == 2);
+        t = millis() - t;
+        times[c] = t;
+        total += t;
+        if (best < 0 || t < best)
+            best = t;
+    }
+    for (i = 1; i < REPS; ++i) {
+        double v = times[i];
+        for (k = i; k > 0 && times[k - 1] > v; --k)
+            times[k] = times[k - 1];
+        times[k] = v;
+    }
+    median = times[REPS / 2];
+    printf("resident bench: %dx%d full colour+depth pass min %.2f ms median %.2f ms "
+           "(mean %.2f ms over %d reps)\n",
+           W, H, best, median, total / REPS, (int)REPS);
+    free(colors);
+    free(keys);
+}
+
+
+/* Solid 2D composition on a resident colour mirror. */
+static void mirror_basics(nj_vk_renderer *r) {
+    enum { W = 320, H = 240 };
+    nj_vk_mirror *m = nj_vk_renderer_mirror_create(r, W, H);
+    nj_u4 *got = (nj_u4 *)malloc((size_t)W * H * 4);
+    const nj_u4 background = 0xa0804020u;
+    const nj_u4 first = 0xcc112233u;
+    const nj_u4 second = 0xff556677u;
+    nj_surface dst;
+    int x, y, mismatches = 0;
+    if (!m || !got) {
+        fprintf(stderr, "resident mirror: create failed\n");
+        exit(1);
+    }
+    dst = (nj_surface){got, W, H, W * 4, NJ_PIXFMT_ARGB8888, 4};
+    CHECK(nj_vk_renderer_mirror_clear(m, background));
+    CHECK(nj_vk_renderer_mirror_export(m, &dst));
+    for (y = 0; y < H; ++y)
+        for (x = 0; x < W; ++x)
+            if (got[y * W + x] != background)
+                ++mismatches;
+    CHECK(nj_vk_renderer_mirror_fill(m, 10, 20, 60, 40, first));
+    CHECK(nj_vk_renderer_mirror_fill(m, 40, 40, 80, 60, second));
+    CHECK(nj_vk_renderer_mirror_export(m, &dst));
+    for (y = 0; y < H; ++y)
+        for (x = 0; x < W; ++x) {
+            nj_u4 want = background;
+            if (x >= 40 && x < 120 && y >= 40 && y < 100)
+                want = second;
+            else if (x >= 10 && x < 70 && y >= 20 && y < 60)
+                want = first;
+            if (got[y * W + x] != want)
+                ++mismatches;
+        }
+    CHECK(nj_vk_renderer_mirror_fill(m, -5, -5, 20, 20, 0xff00ff00u));
+    printf("resident mirror: %d mismatched pixels\n", mismatches);
+    CHECK(mismatches == 0);
+    nj_vk_renderer_mirror_destroy(m);
+    free(got);
+}
+
+/* One clear, eight rectangle fills and one export: the per-frame floor of a
+ * GPU-composed 8x frame once textured 2D also moves to the GPU. */
+static void bench_mirror(nj_vk_renderer *r) {
+    enum { W = 1920, H = 2560, REPS = 30, FILLS = 8 };
+    nj_vk_mirror *m = nj_vk_renderer_mirror_create(r, W, H);
+    nj_u4 *got = (nj_u4 *)malloc((size_t)W * H * 4);
+    nj_surface dst;
+    double times[REPS], best = -1, total = 0, median;
+    int c, i;
+    if (!m || !got) {
+        fprintf(stderr, "mirror bench: create failed\n");
+        exit(1);
+    }
+    dst = (nj_surface){got, W, H, W * 4, NJ_PIXFMT_ARGB8888, 4};
+    CHECK(nj_vk_renderer_mirror_clear(m, 0xff101010u));
+    for (c = 0; c < REPS; ++c) {
+        double t = millis();
+        CHECK(nj_vk_renderer_mirror_clear(m, 0xff101010u));
+        for (i = 0; i < FILLS; ++i)
+            CHECK(nj_vk_renderer_mirror_fill(m, 40 + i * 200, 60 + i * 240, 320, 200,
+                                             0xff3060a0u + (nj_u4)i * 0x0a0a0au));
+        CHECK(nj_vk_renderer_mirror_export(m, &dst));
+        t = millis() - t;
+        times[c] = t;
+        total += t;
+        if (best < 0 || t < best)
+            best = t;
+    }
+    for (i = 1; i < REPS; ++i) {
+        double v = times[i];
+        for (c = i; c > 0 && times[c - 1] > v; --c)
+            times[c] = times[c - 1];
+        times[c] = v;
+    }
+    median = times[REPS / 2];
+    printf("mirror bench: %dx%d clear+%d fills+export min %.2f ms median %.2f ms "
+           "(mean %.2f ms over %d reps)\n",
+           W, H, (int)FILLS, best, median, total / REPS, (int)REPS);
+    nj_vk_renderer_mirror_destroy(m);
+    free(got);
+}
+
 int main(int argc, char **argv) {
     nj_vk_renderer *r = nj_vk_renderer_create();
     if (!r) {
@@ -907,6 +1063,7 @@ int main(int argc, char **argv) {
     batch_equivalence(r);
     session_equivalence(r);
     retained_sessions(r);
+    mirror_basics(r);
     if (argc > 1 && !strcmp(argv[1], "--bench-rgb565")) {
         rgb565_packets(r, 243, 322, 1);
         rgb565_packets(r, 1283, 722, 1);
@@ -914,6 +1071,10 @@ int main(int argc, char **argv) {
     order_and_fallback(r);
     puts("Vulkan color/depth, guarded ROI, perspective textures, blends, fog, cutouts, ordering and "
          "atomic declines passed");
+    if (argc > 1 && !strcmp(argv[1], "--bench-mirror"))
+        bench_mirror(r);
+    if (argc > 1 && !strcmp(argv[1], "--bench-resident"))
+        bench_resident(r);
     if (argc > 1 && !strcmp(argv[1], "--bench"))
         bench(r);
     if (argc > 1 && !strcmp(argv[1], "--bench-atlas")) {

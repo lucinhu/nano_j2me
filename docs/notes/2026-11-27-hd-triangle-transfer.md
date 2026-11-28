@@ -468,3 +468,16 @@ import=8.903 export=6.135 render=3.238`，即 619 个会话的导入、导出、
      `vkCmdClearDepthStencilImage`，两者都要动契约与 M3G 接线，且理论上限约 25% 传输。
 3. 诊断工具保留：`NJ_VK_PROFILE=1` 打印会话 import/export/render 分解；`NJ_VK_SESSION=1`
    打开会话（Android 用属性 `debug.nj2me.vk_session`）；`NJ_M3G_JOURNAL_MAX` 限制每事务包数。
+
+## 十五、常驻镜面 M1（2026-11-28）
+
+- 目标③方案 B 的第一步：Vulkan 后端新增常驻颜色镜面对象，
+  `nj_vk_renderer_mirror_create/clear/fill/export`（`src/port/vulkan/tri_draw.inc`、
+  `include/nj2me/nj_gfx_vulkan.h`），内部用单附件 render pass（CLEAR/LOAD 两种）+
+  `vkCmdClearAttachments` 做矩形填充，导出用一次 `vkCmdCopyImageToBuffer`。
+- 单测（tests/test_gfx_vulkan.c `mirror_basics`）：320×240 全屏 clear 后逐像素校验、
+  两个相互覆盖的矩形 fill 后逐像素校验，结果 `resident mirror: 0 mismatched pixels`。
+- 基准（`--bench-mirror`）：1920×2560 per frame「clear + 8 fills + export」
+  `min 8.32 ms / median 16.46 ms`（30 次，load≈9 的共享机器），而逐包全屏颜色+深度往返
+  单次就要 18.40–20.60 ms（`--bench-resident`）⇒ 常驻合成路线的下限明显更低，
+  值得继续 M2（纹理 quad/2D 图元接入、M3G 直接渲染到常驻镜面）。
