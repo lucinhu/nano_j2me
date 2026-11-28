@@ -474,6 +474,30 @@ nj_vk_renderer *nj_vk_renderer_create(void) {
     if ((stage = vkAllocateDescriptorSets(r->dev, &set, &r->set)) != VK_SUCCESS)
         goto fail;
     VK_LOG("vulkan: renderer ready on %s", r->properties.deviceName);
+    {
+        /* Probe for the presentation-interop path: a shared Android hardware
+         * buffer would let present consume the resident mirror without the
+         * GPU-to-host readback. */
+        uint32_t count = 0, i;
+        int ahb = 0, extmem = 0;
+        VkExtensionProperties *exts = NULL;
+        if (vkEnumerateDeviceExtensionProperties(r->gpu, NULL, &count, NULL) == VK_SUCCESS &&
+            count) {
+            exts = (VkExtensionProperties *)malloc((size_t)count * sizeof *exts);
+            if (exts && vkEnumerateDeviceExtensionProperties(r->gpu, NULL, &count, exts) ==
+                            VK_SUCCESS) {
+                for (i = 0; i < count; ++i) {
+                    if (strcmp(exts[i].extensionName,
+                               "VK_ANDROID_external_memory_android_hardware_buffer") == 0)
+                        ahb = 1;
+                    if (strcmp(exts[i].extensionName, "VK_KHR_external_memory") == 0)
+                        extmem = 1;
+                }
+            }
+            free(exts);
+        }
+        VK_LOG("vulkan: device extensions=%u ahb=%d extmem=%d", count, ahb, extmem);
+    }
     return r;
 fail:
     VK_LOG("vulkan: %s setup failed (%d)", stage_name, (int)stage);

@@ -167,3 +167,13 @@
 - Doom3 8× 场内 400 帧：14.9 s → 12.0–12.7 s（journal 关 45.1–45.6 s ⇒ 3.6–3.8×），
   export 5.0–5.2 s → 3.1 s（CPU 拷贝 1.7 s → 0），全部确定性哈希不变（2×/4× 亦然）。
 - 剩余 export ≈7.8 ms/帧为 submit+fence+GPU→host，硬上限在 PCIe；下一步只能 M4。
+
+### 2026-11-29 上午（Round 12，Android 互操作探针与零拷贝冒烟）
+
+- AVD 探针：Goldfish GFXStream（RTX 5080，Vulkan 1.3，88 个设备扩展）报
+  `ahb=1 extmem=1` ⇒ `VK_ANDROID_external_memory_android_hardware_buffer` 可用，M4 可行。
+- 导出零拷贝设备冒烟（JBenchmark3D 8×，resident on/off）：无崩溃、3D 正常渲染；
+  present stats 两模式相同（draw ~3.79、swap ~7.3/7.5、frame ~28 ms）⇒ 别名在 Android
+  不改变可见结果，也仍无可测收益（GLES2 present 上传主导）。
+- M4 难点：AHB RGBA_8888 与镜面 BGRA 字节序不一致；CPU 2D HUD 需要可写共享内存。
+  可行顺序 = 先把 2D 合成搬上 GPU（M3），再让 present 直接消费常驻图像。

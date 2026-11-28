@@ -190,3 +190,26 @@ PCIe 回读带宽（2.4–3.4 GB/s）。强制 write-combined（HOST_COHERENT）
 （相对 journal 关 45.1–45.6 s 为 3.6–3.8×），export 5.0–5.2 s → 3.1 s，像素哈希不变。
 剩余 export 3.1 s（≈7.8 ms/帧）几乎全是 submit+fence+GPU→host 传输，要再降只能让 present
 直接消费 GPU 图像（M4）。
+
+### 8.5 Android 外部内存能力与零拷贝冒烟（2026-11-29 上午）
+
+在 renderer 创建后加了一个只读探针（Android `VK_LOG`）：枚举设备扩展并检查
+`VK_ANDROID_external_memory_android_hardware_buffer` 与 `VK_KHR_external_memory`。
+模拟器（Medium_Phone_API_36.1，`-gpu host`，Goldfish GFXStream / RTX 5080，Vulkan 1.3）
+上读数：`vulkan: device extensions=88 ahb=1 extmem=1` ⇒ **AHB 外部内存可用**，M4
+（present 直接消费 GPU 图像）在 Vulkan 侧没有阻挡。
+
+同时对 Round 11 的导出零拷贝做设备冒烟（JBenchmark3D 8×，resident 开/关各一轮）：
+`adb logcat` 无 FATAL/异常，彩色 3D 场景正常渲染（`/tmp/burst-on-*` 多帧均有内容），
+present stats（温暖窗）on：draw 3.794 / swap 7.496 / frame 28.261 ms，off：3.797 / 7.298 /
+27.562 ms —— 与 Round 7 相同，即别名在 Android 上不改变可见结果，也仍无可测收益
+（帧时由 GLES2 present 上传主导）。证据在
+`.local-tools/debug-runs/avd-alias-20261128/`。
+
+M4 的两个真正难点已明确：(1) AHB 的 32 位格式只有 RGBA_8888/RGBX_8888（字节序 R,G,B,A），
+而镜面是 `VK_FORMAT_B8G8R8A8_UNORM` 且 CPU 2D 代码按 0xAARRGGBB 解释，直接共享需要新增
+RGBA 像素格式或 GPU 侧转置；(2) CPU 2D HUD 需要可写共享内存，若 HUD 改成独立 overlay 纹理
+在 GL present shader 里合成，则依赖目标内容的 2D ROP（混合/掩码/文字）无法正确工作。
+⇒ 可行顺序是先把 2D 合成整体搬上 GPU（M3，含依赖目标的 ROP 在 GPU blend 中实现），
+再让 present 直接消费常驻图像；否则只能在 AHB 与 CPU 缓冲之间做一次 GPU blit，
+收益仅相当于去掉回读的一半。
