@@ -1042,6 +1042,110 @@ static void bench_mirror(nj_vk_renderer *r) {
     free(got);
 }
 
+
+/* Textured quad on the resident mirror: nearest-neighbour upscale must be
+ * pixel exact, and an alpha blended draw must land near the CPU expectation. */
+static void mirror_textures(nj_vk_renderer *r) {
+    enum { W = 64, H = 64 };
+    nj_vk_mirror *m = nj_vk_renderer_mirror_create(r, W, H);
+    nj_u4 source[2 * 2];
+    nj_u4 alpha_source[2 * 2];
+    nj_u4 *got = (nj_u4 *)malloc((size_t)W * H * 4);
+    nj_surface src, alpha, dst;
+    int x, y, mismatches = 0, near = 0;
+    const nj_u4 background = 0xff102030u;
+    if (!m || !got) {
+        fprintf(stderr, "mirror textures: create failed\n");
+        exit(1);
+    }
+    /* ARGB8888 memory bytes are B,G,R,A: 0xAARRGGBB. */
+    source[0] = 0xffff0000u; /* red */
+    source[1] = 0xff00ff00u; /* green */
+    source[2] = 0xff0000ffu; /* blue */
+    source[3] = 0xffffffffu; /* white */
+    src = (nj_surface){source, 2, 2, 2 * 4, NJ_PIXFMT_ARGB8888, 4};
+    dst = (nj_surface){got, W, H, W * 4, NJ_PIXFMT_ARGB8888, 4};
+    CHECK(nj_vk_renderer_mirror_clear(m, background));
+    CHECK(nj_vk_renderer_mirror_texture(m, &src, 0, 0, 2, 2, 0, 0, 32, 32, 208, 68));
+    CHECK(nj_vk_renderer_mirror_export(m, &dst));
+    for (y = 0; y < H; ++y)
+        for (x = 0; x < W; ++x) {
+            nj_u4 want = background;
+            if (x < 32 && y < 32)
+                want = source[(y / 16) * 2 + (x / 16)];
+            if (got[y * W + x] != want)
+                ++mismatches;
+        }
+    CHECK(mismatches == 0);
+    /* Half-transparent black over the background: expect bg * (1 - 0.5). */
+    alpha_source[0] = alpha_source[1] = alpha_source[2] = alpha_source[3] = 0x80000000u;
+    alpha = (nj_surface){alpha_source, 2, 2, 2 * 4, NJ_PIXFMT_ARGB8888, 4};
+    CHECK(nj_vk_renderer_mirror_clear(m, background));
+    CHECK(nj_vk_renderer_mirror_texture(m, &alpha, 0, 0, 2, 2, 0, 0, 64, 64, 208, 64));
+    CHECK(nj_vk_renderer_mirror_export(m, &dst));
+    for (y = 0; y < H; ++y)
+        for (x = 0; x < W; ++x) {
+            nj_u4 v = got[y * W + x];
+            int dr = (int)((v >> 16) & 0xffu) - 8;
+            int dg = (int)((v >> 8) & 0xffu) - 16;
+            int db = (int)(v & 0xffu) - 24;
+            if (dr < -2 || dr > 2 || dg < -2 || dg > 2 || db < -2 || db > 2)
+                ++near;
+        }
+    printf("mirror textures: %d nearest mismatches, %d blend outliers\n", mismatches, near);
+    CHECK(mismatches == 0 && near == 0);
+    nj_vk_renderer_mirror_destroy(m);
+    free(got);
+}
+
+/* Textured 2D on the resident mirror: per frame one clear, eight fills, one
+ * scaled image quad and one export. */
+static void bench_mirror_texture(nj_vk_renderer *r) {
+    enum { W = 1920, H = 2560, REPS = 30, FILLS = 8, IMG = 240 };
+    nj_vk_mirror *m = nj_vk_renderer_mirror_create(r, W, H);
+    nj_u4 *image = (nj_u4 *)malloc((size_t)IMG * IMG * 4);
+    nj_u4 *got = (nj_u4 *)malloc((size_t)W * H * 4);
+    nj_surface src, dst;
+    double times[REPS], best = -1, total = 0, median;
+    int c, i;
+    if (!m || !image || !got) {
+        fprintf(stderr, "mirror texture bench: create failed\n");
+        exit(1);
+    }
+    for (i = 0; i < IMG * IMG; ++i)
+        image[i] = 0xff000000u | (nj_u4)((i * 2654435761u) >> 8);
+    src = (nj_surface){image, IMG, IMG, IMG * 4, NJ_PIXFMT_ARGB8888, 4};
+    dst = (nj_surface){got, W, H, W * 4, NJ_PIXFMT_ARGB8888, 4};
+    CHECK(nj_vk_renderer_mirror_clear(m, 0xff101010u));
+    for (c = 0; c < REPS; ++c) {
+        double t = millis();
+        CHECK(nj_vk_renderer_mirror_clear(m, 0xff101010u));
+        for (i = 0; i < FILLS; ++i)
+            CHECK(nj_vk_renderer_mirror_fill(m, 40 + i * 200, 60 + i * 240, 320, 200,
+                                             0xff3060a0u + (nj_u4)i * 0x0a0a0au));
+        CHECK(nj_vk_renderer_mirror_texture(m, &src, 0, 0, IMG, IMG, 0, 0, W, H, 208, 64));
+        CHECK(nj_vk_renderer_mirror_export(m, &dst));
+        t = millis() - t;
+        times[c] = t;
+        total += t;
+        if (best < 0 || t < best)
+            best = t;
+    }
+    for (i = 1; i < REPS; ++i) {
+        double v = times[i];
+        for (c = i; c > 0 && times[c - 1] > v; --c)
+            times[c] = times[c - 1];
+        times[c] = v;
+    }
+    median = times[REPS / 2];
+    printf("mirror texture bench: %dx%d clear+%d fills+textured quad+export min %.2f ms "
+           "median %.2f ms (mean %.2f ms over %d reps)\n",
+           W, H, (int)FILLS, best, median, total / REPS, (int)REPS);
+    nj_vk_renderer_mirror_destroy(m);
+    free(image);
+    free(got);
+}
+
 int main(int argc, char **argv) {
     nj_vk_renderer *r = nj_vk_renderer_create();
     if (!r) {
@@ -1064,6 +1168,7 @@ int main(int argc, char **argv) {
     session_equivalence(r);
     retained_sessions(r);
     mirror_basics(r);
+    mirror_textures(r);
     if (argc > 1 && !strcmp(argv[1], "--bench-rgb565")) {
         rgb565_packets(r, 243, 322, 1);
         rgb565_packets(r, 1283, 722, 1);
@@ -1073,6 +1178,8 @@ int main(int argc, char **argv) {
          "atomic declines passed");
     if (argc > 1 && !strcmp(argv[1], "--bench-mirror"))
         bench_mirror(r);
+    if (argc > 1 && !strcmp(argv[1], "--bench-mirror-texture"))
+        bench_mirror_texture(r);
     if (argc > 1 && !strcmp(argv[1], "--bench-resident"))
         bench_resident(r);
     if (argc > 1 && !strcmp(argv[1], "--bench"))

@@ -481,3 +481,18 @@ import=8.903 export=6.135 render=3.238`，即 619 个会话的导入、导出、
   `min 8.32 ms / median 16.46 ms`（30 次，load≈9 的共享机器），而逐包全屏颜色+深度往返
   单次就要 18.40–20.60 ms（`--bench-resident`）⇒ 常驻合成路线的下限明显更低，
   值得继续 M2（纹理 quad/2D 图元接入、M3G 直接渲染到常驻镜面）。
+
+## 十六、常驻镜面 M2a：纹理 quad 与常驻深度（2026-11-28）
+
+- 常驻镜面补上常驻深度附件；render pass 结构与 `r->pass` 相同（颜色 + 深度），因此可直接复用
+  既有三角管线（像素格式/子 pass 布局兼容）。
+- 新增 `nj_vk_renderer_mirror_texture(mirror, src, sx,sy,sw,sh, dx,dy,dw,dh, filter, blend)`：
+  任意源矩形→目标矩形的纹理 quad，支持 RGB565/RGB888/ARGB8888 源、nearest(208)/filtered 与
+  replace(68)/alpha(64) 混合；顶点/纹理走既有顶点与纹理池与 push-constant 材质。
+- 单测：2×2 ARGB8888 纹理最近邻放大到 32×32 与 CPU 参考逐像素一致（0 mismatches）；
+  半透明黑（0x80000000）覆盖 0xff102030 背景误差 ≤2（0 outliers）。
+- 基准（1920×2560，load≈8.7）：clear + 8 矩形 fill + 全屏纹理 quad + 导出
+  `min 4.70 / median 6.38 ms`；同机 `--bench-resident` 逐包全屏颜色+深度往返
+  `min 21.39 / median 24.40 ms`，纯填充版本 `min 4.64 / median 5.30 ms`。
+- 结论：2D 合成搬到常驻镜面后的每帧下限（~5-6 ms）远低于当前 8× 的 ~100 ms/帧，
+  下一步 M2b 把 `nj_gfx` 2D 调用点与 M3G HD 三角形接进常驻镜面。

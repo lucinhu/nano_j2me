@@ -98,3 +98,11 @@
   1920×2560 每帧 clear+8 fills+export 基准 min 8.32 / median 16.46 ms。
 - 下一步：M2 纹理 quad（背景图/overlay/drawImage）+ 文字接入、M3G HD 路径改画进常驻镜面，
   逐位闸门改为截图/容差对照；全量测试与 Android present 验证后合入。
+
+### 2026-11-28 上午末（常驻镜面 M2a）
+
+- 常驻镜面加深常驻深度；新增纹理 quad API 与单测（nearest 逐像素一致、alpha 混合 0 outliers）。
+- 基准（1920×2560，load≈8.7）：clear+8 fills+全屏纹理 quad+export min 4.70 / median 6.38 ms；
+  逐包全屏颜色+深度往返 21.39/24.40 ms。
+- 下一步 M2b：nj_gfx 2D 调用点（背景图/overlay/drawImage/文字）与 M3G HD 三角形接入常驻镜面，
+  截图/容差对照 + 8× 场内 A/B。

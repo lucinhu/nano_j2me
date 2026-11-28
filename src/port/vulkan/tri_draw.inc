@@ -1024,31 +1024,39 @@ int nj_vk_renderer_triangles_list(void *ud, const nj_gfx_triangles_list *l, nj_u
 struct nj_vk_mirror {
     nj_vk_renderer *r;
     int width, height, ready;
-    attachment image;
+    attachment image, depth;
     VkRenderPass clear_pass, load_pass;
     VkFramebuffer clear_fb, load_fb;
     buffer stage;
 };
 
+/* Mirrored after create_pass(): same attachment formats and subpass layout so
+ * the existing triangle pipelines are render-pass compatible with it. */
 static VkRenderPass mirror_render_pass(nj_vk_renderer *r, VkAttachmentLoadOp load) {
-    VkAttachmentDescription att = {0};
-    VkAttachmentReference ref = {0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
+    VkAttachmentDescription att[2] = {{0}};
+    VkAttachmentReference color = {0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
+    VkAttachmentReference depth = {1, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL};
     VkSubpassDescription sub = {0};
     VkRenderPassCreateInfo info = VK_INIT(RENDER_PASS_CREATE_INFO);
     VkRenderPass pass = VK_NULL_HANDLE;
-    att.format = formats[0];
-    att.samples = VK_SAMPLE_COUNT_1_BIT;
-    att.loadOp = load;
-    att.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    att.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-    att.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    att.initialLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    att.finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    int i;
+    for (i = 0; i < 2; ++i) {
+        att[i].format = formats[i];
+        att[i].samples = VK_SAMPLE_COUNT_1_BIT;
+        att[i].loadOp = load;
+        att[i].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        att[i].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        att[i].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        att[i].initialLayout = i ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL
+                                 : VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        att[i].finalLayout = att[i].initialLayout;
+    }
     sub.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
     sub.colorAttachmentCount = 1;
-    sub.pColorAttachments = &ref;
-    info.attachmentCount = 1;
-    info.pAttachments = &att;
+    sub.pColorAttachments = &color;
+    sub.pDepthStencilAttachment = &depth;
+    info.attachmentCount = 2;
+    info.pAttachments = att;
     info.subpassCount = 1;
     info.pSubpasses = &sub;
     if (vkCreateRenderPass(r->dev, &info, NULL, &pass) != VK_SUCCESS)
@@ -1058,9 +1066,12 @@ static VkRenderPass mirror_render_pass(nj_vk_renderer *r, VkAttachmentLoadOp loa
 
 static int mirror_framebuffer(nj_vk_mirror *m, VkRenderPass pass, VkFramebuffer *out) {
     VkFramebufferCreateInfo info = VK_INIT(FRAMEBUFFER_CREATE_INFO);
+    VkImageView views[2];
+    views[0] = m->image.view;
+    views[1] = m->depth.view;
     info.renderPass = pass;
-    info.attachmentCount = 1;
-    info.pAttachments = &m->image.view;
+    info.attachmentCount = 2;
+    info.pAttachments = views;
     info.width = (uint32_t)m->width;
     info.height = (uint32_t)m->height;
     info.layers = 1;
@@ -1100,6 +1111,13 @@ static VkClearValue mirror_clear_value(nj_u4 argb) {
     return value;
 }
 
+static void mirror_image_release(nj_vk_renderer *r, attachment *a) {
+    vkDestroyImageView(r->dev, a->view, NULL);
+    vkDestroyImage(r->dev, a->id, NULL);
+    vkFreeMemory(r->dev, a->memory, NULL);
+    memset(a, 0, sizeof *a);
+}
+
 void nj_vk_renderer_mirror_destroy(nj_vk_mirror *m) {
     nj_vk_renderer *r;
     if (!m)
@@ -1109,9 +1127,8 @@ void nj_vk_renderer_mirror_destroy(nj_vk_mirror *m) {
     vkDestroyFramebuffer(r->dev, m->load_fb, NULL);
     vkDestroyRenderPass(r->dev, m->clear_pass, NULL);
     vkDestroyRenderPass(r->dev, m->load_pass, NULL);
-    vkDestroyImageView(r->dev, m->image.view, NULL);
-    vkDestroyImage(r->dev, m->image.id, NULL);
-    vkFreeMemory(r->dev, m->image.memory, NULL);
+    mirror_image_release(r, &m->image);
+    mirror_image_release(r, &m->depth);
     release_buffer(r, &m->stage);
     free(m);
 }
@@ -1123,6 +1140,7 @@ nj_vk_mirror *nj_vk_renderer_mirror_create(void *ud, int width, int height) {
     VkImageViewCreateInfo view = VK_INIT(IMAGE_VIEW_CREATE_INFO);
     VkMemoryAllocateInfo alloc = VK_INIT(MEMORY_ALLOCATE_INFO);
     VkMemoryRequirements req;
+    int i;
     if (!r || width <= 0 || height <= 0 ||
         (uint64_t)width * (uint64_t)height > MAX_PIXELS)
         return NULL;
@@ -1132,29 +1150,32 @@ nj_vk_mirror *nj_vk_renderer_mirror_create(void *ud, int width, int height) {
     m->r = r;
     m->width = width;
     m->height = height;
-    info.imageType = VK_IMAGE_TYPE_2D;
-    info.extent = (VkExtent3D){(uint32_t)width, (uint32_t)height, 1};
-    info.mipLevels = info.arrayLayers = 1;
-    info.samples = VK_SAMPLE_COUNT_1_BIT;
-    info.format = formats[0];
-    info.usage = usages[0] | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
-    info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    if (vkCreateImage(r->dev, &info, NULL, &m->image.id) != VK_SUCCESS)
-        goto fail;
-    vkGetImageMemoryRequirements(r->dev, m->image.id, &req);
-    alloc.allocationSize = req.size;
-    alloc.memoryTypeIndex =
-        memory_type(r, req.memoryTypeBits, 0, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-    if (alloc.memoryTypeIndex == UINT32_MAX ||
-        vkAllocateMemory(r->dev, &alloc, NULL, &m->image.memory) != VK_SUCCESS ||
-        vkBindImageMemory(r->dev, m->image.id, m->image.memory, 0) != VK_SUCCESS)
-        goto fail;
-    view.image = m->image.id;
-    view.viewType = VK_IMAGE_VIEW_TYPE_2D;
-    view.format = formats[0];
-    view.subresourceRange = (VkImageSubresourceRange){VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-    if (vkCreateImageView(r->dev, &view, NULL, &m->image.view) != VK_SUCCESS)
-        goto fail;
+    for (i = 0; i < 2; ++i) {
+        attachment *a = i ? &m->depth : &m->image;
+        info.imageType = VK_IMAGE_TYPE_2D;
+        info.extent = (VkExtent3D){(uint32_t)width, (uint32_t)height, 1};
+        info.mipLevels = info.arrayLayers = 1;
+        info.samples = VK_SAMPLE_COUNT_1_BIT;
+        info.format = formats[i];
+        info.usage = usages[i];
+        info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        if (vkCreateImage(r->dev, &info, NULL, &a->id) != VK_SUCCESS)
+            goto fail;
+        vkGetImageMemoryRequirements(r->dev, a->id, &req);
+        alloc.allocationSize = req.size;
+        alloc.memoryTypeIndex =
+            memory_type(r, req.memoryTypeBits, 0, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        if (alloc.memoryTypeIndex == UINT32_MAX ||
+            vkAllocateMemory(r->dev, &alloc, NULL, &a->memory) != VK_SUCCESS ||
+            vkBindImageMemory(r->dev, a->id, a->memory, 0) != VK_SUCCESS)
+            goto fail;
+        view.image = a->id;
+        view.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        view.format = formats[i];
+        view.subresourceRange = (VkImageSubresourceRange){aspects[i], 0, 1, 0, 1};
+        if (vkCreateImageView(r->dev, &view, NULL, &a->view) != VK_SUCCESS)
+            goto fail;
+    }
     m->clear_pass = mirror_render_pass(r, VK_ATTACHMENT_LOAD_OP_CLEAR);
     m->load_pass = mirror_render_pass(r, VK_ATTACHMENT_LOAD_OP_LOAD);
     if (m->clear_pass == VK_NULL_HANDLE || m->load_pass == VK_NULL_HANDLE)
@@ -1174,31 +1195,41 @@ fail:
 int nj_vk_renderer_mirror_clear(nj_vk_mirror *m, nj_u4 argb) {
     nj_vk_renderer *r;
     VkRenderPassBeginInfo pass = VK_INIT(RENDER_PASS_BEGIN_INFO);
-    VkClearValue value;
+    VkClearValue values[2];
+    int i;
     if (!m)
         return 0;
     r = m->r;
-    value = mirror_clear_value(argb);
+    values[1].depthStencil.depth = 1.0f;
+    values[1].depthStencil.stencil = 0;
+    values[0] = mirror_clear_value(argb);
     if (!mirror_begin(r))
         return 0;
     if (!m->ready) {
-        VkImageMemoryBarrier barrier = VK_INIT(IMAGE_MEMORY_BARRIER);
-        barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        barrier.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-        barrier.srcQueueFamilyIndex = barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        barrier.image = m->image.id;
-        barrier.subresourceRange =
-            (VkImageSubresourceRange){VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-        barrier.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        VkImageMemoryBarrier barrier[2] = {VK_INIT(IMAGE_MEMORY_BARRIER),
+                                           VK_INIT(IMAGE_MEMORY_BARRIER)};
+        for (i = 0; i < 2; ++i) {
+            barrier[i].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+            barrier[i].newLayout = i ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL
+                                     : VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            barrier[i].srcQueueFamilyIndex = barrier[i].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            barrier[i].image = i ? m->depth.id : m->image.id;
+            barrier[i].subresourceRange = (VkImageSubresourceRange){aspects[i], 0, 1, 0, 1};
+            barrier[i].dstAccessMask = i ? (VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
+                                            VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT)
+                                         : VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        }
         vkCmdPipelineBarrier(r->cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                             VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0, 0, NULL, 0, NULL,
-                             1, &barrier);
+                             VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                                 VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
+                                 VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
+                             0, 0, NULL, 0, NULL, 2, barrier);
     }
     pass.renderPass = m->clear_pass;
     pass.framebuffer = m->clear_fb;
     pass.renderArea.extent = (VkExtent2D){(uint32_t)m->width, (uint32_t)m->height};
-    pass.clearValueCount = 1;
-    pass.pClearValues = &value;
+    pass.clearValueCount = 2;
+    pass.pClearValues = values;
     vkCmdBeginRenderPass(r->cmd, &pass, VK_SUBPASS_CONTENTS_INLINE);
     vkCmdEndRenderPass(r->cmd);
     if (!mirror_submit(r))
@@ -1296,4 +1327,135 @@ int nj_vk_renderer_mirror_export(nj_vk_mirror *m, const nj_surface *dst) {
         memcpy((nj_u1 *)dst->pixels + (nj_u8)row * (nj_u8)dst->stride,
                rows + (nj_u8)row * (nj_u8)m->width * 4u, (nj_u8)m->width * 4u);
     return 1;
+}
+
+/* One source pixel as the RGBA word the triangle shader unpacks: byte 0 is R,
+ * byte 1 G, byte 2 B, byte 3 A. Surfaces store ARGB8888 as B,G,R,A bytes (the
+ * packed 0xAARRGGBB order), RGB888 as R,G,B and RGB565 as little-endian. */
+static nj_u4 mirror_texel_at(const nj_u1 *p, int bpp) {
+    if (bpp == 2) {
+        unsigned v = (unsigned)p[0] | ((unsigned)p[1] << 8);
+        unsigned red = (v >> 11) & 31u, green = (v >> 5) & 63u, blue = v & 31u;
+        return ((red << 3) | (red >> 2)) | (((green << 2) | (green >> 4)) << 8) |
+               (((blue << 3) | (blue >> 2)) << 16) | 0xff000000u;
+    }
+    if (bpp == 3)
+        return (nj_u4)p[0] | ((nj_u4)p[1] << 8) | ((nj_u4)p[2] << 16) | 0xff000000u;
+    return (nj_u4)p[2] | ((nj_u4)p[1] << 8) | ((nj_u4)p[0] << 16) | ((nj_u4)p[3] << 24);
+}
+
+/* Draw a (sub)rectangle of a CPU surface as a textured quad on the mirror.
+ * `filter` is 208 nearest or any other value for filtered sampling, `blend` is
+ * 68 replace or 64 alpha blending. */
+int nj_vk_renderer_mirror_texture(nj_vk_mirror *m, const nj_surface *src, int sx, int sy, int sw,
+                                  int sh, int dx, int dy, int dw, int dh, int filter, int blend) {
+    nj_vk_renderer *r;
+    nj_gfx_triangle_cmd style;
+    packet_info info;
+    VkDescriptorBufferInfo desc = {0};
+    VkWriteDescriptorSet write = VK_INIT(WRITE_DESCRIPTOR_SET);
+    VkRenderPassBeginInfo pass = VK_INIT(RENDER_PASS_BEGIN_INFO);
+    VkViewport viewport;
+    VkRect2D scissor;
+    VkDeviceSize zero = 0;
+    material mat;
+    vertex *verts;
+    nj_u4 *texels;
+    unsigned index;
+    int x, y, bpp;
+    if (!m || !m->ready || !src || !src->pixels || sw <= 0 || sh <= 0 || dw <= 0 || dh <= 0)
+        return 0;
+    if (blend != 64 && blend != 68)
+        return 0;
+    if (sx < 0 || sy < 0 || sx + sw > src->width || sy + sh > src->height || dx < 0 || dy < 0 ||
+        dx + dw > m->width || dy + dh > m->height)
+        return 0;
+    bpp = src->bpp;
+    if (bpp != 2 && bpp != 3 && bpp != 4)
+        return 0;
+    r = m->r;
+    memset(&style, 0, sizeof style);
+    memset(&info, 0, sizeof info);
+    style.blend = blend;
+    style.alpha_write = 1;
+    style.texture_function = 228;
+    style.filter = (unsigned)filter;
+    style.wrap_s = style.wrap_t = 240;
+    style.texture_no_alpha = bpp == 3;
+    if (!prepare_pipeline(r, &style))
+        return 0;
+    index = pipeline_index(&style);
+    if (!reserve_buffer(r, &r->vertices, (VkDeviceSize)6 * sizeof(vertex),
+                        VK_BUFFER_USAGE_VERTEX_BUFFER_BIT) ||
+        !reserve_buffer(r, &r->textures, (VkDeviceSize)sw * (VkDeviceSize)sh * 4u,
+                        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT))
+        return 0;
+    desc.buffer = r->textures.id;
+    desc.range = (VkDeviceSize)sw * (VkDeviceSize)sh * 4u;
+    if (desc.range > r->properties.limits.maxStorageBufferRange)
+        return 0;
+    if (!r->desc_valid || desc.buffer != r->desc_buffer || desc.range > r->desc_range) {
+        write.dstSet = r->set;
+        write.descriptorCount = 1;
+        write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        write.pBufferInfo = &desc;
+        vkUpdateDescriptorSets(r->dev, 1, &write, 0, NULL);
+        r->desc_buffer = desc.buffer;
+        r->desc_range = desc.range;
+        r->desc_valid = 1;
+    }
+    verts = (vertex *)r->vertices.map;
+    {
+        const float x0 = (float)dx * 2.0f / (float)m->width - 1.0f;
+        const float x1 = (float)(dx + dw) * 2.0f / (float)m->width - 1.0f;
+        const float y0 = (float)dy * 2.0f / (float)m->height - 1.0f;
+        const float y1 = (float)(dy + dh) * 2.0f / (float)m->height - 1.0f;
+        const float u0 = (float)sx / (float)src->width;
+        const float u1 = (float)(sx + sw) / (float)src->width;
+        const float v0 = (float)sy / (float)src->height;
+        const float v1 = (float)(sy + sh) / (float)src->height;
+        int k;
+        for (k = 0; k < 6; ++k) {
+            int corner = (int[]){0, 1, 2, 2, 1, 3}[k];
+            verts[k].position[0] = (corner & 1) ? x1 : x0;
+            verts[k].position[1] = (corner & 2) ? y1 : y0;
+            verts[k].position[2] = 0.0f;
+            verts[k].uvq[0] = (corner & 1) ? u1 : u0;
+            verts[k].uvq[1] = (corner & 2) ? v1 : v0;
+            verts[k].uvq[2] = 1.0f;
+            verts[k].rgba[0] = verts[k].rgba[1] = verts[k].rgba[2] = verts[k].rgba[3] = 255;
+        }
+    }
+    texels = (nj_u4 *)r->textures.map;
+    for (y = 0; y < sh; ++y) {
+        const nj_u1 *row = (const nj_u1 *)src->pixels + (nj_u8)(sy + y) * (nj_u8)src->stride +
+                           (nj_u8)sx * (nj_u8)bpp;
+        for (x = 0; x < sw; ++x)
+            texels[(nj_u8)y * (nj_u8)sw + (nj_u8)x] = mirror_texel_at(row + (nj_u8)x * (nj_u8)bpp, bpp);
+    }
+    memset(&mat, 0, sizeof mat);
+    mat.width = src->width;
+    mat.height = src->height;
+    mat.function = 228;
+    mat.blend = blend;
+    mat.flags = (filter != 208 ? 4 : 0) | (bpp == 3 ? 8 : 0) |
+                (filter == NJ_GFX_FILTER_SHARP ? 16 : 0);
+    if (!sync_buffer(r, &r->vertices, 0) || !sync_buffer(r, &r->textures, 0) || !mirror_begin(r))
+        return 0;
+    viewport = (VkViewport){0.0f, 0.0f, (float)m->width, (float)m->height, 0.0f, 1.0f};
+    scissor = (VkRect2D){{0, 0}, {(uint32_t)m->width, (uint32_t)m->height}};
+    pass.renderPass = m->load_pass;
+    pass.framebuffer = m->load_fb;
+    pass.renderArea.extent = (VkExtent2D){(uint32_t)m->width, (uint32_t)m->height};
+    vkCmdBeginRenderPass(r->cmd, &pass, VK_SUBPASS_CONTENTS_INLINE);
+    vkCmdSetViewport(r->cmd, 0, 1, &viewport);
+    vkCmdSetScissor(r->cmd, 0, 1, &scissor);
+    vkCmdBindPipeline(r->cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->pipelines[index]);
+    vkCmdBindVertexBuffers(r->cmd, 0, 1, &r->vertices.id, &zero);
+    vkCmdBindDescriptorSets(r->cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->layout, 0, 1, &r->set, 0,
+                            NULL);
+    vkCmdPushConstants(r->cmd, r->layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof mat, &mat);
+    vkCmdDraw(r->cmd, 6, 1, 0, 0);
+    vkCmdEndRenderPass(r->cmd);
+    return mirror_submit(r);
 }

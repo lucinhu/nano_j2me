@@ -76,8 +76,15 @@ resident bench: 1920x2560 full colour+depth pass min 18.40 ms median 20.60 ms
   （`resident mirror: 0 mismatched pixels`）；1920×2560 每帧「clear + 8 个矩形 fill + 一次导出」
   `min 8.32 ms / median 16.46 ms`（30 次，机器有并发负载），对比逐包全屏三角形往返
   （20.6 ms）已明显更低；尚未接入 M3G/2D 调用方。
-- **M2**：图像 quad（背景图/overlay/drawImage）+ solid 图元接入，M3G HD 路径改画进常驻镜面；
-  8× 画质对照（截图/容差，文本与滤波路径单独比对）与性能 A/B（目标 ≥20%）。
+- **M2a（完成）**：常驻镜面加深常驻深度附件；新增 `nj_vk_renderer_mirror_texture`
+  （任意源矩形 → 目标矩形的纹理 quad，nearest/bilinear、replace/alpha 混合，复用现有三角
+  shader 与管线，源格式支持 RGB565/RGB888/ARGB8888）。单测：2×2 纹理最近邻放大到 32×32
+  `0 nearest mismatches`；半透明黑覆盖背景 `0 blend outliers`。
+  基准（1920×2560，load≈8.7）：clear+8 fills+全屏纹理 quad+export
+  `min 4.70 / median 6.38 ms`；同机对比 逐包全屏颜色+深度往返 `min 21.39 / median 24.40 ms`、
+  纯填充版本 `min 4.64 / median 5.30 ms`。
+- **M2b**：把 `nj_gfx` 的 2D 调用点（背景图/overlay/drawImage/纯色/文字）接到常驻镜面，
+  M3G HD 三角形直接渲染进常驻镜面；8× 画质对照（截图/容差）与性能 A/B（目标 ≥20%）。
 - **M3**：文字、曲线、视频 overlay；脏矩形导出。
 - **M4**：present 集成与 Android 验证（present stats）、全量测试（236/222/check_android_java/
   test_gfx_vulkan/no_statics）、文档与提交。

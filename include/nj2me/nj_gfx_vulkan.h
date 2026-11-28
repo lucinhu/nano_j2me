@@ -17,13 +17,18 @@ int nj_vk_renderer_triangles_list(void *ud, const nj_gfx_triangles_list *list, n
 int nj_vk_renderer_triangles_begin(void *ud, const nj_gfx_triangles_session *session);
 int nj_vk_renderer_triangles_end(void *ud, nj_u4 *submitted);
 void nj_vk_renderer_triangles_abort(void *ud);
-/* Resident colour mirror: compose on the GPU and export once per present. */
+/* Resident colour mirror: compose on the GPU and export once per present.
+ * The mirror is a synchronous resource like the renderer: do not interleave it
+ * with triangle sessions, and destroy every mirror before the renderer. */
 typedef struct nj_vk_mirror nj_vk_mirror;
 nj_vk_mirror *nj_vk_renderer_mirror_create(void *ud, int width, int height);
 void nj_vk_renderer_mirror_destroy(nj_vk_mirror *mirror);
 int nj_vk_renderer_mirror_clear(nj_vk_mirror *mirror, nj_u4 argb);
 int nj_vk_renderer_mirror_fill(nj_vk_mirror *mirror, int x, int y, int width, int height, nj_u4 argb);
 int nj_vk_renderer_mirror_export(nj_vk_mirror *mirror, const nj_surface *dst);
+int nj_vk_renderer_mirror_texture(nj_vk_mirror *mirror, const nj_surface *src, int sx, int sy,
+                                  int sw, int sh, int dx, int dy, int dw, int dh, int filter,
+                                  int blend);
 #ifdef __cplusplus
 }
 #endif
