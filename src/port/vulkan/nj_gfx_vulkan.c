@@ -168,6 +168,10 @@ struct nj_vk_renderer {
     int present_small_h;
     nj_u1 *present_scratch;
     nj_u1 *present_prev;
+    int *present_sx;
+    int *present_sy;
+    int present_sx_count;
+    int present_sy_count;
     size_t present_prev_bytes;
     size_t present_prev_size;
     unsigned present_small_frames;
@@ -1536,6 +1540,11 @@ static void present_small_release(nj_vk_renderer *r) {
     r->present_scratch = NULL;
     free(r->present_prev);
     r->present_prev = NULL;
+    free(r->present_sx);
+    r->present_sx = NULL;
+    r->present_sy = NULL;
+    r->present_sx_count = 0;
+    r->present_sy_count = 0;
     r->present_prev_bytes = 0;
     r->present_prev_size = 0;
     r->present_small_w = 0;
@@ -1565,16 +1574,33 @@ static int present_upload_small(nj_vk_renderer *r, const nj_surface *frame, int 
         }
         r->present_prev_size = 0;
         r->present_prev_size = 0;
+        r->present_sx = (int *)malloc((size_t)w * sizeof(int));
+        r->present_sy = (int *)malloc((size_t)h * sizeof(int));
+        if (!r->present_sx || !r->present_sy) {
+            present_small_release(r);
+            return 0;
+        }
+        {
+            int k;
+            for (k = 0; k < w; k++) {
+                r->present_sx[k] = (int)(((long long)(2 * k + 1) * frame->width) / (2LL * w));
+            }
+            for (k = 0; k < h; k++) {
+                r->present_sy[k] = (int)(((long long)(2 * k + 1) * frame->height) / (2LL * h));
+            }
+            r->present_sx_count = w;
+            r->present_sy_count = h;
+        }
         r->present_small_w = w;
         r->present_small_h = h;
     }
+    if (r->present_sx_count != w || r->present_sy_count != h) return 0;
     for (i = 0; i < h; i++) {
-        int sy = (int)(((long long)(2 * i + 1) * frame->height) / (2LL * h));
-        const nj_u1 *src = (const nj_u1 *)frame->pixels + (size_t)sy * (size_t)frame->stride;
+        const nj_u1 *src = (const nj_u1 *)frame->pixels +
+                           (size_t)r->present_sy[i] * (size_t)frame->stride;
         nj_u1 *dst = r->present_scratch + (size_t)i * (size_t)w * 4u;
         for (j = 0; j < w; j++) {
-            int sx = (int)(((long long)(2 * j + 1) * frame->width) / (2LL * w));
-            *(nj_u4 *)(dst + (size_t)j * 4u) = *(const nj_u4 *)(src + (size_t)sx * 4u);
+            *(nj_u4 *)(dst + (size_t)j * 4u) = *(const nj_u4 *)(src + (size_t)r->present_sx[j] * 4u);
         }
     }
     /* The small mirror still holds this exact frame: many 2D screens repeat
