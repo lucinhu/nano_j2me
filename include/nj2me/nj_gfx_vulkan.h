@@ -35,6 +35,14 @@ int nj_vk_renderer_mirror_clear_rect(nj_vk_mirror *mirror, nj_u4 argb, int x, in
                                      int height, int clear_colour, int clear_depth);
 int nj_vk_renderer_mirror_fill(nj_vk_mirror *mirror, int x, int y, int width, int height, nj_u4 argb);
 int nj_vk_renderer_mirror_export(nj_vk_mirror *mirror, const nj_surface *dst);
+/* Seed and read back part of the mirror.  A fresh mirror (or one whose depth
+ * has never been imported) falls back to seeding the whole frame; sub-rectangle
+ * imports are otherwise packed and copied as a rectangle. */
+int nj_vk_renderer_mirror_import_rect(nj_vk_mirror *mirror, const nj_surface *surface,
+                                      nj_s4 *depth, int depth_stride, int x, int y, int width,
+                                      int height, int mask);
+int nj_vk_renderer_mirror_export_rect(nj_vk_mirror *mirror, const nj_surface *dst, int x, int y,
+                                      int width, int height);
 void *nj_vk_renderer_mirror_pixels(nj_vk_mirror *mirror);
 int nj_vk_renderer_mirror_texture(nj_vk_mirror *mirror, const nj_surface *src, int sx, int sy,
                                   int sw, int sh, int dx, int dy, int dw, int dh, int filter,

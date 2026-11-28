@@ -1045,6 +1045,118 @@ static void bench_mirror(nj_vk_renderer *r) {
 
 /* Textured quad on the resident mirror: nearest-neighbour upscale must be
  * pixel exact, and an alpha blended draw must land near the CPU expectation. */
+/* Region imports/exports must agree with full-frame ones: sub-rectangle
+ * seeding keeps the rest of the mirror, partial export leaves `dst` elsewhere
+ * untouched, and a fresh mirror still seeds the whole frame. */
+static void mirror_regions(nj_vk_renderer *r) {
+    enum { W = 64, H = 48, RX = 7, RY = 5, RW = 20, RH = 10 };
+    nj_vk_mirror *m = nj_vk_renderer_mirror_create(r, W, H);
+    nj_u4 *src = (nj_u4 *)malloc((size_t)W * H * 4);
+    nj_u4 *got = (nj_u4 *)malloc((size_t)W * H * 4);
+    nj_u4 *got2 = (nj_u4 *)malloc((size_t)W * H * 4);
+    nj_s4 *keys = (nj_s4 *)malloc((size_t)W * H * sizeof(nj_s4));
+    const nj_u4 marker = 0xdeadbeefu;
+    nj_surface logical, dst;
+    int x, y, mismatches = 0;
+    if (!m || !src || !got || !got2 || !keys) {
+        fprintf(stderr, "mirror regions: allocation failed\n");
+        exit(1);
+    }
+    for (y = 0; y < H; ++y)
+        for (x = 0; x < W; ++x) {
+            src[y * W + x] = 0xff000000u | ((nj_u4)(x * 5 + y * 3) << 16) | ((nj_u4)x << 8) | (nj_u4)y;
+            keys[y * W + x] = (nj_s4)((x * 7 + y * 11) & 0xffff);
+        }
+    logical = (nj_surface){src, W, H, W * 4, NJ_PIXFMT_ARGB8888, 4};
+    dst = (nj_surface){got, W, H, W * 4, NJ_PIXFMT_ARGB8888, 4};
+    /* Seed the whole frame, then replace one rectangle in the source and merge
+     * it with a rectangle import (multiple imports must stack). */
+    CHECK(nj_vk_renderer_mirror_import_rect(m, &logical, keys, W, 0, 0, W, H,
+                                            NJ_VK_MIRROR_IMPORT_COLOUR | NJ_VK_MIRROR_IMPORT_DEPTH));
+    for (y = RY; y < RY + RH; ++y)
+        for (x = RX; x < RX + RW; ++x)
+            src[y * W + x] = 0xff000000u | ((nj_u4)(x * 3) << 16) | ((nj_u4)(y * 5) << 8) | 0x40u;
+    CHECK(nj_vk_renderer_mirror_import_rect(m, &logical, keys, W, RX, RY, RW, RH,
+                                            NJ_VK_MIRROR_IMPORT_COLOUR));
+    for (y = 0; y < H; ++y)
+        for (x = 0; x < W; ++x)
+            got2[y * W + x] = marker;
+    dst.pixels = got2;
+    CHECK(nj_vk_renderer_mirror_export_rect(m, &dst, RX, RY, RW, RH));
+    dst.pixels = got;
+    {
+        int phase1 = 0;
+        for (y = 0; y < H; ++y)
+            for (x = 0; x < W; ++x) {
+                nj_u4 want = marker;
+                if (x >= RX && x < RX + RW && y >= RY && y < RY + RH)
+                    want = src[y * W + x];
+                if (got2[y * W + x] != want)
+                    ++phase1;
+            }
+        (void)phase1;
+        mismatches += phase1;
+    }
+    CHECK(nj_vk_renderer_mirror_export(m, &dst));
+    {
+        int phase2 = 0;
+        for (y = 0; y < H; ++y)
+            for (x = 0; x < W; ++x)
+                if (got[y * W + x] != src[y * W + x])
+                    ++phase2;
+        (void)phase2;
+        mismatches += phase2;
+    }
+    /* Touching the source again and importing the same rectangle must update
+     * the mirror (the import is not cached). */
+    for (y = RY; y < RY + RH; ++y)
+        for (x = RX; x < RX + RW; ++x)
+            src[y * W + x] = 0xff112233u + (nj_u4)(x + y);
+    CHECK(nj_vk_renderer_mirror_import_rect(m, &logical, keys, W, RX, RY, RW, RH,
+                                            NJ_VK_MIRROR_IMPORT_COLOUR));
+    CHECK(nj_vk_renderer_mirror_export(m, &dst));
+    {
+        int phase3 = 0;
+        for (y = 0; y < H; ++y)
+            for (x = 0; x < W; ++x)
+                if (got[y * W + x] != src[y * W + x])
+                    ++phase3;
+        (void)phase3;
+        mismatches += phase3;
+    }
+    /* A fresh mirror cannot trust a partial seed: the import must define the
+     * whole frame even when asked for a rectangle. */
+    nj_vk_renderer_mirror_destroy(m);
+    m = nj_vk_renderer_mirror_create(r, W, H);
+    if (!m) {
+        fprintf(stderr, "mirror regions: recreate failed\n");
+        exit(1);
+    }
+    CHECK(nj_vk_renderer_mirror_import_rect(m, &logical, keys, W, RX, RY, RW, RH,
+                                            NJ_VK_MIRROR_IMPORT_COLOUR));
+    CHECK(nj_vk_renderer_mirror_export(m, &dst));
+    {
+        int phase4 = 0;
+        for (y = 0; y < H; ++y)
+            for (x = 0; x < W; ++x)
+                if (got[y * W + x] != src[y * W + x])
+                    ++phase4;
+        (void)phase4;
+        mismatches += phase4;
+    }
+    /* Out-of-range rectangles are rejected instead of clamping. */
+    CHECK(!nj_vk_renderer_mirror_import_rect(m, &logical, keys, W, W - 1, 0, 4, 4,
+                                             NJ_VK_MIRROR_IMPORT_COLOUR));
+    CHECK(!nj_vk_renderer_mirror_export_rect(m, &dst, 0, H - 1, 4, 4));
+    printf("mirror regions: %d mismatched pixels\n", mismatches);
+    CHECK(mismatches == 0);
+    nj_vk_renderer_mirror_destroy(m);
+    free(src);
+    free(got);
+    free(got2);
+    free(keys);
+}
+
 static void mirror_textures(nj_vk_renderer *r) {
     enum { W = 64, H = 64 };
     nj_vk_mirror *m = nj_vk_renderer_mirror_create(r, W, H);
@@ -1100,6 +1212,50 @@ static void mirror_textures(nj_vk_renderer *r) {
 
 /* Textured 2D on the resident mirror: per frame one clear, eight fills, one
  * scaled image quad and one export. */
+/* Region imports/exports are the M3 building blocks: measure how much they
+ * save against the whole-frame 1920x2560 transfer (19.66 MB each way). */
+static void bench_mirror_regions(nj_vk_renderer *r) {
+    enum { W = 1920, H = 2560, RX = 300, RY = 400, RW = 256, RH = 192, REPS = 20 };
+    nj_vk_mirror *m = nj_vk_renderer_mirror_create(r, W, H);
+    nj_u4 *src = (nj_u4 *)malloc((size_t)W * H * 4);
+    nj_u4 *dst = (nj_u4 *)malloc((size_t)W * H * 4);
+    nj_surface logical, target;
+    double rect_import = 0, rect_export = 0, full_import = 0, full_export = 0;
+    int x, y, i;
+    if (!m || !src || !dst) {
+        fprintf(stderr, "mirror regions bench: create failed\n");
+        exit(1);
+    }
+    for (y = 0; y < H; ++y)
+        for (x = 0; x < W; ++x)
+            src[y * W + x] = 0xff000000u | ((nj_u4)(x * 7) << 16) | ((nj_u4)(y * 13) << 8) | 0x22u;
+    logical = (nj_surface){src, W, H, W * 4, NJ_PIXFMT_ARGB8888, 4};
+    target = (nj_surface){dst, W, H, W * 4, NJ_PIXFMT_ARGB8888, 4};
+    CHECK(nj_vk_renderer_mirror_import_rect(m, &logical, NULL, 0, 0, 0, W, H, NJ_VK_MIRROR_IMPORT_COLOUR));
+    for (i = 0; i < REPS; ++i) {
+        double t = millis();
+        CHECK(nj_vk_renderer_mirror_import_rect(m, &logical, NULL, 0, RX, RY, RW, RH,
+                                                NJ_VK_MIRROR_IMPORT_COLOUR));
+        rect_import += millis() - t;
+        t = millis();
+        CHECK(nj_vk_renderer_mirror_export_rect(m, &target, RX, RY, RW, RH));
+        rect_export += millis() - t;
+        t = millis();
+        CHECK(nj_vk_renderer_mirror_import_rect(m, &logical, NULL, 0, 0, 0, W, H, NJ_VK_MIRROR_IMPORT_COLOUR));
+        full_import += millis() - t;
+        t = millis();
+        CHECK(nj_vk_renderer_mirror_export(m, &target));
+        full_export += millis() - t;
+    }
+    printf("mirror regions: %dx%d frame, %dx%d rect  import rect %.2f ms  export rect %.2f ms  "
+           "import full %.2f ms  export full %.2f ms\n",
+           W, H, RW, RH, rect_import / REPS, rect_export / REPS, full_import / REPS,
+           full_export / REPS);
+    nj_vk_renderer_mirror_destroy(m);
+    free(src);
+    free(dst);
+}
+
 static void bench_mirror_texture(nj_vk_renderer *r) {
     enum { W = 1920, H = 2560, REPS = 30, FILLS = 8, IMG = 240 };
     nj_vk_mirror *m = nj_vk_renderer_mirror_create(r, W, H);
@@ -1391,6 +1547,7 @@ int main(int argc, char **argv) {
     retained_sessions(r);
     mirror_basics(r);
     mirror_textures(r);
+    mirror_regions(r);
     mirror_triangle_lists(r);
     if (argc > 1 && !strcmp(argv[1], "--bench-rgb565")) {
         rgb565_packets(r, 243, 322, 1);
@@ -1399,6 +1556,8 @@ int main(int argc, char **argv) {
     order_and_fallback(r);
     puts("Vulkan color/depth, guarded ROI, perspective textures, blends, fog, cutouts, ordering and "
          "atomic declines passed");
+    if (argc > 1 && !strcmp(argv[1], "--bench-mirror-regions"))
+        return bench_mirror_regions(r), 0;
     if (argc > 1 && !strcmp(argv[1], "--bench-mirror"))
         bench_mirror(r);
     if (argc > 1 && !strcmp(argv[1], "--bench-mirror-texture"))

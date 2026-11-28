@@ -268,3 +268,28 @@ M3 切口（按顺序，每步独立可验证）：
 风险与前置：2D ROP 语义（blend/mask/xor）依赖目标像素，GPU 侧需要保留目标或把 ROP
 转成 blend/pipeline 状态；FSR1 素材过滤上 GPU 需把 Catmull-Rom+RCAS 折进 shader
 （可选后续）；CPU/GPU 交错写入的生命周期（dirty 代次）是最大正确性风险，先写单测再接线。
+
+### 8.8 M3.1：region import/export（2026-11-29）
+
+新增 API（`include/nj2me/nj_gfx_vulkan.h`、`src/port/vulkan/tri_draw.inc`）：
+
+- `nj_vk_renderer_mirror_import_rect(mirror, surface, depth, depth_stride, x, y, width, height, mask)`：
+  按矩形从 CPU 帧播种颜色/深度。新镜面（或深度从未导入）会回退整帧播种，因为附件
+  未定义区域不能被后续 pass load；resident 零拷贝别名帧不支持子矩形导入（返回 0，
+  避免「从自身覆盖自身」）。
+- `nj_vk_renderer_mirror_export_rect(mirror, dst, x, y, width, height)`：只写回该矩形，
+  `dst` 其余像素保持不变；整帧矩形委托既有导出（保留零拷贝快路径）。
+- 内部 `mirror_import` 现在只是整帧 wrapper，既有行为不变。
+
+单测 `mirror_regions`（`tests/test_gfx_vulkan.c`）：整帧+深度播种后修改源并做子矩形导入
+→ 整帧导出一致；子矩形导出的 dst 其余像素保持 marker；重复导入同矩形立即生效；新镜面
+子矩形导入回退整帧；越界矩形返回 0。输出 `mirror regions: 0 mismatched pixels`。
+
+基准 `--bench-mirror-regions`（1920×2560、256×192 矩形、REPS=20）：
+`import rect 0.26 ms  export rect 0.18 ms  import full 0.95 ms  export full 3.99 ms`
+⇒ 帧内只回读 HUD 小矩形比整帧导出省约 3.8 ms/帧；反之整帧导入只要 0.95 ms，
+说明 M3 的主要开销确实是导出的 GPU→CPU 带宽，而非导入。
+
+闸门：8× plain/resident 确定性哈希与重构前完全一致（plain
+`846057676cfed67a`/`c65baebe4730fcbe`/`dc5cb60109dd03cb`，resident
+`846057676cfed67a`/`b2f32d1c682185d3`/`695e0c5a49938a7f`）。

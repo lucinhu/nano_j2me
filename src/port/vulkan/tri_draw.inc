@@ -1363,6 +1363,68 @@ int nj_vk_renderer_mirror_export(nj_vk_mirror *m, const nj_surface *dst) {
     }
     return 1;
 }
+/* Export a rectangle of the mirror back into a full-frame CPU surface.  The
+ * frame's other pixels are left untouched (`dst` keeps whatever it held). */
+int nj_vk_renderer_mirror_export_rect(nj_vk_mirror *m, const nj_surface *dst, int x, int y,
+                                      int width, int height) {
+    nj_vk_renderer *r;
+    VkImageMemoryBarrier barriers[2] = {VK_INIT(IMAGE_MEMORY_BARRIER), VK_INIT(IMAGE_MEMORY_BARRIER)};
+    VkBufferImageCopy copy = {0};
+    VkMemoryBarrier host = VK_INIT(MEMORY_BARRIER);
+    const nj_u1 *rows;
+    int row;
+    if (!m || !m->ready || !dst || !dst->pixels || dst->bpp != 4 || dst->width != m->width ||
+        dst->height != m->height)
+        return 0;
+    if (x == 0 && y == 0 && width == m->width && height == m->height)
+        return nj_vk_renderer_mirror_export(m, dst);
+    if (x < 0 || y < 0 || width <= 0 || height <= 0 || x > m->width - width || y > m->height - height)
+        return 0;
+    if ((const void *)dst->pixels == (const void *)m->stage.map)
+        return 0;
+    r = m->r;
+    if (!mirror_begin(r))
+        return 0;
+    barriers[0].oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    barriers[0].newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    barriers[1].oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    barriers[1].newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    barriers[1].srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    barriers[1].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    for (row = 0; row < 2; ++row) {
+        barriers[row].srcQueueFamilyIndex = barriers[row].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barriers[row].image = m->image.id;
+        barriers[row].subresourceRange =
+            (VkImageSubresourceRange){VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    }
+    barriers[0].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    barriers[0].dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    vkCmdPipelineBarrier(r->cmd, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 0, NULL, 1, &barriers[0]);
+    copy.bufferRowLength = 0;
+    copy.bufferImageHeight = 0;
+    copy.imageSubresource = (VkImageSubresourceLayers){VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    copy.imageOffset = (VkOffset3D){(int32_t)x, (int32_t)y, 0};
+    copy.imageExtent = (VkExtent3D){(uint32_t)width, (uint32_t)height, 1};
+    vkCmdCopyImageToBuffer(r->cmd, m->image.id, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, m->stage.id, 1,
+                           &copy);
+    vkCmdPipelineBarrier(r->cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0, 0, NULL, 0, NULL, 1,
+                         &barriers[1]);
+    host.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    host.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
+    vkCmdPipelineBarrier(r->cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, 1,
+                         &host, 0, NULL, 0, NULL);
+    if (!mirror_submit(r))
+        return 0;
+    if (!sync_buffer(r, &m->stage, 1))
+        return 0;
+    rows = (const nj_u1 *)m->stage.map;
+    for (row = 0; row < height; ++row)
+        memcpy((nj_u1 *)dst->pixels + (size_t)(y + row) * (size_t)dst->stride + (size_t)x * 4u,
+               rows + (size_t)row * (size_t)width * 4u, (size_t)width * 4u);
+    return 1;
+}
 
 /* One source pixel as the RGBA word the triangle shader unpacks: byte 0 is R,
  * byte 1 G, byte 2 B, byte 3 A. Surfaces store ARGB8888 as B,G,R,A bytes (the
@@ -1498,37 +1560,51 @@ int nj_vk_renderer_mirror_texture(nj_vk_mirror *m, const nj_surface *src, int sx
 /* Seed the resident colour (and optional depth) from the CPU mirror before a
  * frame of 3D packets. Leaves both images in the attachment layouts the mirror
  * render passes expect, so the next call can draw without another transition. */
-static int mirror_import(nj_vk_mirror *m, const nj_surface *surface, nj_s4 *depth,
-                         int depth_stride, int mask) {
+static int mirror_import_rect(nj_vk_mirror *m, const nj_surface *surface, nj_s4 *depth,
+                              int depth_stride, int x, int y, int width, int height, int mask) {
     nj_vk_renderer *r = m->r;
     VkCommandBufferBeginInfo cb = VK_INIT(COMMAND_BUFFER_BEGIN_INFO);
     VkImageMemoryBarrier barriers[2] = {VK_INIT(IMAGE_MEMORY_BARRIER), VK_INIT(IMAGE_MEMORY_BARRIER)};
     VkBufferImageCopy copies[2] = {{0}};
     VkSubmitInfo submit = VK_INIT(SUBMIT_INFO);
-    nj_u4 n = (nj_u4)m->width * (nj_u4)m->height;
-    int i, want_depth, want_colour, stages = 0;
+    size_t colour_bytes, depth_bytes;
+    int i, pack_depth, want_depth, want_colour, stages = 0;
+    int full = x == 0 && y == 0 && width == m->width && height == m->height;
     if (!surface || !surface->pixels || surface->width != m->width || surface->height != m->height ||
         surface->bpp != 4)
         return 0;
-    /* The first fill must define both attachments before any pass can load
-     * them, so a fresh mirror always imports the full frame. */
-    if (!m->ready)
+    /* A fresh mirror has undefined attachments, and one that never imported
+     * its depth cannot have the unimported depth trusted either.  Both cases
+     * must seed the whole frame before any pass can load it. */
+    if (!m->ready || ((mask & NJ_VK_MIRROR_IMPORT_DEPTH) && depth && !m->depth_ready)) {
+        x = 0;
+        y = 0;
+        width = m->width;
+        height = m->height;
         mask = NJ_VK_MIRROR_IMPORT_COLOUR | NJ_VK_MIRROR_IMPORT_DEPTH;
+        full = 1;
+    }
+    if (x < 0 || y < 0 || width <= 0 || height <= 0 || x > m->width - width || y > m->height - height)
+        return 0;
     want_colour = (mask & NJ_VK_MIRROR_IMPORT_COLOUR) != 0;
     want_depth = depth && (mask & NJ_VK_MIRROR_IMPORT_DEPTH) != 0;
     if (!want_colour && !want_depth)
         return 1;
-    if (want_depth && depth_stride < m->width)
+    if (want_depth && depth_stride < x + width)
         return 0;
-    if (!reserve_buffer(r, &r->stage, (VkDeviceSize)n * 4u * (VkDeviceSize)(1 + (depth ? 1 : 0)),
+    /* The resident zero-copy path maps the caller's pixels onto this buffer, so
+     * copying a sub-rectangle out of the frame would read what it overwrites. */
+    if (!full && (const void *)surface->pixels == (const void *)r->stage.map)
+        return 0;
+    pack_depth = depth ? 1 : 0;
+    colour_bytes = (size_t)width * (size_t)height * 4u;
+    depth_bytes = pack_depth ? colour_bytes : 0;
+    if (!reserve_buffer(r, &r->stage, (VkDeviceSize)(colour_bytes + depth_bytes),
                         VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT))
         return 0;
-    /* When the caller's CPU pixels are this readback buffer itself (the
-     * resident path), the colour is already staged; only the depth keys still
-     * need packing. */
-    if ((const void *)surface->pixels != (const void *)r->stage.map || want_depth)
-        transfer_rect_at(r, surface, depth, depth_stride, 0, 0, m->width, m->height,
-                         depth && want_depth ? 1 : (depth ? 1 : 0), 0, 0, (size_t)n * 4u);
+    if (!full || pack_depth)
+        transfer_rect_at(r, surface, depth, depth_stride, x, y, width, height, pack_depth, 0, 0,
+                         colour_bytes);
     if (!sync_buffer(r, &r->stage, 0) || vkResetCommandPool(r->dev, r->pool, 0) != VK_SUCCESS)
         return 0;
     cb.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
@@ -1549,9 +1625,12 @@ static int mirror_import(nj_vk_mirror *m, const nj_surface *surface, nj_s4 *dept
             VK_QUEUE_FAMILY_IGNORED;
         barriers[stages].image = i ? m->depth.id : m->image.id;
         barriers[stages].subresourceRange = (VkImageSubresourceRange){aspects[i], 0, 1, 0, 1};
-        copies[stages].bufferOffset = (VkDeviceSize)i * n * 4u;
+        copies[stages].bufferOffset = i ? (VkDeviceSize)colour_bytes : 0;
+        copies[stages].bufferRowLength = 0;
+        copies[stages].bufferImageHeight = 0;
         copies[stages].imageSubresource = (VkImageSubresourceLayers){aspects[i], 0, 0, 1};
-        copies[stages].imageExtent = (VkExtent3D){(uint32_t)m->width, (uint32_t)m->height, 1};
+        copies[stages].imageOffset = (VkOffset3D){(int32_t)x, (int32_t)y, 0};
+        copies[stages].imageExtent = (VkExtent3D){(uint32_t)width, (uint32_t)height, 1};
         ++stages;
     }
     vkCmdPipelineBarrier(r->cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
@@ -1590,6 +1669,19 @@ static int mirror_import(nj_vk_mirror *m, const nj_surface *surface, nj_s4 *dept
     if (want_depth)
         m->depth_ready = 1;
     return 1;
+}
+
+static int mirror_import(nj_vk_mirror *m, const nj_surface *surface, nj_s4 *depth,
+                         int depth_stride, int mask) {
+    return mirror_import_rect(m, surface, depth, depth_stride, 0, 0, m->width, m->height, mask);
+}
+
+int nj_vk_renderer_mirror_import_rect(nj_vk_mirror *m, const nj_surface *surface, nj_s4 *depth,
+                                      int depth_stride, int x, int y, int width, int height,
+                                      int mask) {
+    if (!m)
+        return 0;
+    return mirror_import_rect(m, surface, depth, depth_stride, x, y, width, height, mask);
 }
 
 /* Clear a rectangle of the resident mirror (colour and/or depth). Useful for
