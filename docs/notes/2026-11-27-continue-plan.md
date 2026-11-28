@@ -106,3 +106,24 @@
   逐包全屏颜色+深度往返 21.39/24.40 ms。
 - 下一步 M2b：nj_gfx 2D 调用点（背景图/overlay/drawImage/文字）与 M3G HD 三角形接入常驻镜面，
   截图/容差对照 + 8× 场内 A/B。
+
+### 2026-11-28 上午（Round 6）
+
+- 常驻镜面三角形路径已实现并自测通过：`nj_vk_renderer_mirror_triangles`（一次导入、
+  单 render pass 画多包、一次颜色导出；深度常驻不回读）。单测批量 vs 逐包逐字节一致；
+  基准 62 包 / 1920×2560：15.76 ms vs 921.58 ms（min）。
+- 下一步：把 M3G HD 路径与 `nj_gfx` 2D 图元接到常驻镜面，验证 8× 画面（截图/容差）与
+  性能 A/B；目标 ≥20% 才默认开启。
+
+## 2026-11-28 Round 6/7 进展：常驻镜面接线（M2b wiring）
+
+- 后端/端口：`hd_mirror_sync/clear/image/drop` 能力 + `nj_vk_resident` 常驻镜面；M3G 清屏、
+  背景图缩放、三角形全部留在 GPU，present 前一次颜色导出；HD 条目释放时丢弃 GPU 副本
+  （防地址复用继承旧内容）。
+- 开关 `NJ_VK_RESIDENT=1`（Android `debug.nj2me.vk_resident`），默认关闭。
+- 数据：Doom3 8× 400 帧稳定段 23–26 s/100 帧 → 10–11 s/100 帧（2.0–2.5×）；8× 确定性
+  回放两次逐位相同；与基线差集中在星空单像素与几何边缘（最大 39/22，无块状伪影）。
+- AVD 对照已完成：x86_64 --gles2 --vulkan APK + `debug.nj2me.vk_resident`（logcat 确认
+  `vulkan: resident HD mirror enabled`），JBenchmark3D 温暖后 on/off present stats 无可测
+  差异（frame 24.0/29.8 vs 23.35/28.73 ms）⇒ AVD 瓶颈在 GLES2 present/上传，需 M4。
+- 剩余：M3 脏矩形导出、M4 present 接 GPU 图像、多 title 回归；通过后考虑默认开启。

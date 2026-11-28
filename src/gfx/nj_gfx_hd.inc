@@ -17,6 +17,10 @@ int nj_gfx_mirror_context(const nj_gfx *g, nj_gfx *physical)
         (nj_s8)g->surf->width * k != m->target->width ||
         (nj_s8)g->surf->height * k != m->target->height)
         return 0;
+    /* A resident backend owns the physical target between CPU accesses: bring
+       it up to date (or decline the physical draw) before touching pixels. */
+    if (m->sync && !m->sync(m->sync_ud, m->target))
+        return 0;
     *physical = *g;
     physical->surf = m->target;
     physical->mirror = NULL;

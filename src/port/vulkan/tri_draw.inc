@@ -1024,6 +1024,7 @@ int nj_vk_renderer_triangles_list(void *ud, const nj_gfx_triangles_list *l, nj_u
 struct nj_vk_mirror {
     nj_vk_renderer *r;
     int width, height, ready;
+    int depth_ready; /* depth attachment already moved out of UNDEFINED */
     attachment image, depth;
     VkRenderPass clear_pass, load_pass;
     VkFramebuffer clear_fb, load_fb;
@@ -1458,4 +1459,257 @@ int nj_vk_renderer_mirror_texture(nj_vk_mirror *m, const nj_surface *src, int sx
     vkCmdDraw(r->cmd, 6, 1, 0, 0);
     vkCmdEndRenderPass(r->cmd);
     return mirror_submit(r);
+}
+
+/* Seed the resident colour (and optional depth) from the CPU mirror before a
+ * frame of 3D packets. Leaves both images in the attachment layouts the mirror
+ * render passes expect, so the next call can draw without another transition. */
+static int mirror_import(nj_vk_mirror *m, const nj_surface *surface, nj_s4 *depth,
+                         int depth_stride, int mask) {
+    nj_vk_renderer *r = m->r;
+    VkCommandBufferBeginInfo cb = VK_INIT(COMMAND_BUFFER_BEGIN_INFO);
+    VkImageMemoryBarrier barriers[2] = {VK_INIT(IMAGE_MEMORY_BARRIER), VK_INIT(IMAGE_MEMORY_BARRIER)};
+    VkBufferImageCopy copies[2] = {{0}};
+    VkSubmitInfo submit = VK_INIT(SUBMIT_INFO);
+    nj_u4 n = (nj_u4)m->width * (nj_u4)m->height;
+    int i, want_depth, want_colour, stages = 0;
+    if (!surface || !surface->pixels || surface->width != m->width || surface->height != m->height ||
+        surface->bpp != 4)
+        return 0;
+    /* The first fill must define both attachments before any pass can load
+     * them, so a fresh mirror always imports the full frame. */
+    if (!m->ready)
+        mask = NJ_VK_MIRROR_IMPORT_COLOUR | NJ_VK_MIRROR_IMPORT_DEPTH;
+    want_colour = (mask & NJ_VK_MIRROR_IMPORT_COLOUR) != 0;
+    want_depth = depth && (mask & NJ_VK_MIRROR_IMPORT_DEPTH) != 0;
+    if (!want_colour && !want_depth)
+        return 1;
+    if (want_depth && depth_stride < m->width)
+        return 0;
+    if (!reserve_buffer(r, &r->stage, (VkDeviceSize)n * 4u * (VkDeviceSize)(1 + (depth ? 1 : 0)),
+                        VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT))
+        return 0;
+    transfer_rect_at(r, surface, depth, depth_stride, 0, 0, m->width, m->height,
+                     depth && want_depth ? 1 : (depth ? 1 : 0), 0, 0, (size_t)n * 4u);
+    if (!sync_buffer(r, &r->stage, 0) || vkResetCommandPool(r->dev, r->pool, 0) != VK_SUCCESS)
+        return 0;
+    cb.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    if (vkBeginCommandBuffer(r->cmd, &cb) != VK_SUCCESS)
+        return 0;
+    for (i = 0; i < 2; ++i) {
+        int want = i ? want_depth : want_colour;
+        if (!want)
+            continue;
+        barriers[stages].dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        barriers[stages].oldLayout =
+            i == 0 ? (m->ready ? VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
+                               : VK_IMAGE_LAYOUT_UNDEFINED)
+                   : (m->depth_ready ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL
+                                     : VK_IMAGE_LAYOUT_UNDEFINED);
+        barriers[stages].newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        barriers[stages].srcQueueFamilyIndex = barriers[stages].dstQueueFamilyIndex =
+            VK_QUEUE_FAMILY_IGNORED;
+        barriers[stages].image = i ? m->depth.id : m->image.id;
+        barriers[stages].subresourceRange = (VkImageSubresourceRange){aspects[i], 0, 1, 0, 1};
+        copies[stages].bufferOffset = (VkDeviceSize)i * n * 4u;
+        copies[stages].imageSubresource = (VkImageSubresourceLayers){aspects[i], 0, 0, 1};
+        copies[stages].imageExtent = (VkExtent3D){(uint32_t)m->width, (uint32_t)m->height, 1};
+        ++stages;
+    }
+    vkCmdPipelineBarrier(r->cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
+                         0, NULL, 0, NULL, (uint32_t)stages, barriers);
+    for (i = 0; i < stages; ++i)
+        vkCmdCopyBufferToImage(r->cmd, r->stage.id, barriers[i].image,
+                               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copies[i]);
+    for (i = 0; i < stages; ++i) {
+        barriers[i].srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        barriers[i].dstAccessMask =
+            barriers[i].image == m->depth.id
+                ? (VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
+                   VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT)
+                : (VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
+        barriers[i].oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        barriers[i].newLayout = barriers[i].image == m->depth.id
+                                    ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL
+                                    : VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    }
+    vkCmdPipelineBarrier(r->cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                             VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
+                             VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
+                         0, 0, NULL, 0, NULL, (uint32_t)stages, barriers);
+    if (vkEndCommandBuffer(r->cmd) != VK_SUCCESS ||
+        vkResetFences(r->dev, 1, &r->fence) != VK_SUCCESS)
+        return 0;
+    submit.commandBufferCount = 1;
+    submit.pCommandBuffers = &r->cmd;
+    if (vkQueueSubmit(r->queue, 1, &submit, r->fence) != VK_SUCCESS ||
+        vkWaitForFences(r->dev, 1, &r->fence, VK_TRUE, UINT64_MAX) != VK_SUCCESS) {
+        r->lost = 1;
+        return 0;
+    }
+    m->ready = 1;
+    if (want_depth)
+        m->depth_ready = 1;
+    return 1;
+}
+
+/* Clear a rectangle of the resident mirror (colour and/or depth). Useful for
+ * partial clears that a full VkAttachmentLoadOp cannot express. */
+int nj_vk_renderer_mirror_clear_rect(nj_vk_mirror *m, nj_u4 argb, int x, int y, int width,
+                                     int height, int clear_colour, int clear_depth) {
+    nj_vk_renderer *r;
+    VkRenderPassBeginInfo pass = VK_INIT(RENDER_PASS_BEGIN_INFO);
+    VkClearAttachment att[2];
+    VkClearRect rect;
+    int n = 0;
+    if (!m || !(r = m->r) || r->lost || width <= 0 || height <= 0 || x < 0 || y < 0 ||
+        x + width > m->width || y + height > m->height || (!clear_colour && !clear_depth))
+        return 0;
+    if (!m->ready) {
+        /* The LOAD render pass needs defined attachment contents first. */
+        if (!nj_vk_renderer_mirror_clear(m, clear_colour ? argb : 0))
+            return 0;
+    }
+    if (!mirror_begin(r))
+        return 0;
+    pass.renderPass = m->load_pass;
+    pass.framebuffer = m->load_fb;
+    pass.renderArea.extent = (VkExtent2D){(uint32_t)m->width, (uint32_t)m->height};
+    vkCmdBeginRenderPass(r->cmd, &pass, VK_SUBPASS_CONTENTS_INLINE);
+    if (clear_colour) {
+        att[n].aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        att[n].colorAttachment = 0;
+        att[n].clearValue.color = (VkClearColorValue){{
+            (float)((argb >> 16) & 0xffu) / 255.0f, (float)((argb >> 8) & 0xffu) / 255.0f,
+            (float)(argb & 0xffu) / 255.0f, (float)((argb >> 24) & 0xffu) / 255.0f}};
+        ++n;
+    }
+    if (clear_depth) {
+        att[n].aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+        att[n].colorAttachment = 0;
+        att[n].clearValue.depthStencil = (VkClearDepthStencilValue){1.0f, 0};
+        ++n;
+    }
+    rect.rect = (VkRect2D){{x, y}, {(uint32_t)width, (uint32_t)height}};
+    rect.baseArrayLayer = 0;
+    rect.layerCount = 1;
+    vkCmdClearAttachments(r->cmd, (uint32_t)n, att, 1, &rect);
+    vkCmdEndRenderPass(r->cmd);
+    if (!mirror_submit(r))
+        return 0;
+    if (clear_depth)
+        m->depth_ready = 1;
+    return 1;
+}
+
+/* Draw a whole packet list into the resident mirror. `import` is a mask of
+ * NJ_VK_MIRROR_IMPORT_* bits that seeds the mirror from the CPU colour/depth
+ * buffers first (0 keeps the GPU state); `export_colour` copies the colour back
+ * afterwards. Between calls the mirror is authoritative. All packets must share
+ * one surface/depth whose dimensions match the mirror (the HD mirror size). */
+int nj_vk_renderer_mirror_triangles(nj_vk_mirror *m, const nj_gfx_triangles_list *l, int import,
+                                    int export_colour, nj_u4 *submitted) {
+    nj_vk_renderer *r;
+    packet_info *infos;
+    VkDescriptorBufferInfo desc = {0};
+    VkWriteDescriptorSet write = VK_INIT(WRITE_DESCRIPTOR_SET);
+    VkCommandBufferBeginInfo cb = VK_INIT(COMMAND_BUFFER_BEGIN_INFO);
+    VkRenderPassBeginInfo pass = VK_INIT(RENDER_PASS_BEGIN_INFO);
+    VkSubmitInfo submit = VK_INIT(SUBMIT_INFO);
+    VkViewport vp;
+    VkRect2D scissor;
+    VkDeviceSize zero = 0;
+    nj_u4 i, one = 0, total = 0, vertices = 0, texels = 0, vertex_base = 0;
+    if (!m || !m->r || !l || !submitted)
+        return 0;
+    r = m->r;
+    if (r->lost || !nj_gfx_triangles_list_validate(l, &one) || !l->surface ||
+        l->surface->width != m->width || l->surface->height != m->height || l->surface->bpp != 4)
+        return 0;
+    infos = (packet_info *)r->session_infos;
+    if (r->session_infos_cap < l->count) {
+        packet_info *grown =
+            (packet_info *)realloc(infos, (size_t)l->count * sizeof(*infos));
+        if (!grown)
+            return 0;
+        r->session_infos = infos = grown;
+        r->session_infos_cap = l->count;
+    }
+    for (i = 0; i < l->count; ++i) {
+        const nj_gfx_triangles *p = l->packets[i];
+        nj_u4 j;
+        memset(&infos[i], 0, sizeof infos[i]);
+        if (!p || !analyze(r, p, &infos[i]))
+            return 0;
+        for (j = 0; j < (nj_u4)infos[i].count; ++j)
+            infos[i].views[j].offset += (int)texels;
+        texels += (nj_u4)infos[i].texels;
+        vertices += p->count * 3u;
+        total += p->count;
+    }
+    if (!reserve_buffer(r, &r->vertices, (VkDeviceSize)vertices * sizeof(vertex),
+                        VK_BUFFER_USAGE_VERTEX_BUFFER_BIT) ||
+        !reserve_buffer(r, &r->textures, texels ? (VkDeviceSize)texels * 4u : 4u,
+                        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT))
+        return 0;
+    desc.buffer = r->textures.id;
+    desc.range = texels ? (VkDeviceSize)texels * 4u : 4u;
+    if (desc.range > r->properties.limits.maxStorageBufferRange)
+        return 0;
+    if (!r->desc_valid || desc.buffer != r->desc_buffer || desc.range > r->desc_range) {
+        write.dstSet = r->set;
+        write.descriptorCount = 1;
+        write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        write.pBufferInfo = &desc;
+        vkUpdateDescriptorSets(r->dev, 1, &write, 0, NULL);
+        r->desc_buffer = desc.buffer;
+        r->desc_range = desc.range;
+        r->desc_valid = 1;
+    }
+    for (i = 0; i < l->count; ++i) {
+        upload_geometry_at(r, l->packets[i], &infos[i], (vertex *)r->vertices.map + vertex_base);
+        vertex_base += l->packets[i]->count * 3u;
+    }
+    if (!sync_buffer(r, &r->vertices, 0) || !sync_buffer(r, &r->textures, 0))
+        return 0;
+    /* A fresh mirror has no defined contents: import the CPU frame (or clear)
+       before the first pass may load the attachments. */
+    if (!m->ready) {
+        int mask = import | NJ_VK_MIRROR_IMPORT_COLOUR;
+        if (l->depth)
+            mask |= NJ_VK_MIRROR_IMPORT_DEPTH;
+        if (!mirror_import(m, l->surface, l->depth, l->depth_stride, mask))
+            return 0;
+    } else if (import && !mirror_import(m, l->surface, l->depth, l->depth_stride, import)) {
+        return 0;
+    }
+    if (!mirror_begin(r))
+        return 0;
+    cb.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    (void)cb;
+    pass.renderPass = m->load_pass;
+    pass.framebuffer = m->load_fb;
+    pass.renderArea.extent = (VkExtent2D){(uint32_t)m->width, (uint32_t)m->height};
+    vkCmdBeginRenderPass(r->cmd, &pass, VK_SUBPASS_CONTENTS_INLINE);
+    vkCmdBindVertexBuffers(r->cmd, 0, 1, &r->vertices.id, &zero);
+    vkCmdBindDescriptorSets(r->cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->layout, 0, 1, &r->set, 0,
+                            NULL);
+    vertex_base = 0;
+    for (i = 0; i < l->count; ++i) {
+        const nj_gfx_triangles *p = l->packets[i];
+        vp = (VkViewport){(float)p->x, (float)p->y, (float)p->width, (float)p->height, 0.0f, 1.0f};
+        scissor = (VkRect2D){{p->x, p->y}, {(uint32_t)p->width, (uint32_t)p->height}};
+        vkCmdSetViewport(r->cmd, 0, 1, &vp);
+        vkCmdSetScissor(r->cmd, 0, 1, &scissor);
+        draws_body(r, p, &infos[i], vertex_base);
+        vertex_base += p->count * 3u;
+    }
+    vkCmdEndRenderPass(r->cmd);
+    if (!mirror_submit(r))
+        return 0;
+    if (export_colour && !nj_vk_renderer_mirror_export(m, l->surface))
+        return 0;
+    *submitted = total;
+    return NJ_GFX_ACCEL_DONE;
 }

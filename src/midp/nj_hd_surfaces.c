@@ -52,6 +52,10 @@ static void hd_free_surface(nj_vm *vm, nj_surface *s)
 
 static void hd_release(nj_vm *vm, hd_entry *entry)
 {
+    /* A resident backend keeps this surface on the GPU; let it go before the
+       CPU allocation disappears so a reused address cannot inherit its state. */
+    if (entry->mirror.target && vm->port && vm->port->hd_mirror_drop)
+        vm->port->hd_mirror_drop(vm->port->hd_mirror_drop_ud, entry->mirror.target);
     hd_free_surface(vm, &entry->physical);
     memset(entry, 0, sizeof(*entry));
 }
@@ -119,6 +123,8 @@ static void hd_bind(hd_entry *e, struct nj_hd_store *store, const nj_surface *s,
     e->mirror.scale = k;
     e->mirror.ud = store;
     e->mirror.lookup = hd_lookup;
+    e->mirror.sync = NULL;
+    e->mirror.sync_ud = NULL;
 }
 
 static void hd_quality(nj_vm *vm, int scale, int aa, const char *reason)
@@ -217,6 +223,10 @@ nj_render_mirror *nj_midp_hd_target(nj_vm *vm, const nj_surface *s)
         if (!e->physical.pixels) return NULL;
     }
     e->mirror.smooth_assets = vm->render_quality.smooth_assets;
+    /* A resident GPU backend keeps the physical target up to date; it must be
+       asked before the CPU draws on it. */
+    e->mirror.sync = vm->port ? vm->port->hd_mirror_sync : NULL;
+    e->mirror.sync_ud = vm->port ? vm->port->hd_mirror_sync_ud : NULL;
     if (!e->valid) hd_seed(e, s);
     return &e->mirror;
 }
@@ -273,6 +283,7 @@ int nj_midp_hd_present(nj_vm *vm)
     if (!vm || !vm->port || !vm->port->display_hd) return 0;
     nj_render_mirror *mirror = nj_midp_hd_target(vm, &vm->screen);
     if (!mirror) return 0;
+    if (mirror->sync && !mirror->sync(mirror->sync_ud, mirror->target)) return 0;
     frame = mirror->target;
     if (vm->render_quality.ssaa == 2) {
         nj_surface *out = &vm->hd_store->resolve;

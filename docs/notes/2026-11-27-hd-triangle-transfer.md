@@ -496,3 +496,85 @@ import=8.903 export=6.135 render=3.238`，即 619 个会话的导入、导出、
   `min 21.39 / median 24.40 ms`，纯填充版本 `min 4.64 / median 5.30 ms`。
 - 结论：2D 合成搬到常驻镜面后的每帧下限（~5-6 ms）远低于当前 8× 的 ~100 ms/帧，
   下一步 M2b 把 `nj_gfx` 2D 调用点与 M3G HD 三角形接进常驻镜面。
+
+## 十七、常驻镜面三角形路径（2026-11-28）
+
+§十四 证明「会话导入/导出」无法把 8× 高清颜色+深度往返降到足以抵消 CPU 2D 合成成本；
+§十六 的常驻镜面（M1/M2a）已能在 GPU 上常驻颜色与深度并做纹理 quad。本轮把三角批处理
+也搬到常驻镜面上：
+
+- `nj_vk_renderer_mirror_triangles(mirror, list, import, export_colour, &submitted)`
+  （src/port/vulkan/tri_draw.inc）：校验列表后逐包 analyze、累计纹理全局偏移、上传顶点与
+  纹理；`import` 时一次 `transfer_rect` 打包颜色+深度并 copyBufferToImage 到常驻附件；
+  单个 render pass（renderArea=全镜面）内逐包设置 viewport/scissor 后 `draws_body`；
+  一次 submit+fence；`export_colour` 时一次 `nj_vk_renderer_mirror_export` 把颜色写回 CPU
+  surface。深度常驻 GPU、不回读（CPU keys 在批次边界保持 stale，符合列表契约的
+  「调用者不得在分组包之间观察目标」）。
+- 单测 `mirror_triangle_lists`：128×96、3 个包（各 2 个三角形、各自纹理），批量导出与
+  「逐包各一次 import/export」逐字节一致（`0 mismatched pixels against sequential draws`）。
+- 基准（1920×2560、62 个 64×64 包、load≈8.4）：批量 `min 15.76 ms / mean 25.33 ms`；
+  逐包 import/export `min 921.58 ms / mean 1530.49 ms`。即同一批 62 包下，常驻路径约为
+  逐包路径的 1/58；对当前场内「每次 journal 事务 ~62 包」的场景，GPU 往返部分可从
+  约 40–49 ms 降到 16–25 ms。
+- 未接线：MIDP 2D 图元/图像/文字与 M3G HD 渲染仍走旧的逐包/会话路径；下一步把它接到
+  `nj_midp_hd_target`/`jr_hd_*` 与 `nj_gfx` 2D 调用点，再做 8× 截图/容差对照与 A/B。
+
+## 十八、常驻镜面接线（M2b wiring，2026-11-28）
+
+§十七 把三角形批处理搬上了常驻镜面，但 MIDP 2D 与 M3G 清屏/背景仍走 CPU，所以每帧仍要
+在 CPU 与 GPU 之间搬运两次全屏颜色+深度。本轮把整条 8× 高清路径接到常驻镜面上：
+
+- 端口契约（include/nj2me/nj_port.h）：新增 `hd_mirror_sync`（CPU 绘制前同步，必须返回非零
+  才允许 CPU 写物理目标）、`hd_mirror_clear`（GPU 清矩形，颜色/深度可选）、`hd_mirror_image`
+  （源矩形→目标矩形的纹理 quad）、`hd_mirror_drop`（HD 条目释放前丢弃 GPU 副本，防止地址
+  复用继承旧内容）。`nj_render_mirror` 相应增加 `sync`/`sync_ud`（CPU 2D 物理绘制前调用）。
+- Vulkan 后端（src/port/vulkan/nj_gfx_vulkan.c）：`nj_vk_resident` 按 CPU 目标指针匹配常驻
+  镜面；`resident_clear` 全屏清走 `mirror_clear`、局部清走 `mirror_clear_rect`（首次使用先
+  定义附件并从 CPU 导入颜色）；`resident_image` 走 `mirror_texture`（nearest、replace）；
+  `resident_list` 对 ARGB8888 目标走 `mirror_triangles`（import mask：CPU 触碰过则导入颜色，
+  深度仅在 CPU keys 可能过期时导入），其它格式委托精确单包列表；`resident_sync` 把 GPU 脏
+  内容一次导出；present 前同步。
+- M3G（src/midp/nj_lib_m3g.c）：`m3g_clear` 优先 `hd_mirror_clear`（视口非全屏时回退 CPU
+  填充）；`m3g_background_image` 的最近邻缩放改由 GPU quad 完成（REPEAT 模式仍走 CPU）；
+  三角形经 journal 一次 list 提交到常驻镜面，深度常驻 GPU、不回读。
+- 开关：`NJ_VK_RESIDENT=1`（Android：`debug.nj2me.vk_resident`），默认关闭。
+
+### 18.1 确定性与逐位对照
+
+8× 确定性回放（200 帧、dump-every 60）：两次运行逐位相同，帧 60/120/180 =
+`846057676cfed67a`/`b2f32d1c682185d3`/`695e0c5a49938a7f`；1× 下同样确定（帧
+60/120/180 = `584c0249d197ec69`/`3eacb0453a3d0fec`/`d8c677b177ec5c38`），但与 journal 关
+基线不同（journal 打开后经 list 提交，属于 opt-in 模式的确定性差异，默认路径未变）。
+与 journal 关基线的像素差（8×，同参数）：帧 60 完全相同；帧 100 差 59,482 px、最大通道差 3
+（均值 0.013）；帧 120 差 157,853 px、最大差 10（均值 0.059）；帧 180 差 66,104 px、最大差 39
+（均值 0.082，>8 的 15,301 px 集中在星空背景单像素）；帧 200 差 66,247 px、最大差 39；
+场内帧 300/400 差 13,633 px（0.28%）、最大差 22（>8 的 2,173 px 只在几何边缘细线）。
+目视无块状伪影：差异集中在星空单像素与三角边缘，属于 GPU 光栅化/采样与 CPU 参考的固有
+差异（与 §十四 的 float 深度语义差同源）。
+
+### 18.2 8× 场内耗时（Doom3 400 帧，keys 200/205/215/216，同机 interleaved A/B）
+
+以每 100 帧的稳定段计（dump 文件时间戳）：journal 关 23–26 s/100 帧；常驻开启
+10–11 s/100 帧 ⇒ 约 **2.0–2.5×** 加速（load≈4.2 的共享机器）。粗测整轮 400 帧：
+关 56.9/88.2 s，开 41.7/47.0 s。收益来源：每帧不再做 CPU 侧背景图 8× 缩放与逐包
+颜色/深度导入导出，只保留一次 present 前的颜色导出。
+- 注意：常驻模式改变了渲染语义（GPU 光栅化 2D 背景与三角形），画质对照见 18.1；默认仍是
+  精确单包+CPU 2D 路径，常驻模式保持 opt-in，待 AVD present stats 与更多 title 验证后再考虑
+  默认开启。
+
+### 18.3 AVD present stats（Android，x86_64 --gles2 --vulkan，8× HD，mode=5 1080x2400）
+
+设备：Medium_Phone_API_36.1（-gpu host，gfxstream 直通 RTX 5080），素材 JBenchmark3D
+（`Triangles ps: 49908` 场景）。`debug.nj2me.present_stats=1` 采集，开关由 `debug.nj2me.vk_resident` 控制，
+logcat 确认 `vulkan: resident HD mirror enabled` 后才计入常驻数据。
+
+| 配置 | draw median (ms) | swap median (ms) | frame median (ms) |
+| --- | --- | --- | --- |
+| 冷启动 off（首个 120 帧窗） | 5.4 / 4.5 | 12.4 / 8.5 | 43.9 / 52.2 |
+| 温暖 off | 3.175 / 3.133 | 5.801 / 5.295 | 23.350 / 28.731 |
+| 温暖 resident on | 3.349 / 3.300 | 5.855 / 5.181 | 24.001 / 29.831 |
+
+⇒ 温暖后 resident 与 off **无可测差异**（帧时 ~24–30 ms 被 GLES2 present/纹理上传主导，CPU
+侧 2D 合成已不是瓶颈）；冷启动窗的 44–52 ms 是 JIT/着色器编译伪差。桌面 2.0–2.5× 的收益在
+AVD 上体现不出来，说明下一步（M4）要把 present 也接到 GPU 图像上（省掉 GLES2 上传），
+而不是继续优化 CPU 合成。证据：`.local-tools/debug-runs/avd-resident-20261128/`。

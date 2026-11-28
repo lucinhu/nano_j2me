@@ -21,14 +21,25 @@ void nj_vk_renderer_triangles_abort(void *ud);
  * The mirror is a synchronous resource like the renderer: do not interleave it
  * with triangle sessions, and destroy every mirror before the renderer. */
 typedef struct nj_vk_mirror nj_vk_mirror;
+/* nj_vk_renderer_mirror_triangles() import bits: seed the mirror from the CPU
+ * colour/depth buffers before drawing. A fresh mirror always imports both. */
+#define NJ_VK_MIRROR_IMPORT_COLOUR 1
+#define NJ_VK_MIRROR_IMPORT_DEPTH 2
 nj_vk_mirror *nj_vk_renderer_mirror_create(void *ud, int width, int height);
 void nj_vk_renderer_mirror_destroy(nj_vk_mirror *mirror);
 int nj_vk_renderer_mirror_clear(nj_vk_mirror *mirror, nj_u4 argb);
+/* Clear one rectangle of the resident mirror on the GPU. `clear_colour` and
+ * `clear_depth` select which attachments the rectangle clears. Returns
+ * nonzero when the rectangle was committed. */
+int nj_vk_renderer_mirror_clear_rect(nj_vk_mirror *mirror, nj_u4 argb, int x, int y, int width,
+                                     int height, int clear_colour, int clear_depth);
 int nj_vk_renderer_mirror_fill(nj_vk_mirror *mirror, int x, int y, int width, int height, nj_u4 argb);
 int nj_vk_renderer_mirror_export(nj_vk_mirror *mirror, const nj_surface *dst);
 int nj_vk_renderer_mirror_texture(nj_vk_mirror *mirror, const nj_surface *src, int sx, int sy,
                                   int sw, int sh, int dx, int dy, int dw, int dh, int filter,
                                   int blend);
+int nj_vk_renderer_mirror_triangles(nj_vk_mirror *mirror, const nj_gfx_triangles_list *list,
+                                    int import, int export_colour, nj_u4 *submitted);
 #ifdef __cplusplus
 }
 #endif

@@ -898,6 +898,24 @@ typedef struct nj_port {
     int render_scale, render_ssaa, render_subdivide, render_fsr2;
     void (*display_hd)(void *ud, const nj_surface *frame);
     int render_smooth_assets; /* enum nj_asset_filter (nearest, smooth, pixel art) */
+    /* Optional GPU-resident HD mirror hooks. When set, the VM keeps the
+     * physical target on the GPU between CPU observations: hd_mirror_sync
+     * exports pending pixels before the CPU draws into the target or the port
+     * presents it; hd_mirror_clear clears a physical rectangle (colour and/or
+     * depth) and hd_mirror_image draws a screen-space source rectangle as a
+     * nearest-sampled quad. All return nonzero when they handled the work. */
+    int (*hd_mirror_sync)(void *ud, nj_surface *target);
+    void *hd_mirror_sync_ud;
+    int (*hd_mirror_clear)(void *ud, nj_surface *target, nj_u4 argb, int x, int y, int width,
+                           int height, int clear_colour, int clear_depth);
+    void *hd_mirror_clear_ud;
+    int (*hd_mirror_image)(void *ud, nj_surface *target, const void *pixels, int width, int height,
+                           int bpp, int sx, int sy, int sw, int sh, int dx, int dy, int dw, int dh);
+    void *hd_mirror_image_ud;
+    /* The HD store is dropping `target`: release any GPU copy of it without
+     * exporting, because its pixels are about to become unreachable. */
+    void (*hd_mirror_drop)(void *ud, nj_surface *target);
+    void *hd_mirror_drop_ud;
 } nj_port;
 
 /* ------------------------------------------------------------------ */

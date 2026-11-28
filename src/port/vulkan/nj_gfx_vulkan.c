@@ -50,6 +50,15 @@ typedef struct material {
     uint32_t fog_color;
     float near_dist, far_dist, density;
 } material;
+/* A physical HD target that stays on the GPU between CPU observations. It is
+ * matched to the CPU buffer it exports to; the VM calls the mirror sync hook
+ * before it draws on that buffer and before it presents it. */
+typedef struct nj_vk_resident {
+    nj_vk_mirror *mirror;
+    void *pixels;
+    int width, height;
+} nj_vk_resident;
+
 struct nj_vk_renderer {
     VkInstance instance;
     VkPhysicalDevice gpu;
@@ -101,6 +110,12 @@ struct nj_vk_renderer {
     /* NJ_VK_PROFILE=1 reports where the session time goes. */
     double prof_import, prof_export, prof_render;
     unsigned prof_sessions;
+    /* GPU-resident HD mirror (opt-in): the physical target accumulates M3G
+     * draws and GPU 2D until the CPU needs the pixels. */
+    nj_vk_resident *resident;
+    int resident_dirty;       /* GPU colour differs from the CPU copy */
+    int resident_cpu_touched; /* the CPU may have written since the last import */
+    int resident_depth_dirty; /* GPU depth holds draws the CPU keys do not */
 };
 static const VkFormat formats[] = {VK_FORMAT_B8G8R8A8_UNORM, VK_FORMAT_D32_SFLOAT};
 static const VkImageUsageFlags usages[] = {
@@ -463,6 +478,12 @@ void nj_vk_renderer_destroy(nj_vk_renderer *r) {
     if (r->dev) {
         int i;
         vkDeviceWaitIdle(r->dev);
+        if (r->resident) {
+            if (r->resident->mirror)
+                nj_vk_renderer_mirror_destroy(r->resident->mirror);
+            free(r->resident);
+            r->resident = NULL;
+        }
         vkDestroyCommandPool(r->dev, r->pool, NULL);
         vkDestroyDescriptorPool(r->dev, r->descriptors, NULL);
         release_target(r);
@@ -489,6 +510,148 @@ void nj_vk_renderer_destroy(nj_vk_renderer *r) {
     free(r);
 }
 #include "tri_draw.inc"
+
+/* --- GPU-resident HD mirror ------------------------------------------------ */
+static void resident_release(nj_vk_renderer *r) {
+    if (!r || !r->resident) return;
+    if (r->resident->mirror) nj_vk_renderer_mirror_destroy(r->resident->mirror);
+    free(r->resident);
+    r->resident = NULL;
+    r->resident_dirty = 0;
+    r->resident_cpu_touched = 0;
+    r->resident_depth_dirty = 0;
+}
+static nj_vk_resident *resident_ensure(nj_vk_renderer *r, const nj_surface *surface) {
+    nj_vk_resident *res = r->resident;
+    if (!r || !surface || !surface->pixels) return NULL;
+    if (res && res->pixels == surface->pixels && res->width == surface->width &&
+        res->height == surface->height)
+        return res;
+    resident_release(r);
+    if (surface->format != NJ_PIXFMT_ARGB8888 || surface->bpp != 4 || surface->width < 16 ||
+        surface->height < 16)
+        return NULL;
+    res = (nj_vk_resident *)calloc(1, sizeof *res);
+    if (!res) return NULL;
+    res->mirror = nj_vk_renderer_mirror_create(r, surface->width, surface->height);
+    if (!res->mirror) {
+        free(res);
+        return NULL;
+    }
+    res->pixels = surface->pixels;
+    res->width = surface->width;
+    res->height = surface->height;
+    r->resident = res;
+    return res;
+}
+static void resident_drop(void *ud, nj_surface *target) {
+    nj_vk_renderer *r = (nj_vk_renderer *)ud;
+    if (r && r->resident && target && r->resident->pixels == target->pixels)
+        resident_release(r);
+}
+static int resident_sync(void *ud, nj_surface *target) {
+    nj_vk_renderer *r = (nj_vk_renderer *)ud;
+    nj_vk_resident *res;
+    if (!r) return 0;
+    res = r->resident;
+    if (!res || !target || res->pixels != target->pixels) return 1;
+    if (r->resident_dirty) {
+        if (!nj_vk_renderer_mirror_export(res->mirror, target)) {
+            r->lost = 1;
+            return 0;
+        }
+        r->resident_dirty = 0;
+    }
+    r->resident_cpu_touched = 1;
+    return 1;
+}
+static int resident_clear(void *ud, nj_surface *target, nj_u4 argb, int x, int y, int width,
+                          int height, int clear_colour, int clear_depth) {
+    nj_vk_renderer *r = (nj_vk_renderer *)ud;
+    nj_vk_resident *res;
+    int full;
+    if (!r || !target) return 0;
+    res = resident_ensure(r, target);
+    if (!res) return 0;
+    full = x == 0 && y == 0 && width == res->width && height == res->height;
+    if (!res->mirror->ready) {
+        /* Define both attachments, then seed the colour from the CPU frame so a
+           partial clear keeps everything outside its rectangle. */
+        if (!nj_vk_renderer_mirror_clear(res->mirror, 0)) {
+            r->lost = 1;
+            return 0;
+        }
+        if (!(full && clear_colour && clear_depth) &&
+            !mirror_import(res->mirror, target, NULL, 0, NJ_VK_MIRROR_IMPORT_COLOUR)) {
+            r->lost = 1;
+            return 0;
+        }
+    }
+    if ((full && clear_colour && clear_depth
+             ? !nj_vk_renderer_mirror_clear(res->mirror, argb)
+             : !nj_vk_renderer_mirror_clear_rect(res->mirror, argb, x, y, width, height,
+                                                 clear_colour, clear_depth))) {
+        r->lost = 1;
+        return 0;
+    }
+    r->resident_dirty = 1;
+    r->resident_cpu_touched = 0;
+    if (clear_depth) r->resident_depth_dirty = 0;
+    return 1;
+}
+static int resident_image(void *ud, nj_surface *target, const void *pixels, int width, int height,
+                          int bpp, int sx, int sy, int sw, int sh, int dx, int dy, int dw, int dh) {
+    nj_vk_renderer *r = (nj_vk_renderer *)ud;
+    nj_vk_resident *res;
+    nj_surface src;
+    if (!r || !target || !pixels || width <= 0 || height <= 0 || bpp < 2 || bpp > 4 || sw <= 0 ||
+        sh <= 0 || dw <= 0 || dh <= 0)
+        return 0;
+    res = resident_ensure(r, target);
+    if (!res) return 0;
+    src.pixels = (void *)pixels;
+    src.width = width;
+    src.height = height;
+    src.stride = width * bpp;
+    src.format = bpp == 4 ? NJ_PIXFMT_ARGB8888 : bpp == 3 ? NJ_PIXFMT_RGB888 : NJ_PIXFMT_RGB565;
+    src.bpp = bpp;
+    if (!res->mirror->ready) {
+        if (!nj_vk_renderer_mirror_clear(res->mirror, 0) ||
+            !mirror_import(res->mirror, target, NULL, 0, NJ_VK_MIRROR_IMPORT_COLOUR)) {
+            r->lost = 1;
+            return 0;
+        }
+    }
+    if (!nj_vk_renderer_mirror_texture(res->mirror, &src, sx, sy, sw, sh, dx, dy, dw, dh, 208, 68)) {
+        r->lost = 1;
+        return 0;
+    }
+    r->resident_dirty = 1;
+    r->resident_cpu_touched = 0;
+    return 1;
+}
+static int resident_list(void *ud, const nj_gfx_triangles_list *l, nj_u4 *submitted) {
+    nj_vk_renderer *r = (nj_vk_renderer *)ud;
+    nj_vk_resident *res;
+    nj_u4 import = 0;
+    if (!r || !l || !l->surface || !submitted) return NJ_GFX_ACCEL_DECLINE;
+    if (l->surface->format != NJ_PIXFMT_ARGB8888 || l->surface->bpp != 4)
+        return nj_vk_renderer_triangles_list(r, l, submitted);
+    res = resident_ensure(r, l->surface);
+    if (!res) return nj_vk_renderer_triangles_list(r, l, submitted);
+    if (r->resident_cpu_touched) {
+        import = NJ_VK_MIRROR_IMPORT_COLOUR;
+        if (!r->resident_depth_dirty) import |= NJ_VK_MIRROR_IMPORT_DEPTH;
+    }
+    if (!nj_vk_renderer_mirror_triangles(res->mirror, l, (int)import, 0, submitted)) {
+        r->lost = 1;
+        return NJ_GFX_ACCEL_DECLINE;
+    }
+    r->resident_dirty = 1;
+    r->resident_cpu_touched = 0;
+    r->resident_depth_dirty = 1;
+    return NJ_GFX_ACCEL_DONE;
+}
 
 #if NJ_ENABLE_GFX_ACCEL
 static void destroy_owned_renderer(void *ud) { nj_vk_renderer_destroy(ud); }
@@ -545,6 +708,35 @@ int nj_vk_renderer_attach(nj_port *port) {
             port->gfx_triangles_abort = nj_vk_renderer_triangles_abort;
             port->gfx_triangles_session_ud = r;
             port->gfx_hd_journal = 1;
+        }
+    }
+    {
+        /* GPU-resident HD mirror: M3G draws, clears and background images stay
+         * on the GPU; the CPU copy is exported only when the VM reads it. */
+        int want_resident = 0;
+        const char *resident = getenv("NJ_VK_RESIDENT");
+        if (resident && resident[0] == '1')
+            want_resident = 1;
+#if defined(__ANDROID__)
+        if (!want_resident) {
+            char prop[PROP_VALUE_MAX];
+            if (__system_property_get("debug.nj2me.vk_resident", prop) > 0 && prop[0] == '1')
+                want_resident = 1;
+        }
+#endif
+        if (want_resident) {
+            port->gfx_triangles_list = resident_list;
+            port->gfx_triangles_list_ud = r;
+            port->gfx_hd_journal = 1;
+            port->hd_mirror_sync = resident_sync;
+            port->hd_mirror_sync_ud = r;
+            port->hd_mirror_clear = resident_clear;
+            port->hd_mirror_clear_ud = r;
+            port->hd_mirror_image = resident_image;
+            port->hd_mirror_image_ud = r;
+            port->hd_mirror_drop = resident_drop;
+            port->hd_mirror_drop_ud = r;
+            VK_LOG("vulkan: resident HD mirror enabled");
         }
     }
     port->gfx_hd_destroy = destroy_owned_renderer;

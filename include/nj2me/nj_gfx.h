@@ -275,6 +275,12 @@ typedef struct nj_render_mirror {
     /* Borrow an existing physical image. A miss never allocates. */
     const nj_surface *(*lookup)(void *ud, const void *pixels, int w, int h);
     int smooth_assets;  /* enum nj_asset_filter, physical target only */
+    /* Optional GPU residency. Before the CPU draws into `target`, `sync` must
+     * make it current: it may export pixels the GPU produced since the last
+     * CPU access. Nonzero means the CPU may write the target. Both NULL keeps
+     * the pure software path. */
+    int (*sync)(void *ud, nj_surface *target);
+    void *sync_ud;
 } nj_render_mirror;
 
 struct nj_gfx_accel;

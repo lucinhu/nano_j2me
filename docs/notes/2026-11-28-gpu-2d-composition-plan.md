@@ -83,7 +83,19 @@ resident bench: 1920x2560 full colour+depth pass min 18.40 ms median 20.60 ms
   基准（1920×2560，load≈8.7）：clear+8 fills+全屏纹理 quad+export
   `min 4.70 / median 6.38 ms`；同机对比 逐包全屏颜色+深度往返 `min 21.39 / median 24.40 ms`、
   纯填充版本 `min 4.64 / median 5.30 ms`。
-- **M2b**：把 `nj_gfx` 的 2D 调用点（背景图/overlay/drawImage/纯色/文字）接到常驻镜面，
+- **M2b（后端路径完成）**：常驻镜面三角形路径
+  `nj_vk_renderer_mirror_triangles(mirror, list, import, export_colour, &submitted)`
+  ——一次颜色（可选深度）导入、单个 render pass 内按包设置 viewport/scissor 画完所有包、
+  一次颜色导出；纹理/顶点仍每批上传，深度只导入不导出。单测 `mirror_triangle_lists`
+  （128×96、3 个包、每包 2 个三角形与独立纹理）：单次批量与「逐包各一次 import/export」
+  像素逐字节一致（`0 mismatched pixels against sequential draws`）。
+  基准（1920×2560、62 个 64×64 包、load≈8.4）：批量 `min 15.76 ms / mean 25.33 ms`，
+  逐包 `min 921.58 ms / mean 1530.49 ms` ⇒ 同一批 62 包，常驻路径约为逐包 import/export 的
+  1/58 耗时；当前 8× 场内每批约 62 包、每次事务约 40–49 ms，常驻路径把其中 GPU 往返部分
+  压到 ~16–25 ms（仍含全屏 39 MB 一次导入+一次颜色导出）。**尚未接线**：MIDP 2D
+  （背景图/overlay/drawImage/纯色/文字）与 M3G HD 三角形仍需切到该路径，
+  8× 画质对照（截图/容差）与性能 A/B（目标 ≥20%）待做。
+- **M2b 接线**：把 `nj_gfx` 的 2D 调用点（背景图/overlay/drawImage/纯色/文字）接到常驻镜面，
   M3G HD 三角形直接渲染进常驻镜面；8× 画质对照（截图/容差）与性能 A/B（目标 ≥20%）。
 - **M3**：文字、曲线、视频 overlay；脏矩形导出。
 - **M4**：present 集成与 Android 验证（present stats）、全量测试（236/222/check_android_java/
@@ -104,3 +116,33 @@ resident bench: 1920x2560 full colour+depth pass min 18.40 ms median 20.60 ms
 
 M1：给 `nj_vk_renderer` 加常驻镜面对象与最小 2D 操作（clear/fill/纹理 quad/export），
 在 `test_gfx_vulkan` 里与 CPU 参考对比并基准；先不接 M3G，保证独立可测。
+
+## 7. M2b 接线（2026-11-28）
+
+MIDP 2D 与 M3G 高清路径已接到常驻镜面（实现细节与数据见
+`docs/notes/2026-11-27-hd-triangle-transfer.md` §十八）：
+
+- 端口新增 `hd_mirror_sync/clear/image/drop` 四个能力；`nj_render_mirror.sync` 让 CPU 2D
+  在写物理目标前先导出/同步 GPU 状态。
+- `m3g_clear` 用 GPU 矩形清屏（视口外保留、局部清用 `vkCmdClearAttachments`）；
+  `m3g_background_image` 的最近邻缩放变成 GPU 纹理 quad（REPEAT 保留 CPU 路径）；
+  三角形经 journal 列表一次提交进常驻镜面，深度常驻 GPU 不回读。
+- 开关：`NJ_VK_RESIDENT=1` / Android `debug.nj2me.vk_resident`，默认关闭。
+
+结果（Doom3 8× 400 帧，同机 interleaved，load≈4.2）：
+
+- 稳定段 journal 关 23–26 s/100 帧 vs 常驻 10–11 s/100 帧 ⇒ **2.0–2.5×**；整轮粗测
+  56.9/88.2 s vs 41.7/47.0 s。
+- 8× 确定性回放两次逐位相同（帧 60/120/180 = `846057676cfed67a` / `b2f32d1c682185d3` /
+  `695e0c5a49938a7f`）；与 journal 关基线相比：标题帧 60 完全一致；场内帧 300 差
+  13,633 px（0.28%、最大 22，只在几何边缘细线）；星空背景单像素最大差 39。
+- 1× 常驻模式也确定，但因 journal 改走 list 提交而与逐包基线不同（opt-in 专用；默认路径
+  未变）。
+
+AVD present stats（x86_64 --gles2 --vulkan，8× HD，JBenchmark3D）：温暖后 resident on 与 off
+无可测差异（draw 3.35/3.30 vs 3.18/3.13，swap 5.86/5.18 vs 5.80/5.30，frame 24.0/29.8 vs
+23.35/28.73 ms），说明 AVD 的帧时被 GLES2 present/上传主导，CPU 合成已不是瓶颈；桌面
+2.0–2.5× 的收益要等 M4（present 直接消费 GPU 图像）才能在 Android 上兑现。
+
+下一步：M3 脏矩形导出（把 present 前的全屏颜色导出也缩到 HUD/变化区域）、M4 present 接
+GPU 图像与更多 title 回归；通过后把这些能力做成默认开启（但保留精确单包回退）。

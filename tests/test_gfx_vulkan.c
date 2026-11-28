@@ -1146,6 +1146,228 @@ static void bench_mirror_texture(nj_vk_renderer *r) {
     free(got);
 }
 
+
+/* A packet list drawn into the resident mirror must match the same packets
+ * drawn one call at a time (same import/export boundaries, same order). */
+static void mirror_triangle_lists(nj_vk_renderer *r) {
+    enum { W = 128, H = 96, NP = 3, PX = 32 };
+    nj_vk_mirror *m = nj_vk_renderer_mirror_create(r, W, H);
+    nj_u4 *colors = (nj_u4 *)malloc((size_t)W * H * 4);
+    nj_u4 *batch = (nj_u4 *)malloc((size_t)W * H * 4);
+    nj_u4 *sequential = (nj_u4 *)malloc((size_t)W * H * 4);
+    nj_s4 *keys = (nj_s4 *)malloc((size_t)W * H * sizeof *keys);
+    nj_u1 texture[4 * 4 * 3];
+    nj_gfx_triangle_cmd cmds[NP][2];
+    nj_gfx_triangles packets[NP];
+    const nj_gfx_triangles *list_packets[NP];
+    nj_gfx_triangles_list list;
+    nj_surface surface;
+    nj_u4 submitted;
+    int i, k, x, y, mismatches = 0;
+    const nj_u4 background = 0xff102030u;
+    if (!m || !colors || !batch || !sequential || !keys) {
+        fprintf(stderr, "mirror triangle lists: setup failed\n");
+        exit(1);
+    }
+    for (i = 0; i < (int)sizeof texture; i += 3) {
+        texture[i] = 0x20;
+        texture[i + 1] = 0xc0;
+        texture[i + 2] = 0x50;
+    }
+    surface = (nj_surface){colors, W, H, W * 4, NJ_PIXFMT_ARGB8888, 4};
+    memset(cmds, 0, sizeof cmds);
+    for (i = 0; i < NP; ++i) {
+        nj_gfx_triangle_cmd *q = cmds[i];
+        int px = i * 40, py = i * 10;
+        for (k = 0; k < 2; ++k) {
+            q[k].blend = 68;
+            q[k].alpha_write = 1;
+            q[k].depth_test = 1;
+            q[k].depth_write = 1;
+            q[k].texture = texture;
+            q[k].texture_width = 4;
+            q[k].texture_height = 4;
+            q[k].texture_bpp = 3;
+            q[k].texture_no_alpha = 1;
+            q[k].wrap_s = q[k].wrap_t = 240;
+            q[k].filter = 208;
+            q[k].texture_function = 228;
+            q[k].vertices[0].inv_w = q[k].vertices[1].inv_w = q[k].vertices[2].inv_w = 1.0f;
+            q[k].vertices[0].depth = q[k].vertices[1].depth = q[k].vertices[2].depth = 0.5;
+            q[k].vertices[0].u = q[k].vertices[0].v = 0.0f;
+            q[k].vertices[1].u = 1.0f;
+            q[k].vertices[1].v = 0.0f;
+            q[k].vertices[2].u = 0.0f;
+            q[k].vertices[2].v = 1.0f;
+            q[k].vertices[0].color = q[k].vertices[1].color = q[k].vertices[2].color = 0xffffffffu;
+        }
+        /* Two triangles cover the packet rectangle [px, py, PX, PX]. */
+        cmds[i][0].vertices[0].x = (float)px;
+        cmds[i][0].vertices[0].y = (float)py;
+        cmds[i][0].vertices[1].x = (float)(px + PX);
+        cmds[i][0].vertices[1].y = (float)py;
+        cmds[i][0].vertices[2].x = (float)px;
+        cmds[i][0].vertices[2].y = (float)(py + PX);
+        cmds[i][1].vertices[0].x = (float)(px + PX);
+        cmds[i][1].vertices[0].y = (float)(py + PX);
+        cmds[i][1].vertices[1].x = (float)(px + PX);
+        cmds[i][1].vertices[1].y = (float)py;
+        cmds[i][1].vertices[2].x = (float)px;
+        cmds[i][1].vertices[2].y = (float)(py + PX);
+        packets[i] = (nj_gfx_triangles){NJ_GFX_TRIANGLES_VERSION, &surface, keys, W, px, py, PX, PX,
+                                        q, 2};
+        list_packets[i] = &packets[i];
+    }
+    list = (nj_gfx_triangles_list){NJ_GFX_TRIANGLES_LIST_VERSION, &surface, keys, W, list_packets, NP};
+    for (i = 0; i < W * H; ++i) {
+        colors[i] = background;
+        keys[i] = 1; /* far depth rank: depth 0.5 passes and writes */
+    }
+    /* Sequential: every packet is its own import/export transaction. */
+    for (i = 0; i < NP; ++i) {
+        nj_gfx_triangles_list one = list;
+        one.count = 1;
+        one.packets = &list_packets[i];
+        CHECK(nj_vk_renderer_mirror_triangles(m, &one, 3, 1, &submitted) == NJ_GFX_ACCEL_DONE);
+        CHECK(submitted == 2);
+    }
+    memcpy(sequential, colors, (size_t)W * H * 4);
+    /* Batched: one import, all packets, one export. */
+    for (i = 0; i < W * H; ++i) {
+        colors[i] = background;
+        keys[i] = 1;
+    }
+    CHECK(nj_vk_renderer_mirror_triangles(m, &list, 3, 1, &submitted) == NJ_GFX_ACCEL_DONE);
+    CHECK(submitted == 2 * NP);
+    memcpy(batch, colors, (size_t)W * H * 4);
+    for (y = 0; y < H; ++y)
+        for (x = 0; x < W; ++x)
+            if (batch[y * W + x] != sequential[y * W + x])
+                ++mismatches;
+    CHECK(mismatches == 0);
+    CHECK(colors[10 * W + 10] != background);
+    /* Deferred export: draw a fresh batch without copying colour back, then
+     * export explicitly. Must match the sequential result too. */
+    for (i = 0; i < W * H; ++i) {
+        colors[i] = background;
+        keys[i] = 1;
+    }
+    CHECK(nj_vk_renderer_mirror_triangles(m, &list, 3, 0, &submitted) == NJ_GFX_ACCEL_DONE);
+    CHECK(nj_vk_renderer_mirror_export(m, &surface));
+    mismatches = 0;
+    for (y = 0; y < H; ++y)
+        for (x = 0; x < W; ++x)
+            if (colors[y * W + x] != sequential[y * W + x])
+                ++mismatches;
+    CHECK(mismatches == 0);
+    printf("mirror triangle lists: %d mismatched pixels against sequential draws\n", mismatches);
+    nj_vk_renderer_mirror_destroy(m);
+    free(colors);
+    free(batch);
+    free(sequential);
+    free(keys);
+}
+
+/* Per-frame cost of 3D into the resident mirror: one import, 62 packet draws
+ * and one export against 62 separate import/export transactions. */
+static void bench_mirror_triangles(nj_vk_renderer *r) {
+    enum { W = 1920, H = 2560, NP = 62, PX = 64, REPS = 10 };
+    nj_vk_mirror *m = nj_vk_renderer_mirror_create(r, W, H);
+    nj_u4 *colors = (nj_u4 *)malloc((size_t)W * H * 4);
+    nj_u4 *keys = (nj_s4 *)malloc((size_t)W * H * sizeof(nj_s4));
+    nj_u1 texture[2 * 2 * 3];
+    nj_gfx_triangle_cmd cmds[NP][2];
+    nj_gfx_triangles packets[NP];
+    const nj_gfx_triangles *list_packets[NP];
+    nj_gfx_triangles_list list, one;
+    nj_surface surface;
+    nj_u4 submitted;
+    double batch_ms = 0, single_ms = 0, best_batch = -1, best_single = -1;
+    int i, k, c;
+    if (!m || !colors || !keys) {
+        fprintf(stderr, "mirror triangle bench: setup failed\n");
+        exit(1);
+    }
+    for (i = 0; i < (int)sizeof texture; i += 3) {
+        texture[i] = 0x40;
+        texture[i + 1] = 0x80;
+        texture[i + 2] = 0xc0;
+    }
+    surface = (nj_surface){colors, W, H, W * 4, NJ_PIXFMT_ARGB8888, 4};
+    memset(cmds, 0, sizeof cmds);
+    for (i = 0; i < NP; ++i) {
+        int px = (i % 8) * 200 + 40, py = (i / 8) * 280 + 60;
+        for (k = 0; k < 2; ++k) {
+            nj_gfx_triangle_cmd *q = &cmds[i][k];
+            q->blend = 68;
+            q->alpha_write = 1;
+            q->depth_test = 1;
+            q->depth_write = 1;
+            q->texture = texture;
+            q->texture_width = q->texture_height = 2;
+            q->texture_bpp = 3;
+            q->texture_no_alpha = 1;
+            q->wrap_s = q->wrap_t = 240;
+            q->filter = 208;
+            q->texture_function = 228;
+            q->vertices[0].inv_w = q->vertices[1].inv_w = q->vertices[2].inv_w = 1.0f;
+            q->vertices[0].depth = q->vertices[1].depth = q->vertices[2].depth = 0.5;
+            q->vertices[0].u = q->vertices[0].v = 0.0f;
+            q->vertices[1].u = 1.0f;
+            q->vertices[1].v = 0.0f;
+            q->vertices[2].u = 0.0f;
+            q->vertices[2].v = 1.0f;
+            q->vertices[0].color = q->vertices[1].color = q->vertices[2].color = 0xffffffffu;
+        }
+        cmds[i][0].vertices[0].x = (float)px;
+        cmds[i][0].vertices[0].y = (float)py;
+        cmds[i][0].vertices[1].x = (float)(px + PX);
+        cmds[i][0].vertices[1].y = (float)py;
+        cmds[i][0].vertices[2].x = (float)px;
+        cmds[i][0].vertices[2].y = (float)(py + PX);
+        cmds[i][1].vertices[0].x = (float)(px + PX);
+        cmds[i][1].vertices[0].y = (float)(py + PX);
+        cmds[i][1].vertices[1].x = (float)(px + PX);
+        cmds[i][1].vertices[1].y = (float)py;
+        cmds[i][1].vertices[2].x = (float)px;
+        cmds[i][1].vertices[2].y = (float)(py + PX);
+        packets[i] = (nj_gfx_triangles){NJ_GFX_TRIANGLES_VERSION, &surface, keys, W, px, py, PX, PX,
+                                        cmds[i], 2};
+    }
+    list = (nj_gfx_triangles_list){NJ_GFX_TRIANGLES_LIST_VERSION, &surface, keys, W, list_packets, NP};
+    for (i = 0; i < NP; ++i)
+        list_packets[i] = &packets[i];
+    for (i = 0; i < W * H; ++i) {
+        colors[i] = 0xff101010u;
+        keys[i] = 1;
+    }
+    for (c = 0; c < REPS; ++c) {
+        double t = millis();
+        CHECK(nj_vk_renderer_mirror_triangles(m, &list, 3, 1, &submitted) == NJ_GFX_ACCEL_DONE);
+        t = millis() - t;
+        batch_ms += t;
+        if (best_batch < 0 || t < best_batch)
+            best_batch = t;
+        t = millis();
+        one = list;
+        one.count = 1;
+        for (i = 0; i < NP; ++i) {
+            one.packets = &list_packets[i];
+            CHECK(nj_vk_renderer_mirror_triangles(m, &one, 3, 1, &submitted) == NJ_GFX_ACCEL_DONE);
+        }
+        t = millis() - t;
+        single_ms += t;
+        if (best_single < 0 || t < best_single)
+            best_single = t;
+    }
+    printf("mirror triangle bench: %dx%d, %d packets: batch min %.2f ms mean %.2f ms; "
+           "per-packet min %.2f ms mean %.2f ms\n",
+           W, H, (int)NP, best_batch, batch_ms / REPS, best_single, single_ms / REPS);
+    nj_vk_renderer_mirror_destroy(m);
+    free(colors);
+    free(keys);
+}
+
 int main(int argc, char **argv) {
     nj_vk_renderer *r = nj_vk_renderer_create();
     if (!r) {
@@ -1169,6 +1391,7 @@ int main(int argc, char **argv) {
     retained_sessions(r);
     mirror_basics(r);
     mirror_textures(r);
+    mirror_triangle_lists(r);
     if (argc > 1 && !strcmp(argv[1], "--bench-rgb565")) {
         rgb565_packets(r, 243, 322, 1);
         rgb565_packets(r, 1283, 722, 1);
@@ -1180,6 +1403,8 @@ int main(int argc, char **argv) {
         bench_mirror(r);
     if (argc > 1 && !strcmp(argv[1], "--bench-mirror-texture"))
         bench_mirror_texture(r);
+    if (argc > 1 && !strcmp(argv[1], "--bench-mirror-triangles"))
+        bench_mirror_triangles(r);
     if (argc > 1 && !strcmp(argv[1], "--bench-resident"))
         bench_resident(r);
     if (argc > 1 && !strcmp(argv[1], "--bench"))

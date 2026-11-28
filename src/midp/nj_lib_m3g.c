@@ -4207,6 +4207,13 @@ static void m3g_background_image(nj_vm *vm, nj_ref self, nj_ref bg, nj_ref targe
     my = nj_iget(vm, bg, m3g_fof(vm, NJ_C_BG, "_nj_immodeY", "I"));
     if (cw <= 0 || ch <= 0) { return; }
     src = (const nj_u1 *)nj_array_data(pixels);
+    /* The CPU sampler below is nearest-neighbour over the viewport, which the
+       resident mirror reproduces exactly with a source-to-destination quad.
+       REPEAT (immode 33) wraps per pixel and has to stay on the CPU. */
+    if (mirror && vm->port && vm->port->hd_mirror_image && mx != 33 && my != 33 &&
+        vm->port->hd_mirror_image(vm->port->hd_mirror_image_ud, mirror->target, src, iw, ih, bpp,
+                                  cx, cy, cw, ch, (int)vx, (int)vy, (int)vw, (int)vh))
+        return;
     for (y = y0; y < y1; y++) {
         /*
          * The crop rectangle and the viewport are Java ints, so their sum can
@@ -4253,6 +4260,7 @@ NJFN(m3g_clear)
     int x0, y0, x1, y1;
     nj_s4 vx, vy, vw, vh;
     nj_render_mirror *mirror;
+    int gpu_clear = 0;
     nj_m3g_flush_why(vm, NJ_M3G_FLUSH_CLEAR);   /* queued draws must land before the clear */
     target = nj_rget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_target", "Ljava/lang/Object;"));
     if (!target) {
@@ -4262,6 +4270,20 @@ NJFN(m3g_clear)
     if (!surface || !m3g_target_bounds(vm, self, surface, &x0, &y0, &x1, &y1))
         return NJ_OK;
     mirror = nj_midp_hd_target(vm, surface);
+    /* A resident GPU mirror takes the clear itself; its CPU colour copy is
+       exported lazily before the CPU next draws on or presents it. */
+    if (mirror && vm->port && vm->port->hd_mirror_clear && x1 > x0 && y1 > y0) {
+        int dclear = !bg || nj_iget(vm, bg, m3g_fof(vm, NJ_C_BG, "_nj_dclear", "Z"));
+        int cclear = !bg || nj_iget(vm, bg, m3g_fof(vm, NJ_C_BG, "_nj_cclear", "Z"));
+        if (dclear || cclear) {
+            nj_u4 colour = bg ?
+                (nj_u4)nj_iget(vm, bg, m3g_fof(vm, NJ_C_BG, "_nj_color", "I")) : 0;
+            int k = mirror->scale;
+            gpu_clear = vm->port->hd_mirror_clear(vm->port->hd_mirror_clear_ud, mirror->target,
+                                                  colour | 0xff000000u, x0 * k, y0 * k,
+                                                  (x1 - x0) * k, (y1 - y0) * k, cclear, dclear);
+        }
+    }
     /* Null means the default Background: clear both buffers to black/far. */
     if (!bg || nj_iget(vm, bg, m3g_fof(vm, NJ_C_BG, "_nj_dclear", "Z"))) {
         nj_ref a = nj_rget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_zbuf", "[I"));
@@ -4298,7 +4320,7 @@ NJFN(m3g_clear)
         nj_u4 colour = bg ? (nj_u4)nj_iget(vm, bg, m3g_fof(vm, NJ_C_BG, "_nj_color", "I")) : 0;
         int bpp = surface->format == NJ_PIXFMT_RGB565 ? 2 :
                   surface->format == NJ_PIXFMT_RGB888 ? 3 : 4;
-        if (mirror) {
+        if (mirror && !gpu_clear) {
             nj_gfx hg;
             int k = mirror->scale;
             nj_gfx_init(&hg, mirror->target);
