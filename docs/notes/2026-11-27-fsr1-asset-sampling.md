@@ -275,3 +275,33 @@ OpenGL ES Translator (NVIDIA GeForce RTX 5080 Laptop GPU)`、`running Doom.Doom 
 输出逐字节不变：帧 60/120/180 的转储与改动前相同，且 1×、4× 倍率下的帧 100/200
 也完全相同；`test_gfx_hd` 的 `fsr1 assets: opaque interior reshaped, translucent
 samples and stencils unchanged` 通过，`test_gfx_vulkan` 全部通过。
+
+## 附六：段边界列的复用与 ARGB8888 直接取样（第 16 轮）
+
+上一轮把半透明合成的逐像素部分向量化之后，gprof 采样里剩下的头部变成了
+`hd_asset_column`（29%）和 `nj_src_pixel`（18%）。两处都有结构性浪费：
+
+- 每个半透明段都要重算左右两条边界的「垂直混合色」，但相邻段共用同一条边界列
+  （相位连续的段边界逐段前移一格），左边界的值就是上一段算出的右边界值；
+- 8× 高清镜面是 ARGB8888，这一列读取原本却每次都走 `nj_src_pixel()` 的格式分发。
+
+改动（`src/gfx/nj_gfx_fsr1_asset.inc`）：
+
+1. 段循环里维护 `left/left_index` 缓存：索引与上一段的 `next` 相同时直接复用，
+   `hd_asset_column*` 的调用量减半（gprof 从 504M 次降到 254M 次）。
+2. 新增 `hd_asset_column_argb()`：ARGB8888 源直接读 4 字节字再 unpack/mix，
+   跳过格式分发；非 ARGB8888 源仍走通用 `hd_asset_column()`。
+3. 其余逻辑（不透明快速段、`hd_fsr1_over_span`、回退条件）保持不变。
+
+结果（Doom3 8×、`--asset-filter fsr1`、resident、200 帧，同二进制交替 A/B）：
+
+| 版本 | 运行 1 | 运行 2 | 运行 3 |
+| --- | --- | --- | --- |
+| 第 15 轮（半透明 SIMD） | 7.56 s | 8.10 s | 8.10 s |
+| 本轮（边界复用 + ARGB 直取） | **6.78 s** | **6.93 s** | **7.14 s** |
+
+约 **−12%**；相对第 15 轮之前（11.34–11.44 s）累计约 **−40%**。帧 100/200 在 1× 与
+8× 倍率下与上一版逐字节相同。
+
+另外试过把 RGB565/RGB888 的行扫描改成专用取像素（跳过 `nj_src_pixel` 分发），
+实测无可测收益，已回退，只保留 ARGB8888 的直接取样。

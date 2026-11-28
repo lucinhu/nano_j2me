@@ -473,6 +473,18 @@ static void hd_fsr1_over_span(nj_u1 *out, int n, int phase, const unsigned *weig
     }
 }
 
+/* ARGB8888 is the HD mirror format and the common case for the asset filter,
+ * so the per-segment boundary colours read the source words directly instead
+ * of going through the format dispatch. */
+static hd_asset_color hd_asset_column_argb(const nj_u1 *top, const nj_u1 *bottom,
+                                           nj_s8 offset, unsigned wy)
+{
+    nj_u4 pt, pb;
+    memcpy(&pt, top + offset, sizeof pt);
+    memcpy(&pb, bottom + offset, sizeof pb);
+    return hd_asset_mix(hd_asset_unpack(pt), hd_asset_unpack(pb), wy);
+}
+
 
 
 static void hd_fsr1_bitmap(nj_surface *dst, int k, const nj_u1 *src, nj_s8 stride,
@@ -521,6 +533,9 @@ static void hd_fsr1_bitmap(nj_surface *dst, int k, const nj_u1 *src, nj_s8 strid
         out = (nj_u1 *)dst->pixels + (nj_s8)y * dst->stride + (nj_s8)x0 * k * 4;
         count = width * k;
         p = 0;
+        {
+        hd_asset_color left;
+        int left_index = -1, have_left = 0;
         while (count > 0) {
             int g = p + phase_first;
             int phase = g % k, base = first - 1 + g / k;
@@ -537,19 +552,32 @@ static void hd_fsr1_bitmap(nj_surface *dst, int k, const nj_u1 *src, nj_s8 strid
             } else {
                 int index = base < 0 ? 0 : base >= tw ? tw - 1 : base;
                 int next = base + 1 < 0 ? 0 : base + 1 >= tw ? tw - 1 : base + 1;
-                hd_asset_color l = hd_asset_column(src + rows[1], src + rows[2],
-                                                   (nj_s8)index * step, format, wy);
-                hd_asset_color r = hd_asset_column(src + rows[1], src + rows[2],
-                                                   (nj_s8)next * step, format, wy);
+                hd_asset_color l, r;
+                if (format == NJ_PIXFMT_ARGB8888) {
+                    l = have_left && left_index == index ? left
+                        : hd_asset_column_argb(src + rows[1], src + rows[2],
+                                               (nj_s8)index * step, wy);
+                    r = hd_asset_column_argb(src + rows[1], src + rows[2],
+                                             (nj_s8)next * step, wy);
+                } else {
+                    l = hd_asset_column(src + rows[1], src + rows[2],
+                                        (nj_s8)index * step, format, wy);
+                    r = hd_asset_column(src + rows[1], src + rows[2],
+                                        (nj_s8)next * step, format, wy);
+                }
+                left = r;
+                left_index = next;
+                have_left = 1;
                 if (l.a == (255u << 8) && r.a == (255u << 8)) {
                     hd_asset_opaque_span(out, n, l, r, NULL, phase, k);
                 } else if (l.a || r.a) {
                     hd_fsr1_over_span(out, n, phase, weights, &l, &r);
                 }
             }
-            out += (size_t)n * 4;
-            count -= n;
-            p += n;
+                out += (size_t)n * 4;
+                count -= n;
+                p += n;
+            }
         }
     }
     hd_fsr1_row_free(&row);
