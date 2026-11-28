@@ -225,6 +225,72 @@ static int hd_fsr1_span_sse41(nj_u1 *out, int n, int phase,
     }
     return done;
 }
+
+/* The translucent half of the FSR1 asset filter composites four pixels at a
+ * time when the destination is opaque: every division in hd_asset_over() is
+ * exact for 16-bit numerators through the (x * 0x8081) >> 23 reciprocal, so
+ * the scalar result can be reproduced bit for bit. Groups with a transparent
+ * destination pixel, a zero alpha or the full-alpha shortcut fall back to the
+ * scalar helper. */
+__attribute__((target("sse4.1")))
+static int hd_fsr1_over_sse41(nj_u1 *out, int n, int phase,
+                              const unsigned *weights,
+                              const hd_asset_color *lp, const hd_asset_color *rp)
+{
+    const hd_asset_color l = *lp, r = *rp;
+    const __m128i unit = _mm_set1_epi32(255);
+    const __m128i bias = _mm_set1_epi32(32768);
+    const __m128i magic = _mm_set1_epi32(0x8081);
+    const __m128i full = _mm_set1_epi32(255 << 16);
+    int done = 0;
+    for (; done + 4 <= n; done += 4) {
+        __m128i fx = _mm_loadu_si128((const __m128i *)(weights + phase + done));
+        __m128i dst = _mm_loadu_si128((const __m128i *)(out + (size_t)done * 4));
+        __m128i dcmp = _mm_cmpeq_epi32(_mm_srli_epi32(dst, 24), unit);
+        __m128i ca, c[3];
+        __m128i a8, rem, word;
+        if (_mm_movemask_ps(_mm_castsi128_ps(dcmp)) != 0xF) break;
+        {
+            __m128i v = _mm_sub_epi32(_mm_set1_epi32(256), fx);
+            ca = _mm_add_epi32(_mm_mullo_epi32(v, _mm_set1_epi32((int)l.a)),
+                               _mm_mullo_epi32(fx, _mm_set1_epi32((int)r.a)));
+            for (int ch = 0; ch < 3; ++ch) {
+                int left = ch == 0 ? (int)l.r : ch == 1 ? (int)l.g : (int)l.b;
+                int right = ch == 0 ? (int)r.r : ch == 1 ? (int)r.g : (int)r.b;
+                c[ch] = _mm_add_epi32(_mm_mullo_epi32(v, _mm_set1_epi32(left)),
+                                      _mm_mullo_epi32(fx, _mm_set1_epi32(right)));
+            }
+        }
+        a8 = _mm_srli_epi32(_mm_add_epi32(ca, bias), 16);
+        /* hd_asset_over() returns for alpha 0 and treats a full Q16 alpha as
+         * the "source covers everything" shortcut; leave both to the scalar
+         * path rather than duplicating those branches. */
+        if (_mm_movemask_ps(_mm_castsi128_ps(_mm_cmpeq_epi32(a8, _mm_setzero_si128()))) ||
+            _mm_movemask_ps(_mm_castsi128_ps(_mm_cmpeq_epi32(ca, full))))
+            break;
+        rem = _mm_sub_epi32(unit, a8);
+        {
+            __m128i channels[3];
+            for (int ch = 0; ch < 3; ++ch) {
+                __m128i src = _mm_srli_epi32(_mm_add_epi32(c[ch], bias), 16);
+                __m128i d = ch == 0 ? _mm_and_si128(_mm_srli_epi32(dst, 16), unit)
+                           : ch == 1 ? _mm_and_si128(_mm_srli_epi32(dst, 8), unit)
+                                     : _mm_and_si128(dst, unit);
+                __m128i sum = _mm_add_epi32(
+                    _mm_add_epi32(src, _mm_mullo_epi32(rem, d)),
+                    _mm_set1_epi32(127));
+                channels[ch] = _mm_srli_epi32(_mm_mullo_epi32(sum, magic), 23);
+            }
+            word = _mm_or_si128(_mm_set1_epi32((int)(255u << 24)),
+                                _mm_or_si128(_mm_or_si128(
+                                                 _mm_slli_epi32(channels[0], 16),
+                                                 _mm_slli_epi32(channels[1], 8)),
+                                             channels[2]));
+        }
+        _mm_storeu_si128((__m128i *)(out + (size_t)done * 4), word);
+    }
+    return done;
+}
 #endif
 
 __attribute__((target("sse4.1")))
@@ -394,6 +460,19 @@ static void hd_fsr1_span(nj_u1 *out, int n, int phase, const hd_fsr1_kernel *ker
     }
 }
 
+static void hd_fsr1_over_span(nj_u1 *out, int n, int phase, const unsigned *weights,
+                              const hd_asset_color *l, const hd_asset_color *r)
+{
+    int done = 0;
+#if defined(__x86_64__) || defined(__i386__)
+    if (hd_fsr1_sse41()) done = hd_fsr1_over_sse41(out, n, phase, weights, l, r);
+#endif
+    for (; done < n; ++done) {
+        unsigned fx = weights[phase + done];
+        hd_asset_over(out + (size_t)done * 4, hd_asset_mix(*l, *r, fx));
+    }
+}
+
 
 
 static void hd_fsr1_bitmap(nj_surface *dst, int k, const nj_u1 *src, nj_s8 stride,
@@ -402,6 +481,7 @@ static void hd_fsr1_bitmap(nj_surface *dst, int k, const nj_u1 *src, nj_s8 strid
 {
     hd_fsr1_kernel kernel;
     hd_fsr1_row row;
+    unsigned weights[HD_FSR1_MAX_SCALE];
     int tw, th, first, width, phase_first, columns, c;
     nj_s8 step;
     if (k > HD_FSR1_MAX_SCALE) {
@@ -410,6 +490,7 @@ static void hd_fsr1_bitmap(nj_surface *dst, int k, const nj_u1 *src, nj_s8 strid
         return;
     }
     hd_fsr1_kernel_build(&kernel, k);
+    for (int n = 0; n < k; ++n) weights[n] = hd_asset_weight(n, k);
     nj_trans_size(transform, sw, sh, &tw, &th);
     step = nj_trans_row_step(transform, bpp, stride);
     first = (int)(x0 - dx);
@@ -463,10 +544,7 @@ static void hd_fsr1_bitmap(nj_surface *dst, int k, const nj_u1 *src, nj_s8 strid
                 if (l.a == (255u << 8) && r.a == (255u << 8)) {
                     hd_asset_opaque_span(out, n, l, r, NULL, phase, k);
                 } else if (l.a || r.a) {
-                    for (int i = 0; i < n; ++i) {
-                        unsigned fx = hd_asset_weight(phase + i, k);
-                        hd_asset_over(out + (size_t)i * 4, hd_asset_mix(l, r, fx));
-                    }
+                    hd_fsr1_over_span(out, n, phase, weights, &l, &r);
                 }
             }
             out += (size_t)n * 4;

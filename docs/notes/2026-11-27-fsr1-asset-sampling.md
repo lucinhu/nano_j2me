@@ -252,3 +252,26 @@ OpenGL ES Translator (NVIDIA GeForce RTX 5080 Laptop GPU)`、`running Doom.Doom 
 限制在首帧。但每帧仍需扫 490 万像素做混合（约 2–3 ms），相对 5.2 ms 过滤只省一半；
 更彻底的做法是把 FSR1 素材过滤搬上 GPU（4×4 tap + 逐通道 min/max clamp + sharpening 的
 片元着色器），与常驻镜面的纹理 quad 路径共用（见 `2026-11-28-gpu-2d-composition-plan.md` 的 M3）。
+
+## 附五：半透明叠加层的逐像素合成向量化（第 15 轮）
+
+第 14 轮的分析指出：8× 高清下 FSR1 素材过滤的大头不是不透明重建（SSE4.1 的
+`hd_fsr1_span_sse41` 覆盖的部分），而是 4×4 邻域含半透明像素时走的那条**逐像素**
+路径——每像素先做一次 Q16 预乘混合，再对目标像素做 source-over 合成
+（`hd_asset_over`，含三次 `/255` 除法）。Doom3 的整幅 249×334 叠加层几乎全是这条路径。
+
+这一轮把它改成 4 像素一组的 SSE4.1 内核（组内相位连续，权重可直接查表）：
+
+- 像素值都落在 32 位内：Q16 预乘混合最大约 `255*255*256*256 < 2^32`；
+  合成的 `(预乘 + rem*dst + 127)` 最大 65407，用倒数 `(x * 0x8081) >> 23`
+  对 0–65535 精确复现 `/255`（已逐值验证）。
+- 每组的 4 个目标像素必须都是不透明（alpha 255）；否则、或组内出现 alpha 0、
+  或出现 `c.a == 255<<16` 的「整像素覆盖」捷径，整组退回原来的标量实现，
+  保证边界行为逐位一致。
+- 权重表 `hd_asset_weight(phase, k)` 也从逐像素计算改为每张图预计算一次。
+
+结果（Doom3 8×、`--asset-filter fsr1`、resident、200 帧，同一二进制交替跑）：
+11.34 / 11.37 / 11.44 s → **8.08 / 7.74 / 7.72 s（约 −31%）**，折合约 18 ms/帧。
+输出逐字节不变：帧 60/120/180 的转储与改动前相同，且 1×、4× 倍率下的帧 100/200
+也完全相同；`test_gfx_hd` 的 `fsr1 assets: opaque interior reshaped, translucent
+samples and stencils unchanged` 通过，`test_gfx_vulkan` 全部通过。
