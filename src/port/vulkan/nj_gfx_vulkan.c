@@ -18,6 +18,9 @@
 #include <string.h>
 #include <sys/time.h>
 #include "tri_spv.inc"
+#if defined(__ANDROID__)
+#include "post_spv.inc"
+#endif
 
 static double vk_prof_now(void) {
     struct timeval tv;
@@ -166,13 +169,24 @@ struct nj_vk_renderer {
     nj_u1 *present_scratch;
     unsigned present_small_frames;
     int present_soft; /* upload CPU frames at half the displayed size */
+    VkSampler present_sampler;
+    VkRenderPass present_pass;
+    VkPipelineLayout present_layout;
+    VkPipeline present_pipeline;
+    VkDescriptorSetLayout present_set_layout;
+    VkDescriptorPool present_desc_pool;
+    VkDescriptorSet present_desc_set;
+    VkImageView *present_views;
+    VkFramebuffer *present_fbs;
+    int present_post;
+    float present_sharp;
 #endif
     unsigned resident_prof_exports, resident_prof_draws;
 };
 static const VkFormat formats[] = {VK_FORMAT_B8G8R8A8_UNORM, VK_FORMAT_D32_SFLOAT};
 static const VkImageUsageFlags usages[] = {
     VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
-        VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+        VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
     VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
         VK_IMAGE_USAGE_TRANSFER_DST_BIT};
 static const VkImageAspectFlags aspects[] = {VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_ASPECT_DEPTH_BIT};
@@ -927,6 +941,347 @@ static int resident_list_trusted(void *ud, const nj_gfx_triangles_list *l, nj_u4
 #if NJ_ENABLE_GFX_ACCEL
 static void destroy_owned_renderer(void *ud) { nj_vk_renderer_destroy(ud); }
 #endif
+
+#if defined(__ANDROID__)
+/* Sharpen the presented image: the mirror is either a supersampled 8x render
+ * or a 2x/1x upload, and bilinear downsampling alone softens edges. The pass
+ * samples the mirror and applies a small RCAS-style contrast around a 4-tap
+ * neighbour average. Any failure leaves the blit path in charge. */
+static void present_post_cleanup(nj_vk_renderer *r) {
+    uint32_t i;
+    for (i = 0; i < r->present_count; ++i) {
+        if (r->present_views && r->present_views[i])
+            vkDestroyImageView(r->dev, r->present_views[i], NULL);
+        if (r->present_fbs && r->present_fbs[i])
+            vkDestroyFramebuffer(r->dev, r->present_fbs[i], NULL);
+    }
+    free(r->present_views);
+    free(r->present_fbs);
+    r->present_views = NULL;
+    r->present_fbs = NULL;
+    if (r->present_pipeline) {
+        vkDestroyPipeline(r->dev, r->present_pipeline, NULL);
+        r->present_pipeline = VK_NULL_HANDLE;
+    }
+    if (r->present_layout) {
+        vkDestroyPipelineLayout(r->dev, r->present_layout, NULL);
+        r->present_layout = VK_NULL_HANDLE;
+    }
+    if (r->present_desc_pool) {
+        vkDestroyDescriptorPool(r->dev, r->present_desc_pool, NULL);
+        r->present_desc_pool = VK_NULL_HANDLE;
+        r->present_desc_set = VK_NULL_HANDLE;
+    }
+    if (r->present_set_layout) {
+        vkDestroyDescriptorSetLayout(r->dev, r->present_set_layout, NULL);
+        r->present_set_layout = VK_NULL_HANDLE;
+    }
+    if (r->present_pass) {
+        vkDestroyRenderPass(r->dev, r->present_pass, NULL);
+        r->present_pass = VK_NULL_HANDLE;
+    }
+    if (r->present_sampler) {
+        vkDestroySampler(r->dev, r->present_sampler, NULL);
+        r->present_sampler = VK_NULL_HANDLE;
+    }
+    r->present_post = 0;
+}
+
+static int present_post_build(nj_vk_renderer *r) {
+    VkAttachmentDescription att = {0};
+    VkAttachmentReference ref = {0};
+    VkSubpassDescription sub = {0};
+    VkSubpassDependency dep = {0};
+    VkRenderPassCreateInfo rp = VK_INIT(RENDER_PASS_CREATE_INFO);
+    VkImageViewCreateInfo view = VK_INIT(IMAGE_VIEW_CREATE_INFO);
+    VkFramebufferCreateInfo fb = VK_INIT(FRAMEBUFFER_CREATE_INFO);
+    VkSamplerCreateInfo samp = VK_INIT(SAMPLER_CREATE_INFO);
+    VkDescriptorSetLayoutBinding binding = {0};
+    VkDescriptorSetLayoutCreateInfo dsl = VK_INIT(DESCRIPTOR_SET_LAYOUT_CREATE_INFO);
+    VkDescriptorPoolSize size = {0};
+    VkDescriptorPoolCreateInfo dpi = VK_INIT(DESCRIPTOR_POOL_CREATE_INFO);
+    VkDescriptorSetAllocateInfo dsa = VK_INIT(DESCRIPTOR_SET_ALLOCATE_INFO);
+    VkPushConstantRange pcr;
+    VkPipelineLayoutCreateInfo pl = VK_INIT(PIPELINE_LAYOUT_CREATE_INFO);
+    VkShaderModuleCreateInfo smi = VK_INIT(SHADER_MODULE_CREATE_INFO);
+    VkPipelineShaderStageCreateInfo stages[2];
+    VkPipelineVertexInputStateCreateInfo vi = VK_INIT(PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO);
+    VkPipelineInputAssemblyStateCreateInfo ia = VK_INIT(PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO);
+    VkPipelineViewportStateCreateInfo vp = VK_INIT(PIPELINE_VIEWPORT_STATE_CREATE_INFO);
+    VkPipelineRasterizationStateCreateInfo rs = VK_INIT(PIPELINE_RASTERIZATION_STATE_CREATE_INFO);
+    VkPipelineMultisampleStateCreateInfo ms = VK_INIT(PIPELINE_MULTISAMPLE_STATE_CREATE_INFO);
+    VkPipelineColorBlendAttachmentState cba;
+    VkPipelineColorBlendStateCreateInfo cb = VK_INIT(PIPELINE_COLOR_BLEND_STATE_CREATE_INFO);
+    VkDynamicState dynamic[2] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+    VkPipelineDynamicStateCreateInfo ds = VK_INIT(PIPELINE_DYNAMIC_STATE_CREATE_INFO);
+    VkGraphicsPipelineCreateInfo gp = VK_INIT(GRAPHICS_PIPELINE_CREATE_INFO);
+    VkShaderModule vert = VK_NULL_HANDLE, frag = VK_NULL_HANDLE;
+    VkResult rc;
+    uint32_t i;
+    const char *env = getenv("NJ_VK_SHARP");
+    char prop[PROP_VALUE_MAX];
+    r->present_sharp = 0.35f;
+    if (env && env[0]) {
+        float v = (float)atof(env);
+        if (v >= 0.0f && v <= 2.0f) r->present_sharp = v;
+    }
+    if (__system_property_get("debug.nj2me.vk_sharp", prop) > 0) {
+        float v = (float)atof(prop);
+        if (v >= 0.0f && v <= 2.0f) r->present_sharp = v;
+    }
+    att.format = r->present_format;
+    att.samples = VK_SAMPLE_COUNT_1_BIT;
+    att.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    att.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    att.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    att.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    att.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    att.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+    ref.attachment = 0;
+    ref.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    sub.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    sub.colorAttachmentCount = 1;
+    sub.pColorAttachments = &ref;
+    dep.srcSubpass = 0;
+    dep.dstSubpass = VK_SUBPASS_EXTERNAL;
+    dep.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    dep.dstStageMask = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
+    dep.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    rp.attachmentCount = 1;
+    rp.pAttachments = &att;
+    rp.subpassCount = 1;
+    rp.pSubpasses = &sub;
+    rp.dependencyCount = 1;
+    rp.pDependencies = &dep;
+    if (vkCreateRenderPass(r->dev, &rp, NULL, &r->present_pass) != VK_SUCCESS) return 0;
+    r->present_views = (VkImageView *)calloc(r->present_count, sizeof *r->present_views);
+    r->present_fbs = (VkFramebuffer *)calloc(r->present_count, sizeof *r->present_fbs);
+    if (!r->present_views || !r->present_fbs) return 0;
+    view.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    view.format = r->present_format;
+    view.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    view.subresourceRange.levelCount = 1;
+    view.subresourceRange.layerCount = 1;
+    fb.renderPass = r->present_pass;
+    fb.attachmentCount = 1;
+    fb.width = r->present_extent.width;
+    fb.height = r->present_extent.height;
+    fb.layers = 1;
+    for (i = 0; i < r->present_count; ++i) {
+        view.image = r->present_images[i];
+        if (vkCreateImageView(r->dev, &view, NULL, &r->present_views[i]) != VK_SUCCESS) return 0;
+        fb.pAttachments = &r->present_views[i];
+        if (vkCreateFramebuffer(r->dev, &fb, NULL, &r->present_fbs[i]) != VK_SUCCESS) return 0;
+    }
+    samp.magFilter = VK_FILTER_LINEAR;
+    samp.minFilter = VK_FILTER_LINEAR;
+    samp.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+    samp.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samp.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samp.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samp.maxLod = 0.0f;
+    if (vkCreateSampler(r->dev, &samp, NULL, &r->present_sampler) != VK_SUCCESS) return 0;
+    binding.binding = 0;
+    binding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    binding.descriptorCount = 1;
+    binding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    dsl.bindingCount = 1;
+    dsl.pBindings = &binding;
+    if (vkCreateDescriptorSetLayout(r->dev, &dsl, NULL, &r->present_set_layout) != VK_SUCCESS)
+        return 0;
+    size.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    size.descriptorCount = 1;
+    dpi.maxSets = 1;
+    dpi.poolSizeCount = 1;
+    dpi.pPoolSizes = &size;
+    if (vkCreateDescriptorPool(r->dev, &dpi, NULL, &r->present_desc_pool) != VK_SUCCESS) return 0;
+    dsa.descriptorPool = r->present_desc_pool;
+    dsa.descriptorSetCount = 1;
+    dsa.pSetLayouts = &r->present_set_layout;
+    if (vkAllocateDescriptorSets(r->dev, &dsa, &r->present_desc_set) != VK_SUCCESS) return 0;
+    memset(&pcr, 0, sizeof pcr);
+    pcr.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    pcr.size = 8 * (uint32_t)sizeof(float);
+    pl.setLayoutCount = 1;
+    pl.pSetLayouts = &r->present_set_layout;
+    pl.pushConstantRangeCount = 1;
+    pl.pPushConstantRanges = &pcr;
+    if (vkCreatePipelineLayout(r->dev, &pl, NULL, &r->present_layout) != VK_SUCCESS) return 0;
+    memset(&smi, 0, sizeof smi);
+    smi.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+    smi.codeSize = sizeof post_vert;
+    smi.pCode = post_vert;
+    if (vkCreateShaderModule(r->dev, &smi, NULL, &vert) != VK_SUCCESS) return 0;
+    smi.codeSize = sizeof post_frag;
+    smi.pCode = post_frag;
+    if (vkCreateShaderModule(r->dev, &smi, NULL, &frag) != VK_SUCCESS) {
+        vkDestroyShaderModule(r->dev, vert, NULL);
+        return 0;
+    }
+    memset(stages, 0, sizeof stages);
+    stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
+    stages[0].module = vert;
+    stages[0].pName = "main";
+    stages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+    stages[1].module = frag;
+    stages[1].pName = "main";
+    ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+    vp.viewportCount = 1;
+    vp.scissorCount = 1;
+    rs.polygonMode = VK_POLYGON_MODE_FILL;
+    rs.cullMode = VK_CULL_MODE_NONE;
+    rs.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    rs.lineWidth = 1.0f;
+    ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+    memset(&cba, 0, sizeof cba);
+    cba.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                         VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+    cb.attachmentCount = 1;
+    cb.pAttachments = &cba;
+    ds.dynamicStateCount = 2;
+    ds.pDynamicStates = dynamic;
+    gp.stageCount = 2;
+    gp.pStages = stages;
+    gp.pVertexInputState = &vi;
+    gp.pInputAssemblyState = &ia;
+    gp.pViewportState = &vp;
+    gp.pRasterizationState = &rs;
+    gp.pMultisampleState = &ms;
+    gp.pColorBlendState = &cb;
+    gp.pDynamicState = &ds;
+    gp.layout = r->present_layout;
+    gp.renderPass = r->present_pass;
+    gp.subpass = 0;
+    rc = vkCreateGraphicsPipelines(r->dev, VK_NULL_HANDLE, 1, &gp, NULL, &r->present_pipeline);
+    vkDestroyShaderModule(r->dev, vert, NULL);
+    vkDestroyShaderModule(r->dev, frag, NULL);
+    if (rc != VK_SUCCESS) {
+        VK_LOG("vulkan: present post pipeline failed (%d)", (int)rc);
+        return 0;
+    }
+    r->present_post = 1;
+    VK_LOG("vulkan: present post pass ready sharp=%.2f", r->present_sharp);
+    return 1;
+}
+
+/* 1 = drew, 0 = failed before touching the acquire semaphore, -1 = failed
+ * after the semaphore was consumed (caller must not reuse it). */
+static int present_post_draw(nj_vk_renderer *r, nj_vk_mirror *m, uint32_t index, int x, int y,
+                             int w, int h) {
+    VkImageMemoryBarrier barrier[2];
+    VkImageSubresourceRange range;
+    VkClearValue clear;
+    VkRenderPassBeginInfo rp = VK_INIT(RENDER_PASS_BEGIN_INFO);
+    VkDescriptorImageInfo img;
+    VkWriteDescriptorSet write = VK_INIT(WRITE_DESCRIPTOR_SET);
+    VkSubmitInfo submit = VK_INIT(SUBMIT_INFO);
+    VkPipelineStageFlags wait = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    VkViewport vp;
+    VkRect2D sc;
+    float constants[8];
+    if (!r || !m || !m->ready || !r->present_post || index >= r->present_count || w <= 0 || h <= 0)
+        return 0;
+    if (!mirror_begin(r))
+        return 0;
+    memset(&range, 0, sizeof range);
+    range.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    range.levelCount = 1;
+    range.layerCount = 1;
+    memset(barrier, 0, sizeof barrier);
+    barrier[0].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    barrier[0].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    barrier[0].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    barrier[0].oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    barrier[0].newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    barrier[0].srcQueueFamilyIndex = barrier[0].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier[0].image = m->image.id;
+    barrier[0].subresourceRange = range;
+    barrier[1].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    barrier[1].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    barrier[1].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    barrier[1].newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    barrier[1].srcQueueFamilyIndex = barrier[1].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier[1].image = r->present_images[index];
+    barrier[1].subresourceRange = range;
+    vkCmdPipelineBarrier(r->cmd, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+                             VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                         0, 0, NULL, 0, NULL, 2, barrier);
+    memset(&clear, 0, sizeof clear);
+    clear.color.float32[3] = 1.0f;
+    rp.renderPass = r->present_pass;
+    rp.framebuffer = r->present_fbs[index];
+    rp.renderArea.extent = r->present_extent;
+    rp.clearValueCount = 1;
+    rp.pClearValues = &clear;
+    vkCmdBeginRenderPass(r->cmd, &rp, VK_SUBPASS_CONTENTS_INLINE);
+    vp.x = (float)x;
+    vp.y = (float)y;
+    vp.width = (float)w;
+    vp.height = (float)h;
+    vp.minDepth = 0.0f;
+    vp.maxDepth = 1.0f;
+    sc.offset.x = x;
+    sc.offset.y = y;
+    sc.extent.width = (uint32_t)w;
+    sc.extent.height = (uint32_t)h;
+    vkCmdSetViewport(r->cmd, 0, 1, &vp);
+    vkCmdSetScissor(r->cmd, 0, 1, &sc);
+    vkCmdBindPipeline(r->cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->present_pipeline);
+    memset(&img, 0, sizeof img);
+    img.sampler = r->present_sampler;
+    img.imageView = m->image.view;
+    img.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    write.dstSet = r->present_desc_set;
+    write.descriptorCount = 1;
+    write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    write.pImageInfo = &img;
+    vkUpdateDescriptorSets(r->dev, 1, &write, 0, NULL);
+    vkCmdBindDescriptorSets(r->cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->present_layout, 0, 1,
+                            &r->present_desc_set, 0, NULL);
+    constants[0] = (float)m->width;
+    constants[1] = (float)m->height;
+    constants[2] = (float)x;
+    constants[3] = (float)y;
+    constants[4] = (float)w;
+    constants[5] = (float)h;
+    constants[6] = r->present_sharp;
+    constants[7] = 0.0f;
+    vkCmdPushConstants(r->cmd, r->present_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0,
+                       (uint32_t)sizeof constants, constants);
+    vkCmdDraw(r->cmd, 3, 1, 0, 0);
+    vkCmdEndRenderPass(r->cmd);
+    memset(barrier, 0, sizeof barrier);
+    barrier[0].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    barrier[0].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    barrier[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    barrier[0].oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    barrier[0].newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    barrier[0].srcQueueFamilyIndex = barrier[0].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier[0].image = m->image.id;
+    barrier[0].subresourceRange = range;
+    vkCmdPipelineBarrier(r->cmd, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                         VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0, 0, NULL, 0, NULL, 1,
+                         barrier);
+    if (vkEndCommandBuffer(r->cmd) != VK_SUCCESS)
+        return 0;
+    if (vkResetFences(r->dev, 1, &r->fence) != VK_SUCCESS)
+        return 0;
+    submit.waitSemaphoreCount = 1;
+    submit.pWaitSemaphores = &r->present_semaphore;
+    submit.pWaitDstStageMask = &wait;
+    submit.commandBufferCount = 1;
+    submit.pCommandBuffers = &r->cmd;
+    if (vkQueueSubmit(r->queue, 1, &submit, r->fence) != VK_SUCCESS)
+        return -1;
+    if (vkWaitForFences(r->dev, 1, &r->fence, VK_TRUE, UINT64_MAX) != VK_SUCCESS)
+        return -1;
+    return 1;
+}
+#endif
+
 /* --- Native-window presentation ----------------------------------------- */
 /* The resident mirror goes straight into a swapchain image: no readback, no
  * CPU scaling, no GL upload.  A device without the surface/swapchain
@@ -936,6 +1291,7 @@ static void present_release_swapchain(nj_vk_renderer *r) {
 #if defined(__ANDROID__)
     if (!r)
         return;
+    present_post_cleanup(r);
     if (r->present_swapchain != VK_NULL_HANDLE && r->present_destroy_swapchain)
         r->present_destroy_swapchain(r->dev, r->present_swapchain, NULL);
     r->present_swapchain = VK_NULL_HANDLE;
@@ -1070,6 +1426,7 @@ static int present_build_swapchain(nj_vk_renderer *r, int width, int height) {
             VK_SUCCESS)
         return 0;
     r->present_extent = extent;
+    present_post_build(r);
     r->present_ready = 1;
     VK_LOG("vulkan: present swapchain %ux%u format=%d mode=%d", extent.width, extent.height,
            (int)r->present_format, (int)mode);
@@ -1297,15 +1654,26 @@ int nj_vk_renderer_present_frame(void *renderer, const nj_surface *frame) {
     }
     if (r->present_stats) { t_acquire = vk_prof_now() - now; now = vk_prof_now(); }
     /* The mirror is 8x the logical frame, so presenting it needs a proper
-     * downsample: a nearest tap of the supersampled image shimmers. Linear
-     * filtering is the cheapest filter that actually averages the source. */
-    if (!nj_vk_renderer_mirror_present(blit_mirror, r->present_images[index],
-                                       r->present_extent.width, r->present_extent.height, x, y, w,
-                                       h, 1, r->present_semaphore)) {
-        if (r->present_attempts <= 8)
-            VK_LOG("vulkan: present blit failed (%dx%d from %dx%d)", w, h, frame->width,
-                   frame->height);
-        return 0;
+     * downsample: a nearest tap of the supersampled image shimmers. The
+     * sharpening post pass averages and re-sharpens in one draw; the blit
+     * stays as the fallback when the pass could not be built. */
+    {
+        int drew = r->present_post ? present_post_draw(r, blit_mirror, index, x, y, w, h) : 0;
+        if (drew < 0) {
+            if (r->present_attempts <= 8)
+                VK_LOG("vulkan: present post pass failed");
+            r->present_ready = 0;
+            return 0;
+        }
+        if (!drew && !nj_vk_renderer_mirror_present(blit_mirror, r->present_images[index],
+                                                    r->present_extent.width,
+                                                    r->present_extent.height, x, y, w, h, 1,
+                                                    r->present_semaphore)) {
+            if (r->present_attempts <= 8)
+                VK_LOG("vulkan: present blit failed (%dx%d from %dx%d)", w, h, frame->width,
+                       frame->height);
+            return 0;
+        }
     }
     if (r->present_stats) { t_blit = vk_prof_now() - now; now = vk_prof_now(); }
     present.swapchainCount = 1;
