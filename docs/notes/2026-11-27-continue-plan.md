@@ -186,3 +186,24 @@
   直接杀死模拟器宿主进程（crashpad dump）⇒ gfxstream 不可用，M4 只能真机验证。
 - 桌面 CMake 也编译该文件的 stub 分支；探针默认关闭，文件头注明勿在模拟器启用。
 - 证据：`.local-tools/debug-runs/avd-ahb-20261128/`（模拟器日志 + README）。
+
+### 2026-11-29 午间（Round 14，FSR1 素材过滤成本分析）
+
+- 量化：gprof 构建（`-pg`，Doom3 8×、resident、240 帧）pixel-art 9.09 s vs FSR1 17.17 s
+  ⇒ 素材过滤多出约 8.1 s / 34 ms 每帧。flat profile：`hd_fsr1_bitmap` 64%（4.14 s / 797 次）、
+  `hd_asset_column` 9.7%（5.04 亿次）、`hd_fsr1_span_sse41` 5.4%、`hd_fsr1_row_sse41` 3.9%。
+- 逐帧 trace：807 次调用里 480 次是对同一批 249×334 图的整幅放大（每次输出 490 万像素），
+  gdb 栈为 `g_drawImage → nj_gfx_draw_region → nj_region_draw → hd_fsr1_bitmap`；
+  尾部帧在 `249x334` 与 `20x30` 之间交替、源指针与内容哈希逐帧不变 ⇒ 静态图被逐帧重复过滤。
+- 尝试「持久放大副本」（`nj_render_mirror.adopt` 钩子 + HD store 内容签名 + `hd_blit` 首绘填充）：
+  对全不透明图像像素精确（pixel-art 闸门与 FSR1 转储均逐位不变），但 Doom3 的逐帧大图是
+  半透明叠加层（两张 249×334 的 alpha<255 像素分别占 5.8 万/8.3 万，共 8.3 万），
+  过滤结果依赖目标像素（`hd_asset_over` 与背景合成），独立副本不可复用 ⇒ 墙钟零收益
+  （14.1–14.7 s），实验已回退，工作树干净。
+- 精确缓存的可行形态（留给后续）：逐帧半透明分支的结果等于
+  `((c.r+32768)>>16 + (255-a8)*dst + 127)/255`（`c.r` 为 Q16 预乘），而每帧本来就要把 Q16
+  右移到 8 位，因此缓存「预乘 8 位 + alpha」不损失精度，可用同一公式在拷贝时精确复现；
+  但自写混合循环每帧要扫 490 万像素（约 2–3 ms），相对 5.2 ms 的过滤只省一半左右。
+- 结论：单帧素材过滤的大头是「半透明整幅叠加层」，CPU 侧只能省一半；更大的杠杆是把 FSR1
+  素材过滤搬进 GPU（M3：常驻镜面的纹理 quad 已有，只需加 4×4 tap + min/max clamp + sharpening
+  的片元着色器变体），可直接去掉约 17 ms/帧的 CPU 过滤。

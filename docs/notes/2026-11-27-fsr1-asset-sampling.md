@@ -231,3 +231,24 @@ OpenGL ES Translator (NVIDIA GeForce RTX 5080 Laptop GPU)`、`running Doom.Doom 
 `frame ms median=230.205`（8× 标题帧），无 FATAL/EGL 错误；标题画面与菜单文字正常
 （截图 `.local-tools/debug-runs/fsr-round16/avd-8x-fsr1.png`）。
 
+
+## 附四：逐帧重复放大与半透明叠加层（第 14 轮）
+
+在常驻镜面（`--resident`）下对 Doom3 8× 做 240 帧分析：pixel-art 9.09 s，FSR1 17.17 s
+（gprof `-pg` 构建），差值 8.1 s ≈ 34 ms/帧。逐帧 trace 显示 807 次过滤调用中 480 次是对
+同一批 249×334 静态图的整幅放大（每次 490 万输出像素），栈为 `Canvas.drawImage`
+（`g_drawImage → nj_gfx_draw_region → nj_region_draw → hd_fsr1_bitmap`）。
+
+为消除重复过滤，实验了「持久放大副本」：镜像层新增 `adopt` 钩子，HD store 按源指针 +
+尺寸 + 内容签名缓存放大结果，`hd_blit` 首次命中前把整幅过滤进副本、之后直接 blit。该方案对
+**全不透明**素材像素精确（pixel-art 闸门哈希与 FSR1 转储逐位不变），但 Doom3 的逐帧大图是
+半透明叠加层（249×334 中 alpha<255 的像素达 5.8 万/8.3 万），过滤要在目标像素上合成
+（`hd_asset_over`），结果依赖背景 ⇒ 副本不可复用，墙钟从 14.29 s 到 14.68 s 无可测收益。
+实验已回退。
+
+若要做精确的半透明缓存：半透明分支每像素结果为
+`((c.r+32768)>>16 + (255-a8)*dst + 127)/255`（`c.r` 为 Q16 预乘），过滤时本来就要把 Q16
+截成 8 位，因此副本可以存「预乘 8 位 + alpha」并在 blit 时用同一公式复现，理论可把过滤
+限制在首帧。但每帧仍需扫 490 万像素做混合（约 2–3 ms），相对 5.2 ms 过滤只省一半；
+更彻底的做法是把 FSR1 素材过滤搬上 GPU（4×4 tap + 逐通道 min/max clamp + sharpening 的
+片元着色器），与常驻镜面的纹理 quad 路径共用（见 `2026-11-28-gpu-2d-composition-plan.md` 的 M3）。
