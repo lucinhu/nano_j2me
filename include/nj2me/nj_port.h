@@ -923,7 +923,15 @@ typedef struct nj_port {
     void *hd_mirror_image_ud;
     /* The HD store is dropping `target`: release any GPU copy of it without
      * exporting, because its pixels are about to become unreachable. */
-    void (*hd_mirror_drop)(void *ud, nj_surface *target);
+    /* Native-window presentation of the HD mirror: the backend puts the
+     * resident mirror straight onto the window surface, replacing the CPU
+     * readback and GL upload of the default present path.  attach may be
+     * called again after a window resize; frame returns nonzero when it
+     * presented the frame. */
+    int (*hd_present_attach)(void *ud, void *native_window, int width, int height);
+    void (*hd_present_detach)(void *ud);
+    int (*hd_present_frame)(void *ud, const nj_surface *frame);
+    void *hd_present_ud;    void (*hd_mirror_drop)(void *ud, nj_surface *target);
     void *hd_mirror_drop_ud;
 } nj_port;
 

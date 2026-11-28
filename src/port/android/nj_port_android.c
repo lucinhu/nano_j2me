@@ -332,7 +332,8 @@ typedef struct android_state {
 
     int   width, height, stride;   /* the LOGICAL screen: what the MIDlet sees */
     int   win_w, win_h;            /* the Surface: usually much larger */
-    int   format;
+    int   format;    nj_port *port;                 /* back-pointer for the native present hooks */
+
     nj_u1 *shadow;        /* the logical screen; scaled into the window */
 
     /*
@@ -1733,6 +1734,14 @@ static void android_present_frame(void *ud, const nj_surface *frame)
         density = frame->width / s->width;
     } else {
         frame = &logical;
+    }
+    /* A native present path can put the HD frame straight on the window: the
+     * resident mirror is already on the GPU, so no readback or GL upload is
+     * needed.  A logical frame or a backend without the path falls through. */
+    if (frame != &logical && s->port && s->port->hd_present_frame &&
+        s->port->hd_present_frame(s->port->hd_present_ud, frame)) {
+        ANativeWindow_release(win);
+        goto presented;
     }
     if (!s->det_done) android_detect(s);
 #if NJ_ANDROID_GLES2
@@ -5516,6 +5525,7 @@ nj_status nj_port_android_ex(nj_port *out, int screen_w, int screen_h)
     memset(out, 0, sizeof(*out));
     out->name = "android";
     out->ud = s;
+    s->port = out;
 #if NJ_ANDROID_GLES2 && !NJ_ANDROID_LEGACY
     /* Stable wrappers only: nativeCreate must never own an EGL context.
      * Non-JNI embedders using this constructor directly retain software unless
@@ -5728,6 +5738,17 @@ void nj_port_android_set_window(nj_port *port, void *native_window)
      * that is presenting right now holds its own. */
     if (old) {
         ANativeWindow_release(old);
+    }
+    /* Keep a native present path (Vulkan swapchain) in step with the window.
+     * A backend without one ignores these hooks. */
+    if (port->hd_present_attach) {
+        if (s->window && s->win_w > 0 && s->win_h > 0) {
+            if (!port->hd_present_attach(port->hd_present_ud, s->window, s->win_w, s->win_h) &&
+                port->hd_present_detach)
+                port->hd_present_detach(port->hd_present_ud);
+        } else if (port->hd_present_detach) {
+            port->hd_present_detach(port->hd_present_ud);
+        }
     }
 #endif
 }
@@ -6192,6 +6213,19 @@ static void *android_main_thread(void *arg)
         int ready = nj_vk_renderer_attach(&a->port);
         android_log(NULL, ready ? 2 : 1, ready ? "3D triangles: Vulkan ready" :
                                                 "Vulkan unavailable; continuing with previous renderer");
+        if (ready && s && s->port && s->port->hd_present_attach) {
+            ANativeWindow *win = NULL;
+            pthread_mutex_lock(&s->lock);
+            win = s->window;
+            if (win)
+                ANativeWindow_acquire(win);
+            pthread_mutex_unlock(&s->lock);
+            if (win) {
+                (void)s->port->hd_present_attach(s->port->hd_present_ud, win, s->win_w,
+                                                 s->win_h);
+                ANativeWindow_release(win);
+            }
+        }
     }
 #endif
     (void)nj_run(&a->port, &a->opts);
@@ -6371,6 +6405,7 @@ Java_com_lucinhu_nj2me_GameActivity_nativeCreate(JNIEnv *env, jobject thiz,
         }
     }
     (*env)->GetJavaVM(env, &s->jvm);
+
 #if NJ_ANDROID_LEGACY
     if (!s->activity_class || !s->blit_mid) {
         __android_log_write(ANDROID_LOG_ERROR, LOG_TAG,

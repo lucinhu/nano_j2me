@@ -5,6 +5,8 @@
 #if defined(__ANDROID__)
 #include <android/log.h>
 #include <sys/system_properties.h>
+#include <android/native_window.h>
+#include <vulkan/vulkan_android.h>
 #define VK_LOG(...) __android_log_print(ANDROID_LOG_INFO, "nj2me", __VA_ARGS__)
 #else
 #define VK_LOG(...) ((void)0)
@@ -123,6 +125,33 @@ struct nj_vk_renderer {
     /* Resident-path profile timers (NJ_VK_PROFILE): where the frame time goes. */
     double resident_prof_export, resident_prof_draw, resident_prof_clear, resident_prof_image;
     double resident_prof_copy, resident_prof_sync;
+#if defined(__ANDROID__)
+    /* Native-window presentation: the mirror is blitted into a swapchain image
+     * and handed to the compositor, so the CPU never sees the HD frame. */
+    int present_instance_ext;
+    int present_device_ext;
+    void *present_window;
+    PFN_vkCreateAndroidSurfaceKHR present_create_surface;
+    PFN_vkGetPhysicalDeviceSurfaceSupportKHR present_surface_support;
+    PFN_vkGetPhysicalDeviceSurfaceCapabilitiesKHR present_surface_caps;
+    PFN_vkGetPhysicalDeviceSurfaceFormatsKHR present_surface_formats;
+    PFN_vkGetPhysicalDeviceSurfacePresentModesKHR present_surface_modes;
+    PFN_vkCreateSwapchainKHR present_create_swapchain;
+    PFN_vkDestroySwapchainKHR present_destroy_swapchain;
+    PFN_vkGetSwapchainImagesKHR present_get_images;
+    PFN_vkAcquireNextImageKHR present_acquire;
+    PFN_vkQueuePresentKHR present_queue;
+    VkSurfaceKHR present_surface;
+    VkSwapchainKHR present_swapchain;
+    VkImage *present_images;
+    uint32_t present_count;
+    VkFormat present_format;
+    VkColorSpaceKHR present_color_space;
+    VkExtent2D present_extent;
+    VkSemaphore present_semaphore;
+    int present_ready;
+    unsigned present_attempts;
+#endif
     unsigned resident_prof_exports, resident_prof_draws;
 };
 static const VkFormat formats[] = {VK_FORMAT_B8G8R8A8_UNORM, VK_FORMAT_D32_SFLOAT};
@@ -396,6 +425,26 @@ nj_vk_renderer *nj_vk_renderer_create(void) {
     const char *stage_name = "instance";
     if (!r)
         return NULL;
+    {
+        /* Presentation is experimental on Android; debug.nj2me.vk_present=0
+         * turns it off at runtime so the old present path can be compared. */
+        int want_present = 1;
+        const char *present_env = getenv("NJ_VK_PRESENT");
+        if (present_env && present_env[0] == '0')
+            want_present = 0;
+#if defined(__ANDROID__)
+        {
+            char prop[PROP_VALUE_MAX];
+            if (__system_property_get("debug.nj2me.vk_present", prop) > 0 && prop[0] == '0')
+                want_present = 0;
+        }
+#endif
+#if defined(__ANDROID__)
+        r->present_instance_ext = want_present ? -1 : 0; /* -1: allowed, decide below */
+#else
+        (void)want_present;
+#endif
+    }
     /* A NULL pApplicationInfo leaves apiVersion 0; some Android Vulkan HALs (the
        emulator's gfxstream one) then enumerate no physical devices at all. */
     app_info.apiVersion = VK_API_VERSION_1_0;
@@ -404,12 +453,65 @@ nj_vk_renderer *nj_vk_renderer_create(void) {
     app_info.pEngineName = "nano_j2me";
     app_info.engineVersion = 1;
     instance.pApplicationInfo = &app_info;
+#if defined(__ANDROID__)
+    /* These arrays hold the extension name pointers handed to vkCreateInstance,
+       so they must live in this scope, not in the lookup block below. */
+    const char *want[2];
+    const char *have[2];
+    if (r->present_instance_ext < 0) {
+        /* Presentation needs VK_KHR_surface plus the Android surface extension;
+         * the old GL path presented through EGL and needed neither. */
+        uint32_t total = 0, i, j, found = 0;
+        want[0] = VK_KHR_SURFACE_EXTENSION_NAME;
+        want[1] = VK_KHR_ANDROID_SURFACE_EXTENSION_NAME;
+        if (vkEnumerateInstanceExtensionProperties(NULL, &total, NULL) == VK_SUCCESS && total) {
+            VkExtensionProperties *list = (VkExtensionProperties *)malloc(total * sizeof *list);
+            if (list &&
+                vkEnumerateInstanceExtensionProperties(NULL, &total, list) == VK_SUCCESS) {
+                for (j = 0; j < 2; ++j)
+                    for (i = 0; i < total; ++i)
+                        if (strcmp(list[i].extensionName, want[j]) == 0) {
+                            have[found++] = want[j];
+                            break;
+                        }
+            }
+            free(list);
+        }
+        if (found == 2) {
+            instance.enabledExtensionCount = found;
+            instance.ppEnabledExtensionNames = have;
+            r->present_instance_ext = 1;
+        } else {
+            r->present_instance_ext = 0;
+        }
+        VK_LOG("vulkan: surface extensions=%u", found);
+    } else {
+        r->present_instance_ext = 0;
+    }
+#endif
     stage = vkCreateInstance(&instance, NULL, &r->instance);
     if (stage != VK_SUCCESS) {
         VK_LOG("vulkan: vkCreateInstance failed (%d)", (int)stage);
         goto fail;
     }
     stage_name = "physical device";
+#if defined(__ANDROID__)
+    if (r->present_instance_ext) {
+        r->present_create_surface = (PFN_vkCreateAndroidSurfaceKHR)vkGetInstanceProcAddr(
+            r->instance, "vkCreateAndroidSurfaceKHR");
+        r->present_surface_support = (PFN_vkGetPhysicalDeviceSurfaceSupportKHR)vkGetInstanceProcAddr(
+            r->instance, "vkGetPhysicalDeviceSurfaceSupportKHR");
+        r->present_surface_caps =
+            (PFN_vkGetPhysicalDeviceSurfaceCapabilitiesKHR)vkGetInstanceProcAddr(
+                r->instance, "vkGetPhysicalDeviceSurfaceCapabilitiesKHR");
+        r->present_surface_formats =
+            (PFN_vkGetPhysicalDeviceSurfaceFormatsKHR)vkGetInstanceProcAddr(
+                r->instance, "vkGetPhysicalDeviceSurfaceFormatsKHR");
+        r->present_surface_modes =
+            (PFN_vkGetPhysicalDeviceSurfacePresentModesKHR)vkGetInstanceProcAddr(
+                r->instance, "vkGetPhysicalDeviceSurfacePresentModesKHR");
+    }
+#endif
     if (!choose_gpu(r))
         goto fail;
     queue.queueFamilyIndex = r->family;
@@ -418,9 +520,51 @@ nj_vk_renderer *nj_vk_renderer_create(void) {
     dev.queueCreateInfoCount = 1;
     dev.pQueueCreateInfos = &queue;
     stage_name = "device";
+#if defined(__ANDROID__)
+    /* The pointer handed to vkCreateDevice below must stay alive until then. */
+    const char *const swap_ext = VK_KHR_SWAPCHAIN_EXTENSION_NAME;
+    {
+        uint32_t total = 0, i;
+        int found = 0;
+        if (r->present_instance_ext &&
+            vkEnumerateDeviceExtensionProperties(r->gpu, NULL, &total, NULL) == VK_SUCCESS &&
+            total) {
+            VkExtensionProperties *list = (VkExtensionProperties *)malloc(total * sizeof *list);
+            if (list &&
+                vkEnumerateDeviceExtensionProperties(r->gpu, NULL, &total, list) == VK_SUCCESS) {
+                for (i = 0; i < total; ++i)
+                    if (strcmp(list[i].extensionName, swap_ext) == 0) {
+                        found = 1;
+                        break;
+                    }
+            }
+            free(list);
+        }
+        VK_LOG("vulkan: swapchain extension found=%d total=%u", found, total);
+        if (found) {
+            dev.enabledExtensionCount = 1;
+            dev.ppEnabledExtensionNames = &swap_ext;
+            r->present_device_ext = 1;
+        }
+    }
+#endif
     if ((stage = vkCreateDevice(r->gpu, &dev, NULL, &r->dev)) != VK_SUCCESS)
         goto fail;
     vkGetDeviceQueue(r->dev, r->family, 0, &r->queue);
+#if defined(__ANDROID__)
+    if (r->present_device_ext) {
+        r->present_acquire =
+            (PFN_vkAcquireNextImageKHR)vkGetDeviceProcAddr(r->dev, "vkAcquireNextImageKHR");
+        r->present_queue =
+            (PFN_vkQueuePresentKHR)vkGetDeviceProcAddr(r->dev, "vkQueuePresentKHR");
+        r->present_create_swapchain =
+            (PFN_vkCreateSwapchainKHR)vkGetDeviceProcAddr(r->dev, "vkCreateSwapchainKHR");
+        r->present_destroy_swapchain =
+            (PFN_vkDestroySwapchainKHR)vkGetDeviceProcAddr(r->dev, "vkDestroySwapchainKHR");
+        r->present_get_images =
+            (PFN_vkGetSwapchainImagesKHR)vkGetDeviceProcAddr(r->dev, "vkGetSwapchainImagesKHR");
+    }
+#endif
     pool.queueFamilyIndex = r->family;
     stage_name = "command pool";
     if ((stage = vkCreateCommandPool(r->dev, &pool, NULL, &r->pool)) != VK_SUCCESS)
@@ -530,6 +674,16 @@ void nj_vk_renderer_destroy(nj_vk_renderer *r) {
         vkDestroyShaderModule(r->dev, r->fs, NULL);
         vkDestroyRenderPass(r->dev, r->session_pass, NULL);
         vkDestroyRenderPass(r->dev, r->pass, NULL);
+#if defined(__ANDROID__)
+        if (r->present_swapchain != VK_NULL_HANDLE && r->present_destroy_swapchain)
+            r->present_destroy_swapchain(r->dev, r->present_swapchain, NULL);
+        r->present_swapchain = VK_NULL_HANDLE;
+        free(r->present_images);
+        r->present_images = NULL;
+        if (r->present_semaphore != VK_NULL_HANDLE)
+            vkDestroySemaphore(r->dev, r->present_semaphore, NULL);
+        r->present_semaphore = VK_NULL_HANDLE;
+#endif
         vkDestroyFence(r->dev, r->fence, NULL);
         vkDestroyDevice(r->dev, NULL);
     }
@@ -544,6 +698,10 @@ void nj_vk_renderer_destroy(nj_vk_renderer *r) {
                 r->resident_prof_clear, r->resident_prof_image);
     }
     free(r->session_infos);
+#if defined(__ANDROID__)
+    if (r->present_surface != VK_NULL_HANDLE && r->instance)
+        vkDestroySurfaceKHR(r->instance, r->present_surface, NULL);
+#endif
     if (r->instance)
         vkDestroyInstance(r->instance, NULL);
     free(r);
@@ -754,6 +912,271 @@ static int resident_list_trusted(void *ud, const nj_gfx_triangles_list *l, nj_u4
 #if NJ_ENABLE_GFX_ACCEL
 static void destroy_owned_renderer(void *ud) { nj_vk_renderer_destroy(ud); }
 #endif
+/* --- Native-window presentation ----------------------------------------- */
+/* The resident mirror goes straight into a swapchain image: no readback, no
+ * CPU scaling, no GL upload.  A device without the surface/swapchain
+ * extensions, or a surface whose formats cannot represent the mirror, leaves
+ * the hooks returning zero and the old present path keeps working. */
+static void present_release_swapchain(nj_vk_renderer *r) {
+#if defined(__ANDROID__)
+    if (!r)
+        return;
+    if (r->present_swapchain != VK_NULL_HANDLE && r->present_destroy_swapchain)
+        r->present_destroy_swapchain(r->dev, r->present_swapchain, NULL);
+    r->present_swapchain = VK_NULL_HANDLE;
+    free(r->present_images);
+    r->present_images = NULL;
+    r->present_count = 0;
+    r->present_ready = 0;
+#else
+    (void)r;
+#endif
+}
+
+void nj_vk_renderer_present_detach(void *renderer) {
+    nj_vk_renderer *r = (nj_vk_renderer *)renderer;
+    if (!r)
+        return;
+    present_release_swapchain(r);
+#if defined(__ANDROID__)
+    if (r->present_surface != VK_NULL_HANDLE && r->instance) {
+        vkDestroySurfaceKHR(r->instance, r->present_surface, NULL);
+        r->present_surface = VK_NULL_HANDLE;
+    }
+    r->present_window = NULL;
+#endif
+}
+
+#if defined(__ANDROID__)
+static int present_build_swapchain(nj_vk_renderer *r, int width, int height) {
+    VkSurfaceCapabilitiesKHR caps;
+    VkSurfaceFormatKHR *list = NULL;
+    VkPresentModeKHR *modes = NULL;
+    VkSwapchainCreateInfoKHR info = VK_INIT(SWAPCHAIN_CREATE_INFO_KHR);
+    VkExtent2D extent;
+    VkFormat want = formats[0];
+    uint32_t count = 0, mode_count = 0, i, mode = VK_PRESENT_MODE_FIFO_KHR;
+    VkResult rc;
+    if (!r->present_surface_caps || !r->present_surface_formats || !r->present_create_swapchain ||
+        !r->present_get_images || !r->present_acquire || !r->present_queue)
+        return 0;
+    if (r->present_surface_caps(r->gpu, r->present_surface, &caps) != VK_SUCCESS)
+        return 0;
+    if (!(caps.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_DST_BIT))
+        return 0;
+    if (r->present_surface_formats(r->gpu, r->present_surface, &count, NULL) != VK_SUCCESS ||
+        !count)
+        return 0;
+    list = (VkSurfaceFormatKHR *)malloc((size_t)count * sizeof *list);
+    if (!list)
+        return 0;
+    if (r->present_surface_formats(r->gpu, r->present_surface, &count, list) != VK_SUCCESS)
+        count = 0;
+    /* The mirror renders into the platform's preferred 8-bit format; surfaces
+       sometimes only offer the byte-swapped twin. vkCmdBlitImage maps channels
+       by component, so both are safe blit destinations when the format
+       supports it. */
+    {
+        const VkFormat candidates[2] = {want, VK_FORMAT_R8G8B8A8_UNORM};
+        int k;
+        r->present_format = VK_FORMAT_UNDEFINED;
+        for (k = 0; k < 2 && r->present_format == VK_FORMAT_UNDEFINED; ++k) {
+            VkFormatProperties props;
+            vkGetPhysicalDeviceFormatProperties(r->gpu, candidates[k], &props);
+            if (!(props.optimalTilingFeatures & VK_FORMAT_FEATURE_BLIT_DST_BIT))
+                continue;
+            for (i = 0; i < count; ++i)
+                if (list[i].format == candidates[k]) {
+                    r->present_format = list[i].format;
+                    r->present_color_space = list[i].colorSpace;
+                    break;
+                }
+        }
+    }
+    free(list);
+    if (r->present_format == VK_FORMAT_UNDEFINED) {
+        VK_LOG("vulkan: swapchain offers no blittable 8-bit format (%u formats); CPU present stays",
+               count);
+        return 0;
+    }
+    if (r->present_surface_modes &&
+        r->present_surface_modes(r->gpu, r->present_surface, &mode_count, NULL) == VK_SUCCESS &&
+        mode_count) {
+        modes = (VkPresentModeKHR *)malloc((size_t)mode_count * sizeof *modes);
+        if (modes &&
+            r->present_surface_modes(r->gpu, r->present_surface, &mode_count, modes) == VK_SUCCESS) {
+            for (i = 0; i < mode_count; ++i)
+                if (modes[i] == VK_PRESENT_MODE_MAILBOX_KHR) {
+                    mode = VK_PRESENT_MODE_MAILBOX_KHR;
+                    break;
+                }
+        }
+        free(modes);
+    }
+    extent = caps.currentExtent;
+    if (extent.width == UINT32_MAX) {
+        extent.width = (uint32_t)(width > 0 ? width : 1);
+        extent.height = (uint32_t)(height > 0 ? height : 1);
+    }
+    if (extent.width < caps.minImageExtent.width)
+        extent.width = caps.minImageExtent.width;
+    if (extent.height < caps.minImageExtent.height)
+        extent.height = caps.minImageExtent.height;
+    if (extent.width > caps.maxImageExtent.width)
+        extent.width = caps.maxImageExtent.width;
+    if (extent.height > caps.maxImageExtent.height)
+        extent.height = caps.maxImageExtent.height;
+    info.surface = r->present_surface;
+    info.minImageCount = caps.minImageCount + 1;
+    if (caps.maxImageCount && info.minImageCount > caps.maxImageCount)
+        info.minImageCount = caps.maxImageCount;
+    info.imageFormat = r->present_format;
+    info.imageColorSpace = r->present_color_space;
+    info.imageExtent = extent;
+    info.imageArrayLayers = 1;
+    info.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    info.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    info.preTransform = caps.currentTransform;
+    info.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+    info.presentMode = (VkPresentModeKHR)mode;
+    info.clipped = VK_TRUE;
+    info.oldSwapchain = VK_NULL_HANDLE;
+    rc = r->present_create_swapchain(r->dev, &info, NULL, &r->present_swapchain);
+    if (rc != VK_SUCCESS) {
+        VK_LOG("vulkan: swapchain create failed (%d)", (int)rc);
+        return 0;
+    }
+    if (r->present_get_images(r->dev, r->present_swapchain, &r->present_count, NULL) != VK_SUCCESS ||
+        !r->present_count)
+        return 0;
+    r->present_images = (VkImage *)malloc((size_t)r->present_count * sizeof *r->present_images);
+    if (!r->present_images ||
+        r->present_get_images(r->dev, r->present_swapchain, &r->present_count, r->present_images) !=
+            VK_SUCCESS)
+        return 0;
+    r->present_extent = extent;
+    r->present_ready = 1;
+    VK_LOG("vulkan: present swapchain %ux%u format=%d mode=%d", extent.width, extent.height,
+           (int)r->present_format, (int)mode);
+    return 1;
+}
+#endif
+
+int nj_vk_renderer_present_attach(void *renderer, void *native_window, int width, int height) {
+    nj_vk_renderer *r = (nj_vk_renderer *)renderer;
+#if defined(__ANDROID__)
+    VkAndroidSurfaceCreateInfoKHR info = VK_INIT(ANDROID_SURFACE_CREATE_INFO_KHR);
+    VkBool32 supported = VK_FALSE;
+    if (!r || !r->instance || !r->dev || !native_window || !r->present_instance_ext ||
+        !r->present_device_ext || !r->present_create_surface)
+        return 0;
+    nj_vk_renderer_present_detach(renderer);
+    info.window = (ANativeWindow *)native_window;
+    if (r->present_create_surface(r->instance, &info, NULL, &r->present_surface) != VK_SUCCESS) {
+        VK_LOG("vulkan: android surface failed");
+        return 0;
+    }
+    if (r->present_surface_support &&
+        (r->present_surface_support(r->gpu, r->family, r->present_surface, &supported) !=
+             VK_SUCCESS ||
+         !supported)) {
+        VK_LOG("vulkan: surface is not presentable on the graphics queue");
+        nj_vk_renderer_present_detach(renderer);
+        return 0;
+    }
+    if (!present_build_swapchain(r, width, height)) {
+        nj_vk_renderer_present_detach(renderer);
+        return 0;
+    }
+    if (r->present_semaphore == VK_NULL_HANDLE) {
+        VkSemaphoreCreateInfo sem = VK_INIT(SEMAPHORE_CREATE_INFO);
+        if (vkCreateSemaphore(r->dev, &sem, NULL, &r->present_semaphore) != VK_SUCCESS) {
+            nj_vk_renderer_present_detach(renderer);
+            return 0;
+        }
+    }
+    r->present_window = native_window;
+    return 1;
+#else
+    (void)r;
+    (void)native_window;
+    (void)width;
+    (void)height;
+    return 0;
+#endif
+}
+
+int nj_vk_renderer_present_frame(void *renderer, const nj_surface *frame) {
+    nj_vk_renderer *r = (nj_vk_renderer *)renderer;
+#if defined(__ANDROID__)
+    VkPresentInfoKHR present = VK_INIT(PRESENT_INFO_KHR);
+    uint32_t index = 0;
+    VkResult rc;
+    int x, y, w, h;
+    double aspect, target;
+    if (!r) return 0;
+    r->present_attempts++;
+    if (!r->present_ready || !frame || !frame->pixels || frame->width <= 0 ||
+        frame->height <= 0 || !r->resident || !r->resident->mirror) {
+        if (r->present_attempts <= 8)
+            VK_LOG("vulkan: present skip ready=%d frame=%p pixels=%d %dx%d resident=%d mirror=%d",
+                   r->present_ready, (const void *)frame, frame ? (frame->pixels != NULL) : 0,
+                   frame ? frame->width : 0, frame ? frame->height : 0, r->resident != NULL,
+                   r->resident ? (r->resident->mirror != NULL) : 0);
+        return 0;
+    }
+    rc = r->present_acquire(r->dev, r->present_swapchain, UINT64_MAX, r->present_semaphore,
+                            VK_NULL_HANDLE, &index);
+    if (rc != VK_SUCCESS) {
+        if (r->present_attempts <= 8)
+            VK_LOG("vulkan: present acquire failed (%d)", (int)rc);
+        if (rc == VK_ERROR_OUT_OF_DATE_KHR || rc == VK_SUBOPTIMAL_KHR)
+            r->present_ready = 0;
+        return 0;
+    }
+    aspect = (double)frame->width / (double)frame->height;
+    target = (double)r->present_extent.width / (double)r->present_extent.height;
+    if (aspect >= target) {
+        w = (int)r->present_extent.width;
+        h = (int)((double)w / aspect);
+    } else {
+        h = (int)r->present_extent.height;
+        w = (int)((double)h * aspect);
+    }
+    if (w <= 0 || h <= 0) {
+        w = (int)r->present_extent.width;
+        h = (int)r->present_extent.height;
+    }
+    x = ((int)r->present_extent.width - w) / 2;
+    y = ((int)r->present_extent.height - h) / 2;
+    if (!nj_vk_renderer_mirror_present(r->resident->mirror, r->present_images[index],
+                                       r->present_extent.width, r->present_extent.height, x, y, w,
+                                       h, 0, r->present_semaphore)) {
+        if (r->present_attempts <= 8)
+            VK_LOG("vulkan: present blit failed (%dx%d from %dx%d)", w, h, frame->width,
+                   frame->height);
+        return 0;
+    }
+    present.swapchainCount = 1;
+    present.pSwapchains = &r->present_swapchain;
+    present.pImageIndices = &index;
+    rc = r->present_queue(r->queue, &present);
+    if (rc != VK_SUCCESS && r->present_attempts <= 8)
+        VK_LOG("vulkan: present queue failed (%d)", (int)rc);
+    if (rc == VK_SUCCESS && r->present_attempts <= 8)
+        VK_LOG("vulkan: present ok #%u", r->present_attempts);
+    if (rc != VK_SUCCESS) {
+        if (rc == VK_ERROR_OUT_OF_DATE_KHR || rc == VK_SUBOPTIMAL_KHR)
+            r->present_ready = 0;
+        return 0;
+    }
+    return 1;
+#else
+    (void)r;
+    (void)frame;
+    return 0;
+#endif
+}
 int nj_vk_renderer_attach(nj_port *port) {
 #if NJ_ENABLE_GFX_ACCEL
     nj_vk_renderer *r;
@@ -818,7 +1241,10 @@ int nj_vk_renderer_attach(nj_port *port) {
         if (resident && resident[0] == '1')
             want_resident = 1;
 #if defined(__ANDROID__)
-        if (!want_resident) {
+        /* The Vulkan swapchain present path still needs the resident mirror, so
+         * both stay opt-in until every frame class is covered: set
+         * debug.nj2me.vk_resident=1 (and debug.nj2me.vk_present=1) to try it. */
+        {
             char prop[PROP_VALUE_MAX];
             if (__system_property_get("debug.nj2me.vk_resident", prop) > 0 && prop[0] == '1')
                 want_resident = 1;
@@ -864,7 +1290,17 @@ int nj_vk_renderer_attach(nj_port *port) {
             nj_vk_ahb_probe();
         }
     }
-    port->gfx_hd_destroy = destroy_owned_renderer;
+#if defined(__ANDROID__)
+    /* The swapchain present path consumes the resident mirror; when the mirror
+     * is off the port keeps its established GL/CPU present path. */
+    if (port->gfx_triangles_list == resident_list) {
+        port->hd_present_attach = nj_vk_renderer_present_attach;
+        port->hd_present_detach = nj_vk_renderer_present_detach;
+        port->hd_present_frame = nj_vk_renderer_present_frame;
+        port->hd_present_ud = r;
+    }
+#endif
+    port->gfx_hd_destroy = destroy_owned_renderer;    port->gfx_hd_destroy = destroy_owned_renderer;
     return 1;
 #else
     (void)port;

@@ -165,3 +165,41 @@ quad，并按帧批处理（≤1 次颜色 import + ≤1 次 export）。
 3. 因此 AOT/持久代码缓存暂不立项：它会继承同一套块编译质量与正确性
    问题，收益上限也只是 CPU 密集标题的 VM 部分（当前 3D 工作负载里
    `nj_run` 约 4%）。先继续做图形管线（L1/L2/L3）。
+
+## 8. L1 Android swapchain present（Round 2 进展，opt-in）
+
+目标：Android 上把常驻镜面直接 present 到 Vulkan swapchain，省掉每帧 ENTIRE 帧回读 +
+`SDL_UpdateTexture`/GL 纹理上传 + CPU 缩放（桌面 resident 8× 的 export ≈7.8 ms/帧，
+Android 上的上传同量级）。
+
+实现（`src/port/vulkan/`，`include/nj2me/nj_port.h` 新增 `hd_present_*` 钩子）：
+
+- renderer 创建时枚举并启用 `VK_KHR_surface` + `VK_KHR_android_surface`（instance）与
+  `VK_KHR_swapchain`（device）；`nj_vk_renderer_present_attach` 用 `ANativeWindow` 建
+  surface/swapchain（镜像同格式优先，否则 RGBA8，要求 BLIT_DST；MAILBOX 否则 FIFO），
+  `present_frame` 每帧 acquire → aspect-fit 居中 → `vkCmdBlitImage`（常驻镜面 →
+  swapchain 图像）→ `vkQueuePresentKHR`。
+- Android 端口在窗口就绪时 attach，在 `android_present_frame` 的 HD 帧上先走该钩子，
+  成功则跳过 GL/CPU present。
+- 本轮调试中修掉两个真实缺陷：
+  1. **扩展名指针生命周期**：instance/device 的扩展名字符串指针声明在查找块内、
+     却在块结束后才传给 `vkCreateInstance`/`vkCreateDevice`，栈槽复用导致 guest
+     libvulkan `strcmp` 读到 `0x000000020000000f` 段错误。修复=把数组提升到函数作用域。
+  2. swapchain 格式只接受与镜面完全相同格式（BGRA8），而 AVD surface 只提供 RGBA8。
+     改为接受两种 8 位格式（blit 按分量映射）。
+
+AVD（Medium_Phone_API_36.1，-gpu host，8× HD，Doom3 标题画面同阶段）：
+
+| present 路径 | 帧率窗口（fps） |
+|---|---|
+| 旧 GL 上传 | 6.9 / 7.2 / 6.8 / 10.5 |
+| Vulkan swapchain | 7.8 / 9.1 / 8.5 / 13.8 |
+
+同阶段约 +13~31%；截图形状/颜色正确（居中 letterbox + 系统浮层）。
+
+已知缺口：present 依赖常驻镜面；若首批 HD 帧在镜面创建前到达（JBenchmark3D 启动
+阶段），钩子返回 0 后 Vulkan 已占用 ANativeWindow，旧 GL present 不可用，CPU 回退
+约 2–3 s/帧（0.3–1 fps）。下一步需加「无 resident 时 CPU 帧上传 + blit」路径，或让
+屏幕 HD 目标首帧即建立镜面；两条路径都验证后再考虑默认开启。当前保持 opt-in：
+Android `debug.nj2me.vk_resident=1` + `debug.nj2me.vk_present=1` 才会启用，
+默认走旧 present 路径。

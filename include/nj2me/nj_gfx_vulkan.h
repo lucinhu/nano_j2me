@@ -43,6 +43,13 @@ int nj_vk_renderer_mirror_import_rect(nj_vk_mirror *mirror, const nj_surface *su
                                       int height, int mask);
 int nj_vk_renderer_mirror_export_rect(nj_vk_mirror *mirror, const nj_surface *dst, int x, int y,
                                       int width, int height);
+/* Native-window presentation of the resident mirror.  When the backend owns
+ * a swapchain (Android) the frame is blitted straight onto the window surface
+ * and the CPU never touches the pixels.  present_attach() may be called again
+ * after a resize; present_frame() returns nonzero when it presented. */
+int nj_vk_renderer_present_attach(void *renderer, void *native_window, int width, int height);
+void nj_vk_renderer_present_detach(void *renderer);
+int nj_vk_renderer_present_frame(void *renderer, const nj_surface *frame);
 void *nj_vk_renderer_mirror_pixels(nj_vk_mirror *mirror);
 int nj_vk_renderer_mirror_texture(nj_vk_mirror *mirror, const nj_surface *src, int sx, int sy,
                                   int sw, int sh, int dx, int dy, int dw, int dh, int filter,

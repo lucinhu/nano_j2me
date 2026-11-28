@@ -1363,6 +1363,108 @@ int nj_vk_renderer_mirror_export(nj_vk_mirror *m, const nj_surface *dst) {
     }
     return 1;
 }
+/* Present the resident mirror into a swapchain image.  The destination is
+ * cleared to black first (the letterbox bars), the mirror is blitted into the
+ * caller's aspect-fit rectangle and the image is left in PRESENT_SRCKHR.  The
+ * acquire semaphore is waited on before the transfer, so the caller can queue
+ * the present as soon as this returns. */
+int nj_vk_renderer_mirror_present(nj_vk_mirror *m, VkImage dst, uint32_t dst_width,
+                                  uint32_t dst_height, int x, int y, int width, int height,
+                                  int filter, VkSemaphore wait) {
+    nj_vk_renderer *r;
+    VkImageMemoryBarrier barrier[2];
+    VkImageSubresourceRange range;
+    VkClearColorValue black;
+    VkImageBlit blit;
+    VkSubmitInfo submit = VK_INIT(SUBMIT_INFO);
+    VkPipelineStageFlags stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+    if (!m || !m->ready || dst == VK_NULL_HANDLE || dst_width == 0 || dst_height == 0 ||
+        width <= 0 || height <= 0 || x < 0 || y < 0 ||
+        (uint32_t)(x + width) > dst_width || (uint32_t)(y + height) > dst_height)
+        return 0;
+    r = m->r;
+    if (!mirror_begin(r))
+        return 0;
+    memset(&range, 0, sizeof range);
+    range.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    range.levelCount = 1;
+    range.layerCount = 1;
+    memset(barrier, 0, sizeof barrier);
+    barrier[0].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    barrier[0].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    barrier[0].dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    barrier[0].oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    barrier[0].newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    barrier[0].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier[0].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier[0].image = m->image.id;
+    barrier[0].subresourceRange = range;
+    barrier[1].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    barrier[1].srcAccessMask = 0;
+    barrier[1].dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    barrier[1].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    barrier[1].newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    barrier[1].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier[1].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier[1].image = dst;
+    barrier[1].subresourceRange = range;
+    vkCmdPipelineBarrier(r->cmd, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 0, NULL, 2, barrier);
+    memset(&black, 0, sizeof black);
+    black.float32[3] = 1.0f;
+    vkCmdClearColorImage(r->cmd, dst, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &black, 1, &range);
+    memset(&blit, 0, sizeof blit);
+    blit.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    blit.srcSubresource.layerCount = 1;
+    blit.srcOffsets[1].x = m->width;
+    blit.srcOffsets[1].y = m->height;
+    blit.srcOffsets[1].z = 1;
+    blit.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    blit.dstSubresource.layerCount = 1;
+    blit.dstOffsets[0].x = x;
+    blit.dstOffsets[0].y = y;
+    blit.dstOffsets[1].x = x + width;
+    blit.dstOffsets[1].y = y + height;
+    blit.dstOffsets[1].z = 1;
+    vkCmdBlitImage(r->cmd, m->image.id, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, dst,
+                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit,
+                   filter ? VK_FILTER_NEAREST : VK_FILTER_LINEAR);
+    memset(barrier, 0, sizeof barrier);
+    barrier[0].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    barrier[0].srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    barrier[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    barrier[0].oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    barrier[0].newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    barrier[0].image = m->image.id;
+    barrier[0].subresourceRange = range;
+    barrier[1].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    barrier[1].srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    barrier[1].dstAccessMask = 0;
+    barrier[1].oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    barrier[1].newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+    barrier[1].image = dst;
+    barrier[1].subresourceRange = range;
+    vkCmdPipelineBarrier(r->cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, NULL, 0, NULL, 2, barrier);
+    if (vkEndCommandBuffer(r->cmd) != VK_SUCCESS)
+        return 0;
+    if (vkResetFences(r->dev, 1, &r->fence) != VK_SUCCESS)
+        return 0;
+    submit.commandBufferCount = 1;
+    submit.pCommandBuffers = &r->cmd;
+    if (wait != VK_NULL_HANDLE) {
+        submit.waitSemaphoreCount = 1;
+        submit.pWaitSemaphores = &wait;
+        submit.pWaitDstStageMask = &stage;
+    }
+    if (vkQueueSubmit(r->queue, 1, &submit, r->fence) != VK_SUCCESS ||
+        vkWaitForFences(r->dev, 1, &r->fence, VK_TRUE, UINT64_MAX) != VK_SUCCESS) {
+        r->lost = 1;
+        return 0;
+    }
+    return 1;
+}
+
 /* Export a rectangle of the mirror back into a full-frame CPU surface.  The
  * frame's other pixels are left untouched (`dst` keeps whatever it held). */
 int nj_vk_renderer_mirror_export_rect(nj_vk_mirror *m, const nj_surface *dst, int x, int y,
