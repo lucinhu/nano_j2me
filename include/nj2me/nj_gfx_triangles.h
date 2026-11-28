@@ -155,14 +155,34 @@ int nj_gfx_triangles_list_validate(const nj_gfx_triangles_list *list,
  *
  * submitted on end() is the total accepted primitives for the whole session.
  * The rectangle must be inside the surface; x/y may be non-zero.
+ *
+ * Version 2 adds the retained-session extension at the end of the descriptor.
+ * A caller sets `retain` when it will come back with the identical surface
+ * rectangle and wants the backend to keep the exported result resident instead
+ * of paying the full import again. The CPU buffers are then authoritative only
+ * for the `dirty` colour rectangles the caller lists (plus the whole depth
+ * buffer unless `depth_retain` says the CPU depth buffer did not move). The
+ * backend may ignore the hint and import everything if its resident result no
+ * longer matches; it must never read stale attachment contents. Version 1
+ * callers leave the extension absent and always get the full import.
  */
-#define NJ_GFX_TRIANGLES_SESSION_VERSION 1u
+#define NJ_GFX_TRIANGLES_SESSION_VERSION 2u
+/* A rectangle in surface space; used to name retained-session dirty regions. */
+typedef struct nj_gfx_session_rect {
+    int x, y, width, height;
+} nj_gfx_session_rect;
 typedef struct nj_gfx_triangles_session {
     nj_u4 version;
     nj_surface *surface;
     nj_s4 *depth;
     int depth_stride;
     int x, y, width, height;
+    /* Retained-session extension (version 2). `dirty` may be NULL when
+     * dirty_count is zero (the CPU wrote nothing since the last end()). */
+    const nj_gfx_session_rect *dirty;
+    nj_u4 dirty_count;
+    int retain;
+    int depth_retain;
 } nj_gfx_triangles_session;
 typedef int (*nj_gfx_triangles_begin_fn)(void *ud,
                                          const nj_gfx_triangles_session *session);

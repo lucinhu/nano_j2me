@@ -637,6 +637,102 @@ static void session_equivalence(nj_vk_renderer *r) {
     CHECK(memcmp(colors, base_colors, sizeof colors) != 0);
 }
 
+static void retained_sessions(nj_vk_renderer *r) {
+    enum { BW = 32, BH = 32, ZS = BW + 3 };
+    static nj_u4 colors[BH][BW], base_colors[BH][BW], want[BH][BW], mixed[BH][BW];
+    static nj_s4 keys[BH][ZS], base_keys[BH][ZS], want_keys[BH][ZS];
+    static const nj_u4 patch = 0xffaa7711u;
+    static const nj_gfx_session_rect dirty[1] = {{6, 7, 9, 8}};
+    nj_surface s = {(nj_u4 *)colors, BW, BH, BW * 4, NJ_PIXFMT_ARGB8888, 4};
+    nj_gfx_triangle_cmd cmds[1];
+    nj_gfx_triangles p;
+    nj_gfx_triangles_session full = {NJ_GFX_TRIANGLES_SESSION_VERSION, &s, &keys[0][0], ZS,
+                                     0, 0, BW, BH, NULL, 0, 0, 0};
+    nj_gfx_triangles_session kept = {NJ_GFX_TRIANGLES_SESSION_VERSION, &s, &keys[0][0], ZS,
+                                     0, 0, BW, BH, NULL, 0, 1, 0};
+    nj_gfx_triangles_session kept_dirty = {NJ_GFX_TRIANGLES_SESSION_VERSION, &s, &keys[0][0], ZS,
+                                           0, 0, BW, BH, dirty, 1, 1, 1};
+    nj_gfx_triangles_session narrowed = {NJ_GFX_TRIANGLES_SESSION_VERSION, &s, &keys[0][0], ZS,
+                                         0, 0, BW - 1, BH, dirty, 1, 1, 1};
+    nj_u4 submitted = 0;
+    int x, y, maxdiff;
+
+    for (y = 0; y < BH; ++y) {
+        for (x = 0; x < BW; ++x)
+            colors[y][x] = background;
+        for (x = 0; x < ZS; ++x)
+            keys[y][x] = x < BW ? (((x * 3 + y * 7) & 3) ? 8000 : 2000) : -12345;
+    }
+    memcpy(base_colors, colors, sizeof colors);
+    memcpy(base_keys, keys, sizeof keys);
+    memset(cmds, 0, sizeof cmds);
+    cmds[0] = triangle(0xff5577bbu, 0.30);
+    p = (nj_gfx_triangles){NJ_GFX_TRIANGLES_VERSION, &s, &keys[0][0], ZS, 2, 3, 20, 18, cmds, 1};
+    /* Reference: a plain full-import session. */
+    CHECK(nj_vk_renderer_triangles_begin(r, &full) == NJ_GFX_ACCEL_DONE);
+    CHECK(nj_vk_renderer_triangles(r, &p, &submitted) == NJ_GFX_ACCEL_DONE && submitted == 1);
+    CHECK(nj_vk_renderer_triangles_end(r, &submitted) == NJ_GFX_ACCEL_DONE && submitted == 1);
+    memcpy(want, colors, sizeof colors);
+    memcpy(want_keys, keys, sizeof keys);
+    /* First retained session behaves like a full import. */
+    memcpy(colors, base_colors, sizeof colors);
+    memcpy(keys, base_keys, sizeof keys);
+    CHECK(nj_vk_renderer_triangles_begin(r, &kept) == NJ_GFX_ACCEL_DONE);
+    CHECK(nj_vk_renderer_triangles(r, &p, &submitted) == NJ_GFX_ACCEL_DONE);
+    CHECK(nj_vk_renderer_triangles_end(r, &submitted) == NJ_GFX_ACCEL_DONE);
+    CHECK(!memcmp(colors, want, sizeof colors));
+    /* CPU patches one small rectangle; a retained begin may import only that. */
+    for (y = dirty[0].y; y < dirty[0].y + dirty[0].height; ++y)
+        for (x = dirty[0].x; x < dirty[0].x + dirty[0].width; ++x)
+            colors[y][x] = patch;
+    /* Reference for the second frame: full import of the patched buffers. */
+    CHECK(nj_vk_renderer_triangles_begin(r, &full) == NJ_GFX_ACCEL_DONE);
+    CHECK(nj_vk_renderer_triangles(r, &p, &submitted) == NJ_GFX_ACCEL_DONE);
+    CHECK(nj_vk_renderer_triangles_end(r, &submitted) == NJ_GFX_ACCEL_DONE);
+    memcpy(mixed, colors, sizeof colors);
+    /* Rebuild the same inputs and take the retained dirty-rectangle path. */
+    memcpy(colors, want, sizeof colors);
+    for (y = dirty[0].y; y < dirty[0].y + dirty[0].height; ++y)
+        for (x = dirty[0].x; x < dirty[0].x + dirty[0].width; ++x)
+            colors[y][x] = patch;
+    memcpy(keys, want_keys, sizeof keys);
+    CHECK(nj_vk_renderer_triangles_begin(r, &kept_dirty) == NJ_GFX_ACCEL_DONE);
+    CHECK(nj_vk_renderer_triangles(r, &p, &submitted) == NJ_GFX_ACCEL_DONE);
+    CHECK(nj_vk_renderer_triangles_end(r, &submitted) == NJ_GFX_ACCEL_DONE);
+    CHECK(!memcmp(colors, mixed, sizeof colors));
+    maxdiff = 0;
+    for (y = 0; y < BH; ++y)
+        for (x = 0; x < ZS; ++x) {
+            int d = keys[y][x] - want_keys[y][x];
+            if (d < 0)
+                d = -d;
+            if (d > maxdiff)
+                maxdiff = d;
+        }
+    printf("retained session: colour identical, depth max step %d\n", maxdiff);
+    CHECK(maxdiff <= 1);
+    /* A different session rectangle must fall back to the full import. */
+    memcpy(colors, base_colors, sizeof colors);
+    memcpy(keys, base_keys, sizeof keys);
+    CHECK(nj_vk_renderer_triangles_begin(r, &narrowed) == NJ_GFX_ACCEL_DONE);
+    CHECK(nj_vk_renderer_triangles(r, &p, &submitted) == NJ_GFX_ACCEL_DONE);
+    CHECK(nj_vk_renderer_triangles_end(r, &submitted) == NJ_GFX_ACCEL_DONE);
+    CHECK(!memcmp(colors, want, sizeof colors));
+    /* Abort discards the resident result; the next retained begin imports. */
+    memcpy(colors, base_colors, sizeof colors);
+    memcpy(keys, base_keys, sizeof keys);
+    CHECK(nj_vk_renderer_triangles_begin(r, &kept_dirty) == NJ_GFX_ACCEL_DONE);
+    nj_vk_renderer_triangles_abort(r);
+    CHECK(!memcmp(colors, base_colors, sizeof colors) && !memcmp(keys, base_keys, sizeof keys));
+    memcpy(colors, base_colors, sizeof colors);
+    memcpy(keys, base_keys, sizeof keys);
+    CHECK(nj_vk_renderer_triangles_begin(r, &kept_dirty) == NJ_GFX_ACCEL_DONE);
+    CHECK(nj_vk_renderer_triangles(r, &p, &submitted) == NJ_GFX_ACCEL_DONE);
+    CHECK(nj_vk_renderer_triangles_end(r, &submitted) == NJ_GFX_ACCEL_DONE);
+    CHECK(!memcmp(colors, want, sizeof colors));
+    puts("retained session fallback and abort invalidation passed");
+}
+
 static double millis(void) {
 #ifdef _WIN32
     LARGE_INTEGER t, hz;
@@ -810,6 +906,7 @@ int main(int argc, char **argv) {
     rgb565_packets(r, 24, 16, 0);
     batch_equivalence(r);
     session_equivalence(r);
+    retained_sessions(r);
     if (argc > 1 && !strcmp(argv[1], "--bench-rgb565")) {
         rgb565_packets(r, 243, 322, 1);
         rgb565_packets(r, 1283, 722, 1);

@@ -11,9 +11,17 @@
 #endif
 #include <math.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/time.h>
 #include "tri_spv.inc"
+
+static double vk_prof_now(void) {
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    return (double)tv.tv_sec + (double)tv.tv_usec * 1e-6;
+}
 
 #define MAX_PIXELS (8u * 1024u * 1024u)
 #define MAX_TEXELS (4u * 1024u * 1024u)
@@ -81,9 +89,18 @@ struct nj_vk_renderer {
     int session_x, session_y, session_width, session_height;
     int session_open, session_failed;
     int session_depth_written;
+    /* Retained sessions (contract version 2): after a successful end() with
+     * `retain` the attachments still hold the exported result for
+     * `session_surface` and sit in TRANSFER_DST layout, so the next begin()
+     * may import only the caller's dirty rectangles. */
+    int session_keep;     /* end() must keep the result and relayout back */
+    int session_retained; /* attachments currently hold a reusable result */
     nj_u4 session_submitted;
     void *session_infos; /* packet_info scratch, typed inside tri_draw.inc */
     unsigned session_infos_cap;
+    /* NJ_VK_PROFILE=1 reports where the session time goes. */
+    double prof_import, prof_export, prof_render;
+    unsigned prof_sessions;
 };
 static const VkFormat formats[] = {VK_FORMAT_B8G8R8A8_UNORM, VK_FORMAT_D32_SFLOAT};
 static const VkImageUsageFlags usages[] = {
@@ -162,6 +179,8 @@ static void release_target(nj_vk_renderer *r) {
     r->fb = r->session_fb = VK_NULL_HANDLE;
     r->session_open = 0;
     r->session_failed = 0;
+    r->session_keep = 0;
+    r->session_retained = 0;
     for (i = 0; i < 2; ++i) {
         attachment *a = &r->attachments[i];
         vkDestroyImageView(r->dev, a->view, NULL);
@@ -461,6 +480,9 @@ void nj_vk_renderer_destroy(nj_vk_renderer *r) {
         vkDestroyFence(r->dev, r->fence, NULL);
         vkDestroyDevice(r->dev, NULL);
     }
+    if (getenv("NJ_VK_PROFILE"))
+        fprintf(stderr, "[vkprof] sessions=%u import=%.3f export=%.3f render=%.3f\n",
+                r->prof_sessions, r->prof_import, r->prof_export, r->prof_render);
     free(r->session_infos);
     if (r->instance)
         vkDestroyInstance(r->instance, NULL);
