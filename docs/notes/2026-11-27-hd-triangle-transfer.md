@@ -402,3 +402,69 @@ CPU↔GPU 往返本身去掉**，而不是把多次往返合成一次。
    GPU 附件本来就是对的；深度同理。
 3. 导出推迟到真正观察点（present 读回、createImage、软件回退、FSR2 采样），并只导出必要矩形。
 4. 继续推进方案 B：把 2D 合成也放到 GPU，让 present 直接消费 GPU 图像，去掉每帧整屏读回。
+
+## 十四、保留会话（contract v2）与 8× 时间去向
+
+#### 14.1 保留会话：契约与后端
+
+§13.7 设想的第一步是「会话结束后附件继续持有结果，下一次 begin 只导入脏矩形」。这次把它落成
+了契约版本 2：
+
+- `nj_gfx_triangles_session` 末尾追加 `const nj_gfx_session_rect *dirty; nj_u4 dirty_count;
+  int retain; int depth_retain;`，`NJ_GFX_TRIANGLES_SESSION_VERSION` 升为 2。v1 调用者没有扩展、
+  始终拿全量导入；v2 调用者声明 `retain` 后，backend 只有在「同一 surface/深度/矩形 + 上次 end
+  成功保留」时才复用附件，且只把 `dirty` 颜色矩形重新导入；CPU 深度缓冲未动时（`depth_retain`）
+  连深度导入也跳过。identity 不匹配、abort、或任何失败都回退全量导入；backend 不得读 stale
+  附件。
+- Vulkan 后端（`src/port/vulkan/tri_draw.inc`）：`nj_vk_renderer_triangles_begin` 在 abort 前
+  捕获 `retained` 提示，`session_matches()` 比对 surface 指针/尺寸/格式/stride、深度指针/stride
+  与矩形；`begin` 保留路径用 `transfer_rect_at` 把 dirty 颜色打包进 stage 并逐矩形
+  `vkCmdCopyBufferToImage`（≤8 个矩形）。`end` 在 `session_keep` 时把两个附件从
+  TRANSFER_SRC 迁回 TRANSFER_DST 并置 `session_retained`；abort 与非会话单包路径都会清掉它。
+- `tests/test_gfx_vulkan.c` 新增 `retained_sessions`：第一次 retain 会话走全量导入、第二次
+  retain+dirty 会话只导入小矩形，结果与「全量导入参考」颜色逐字节一致、深度 keys 差 ≤1；
+  另外覆盖矩形不一致回退全量导入、abort 后保留结果失效、渲染器仍可用。
+- 确定性：1× 400 帧会话两次运行逐位相同（帧 300/400 = `a2a5eaadea91ef3b`；与逐包基线
+  `c911305c5e3a0210` 差 5 像素、最大通道差 8，仍是 float 深度与逐包 requantize 的语义差）；
+  8× 闸门 200 帧与 journal 关基线逐位一致（`846057676cfed67a`/`c65baebe4730fcbe`/
+  `dc5cb60109dd03cb`）。
+
+#### 14.2 真实场景里保留路径没有命中
+
+journal 侧已经接好 v2：`m3g_journal` 记住 `hd`，pump 时传 `retain=1`、dirty=完整会话矩形、
+`depth_retain = hd_session_valid && hd_session_epoch == hd_depth_epoch`，begin 成功后再记 epoch。
+但 8× 场内实测（`NJ_VK_SESSION_STATS=1`）显示 419–598 次 begin 全部
+`keep=1 retained=0 depth_retain=0`：`m3g_hd_clear_depth` 每帧都清 CPU 深度 keys 并递增
+`hd_depth_epoch`，于是 `depth_retain` 永远是 0，保留路径永不启用。即使启用，journal 目前把
+dirty 报成整屏矩形，颜色导入也一分不省。这两点都指向 14.4 的结论：想靠会话省传输，先把 CPU
+写入本身变成「诚实的脏矩形」。
+
+#### 14.3 8× 时间去向：CPU 才是大头
+
+profile 构建、8× 场内 400 帧（keys 200/205/215/216），同一台机器连续跑：
+
+| 路径 | 墙钟 | user |
+| --- | --- | --- |
+| journal 关（逐包 GPU） | 40.1 s | 25.8 s |
+| 会话（NJ_VK_SESSION=1） | 40.9 s | 28.1 s |
+
+后端内部计时（`NJ_VK_PROFILE=1`，destroy 时打印 `[vkprof]`）：`sessions=619
+import=8.903 export=6.135 render=3.238`，即 619 个会话的导入、导出、渲染等待合计约 18.2 s。
+会话每次要整屏导入+导出颜色与深度（约 39 MB/会话，24 GB/400 帧），比逐包 ROI 之和更贵，
+所以把提交合成一次并没有省下墙钟；多出来的 user 时间主要是 staging 打包/读回的 CPU 拷贝。
+
+真正的大头是 user 时间：8× 每帧约 70 ms 的 CPU 工作，而 1× 整场只有约 5 ms/帧——差出来的
+几乎全是 CPU 侧的 8× 高清 2D 合成（物理镜面 1920×2560 上的填充/文字/图像）与 journal 快照。
+**在 CPU 合成和整屏读回不消失的前提下，任何 import/export 层面的优化天花板都低于 20% 目标。**
+
+#### 14.4 结论与下一轮
+
+1. 保留会话（contract v2）作为基础设施保留、继续 opt-in：确定性、单测覆盖、默认路径不变；
+   但在 dirty 跟踪与 GPU 侧清屏落地前不会开启。
+2. 8× 的下一杠杆不是「把多次往返合成一次」，而是**去掉 CPU 侧的 8× 2D 合成与整屏读回**：
+   - 方案 B：2D 图元（填充/曲线/图像/文字）在 GPU 上合成到常驻镜面，present 直接消费 GPU 图像；
+     这是唯一能把 user 时间从 ~25 s 压下去的路线。
+   - 若继续会话路线：先做 (a) 2D/清屏写镜面的诚实脏矩形，(b) 深度清屏改为 GPU 侧
+     `vkCmdClearDepthStencilImage`，两者都要动契约与 M3G 接线，且理论上限约 25% 传输。
+3. 诊断工具保留：`NJ_VK_PROFILE=1` 打印会话 import/export/render 分解；`NJ_VK_SESSION=1`
+   打开会话（Android 用属性 `debug.nj2me.vk_session`）；`NJ_M3G_JOURNAL_MAX` 限制每事务包数。

@@ -69,3 +69,14 @@
   JBenchmark3D 场景 session 关/开 draw ≈4.0 ms、swap 6.1–7.6 vs 8.1–8.5 ms、frame 28.7–47.9 vs
   28.8–38.1 ms ⇒ 无可测收益，与桌面结论一致；session 保持 opt-in。日志见
   `.local-tools/debug-runs/avd-session-20261127/`，细节见 gpu-resident-hd-plan.md §九。
+
+### 2026-11-28 上午（目标③第一步）
+
+- contract v2 保留会话（dirty/retain/depth_retain）落地并通过单测与 1×/8× 确定性闸门；
+  默认仍 opt-in，journal 侧已接线但真实场景 `depth_retain` 恒为 0（每帧 CPU 深度 clear），
+  且 dirty 仍是整屏，因此保留路径未命中。
+- 8× 时间去向已量化：journal 关墙钟 40.1 s / user 25.8 s；会话墙钟 40.9 s / user 28.1 s；
+  `[vkprof]` import 8.9 s + export 6.1 s + render 3.2 s。结论：8× 主要成本是 CPU 侧高清 2D
+  合成（~70 ms/帧 vs 1× 的 ~5 ms/帧），import/export 优化天花板低于 20% 目标。
+- 下一轮起点：方案 B（2D 合成上 GPU、present 直接消费 GPU 图像；镜面/深度常驻），以及
+  GPU 侧深度清屏 + 诚实脏矩形作为会话路线的前置。
