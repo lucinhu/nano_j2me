@@ -177,3 +177,12 @@
   不改变可见结果，也仍无可测收益（GLES2 present 上传主导）。
 - M4 难点：AHB RGBA_8888 与镜面 BGRA 字节序不一致；CPU 2D HUD 需要可写共享内存。
   可行顺序 = 先把 2D 合成搬上 GPU（M3），再让 present 直接消费常驻图像。
+
+### 2026-11-29 上午（Round 13，AHB 导入探针）
+
+- 新增 `src/port/vulkan/nj_vk_ahb_probe.c`（Android Vulkan 构建，debug 属性触发，
+  自带 instance/device）：AHB 分配 → 属性查询 → VkImage 导入 → 绑定内存 → 清屏回读。
+- 模拟器：分配成功、扩展齐全、探针 device 创建成功，随后第一个驱动调用（属性查询/导入）
+  直接杀死模拟器宿主进程（crashpad dump）⇒ gfxstream 不可用，M4 只能真机验证。
+- 桌面 CMake 也编译该文件的 stub 分支；探针默认关闭，文件头注明勿在模拟器启用。
+- 证据：`.local-tools/debug-runs/avd-ahb-20261128/`（模拟器日志 + README）。

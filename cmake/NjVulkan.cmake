@@ -7,7 +7,8 @@ endif()
 
 function(nj_enable_vulkan target)
   if(NJ_ENABLE_VULKAN)
-    target_sources(${target} PRIVATE "${_nj_vulkan_dir}/nj_gfx_vulkan.c")
+    target_sources(${target} PRIVATE "${_nj_vulkan_dir}/nj_gfx_vulkan.c"
+      "${_nj_vulkan_dir}/nj_vk_ahb_probe.c")
     target_compile_definitions(${target} PUBLIC NJ_ENABLE_VULKAN=1)
     target_link_libraries(${target} PRIVATE Vulkan::Vulkan)
   endif()

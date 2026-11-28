@@ -124,8 +124,11 @@ fi
 VULKAN_LIBS=""
 if [ "$VULKAN" -eq 1 ]; then
     [ "$API" -ge 24 ] || { echo "--vulkan requires API 24+" >&2; exit 2; }
-    SOURCES="$SOURCES src/port/vulkan/nj_gfx_vulkan.c"
+    SOURCES="$SOURCES src/port/vulkan/nj_gfx_vulkan.c src/port/vulkan/nj_vk_ahb_probe.c"
     VULKAN_LIBS="-lvulkan"
+    # vulkan_android.h (AHB interop probe) is only included when the build
+    # asks for the Android platform surface.
+    VULKAN_DEFS="-DVK_USE_PLATFORM_ANDROID_KHR=1"
 fi
 GLES2_LIBS=""
 if [ "$GLES2" -eq 1 ]; then
@@ -191,7 +194,7 @@ if [ -n "$FSR2_SDK" ]; then
     FEATURE_DEFS="$FEATURE_DEFS -DNJ_ENABLE_FSR2=1"
 fi
 if [ "$VULKAN" -eq 1 ]; then
-    FEATURE_DEFS="$FEATURE_DEFS -DNJ_ENABLE_VULKAN=1 -DNJ_ENABLE_GFX_ACCEL=1"
+    FEATURE_DEFS="$FEATURE_DEFS -DNJ_ENABLE_VULKAN=1 -DNJ_ENABLE_GFX_ACCEL=1 $VULKAN_DEFS"
 fi
 if [ "$GLES2" -eq 1 ]; then
     FEATURE_DEFS="$FEATURE_DEFS -DNJ_ENABLE_GFX_ACCEL=1 -DNJ_ANDROID_GLES2=1"

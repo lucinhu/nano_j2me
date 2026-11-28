@@ -213,3 +213,21 @@ RGBA 像素格式或 GPU 侧转置；(2) CPU 2D HUD 需要可写共享内存，�
 ⇒ 可行顺序是先把 2D 合成整体搬上 GPU（M3，含依赖目标的 ROP 在 GPU blend 中实现），
 再让 present 直接消费常驻图像；否则只能在 AHB 与 CPU 缓冲之间做一次 GPU blit，
 收益仅相当于去掉回读的一半。
+
+### 8.6 AHB 导入探针：模拟器不可验证（2026-11-29）
+
+新增独立探针 `src/port/vulkan/nj_vk_ahb_probe.c`（Android Vulkan 构建专用，
+`debug.nj2me.ahb_probe=1` / `NJ_AHB_PROBE=1` 触发，自带 instance/device，不碰渲染器）：
+分配 64×64 RGBA_8888 AHardwareBuffer → `vkGetAndroidHardwareBufferPropertiesANDROID`
+→ 导入 VkImage → 分配/绑定导入内存 → 清屏并回读像素。
+
+模拟器（Medium_Phone_API_36.1，-gpu host）结果：
+- AHardwareBuffer 分配成功；设备同时有 `VK_KHR_external_memory` 与
+  `VK_ANDROID_external_memory_android_hardware_buffer`；探针自己的 instance/device 创建成功。
+- 在设备创建后的第一个驱动调用（属性查询/导入）时，**模拟器宿主进程直接崩溃**
+  （crashpad dump，adb 掉线）。⇒ gfxstream 只是声明了扩展，实际使用会杀死模拟器，
+  因此 M4（present 直接消费 GPU 图像）**无法在本机 AVD 上验证**，只能留给真实 Android
+  设备；探针保留为真机诊断工具，并在文件头注明不要在模拟器上启用。
+
+结论：AHB 方向的正确性验证依赖真机，本轮不再继续该分支；后续轮次优先做仍可本地验证的
+④ FSR1/呈现优化与已有常驻路径的收尾（默认开启决策需要更多进入 3D 场景的素材）。

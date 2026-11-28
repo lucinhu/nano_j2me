@@ -844,6 +844,26 @@ int nj_vk_renderer_attach(nj_port *port) {
             VK_LOG("vulkan: resident HD mirror enabled");
         }
     }
+    {
+        /* One-shot diagnostic: can an Android hardware buffer be imported and
+         * used as a Vulkan image on this device?  Present interop depends on
+         * it; see src/port/vulkan/nj_vk_ahb_probe.c. */
+        int want_probe = 0;
+        const char *probe = getenv("NJ_AHB_PROBE");
+        if (probe && probe[0] == '1')
+            want_probe = 1;
+#if defined(__ANDROID__)
+        if (!want_probe) {
+            char prop[PROP_VALUE_MAX];
+            if (__system_property_get("debug.nj2me.ahb_probe", prop) > 0 && prop[0] == '1')
+                want_probe = 1;
+        }
+#endif
+        if (want_probe) {
+            extern void nj_vk_ahb_probe(void);
+            nj_vk_ahb_probe();
+        }
+    }
     port->gfx_hd_destroy = destroy_owned_renderer;
     return 1;
 #else
