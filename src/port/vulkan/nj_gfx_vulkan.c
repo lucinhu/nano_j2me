@@ -154,6 +154,17 @@ struct nj_vk_renderer {
     double present_prof_acquire, present_prof_import, present_prof_blit, present_prof_queue;
     unsigned present_prof_frames;
     unsigned present_attempts;
+    /* CPU-drawn frames are uploaded at the size they are shown, not at the
+     * full HD mirror resolution: the nearest-neighbour shrink keeps the same
+     * sampling as the GPU blit did, and takes a quarter of the bandwidth at
+     * 2x. Set NJ_VK_PRESENT_SMALL=0 (debug.nj2me.vk_present_small=0) to send
+     * the full frame instead. */
+    int present_small_enabled;
+    nj_vk_mirror *present_small;
+    int present_small_w;
+    int present_small_h;
+    nj_u1 *present_scratch;
+    unsigned present_small_frames;
 #endif
     unsigned resident_prof_exports, resident_prof_draws;
 };
@@ -1076,6 +1087,16 @@ int nj_vk_renderer_present_attach(void *renderer, void *native_window, int width
             r->present_stats = 1;
         if (r->present_stats) VK_LOG("vulkan: present stats enabled");
     }
+    {
+        const char *senv = getenv("NJ_VK_PRESENT_SMALL");
+        char sprop[PROP_VALUE_MAX];
+        int small = 1;
+        if (senv && senv[0] == '0') small = 0;
+        if (__system_property_get("debug.nj2me.vk_present_small", sprop) > 0 && sprop[0] == '0')
+            small = 0;
+        r->present_small_enabled = small;
+        if (small) VK_LOG("vulkan: CPU frames are uploaded at the displayed size");
+    }
 #endif
 #if defined(__ANDROID__)
     VkAndroidSurfaceCreateInfoKHR info = VK_INIT(ANDROID_SURFACE_CREATE_INFO_KHR);
@@ -1119,6 +1140,59 @@ int nj_vk_renderer_present_attach(void *renderer, void *native_window, int width
 #endif
 }
 
+#if defined(__ANDROID__)
+static void present_small_release(nj_vk_renderer *r) {
+    if (!r) return;
+    nj_vk_renderer_mirror_destroy(r->present_small);
+    r->present_small = NULL;
+    free(r->present_scratch);
+    r->present_scratch = NULL;
+    r->present_small_w = 0;
+    r->present_small_h = 0;
+}
+
+/* Shrink a CPU frame to the size the swapchain will show and upload that.
+ * Returns 1 when the small mirror is ready to blit 1:1. */
+static int present_upload_small(nj_vk_renderer *r, const nj_surface *frame, int w, int h) {
+    nj_surface view;
+    int i, j;
+    if (w <= 0 || h <= 0 || w > 4096 || h > 4096) return 0;
+    if (!r->present_small || r->present_small_w != w || r->present_small_h != h) {
+        present_small_release(r);
+        r->present_small = nj_vk_renderer_mirror_create(r, w, h);
+        if (!r->present_small) return 0;
+        r->present_scratch = (nj_u1 *)malloc((size_t)w * (size_t)h * 4u);
+        if (!r->present_scratch) {
+            present_small_release(r);
+            return 0;
+        }
+        r->present_small_w = w;
+        r->present_small_h = h;
+    }
+    for (i = 0; i < h; i++) {
+        int sy = (int)(((long long)(2 * i + 1) * frame->height) / (2LL * h));
+        const nj_u1 *src = (const nj_u1 *)frame->pixels + (size_t)sy * (size_t)frame->stride;
+        nj_u1 *dst = r->present_scratch + (size_t)i * (size_t)w * 4u;
+        for (j = 0; j < w; j++) {
+            int sx = (int)(((long long)(2 * j + 1) * frame->width) / (2LL * w));
+            *(nj_u4 *)(dst + (size_t)j * 4u) = *(const nj_u4 *)(src + (size_t)sx * 4u);
+        }
+    }
+    view.pixels = r->present_scratch;
+    view.width = w;
+    view.height = h;
+    view.stride = w * 4;
+    view.format = frame->format;
+    view.bpp = 4;
+    if (!nj_vk_renderer_mirror_import_rect(r->present_small, &view, NULL, 0, 0, 0, w, h,
+                                           NJ_VK_MIRROR_IMPORT_COLOUR))
+        return 0;
+    r->present_small_frames++;
+    return 1;
+}
+
+#endif
+
 int nj_vk_renderer_present_frame(void *renderer, const nj_surface *frame) {
     nj_vk_renderer *r = (nj_vk_renderer *)renderer;
 #if defined(__ANDROID__)
@@ -1140,7 +1214,31 @@ int nj_vk_renderer_present_frame(void *renderer, const nj_surface *frame) {
     }
     double now = r->present_stats ? vk_prof_now() : 0.0;
     double t_import = 0.0, t_acquire = 0.0, t_blit = 0.0;
-    if (!r->resident || !r->resident->mirror) {
+    nj_vk_mirror *blit_mirror = NULL;
+    int used_small = 0;
+    /* The display rectangle first: CPU frames can be uploaded straight at it. */
+    aspect = (double)frame->width / (double)frame->height;
+    target = (double)r->present_extent.width / (double)r->present_extent.height;
+    if (aspect >= target) {
+        w = (int)r->present_extent.width;
+        h = (int)((double)w / aspect);
+    } else {
+        h = (int)r->present_extent.height;
+        w = (int)((double)h * aspect);
+    }
+    if (w <= 0 || h <= 0) {
+        w = (int)r->present_extent.width;
+        h = (int)r->present_extent.height;
+    }
+    x = ((int)r->present_extent.width - w) / 2;
+    y = ((int)r->present_extent.height - h) / 2;
+    if (r->present_small_enabled && (r->resident == NULL || r->resident_cpu_touched)) {
+        if (present_upload_small(r, frame, w, h)) {
+            used_small = 1;
+            r->resident_cpu_touched = 0;
+        }
+    }
+    if (!used_small && (!r->resident || !r->resident->mirror)) {
         /* Frames can arrive before the game first draws through the resident
          * mirror (loading screens, 2D-only titles). Adopt the CPU frame into a
          * mirror instead of falling back to the slow CPU present path: the
@@ -1158,7 +1256,7 @@ int nj_vk_renderer_present_frame(void *renderer, const nj_surface *frame) {
     /* 2D-only frames draw on the CPU copy after the last GPU export. Upload
      * them before presenting, otherwise the swapchain keeps showing the stale
      * image the mirror had when the first frame was adopted. */
-    if (r->resident && r->resident_cpu_touched) {
+    if (!used_small && r->resident && r->resident_cpu_touched) {
         if (!nj_vk_renderer_mirror_import_rect(r->resident->mirror, frame, NULL, 0, 0, 0,
                                                frame->width, frame->height,
                                                NJ_VK_MIRROR_IMPORT_COLOUR)) {
@@ -1167,6 +1265,11 @@ int nj_vk_renderer_present_frame(void *renderer, const nj_surface *frame) {
             return 0;
         }
         r->resident_cpu_touched = 0;
+    }
+    blit_mirror = used_small ? r->present_small : (r->resident ? r->resident->mirror : NULL);
+    if (!blit_mirror) {
+        if (r->present_attempts <= 8) VK_LOG("vulkan: present has no mirror to blit");
+        return 0;
     }
     if (r->present_stats) { t_import = vk_prof_now() - now; now = vk_prof_now(); }
     rc = r->present_acquire(r->dev, r->present_swapchain, UINT64_MAX, r->present_semaphore,
@@ -1178,23 +1281,8 @@ int nj_vk_renderer_present_frame(void *renderer, const nj_surface *frame) {
             r->present_ready = 0;
         return 0;
     }
-    aspect = (double)frame->width / (double)frame->height;
-    target = (double)r->present_extent.width / (double)r->present_extent.height;
-    if (aspect >= target) {
-        w = (int)r->present_extent.width;
-        h = (int)((double)w / aspect);
-    } else {
-        h = (int)r->present_extent.height;
-        w = (int)((double)h * aspect);
-    }
-    if (w <= 0 || h <= 0) {
-        w = (int)r->present_extent.width;
-        h = (int)r->present_extent.height;
-    }
-    x = ((int)r->present_extent.width - w) / 2;
-    y = ((int)r->present_extent.height - h) / 2;
     if (r->present_stats) { t_acquire = vk_prof_now() - now; now = vk_prof_now(); }
-    if (!nj_vk_renderer_mirror_present(r->resident->mirror, r->present_images[index],
+    if (!nj_vk_renderer_mirror_present(blit_mirror, r->present_images[index],
                                        r->present_extent.width, r->present_extent.height, x, y, w,
                                        h, 0, r->present_semaphore)) {
         if (r->present_attempts <= 8)
@@ -1219,10 +1307,10 @@ int nj_vk_renderer_present_frame(void *renderer, const nj_surface *frame) {
         r->present_prof_frames++;
         if ((r->present_prof_frames % 60u) == 0u) {
             double n = (double)r->present_prof_frames;
-            VK_LOG("vulkan: present stats frames=%u import=%.2f blit=%.2f acquire=%.2f queue=%.2f ms",
+            VK_LOG("vulkan: present stats frames=%u import=%.2f blit=%.2f acquire=%.2f queue=%.2f ms small=%u",
                    r->present_prof_frames, 1000.0 * r->present_prof_import / n,
                    1000.0 * r->present_prof_blit / n, 1000.0 * r->present_prof_acquire / n,
-                   1000.0 * r->present_prof_queue / n);
+                   1000.0 * r->present_prof_queue / n, r->present_small_frames);
             r->present_prof_import = r->present_prof_acquire = 0.0;
             r->present_prof_blit = r->present_prof_queue = 0.0;
             r->present_prof_frames = 0u;

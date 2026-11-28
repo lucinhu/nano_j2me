@@ -227,6 +227,42 @@ JBenchmark3D 启动阶段此前测到约 58 fps。
 因此「Android 默认开启 resident+present」仍不能放开：纯 2D / HUD 帧需要在 GPU 侧合成
 （L2/M3），或用脏矩形导入替代整帧导入后再验证。
 
+## 8.6 CPU 帧按显示尺寸上传（present small）
+
+### 问题
+
+直呈路径下，2D 标题的 HD 帧（8× = 1920×2560，19.66 MB）每帧都要整帧上传到 GPU，
+present stats 的 import 段实测 7–20 ms，是 2D 帧率（20–29 fps）的主要开销之一。
+8.5 节的脏 tile 方案在该标题上不成立（逐帧全屏重绘），但现成的 `vkCmdBlitImage`
+本来就是 **NEAREST 采样**把 1920×2560 缩到显示尺寸（1080×1440）：
+
+- 原先：CPU 上传 19.66 MB → GPU NEAREST 缩到 1080×1440；
+- 现在：CPU 先按同一采样格 NEAREST 缩到 1080×1440 → 上传 6.2 MB → GPU 1:1 blit。
+
+因为采样格完全一致，画质不降；上传字节数降到约 1/3（按显示区域计）。
+
+### 实现
+
+- `src/port/vulkan/nj_gfx_vulkan.c`：renderer 新增 `present_small`（一个按显示矩形
+  懒创建的 mirror）、`present_scratch` 与开关 `present_small_enabled`
+  （`NJ_VK_PRESENT_SMALL=0` / `debug.nj2me.vk_present_small=0` 可关闭整帧上传）。
+  `present_upload_small()` 做 NEAREST 收缩并 `nj_vk_renderer_mirror_import_rect()`；
+  `nj_vk_renderer_present_frame()` 现在先算显示矩形，CPU 帧（无 resident 或
+  `resident_cpu_touched`）优先走 small 路径，3D GPU 帧仍直接 blit 常驻镜面。
+  关闭 small 或创建失败时回退到原来的整帧上传/首帧 adopt 路径。
+- 仅 CPU 帧走 small；`resident` 常驻镜面、3D 三角、确定性闸门均不受影响。
+
+### AVD 实测（Medium_Phone_API_36.1，-gpu host，8×，resident+present opt-in）
+
+| 场景 | import | 窗口 fps |
+|---|---|---|
+| 2D《傲世三国志》（小标题） | 6.1–7.3 ms（原 1.9–11.3） | 27.8–30.0（原 26.8–29.4） |
+| 2D 同上（复杂画面窗口） | 9.1–10.7 ms（原 11.3–20.0） | 25.4–27.1（原 19.4–19.6） |
+| 3D Doom3 | 0.37 ms，small=2/60 | 不受影响（GPU 直画，无回传） |
+
+截图（`/tmp/r14-sango.png`）确认 2D 标题文字与立绘清晰度与之前一致；Doom3 无回退。
+
+
 ## 9. 素材放大：新增 `fsr1-strong`（Round 9）
 
 用户反馈「素材比较模糊」。现有 2D 高清素材采样选项为：原始像素 / 柔和平滑 / 像素画清晰 /
