@@ -369,3 +369,19 @@ swapchain 直呈时，常驻镜面（8× 物理分辨率，如 1920×2560）要�
   （与改动前同区间）；2D《傲世三国志》窗口 fps 24.8–29.0（无回退）。
 - 桌面确定性闸门不受影响（present 仅 Android），8× plain 帧 60/120/180 仍为
   `846057676cfed67a`/`c65baebe4730fcbe`/`dc5cb60109dd03cb`。
+
+## 8.9 默认直呈 A/B 量化（相同 APK，仅 `debug.nj2me.vk_resident` 开关）
+
+设备：AVD Medium_Phone_API_36.1，`-gpu host`，8× 高清，全新启动；同一 x86_64 APK
+（`/tmp/apk-r16/nj2me.apk` = commit d3dc8a09）。两个用例各跑 16–24 s，Vulkan 侧用
+`present stats` 窗口 fps，GL 侧用 `present stats: frame ms median`。
+
+| 用例 | 默认（Vulkan 直呈） | opt-out（GL present） | 变化 |
+|---|---|---|---|
+| Doom3 3D 菜单 | 8.8 / 11.1 fps 窗口 | frame median 126.0 ms ≈ **7.9 fps** | **+11~40%** |
+| 2D《傲世三国志》 | 24.3–29.0 fps 窗口 | frame median 40.3→51.6 ms ≈ 19.4–24.8 fps | **+17~20%** |
+
+注：2D opt-out 的 GL 路径本身可用（16–25 fps 区间），并非此前的 0.3–1 fps——那次是
+GL 窗口 surface 未初始化导致的 CPU 回退，现已随窗口 attach 流程修正。
+
+结论：默认开启在两类内容上都为正收益，且 2D 路径现在也不再依赖「GL 回退是否可用」。
