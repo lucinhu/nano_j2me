@@ -1694,9 +1694,10 @@ static int mirror_import_rect(nj_vk_mirror *m, const nj_surface *surface, nj_s4 
         return 1;
     if (want_depth && depth_stride < x + width)
         return 0;
-    /* The resident zero-copy path maps the caller's pixels onto this buffer, so
-     * copying a sub-rectangle out of the frame would read what it overwrites. */
-    if (!full && (const void *)surface->pixels == (const void *)r->stage.map)
+    /* The resident zero-copy path aliases the mirror's own staging buffer, not
+     * this one, so a full frame still has to be copied here.  Only skip the
+     * copy when the caller really points at this staging buffer already. */
+    if ((const void *)surface->pixels == (const void *)r->stage.map && !full)
         return 0;
     pack_depth = depth ? 1 : 0;
     colour_bytes = (size_t)width * (size_t)height * 4u;
@@ -1704,7 +1705,7 @@ static int mirror_import_rect(nj_vk_mirror *m, const nj_surface *surface, nj_s4 
     if (!reserve_buffer(r, &r->stage, (VkDeviceSize)(colour_bytes + depth_bytes),
                         VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT))
         return 0;
-    if (!full || pack_depth)
+    if ((const void *)surface->pixels != (const void *)r->stage.map)
         transfer_rect_at(r, surface, depth, depth_stride, x, y, width, height, pack_depth, 0, 0,
                          colour_bytes);
     if (!sync_buffer(r, &r->stage, 0) || vkResetCommandPool(r->dev, r->pool, 0) != VK_SUCCESS)

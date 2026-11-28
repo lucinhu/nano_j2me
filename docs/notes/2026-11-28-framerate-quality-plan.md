@@ -241,3 +241,21 @@ FSR1 锐利。FSR1 锐利的 RCAS 对比度强度写死在 Q8=96（0.375）；�
 Doom3 8× resident 帧 120（1920×2560）对照：fsr1 vs fsr1-strong 平均通道差 0.225、
 最大差 10、差>4 的像素 25,629（约 0.5%），高光边缘更硬，属局部锐化变化而非整体偏移；
 pixel-art 基准帧 60 仍是 `846057676cfed67a`，未受影响。
+
+### 8.2 CPU 帧导入的根因修复（Round 10）
+
+Round 8 记录的「present 前整帧 import 变成黑屏」根因已找到：`mirror_import_rect()` 在
+「整帧、不打包深度」时跳过 `transfer_rect_at()`，假设调用者的像素已经在这个渲染器的
+staging buffer 里——但常驻镜面的零拷贝别名指向的是**镜面自己的** staging buffer，两者
+不是同一块内存。于是整帧纯颜色导入把上一帧残留的 staging 内容上传成图像，2D 游戏因此
+黑屏。修正为：只有调用者像素确实别名到本 staging buffer 时才跳过拷贝，否则一律拷入。
+
+同时 present 在 `resident_cpu_touched` 时把 CPU 已绘制的帧上传一次再 blit：2D 游戏
+每帧在 CPU 侧绘制，若不回传，swapchain 会一直显示首帧 adopt 的旧图。
+
+AVD 实测（Medium_Phone_API_36.1，-gpu host，8×，resident+present opt-in）：
+- 2D 游戏《傲世三国志-群雄争霸》：修复前黑屏（仅键盘），修复后标题画面/对话框正常显示，
+  `present ok` 连续、帧率 20.8–29.7 fps（旧 GL/CPU 回退路径为 0.3–1 fps）。
+- Doom3 8× 标题：`present ok` 连续，8.1–9.0 fps（与 Vulkan 直呈基线一致，无回归）。
+- 帧率低于 GL 路径 ~32 fps 的原因是 2D 帧每帧 19.6 MB 的 CPU→GPU 上传；后续 L2
+  （脏矩形/2D 上 GPU）可消除。

@@ -1140,6 +1140,19 @@ int nj_vk_renderer_present_frame(void *renderer, const nj_surface *frame) {
             return 0;
         }
     }
+    /* 2D-only frames draw on the CPU copy after the last GPU export. Upload
+     * them before presenting, otherwise the swapchain keeps showing the stale
+     * image the mirror had when the first frame was adopted. */
+    if (r->resident && r->resident_cpu_touched) {
+        if (!nj_vk_renderer_mirror_import_rect(r->resident->mirror, frame, NULL, 0, 0, 0,
+                                               frame->width, frame->height,
+                                               NJ_VK_MIRROR_IMPORT_COLOUR)) {
+            if (r->present_attempts <= 8)
+                VK_LOG("vulkan: present could not upload the touched CPU frame");
+            return 0;
+        }
+        r->resident_cpu_touched = 0;
+    }
     rc = r->present_acquire(r->dev, r->present_swapchain, UINT64_MAX, r->present_semaphore,
                             VK_NULL_HANDLE, &index);
     if (rc != VK_SUCCESS) {
