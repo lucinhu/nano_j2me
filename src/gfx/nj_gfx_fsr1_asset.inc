@@ -293,6 +293,7 @@ static int hd_fsr1_over_sse41(nj_u1 *out, int n, int phase,
 }
 #endif
 
+#if defined(__x86_64__) || defined(__i386__)
 __attribute__((target("sse4.1")))
 static void hd_fsr1_row_sse41(hd_fsr1_row *row, int c, const nj_u1 *src0,
                               const nj_u1 *src1, const nj_u1 *src2,
@@ -339,6 +340,7 @@ static void hd_fsr1_row_sse41(hd_fsr1_row *row, int c, const nj_u1 *src0,
         _mm_storeu_si128((__m128i *)&row->hi[ch][c], hi);
     }
 }
+#endif
 
 
 /* One column of the vertical pass: read the same texel from the four scan
