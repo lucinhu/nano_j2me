@@ -231,3 +231,40 @@ RGBA 像素格式或 GPU 侧转置；(2) CPU 2D HUD 需要可写共享内存，�
 
 结论：AHB 方向的正确性验证依赖真机，本轮不再继续该分支；后续轮次优先做仍可本地验证的
 ④ FSR1/呈现优化与已有常驻路径的收尾（默认开启决策需要更多进入 3D 场景的素材）。
+
+### 8.7 M3 实施切口：把 2D 缩放/合成搬上 GPU（2026-11-29 下午）
+
+重新采样默认 pixel-art 常驻路径（8× 240 帧，`--resident`，Doom3）：`hd_art_span`
+（CPU 最近邻放大写像素）占 **54.4%**（1.23 s / 115.5 M 次 span），其后
+`nj_region_draw` 4.9%、`nj_run` 4.4%、`sw_span` 4.4%、`sw_tri_band` 3.5%、
+`jr_hd_target` 3.5%、`m3g_background_image` 2.7%、`nj_surface_format_color` 2.2%、
+`nj_src_pixel` 1.8%。
+
+三项内层 SIMD 尝试全部否决（详见 `docs/notes/2026-11-28-pixel-art-scaling-profile.md`）：
+SSE 宽存储填充 +45% 回退、u64 成对存储中性、半透明合成 4 像素 SSE4.1 有 6 像素差异且
+未定位原因。⇒ `hd_art_span` 的标量内层已接近极限，要继续降 CPU 必须把整段搬上 GPU，
+而不是在同一循环里换指令。
+
+M3 切口（按顺序，每步独立可验证）：
+
+1. **region import/export**：当前 `mirror_import`/`mirror_export` 只做整面（19.66 MB）。
+   改为按矩形（`transfer_rect_at` 已有矩形参数）并记录 `gpu_dirty`/`cpu_dirty` 区域；
+   单测：整面与 region 结果逐位一致、多次 dirty 合并正确、导出后清脏。
+2. **2D 图像 quad**：`nj_render_mirror` 增加 `image` 钩子（源 surface+矩形、目标矩形、
+   filter、wrap），resident 后端在 import 后的同一 render pass 里画 quad；`hd_blit`
+   在 resident 模式且支持该路径时改用钩子（首期只支持 ARGB8888/RGB565 源、PAINT、
+   nearest/filter 两种 filter；mask/xor/其它 ROP 保持 CPU）。
+3. **矩形与文字 glyph quad**：`hd_block` 的纯色填充/描边与 `nj_text.c` 的 glyph blit
+   走 GPU quad；曲线（`hd_curve`）先用 CPU 生成 mask 或折线 quad，最后再考虑 GPU 曲线。
+4. **同帧批处理与一次往返**：把所有 2D quad 收集成一个列表，在需要 CPU 观察
+   （present/readback/依赖目标的 CPU 操作）之前一次 import →（3D 与 2D 同 pass 或分 pass）
+   →一次 export；目标每帧 ≤1 次颜色 import + ≤1 次 export（4× 以上 export 已贴带宽，
+   主要省 import 与 CPU 像素工作）。
+5. **验证闸门**：每步都要求 8×/1× 确定性闸门保持（8× resident baseline
+   `846057676cfed67a`/`b2f32d1c682185d3`/`695e0c5a49938a7f`，8× plain baseline
+   `846057676cfed67a`/`c65baebe4730fcbe`/`dc5cb60109dd03cb`）；2D 图元与 CPU 参考
+   逐像素对比（在 `tests/test_gfx_vulkan.c` 扩 mirror 2D 用例）。
+
+风险与前置：2D ROP 语义（blend/mask/xor）依赖目标像素，GPU 侧需要保留目标或把 ROP
+转成 blend/pipeline 状态；FSR1 素材过滤上 GPU 需把 Catmull-Rom+RCAS 折进 shader
+（可选后续）；CPU/GPU 交错写入的生命周期（dirty 代次）是最大正确性风险，先写单测再接线。
