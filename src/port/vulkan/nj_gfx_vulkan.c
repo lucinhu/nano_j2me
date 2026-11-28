@@ -1117,13 +1117,28 @@ int nj_vk_renderer_present_frame(void *renderer, const nj_surface *frame) {
     if (!r) return 0;
     r->present_attempts++;
     if (!r->present_ready || !frame || !frame->pixels || frame->width <= 0 ||
-        frame->height <= 0 || !r->resident || !r->resident->mirror) {
+        frame->height <= 0) {
         if (r->present_attempts <= 8)
             VK_LOG("vulkan: present skip ready=%d frame=%p pixels=%d %dx%d resident=%d mirror=%d",
                    r->present_ready, (const void *)frame, frame ? (frame->pixels != NULL) : 0,
                    frame ? frame->width : 0, frame ? frame->height : 0, r->resident != NULL,
                    r->resident ? (r->resident->mirror != NULL) : 0);
         return 0;
+    }
+    if (!r->resident || !r->resident->mirror) {
+        /* Frames can arrive before the game first draws through the resident
+         * mirror (loading screens, 2D-only titles). Adopt the CPU frame into a
+         * mirror instead of falling back to the slow CPU present path: the
+         * zero-copy adoption leaves the pixels in the staging buffer, so the
+         * import is just one copyBufferToImage. */
+        nj_vk_resident *res = resident_ensure(r, (nj_surface *)frame);
+        if (!res || !res->mirror ||
+            !nj_vk_renderer_mirror_import_rect(res->mirror, frame, NULL, 0, 0, 0, frame->width,
+                                               frame->height, NJ_VK_MIRROR_IMPORT_COLOUR)) {
+            if (r->present_attempts <= 8)
+                VK_LOG("vulkan: present could not adopt the CPU frame");
+            return 0;
+        }
     }
     rc = r->present_acquire(r->dev, r->present_swapchain, UINT64_MAX, r->present_semaphore,
                             VK_NULL_HANDLE, &index);

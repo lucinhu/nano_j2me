@@ -203,3 +203,9 @@ AVD（Medium_Phone_API_36.1，-gpu host，8× HD，Doom3 标题画面同阶段�
 屏幕 HD 目标首帧即建立镜面；两条路径都验证后再考虑默认开启。当前保持 opt-in：
 Android `debug.nj2me.vk_resident=1` + `debug.nj2me.vk_present=1` 才会启用，
 默认走旧 present 路径。
+
+补充（Round 2 后续）：为覆盖「常驻镜面尚未建立」的首批 HD 帧，`present_frame` 现在会用
+`resident_ensure` 零拷贝接管 CPU 帧（像素直接落进 staging 缓冲），再用
+`nj_vk_renderer_mirror_import_rect` 整帧导入镜面后 blit 呈现；只有非常规格式
+（非 ARGB8888/4bpp/小于 16×16）才回退旧 present。该路径仍需在 AVD 上复测
+JBenchmark3D 启动阶段帧率。
