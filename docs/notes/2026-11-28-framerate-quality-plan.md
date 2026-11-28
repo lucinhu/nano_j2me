@@ -437,3 +437,13 @@ AVD 实测（2D《傲世三国志》，8×，同场景窗口）：
 `present post pass ready` / `half the displayed size` 日志确认两项都生效。3D Doom3 不受影响
 （3D 帧走常驻镜面 + 后处理，CPU 帧才用半尺寸）。
 
+## 8.13 锐化强度跟随上传模式
+
+半尺寸上传会损失一点细节，因此锐化默认值与上传模式联动：
+半尺寸上传时 `sharp=0.45`，全尺寸（`debug.nj2me.vk_present_soft=0`）时 `0.35`；
+`debug.nj2me.vk_sharp` / `NJ_VK_SHARP` 仍可显式覆盖（0~2）。
+
+AVD 实测（《傲世三国志》标题，同一场景截图，灰度高通能量）：
+`0.35` = 19,613,116 → `0.45` = 19,844,416（+1.2%），截图目视无过锐光晕；
+日志确认 `present post pass ready sharp=0.45`。
+

@@ -1020,7 +1020,18 @@ static int present_post_build(nj_vk_renderer *r) {
     uint32_t i;
     const char *env = getenv("NJ_VK_SHARP");
     char prop[PROP_VALUE_MAX];
-    r->present_sharp = 0.35f;
+    {
+        /* The half-size upload loses a little detail, so it is sharpened a
+         * touch more. Both defaults follow the same opt-out property. */
+        const char *softenv = getenv("NJ_VK_PRESENT_SOFT");
+        char softprop[PROP_VALUE_MAX];
+        int soft_on = 1;
+        if (softenv && softenv[0] == '0') soft_on = 0;
+        if (__system_property_get("debug.nj2me.vk_present_soft", softprop) > 0 &&
+            softprop[0] == '0')
+            soft_on = 0;
+        r->present_sharp = soft_on ? 0.45f : 0.35f;
+    }
     if (env && env[0]) {
         float v = (float)atof(env);
         if (v >= 0.0f && v <= 2.0f) r->present_sharp = v;
