@@ -165,6 +165,7 @@ struct nj_vk_renderer {
     int present_small_h;
     nj_u1 *present_scratch;
     unsigned present_small_frames;
+    int present_soft; /* upload CPU frames at half the displayed size */
 #endif
     unsigned resident_prof_exports, resident_prof_draws;
 };
@@ -1096,6 +1097,17 @@ int nj_vk_renderer_present_attach(void *renderer, void *native_window, int width
             small = 0;
         r->present_small_enabled = small;
         if (small) VK_LOG("vulkan: CPU frames are uploaded at the displayed size");
+        {
+            const char *softenv = getenv("NJ_VK_PRESENT_SOFT");
+            char softprop[PROP_VALUE_MAX];
+            int soft = 0;
+            if (softenv && softenv[0] == '1') soft = 1;
+            if (__system_property_get("debug.nj2me.vk_present_soft", softprop) > 0 &&
+                softprop[0] == '1')
+                soft = 1;
+            r->present_soft = soft;
+            if (soft) VK_LOG("vulkan: CPU frames are uploaded at half the displayed size");
+        }
     }
 #endif
 #if defined(__ANDROID__)
@@ -1233,7 +1245,9 @@ int nj_vk_renderer_present_frame(void *renderer, const nj_surface *frame) {
     x = ((int)r->present_extent.width - w) / 2;
     y = ((int)r->present_extent.height - h) / 2;
     if (r->present_small_enabled && (r->resident == NULL || r->resident_cpu_touched)) {
-        if (present_upload_small(r, frame, w, h)) {
+        int sw = r->present_soft ? (w + 1) / 2 : w;
+        int sh = r->present_soft ? (h + 1) / 2 : h;
+        if (present_upload_small(r, frame, sw, sh)) {
             used_small = 1;
             r->resident_cpu_touched = 0;
         }
