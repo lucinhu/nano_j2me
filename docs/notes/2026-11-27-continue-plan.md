@@ -221,3 +221,19 @@
 - 半透明段左右边界颜色跨段复用（`hd_asset_column` 调用减半）+ ARGB8888 直接取样。
 - Doom3 8× resident、FSR1、200 帧：7.56–8.10 s → 6.78–7.14 s（约 −12%，相对第 15 轮前累计约 −40%）。
 - 1×/8× 帧 100/200 输出逐字节不变；`test_gfx_hd`、`test_gfx_vulkan` 通过；全量验证与提交见下。
+
+## Round 18 (2026-11-28 晚)
+
+- 剖面：pixel-art 常驻 8x 下 `hd_art_span` 占 54%（1.23 s/2.26 s 样本，
+  115.5 M 次调用），FSR1 路径剩余热点为 `hd_fsr1_bitmap` 30% 与
+  `nj_src_pixel` 16%。
+- `hd_art_span` 的 SIMD 尝试（SSE4.1 半透明合成、SSE2 宽存储填充、
+  ARGB8888 专用列解码）均未合并：半透明版本闸门像素变化（每 200 帧 6 个
+  像素，组内逐项对比却完全一致，原因未查明）；宽存储使墙钟慢 45%；列解码
+  收益被 profile 占比（1.8%）否定。详见
+  `docs/notes/2026-11-28-pixel-art-scaling-profile.md`。
+- 未改动代码，HEAD `c4e6e8ab`；确定性闸门保持（plain 846057676cfed67a /
+  c65baebe4730fcbe / dc5cb60109dd03cb，resident 846057676cfed67a /
+  b2f32d1c682185d3 / 695e0c5a49938a7f）。
+- 下一步：2D 缩放/合成整体上 GPU（resident mirror 上的 2D 管线），而不是
+  继续优化 CPU 该循环；arm64 NEON 仍等待真机/CI。
