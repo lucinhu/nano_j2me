@@ -404,3 +404,19 @@ AVD 实测（8×，同一 APK，A/B 仅翻开关）：
 取舍的场景；默认仍保持关闭，用户/按机型可开启。
 
 断言：桌面确定性闸门与 3D 直呈路径不受影响（2D/首帧 CPU 帧才走该路径）。
+
+## 8.11 直呈锐化后处理（RCAS 风格，默认开启）
+
+直呈路径原先只做 `vkCmdBlitImage` 双线性下采样，超采样镜面缩到显示尺寸后边缘会变软。
+新增一个全屏后处理 pass：采样常驻镜面 + 4 邻域平均，按 `color + (color - blur) * sharp`
+二次锐化后再写 swapchain 图像（同一 command buffer、一次 fence）。
+
+- 强度：`debug.nj2me.vk_sharp=0.35`（环境变量 `NJ_VK_SHARP`），默认 0.35，范围 0~2。
+- 回退：pass 创建失败（格式/驱动不支持）时自动退回原 blit；`present post pass ready`
+  日志确认启用；Android 专用，桌面与确定性路径不受影响。
+- AVD 实测（2D《傲世三国志》，8×）：`present post pass ready sharp=0.35`；边缘能量
+  （灰度梯度和）sharp=1.2 时 4.429 vs sharp=0.35 的 4.068（+8.9%），画面无可见过锐光晕；
+  帧率 24.4–29.1 fps（与未加锐化持平）。3D Doom3：present ok 连续、无崩溃，import 0.35 ms、
+  blit 1.07 ms/帧。
+- 与半尺寸上传（§8.10）互补：先半尺寸省带宽，再由后处理锐化回细节。
+

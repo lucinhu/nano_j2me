@@ -12,7 +12,7 @@ def rebuild(name):
         for stage in ("vert", "frag"):
             output = pathlib.Path(tmp) / "shader.spv"
             subprocess.run(["glslangValidator", "--target-env", "vulkan1.0", "-Os",
-                            "-o", output, root / ("%s.%s" % (name, stage)))], check=True)
+                            "-o", output, root / ("%s.%s" % (name, stage))], check=True)
             subprocess.run(["spirv-val", "--target-env", "vulkan1.0", output], check=True)
             data = output.read_bytes()
             words = struct.unpack("<%dI" % (len(data) // 4), data)
