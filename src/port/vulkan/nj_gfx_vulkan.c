@@ -1392,13 +1392,17 @@ int nj_vk_renderer_attach(nj_port *port) {
         if (resident && resident[0] == '1')
             want_resident = 1;
 #if defined(__ANDROID__)
-        /* The Vulkan swapchain present path still needs the resident mirror, so
-         * both stay opt-in until every frame class is covered: set
-         * debug.nj2me.vk_resident=1 (and debug.nj2me.vk_present=1) to try it. */
+        /* The swapchain present path consumes the resident mirror, and CPU
+         * frames are uploaded at their displayed size, so both are on by
+         * default here. debug.nj2me.vk_resident=0 (or NJ_VK_RESIDENT=0) keeps
+         * the established GL/CPU present path. */
+        want_resident = 1;
+        if (resident && resident[0] == '0')
+            want_resident = 0;
         {
             char prop[PROP_VALUE_MAX];
-            if (__system_property_get("debug.nj2me.vk_resident", prop) > 0 && prop[0] == '1')
-                want_resident = 1;
+            if (__system_property_get("debug.nj2me.vk_resident", prop) > 0 && prop[0] == '0')
+                want_resident = 0;
         }
 #endif
         if (want_resident) {
@@ -1451,7 +1455,7 @@ int nj_vk_renderer_attach(nj_port *port) {
         port->hd_present_ud = r;
     }
 #endif
-    port->gfx_hd_destroy = destroy_owned_renderer;    port->gfx_hd_destroy = destroy_owned_renderer;
+    port->gfx_hd_destroy = destroy_owned_renderer;
     return 1;
 #else
     (void)port;

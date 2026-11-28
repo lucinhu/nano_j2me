@@ -334,3 +334,24 @@ blit」的串行开销。下一步 L2：脏矩形导入（仅上传变化区域�
 - 3D Doom3：3D 画面由 GPU 直画常驻镜面，present 本身不上传（60 帧仅 2 次 upload，来自首帧 adopt）；脏路径无用武之地。
 
 结论：脏区域导入对「逐帧全屏重绘」的 2D 标题无收益、且扫描有成本，已回退（未合并）。要真正降低 Android 端 2D 帧成本，只能走结构性方案：GPU 侧 2D 合成（L2），或对 2D 帧采用「低分辨率上传 + GPU 放大」的直呈路径（质量/性能权衡，可选开关）。
+
+## 8.7 Android 默认开启常驻镜面与 swapchain 直呈
+
+8.6 后两条路径已覆盖所有帧类别（3D 由 GPU 直画常驻镜面；2D/加载画面按显示尺寸上传），
+因此 Android 端把 resident + Vulkan present 从 opt-in 改为**默认开启**：
+
+- 触发条件：设置里请求 Vulkan 3D 且高清倍率 > 1（否则仍走旧 GL/CPU 路径）。
+- 回退：设备缺少 surface/swapchain 扩展、swapchain 创建失败或 present 返回 0 时，
+  hook 返回 0，端口回退既有 GL/CPU present；`debug.nj2me.vk_resident=0`
+  （或环境变量 `NJ_VK_RESIDENT=0`）可整体关闭，恢复旧路径。
+- 桌面/headless 不受影响（默认逻辑仍在 `#if defined(__ANDROID__)` 内）。
+
+### 冒烟（AVD Medium_Phone_API_36.1，-gpu host，8×，全新模拟器无任何 debug 属性）
+
+| 用例 | 结果 |
+|---|---|
+| Doom3 3D 标题 | `resident HD mirror enabled`、`present ok #1..#8`、无 FATAL；截图正确（星空/行星 splash + 键盘浮层） |
+| 2D《傲世三国志》 | 默认属性下 present ok 连续、`small=180/180`、窗口 fps 29.2/26.7 |
+| opt-out（`debug.nj2me.vk_resident=0`） | `resident=0`、`present ok=0`、GL 路径正常、无 FATAL |
+
+桌面确定性闸门不受影响：8× plain 帧 60/120/180 = `846057676cfed67a`/`c65baebe4730fcbe`/`dc5cb60109dd03cb`。
