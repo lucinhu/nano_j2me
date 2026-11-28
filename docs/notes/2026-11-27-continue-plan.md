@@ -237,3 +237,37 @@
   b2f32d1c682185d3 / 695e0c5a49938a7f）。
 - 下一步：2D 缩放/合成整体上 GPU（resident mirror 上的 2D 管线），而不是
   继续优化 CPU 该循环；arm64 NEON 仍等待真机/CI。
+
+## Round 19–20（2026-11-29）：M3 切口与 region 基础，目标收尾
+
+- Round 19：把 pixel-art 剖面结论转成 M3（2D 合成上 GPU）的可执行切口，写入
+  `docs/notes/2026-11-28-gpu-2d-composition-plan.md` §8.7（region import/export → 2D 图像
+  quad → 矩形/glyph quad → 同帧批处理 → 闸门），提交 `d1ccbeae`。
+- Round 20：实现 M3.1 —— 常驻镜面的区域 import/export
+  （`nj_vk_renderer_mirror_import_rect` / `nj_vk_renderer_mirror_export_rect`），新镜面/
+  未定义深度回退整帧、别名帧拒绝子矩形、`mirror_import` 退化为整帧 wrapper；单测
+  `mirror_regions`（0 mismatched pixels）覆盖子矩形合并/部分导出/重复导入/回退/越界拒绝；
+  基准 `--bench-mirror-regions`（1920×2560、256×192）：import rect 0.26 ms、export rect
+  0.18 ms、import full 0.95 ms、export full 3.99 ms ⇒ 导出带宽是 M3 的主要成本。
+  8× plain/resident 确定性闸门与重构前完全一致；全量 236/236 + 222/222 + no_statics +
+  check_android_java 通过；提交 `55a2dad9`。
+
+### 目标收尾状态（2026-11-29）
+
+- ① 确定性回放与 8× 逐位闸门：已完成（`00323052` 起；plain
+  `846057676cfed67a`/`c65baebe4730fcbe`/`dc5cb60109dd03cb`，resident
+  `846057676cfed67a`/`b2f32d1c682185d3`/`695e0c5a49938a7f`）。
+- ② 8× 回放耗时与 AVD present stats：已量化并判定「批处理/session 保留为 opt-in，
+  默认关闭」（`4acddfce`、`7ed45b78` 等）。
+- ③ 整帧镜面/深度 GPU 驻留：已实现并推送——M1 常驻镜面、M2a 纹理 quad+常驻深度、
+  M2b 常驻三角形路径与 M3G 接线（清屏/背景/三角形常驻 GPU）、导出零拷贝、校验剔除、
+  FSR2 互斥；桌面 Doom3 8× 场内 400 帧 45.5 s → 12.3 s（约 3.6×），opt-in（`--resident`
+  / Android `debug.nj2me.vk_resident`）。2D 合成上 GPU：完成架构方案与 M3.1 region
+  基础；M3.2+（把 pixel-art/FSR1/filter 三种 2D 缩放器搬进 GPU 管线）是后续独立项目。
+- ④ FSR1 与呈现路径：两轮优化（半透明合成 SSE4.1 −31%、段边界复用+ARGB 直取 −12%，
+  累计约 −40%，输出逐位不变）；呈现路径分析完成；arm64 NEON 因本机无 arm64 设备/
+  用户态仿真而阻塞（条件未满足）。
+- 发布：0.5.54（含 arm64 编译修复）已发布到
+  https://github.com/lucinhu/nano_j2me/releases/tag/v0.5.54 。
+- 仍待硬件或后续项目：M4（present 直接消费 GPU 图像，AHB 探针证明模拟器不可用、需真机）、
+  NEON（需 arm64 设备/CI）、常驻镜面默认开启（需更多进入 3D 场景的回归素材）。
