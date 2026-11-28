@@ -166,3 +166,11 @@ M3G 清屏/背景的 GPU 钩子也加 `!render_quality.fsr2` 守卫（Doom3 2×+
 逐位相同）。12 个 3D title 的 8× 冒烟：全部 exit 0、两种模式各自确定；11 个在 120 帧内
 未渲染可见 3D（标题/加载），Doom3 的关/开差异 3.21%（最大 10）。默认开启仍待更多
 「进入 3D 场景」的回归素材。
+
+### 8.2 常驻路径成本拆分与 1x 隔离（2026-11-28 晚）
+
+`NJ_VK_PROFILE` 下 8× 场内 400 帧：每帧约 12.8 ms 的 `mirror_export`（19.66 MB 回读）、
+3.1 ms 三角提交、1.4 ms 清屏、0.9 ms 纹理 quad，合计约 18 ms；余下约 19 ms 是 CPU 2D、
+逻辑走查、VM 与 present。导出是下一阶段最大单项，只有 present 直接消费 GPU 图像（M4）才
+能去掉。另加：全屏重绘后跳过颜色导入（确定性哈希不变）、`--resident` CLI 开关、以及
+`gfx_triangles_hd_only`（常驻的 journal 列表只对 HD 生效，1x 输出逐位不变）。

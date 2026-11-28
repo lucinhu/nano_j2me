@@ -870,6 +870,10 @@ typedef struct nj_port {
      * contract validation. NULL falls back to gfx_triangles_list. */
     nj_gfx_triangles_list_fn gfx_triangles_list_trusted;
     void *gfx_triangles_list_trusted_ud;
+    /* Set when the list callbacks exist only for an HD (scale > 1) resident
+     * target: the 1x path must then keep drawing synchronously so enabling the
+     * HD opt-in cannot change already-shipped 1x pixels. */
+    int gfx_triangles_hd_only;
     /* Optional persistent triangle session: keep the target rectangle resident
      * on the GPU across several list submissions so import/seed/readback are
      * paid once per session instead of once per submission. All three hooks are

@@ -16298,8 +16298,11 @@ static int jr_draw_accel(m3g_jr *r)
         if (r->vm->m3g_accel_auto == 2u) return 0;
     }
     /* Queue into the journal only when the port can commit a whole list in
-     * one transaction; otherwise keep the original synchronous callback. */
-    journaled = port->gfx_triangles_list != NULL && (!r->hd_scale || port->gfx_hd_journal);
+     * one transaction; otherwise keep the original synchronous callback.  A
+     * resident-HD port marks its lists HD-only, so the 1x path stays exactly
+     * the shipped synchronous one. */
+    journaled = port->gfx_triangles_list != NULL &&
+                (r->hd_scale ? port->gfx_hd_journal : !port->gfx_triangles_hd_only);
     memset(&c, 0, sizeof(c));
     collector = *r;
     collector.triangles = &c;

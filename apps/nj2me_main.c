@@ -196,6 +196,9 @@ static void usage(const char *argv0)
 "                        or fsr1 (cubic plus clamped sharpening)\n"
 "  --smooth-assets        alias for --asset-filter smooth\n"
 "  --fsr2                 request temporal M3G rendering (Vulkan build)\n"
+"  --resident             keep the HD mirror resident on the GPU instead of\n"
+"                        paying a colour/depth round trip per draw (Vulkan,\n"
+"                        experimental; the default stays off)\n"
 "  --scale <n>          integer upscale for the window (sdl2, default: auto)\n"
 "  --size <WxH>         screen size, e.g. 240x320 (default: %dx%d)\n"
 "  --rms-dir <path>     where RecordStore files are kept\n"
@@ -346,6 +349,7 @@ typedef struct cli {
     int         where;
     int         run_frames;
     int         deterministic;   /* --deterministic: replay clock and RNGs   */
+    int         resident;        /* --resident: keep the HD mirror on the GPU */
     int         verbose;
     const char *keys;
     const char *cheat_file;         /* --cheat-file: one code per line      */
@@ -936,6 +940,8 @@ int main(int argc, char **argv)
             fprintf(stderr, "--fsr2 requires a build with NJ_ENABLE_FSR2=ON\n");
             return 2;
 #endif
+        } else if (strcmp(a, "--resident") == 0) {
+            c.resident = 1;
         } else if (strcmp(a, "--scale") == 0 && i + 1 < argc) {
             c.scale = atoi(argv[++i]);
         } else if (strcmp(a, "--upscale") == 0 && i + 1 < argc) {
@@ -1250,6 +1256,12 @@ int main(int argc, char **argv)
         }
     }
 
+    if (c.resident) {
+        /* The Vulkan port reads this at attach time; the flag is the CLI-side
+         * spelling of the same opt-in that the Android build reads from a
+         * debug property. */
+        setenv("NJ_VK_RESIDENT", "1", 1);
+    }
     {
         int prc = setup_port(&c, &port, &settings);
         if (prc != 0) {

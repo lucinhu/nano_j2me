@@ -631,3 +631,29 @@ blit，约 5 次全屏 drawImage/帧）、`jr_draw_walk` 对逻辑面的软件�
     10，与前面帧级统计一致，属 GPU 光栅化/采样 vs CPU 参考的固有差异。
   - 结论：常驻路径在这些 title 上不崩溃、确定性成立，但「可见 3D 内容」的覆盖仍只有
     Doom3；默认开启前需要更多能进入 3D 场景的回归素材（脚本按键/存档）。
+
+### 19.2 常驻路径的剩余成本拆分与 1x 隔离（2026-11-28 晚）
+
+给常驻路径加 `NJ_VK_PROFILE` 计数后，8× 场内 400 帧（load≈2.4，墙钟 14.9 s）分解为：
+
+| 项 | 次数 | 总时间 | 每帧 |
+| --- | --- | --- | --- |
+| `mirror_export`（GPU→CPU 19.66 MB） | 619 | 5.105 s | 12.8 ms |
+| `mirror_triangles`（含 submit+fence） | 619 | 1.228 s | 3.1 ms |
+| `mirror_clear` | 619 | 0.552 s | 1.4 ms |
+| `mirror_texture`（背景图 quad） | 1240+ | 0.351 s | 0.9 ms |
+
+即每帧仍有约 18 ms 的同步显存往返/提交，其余约 19 ms 是 CPU 2D（`hd_art_span`）、
+逻辑面软件走查、Java VM 与 present。导出是最大单项（8.2 ms/次），除非做到 present 直接
+消费 GPU 图像（M4），否则难再降；2D 图像上 GPU 需要完整的 2D 合成顺序（M3）。
+
+另外两处正交改动：
+
+- **全屏重绘时跳过颜色导入**：`resident_clear` 的整屏颜色清屏与 `resident_image` 的
+  整屏 replace quad 都置 `resident_repaint`，下一次三角批不再从 CPU 导入颜色（GPU 已把
+  CPU 旧内容整体覆盖）。8× 确定性哈希与改动前逐位相同。
+- **`--resident` CLI 开关 + 1x 隔离**：Vulkan 端口在 `gfx_triangles_hd_only` 下只对
+  HD（scale>1）启用 journal 列表；1x 仍走原有同步路径。验证：1x 开/关 `--resident`
+  输出逐位相同（`584c0249d197ec69`/`1211aaab3c0e1a15`/`9014a7c26a2327c3`）；8× 常驻
+  仍是 `846057676cfed67a`/`b2f32d1c682185d3`/`695e0c5a49938a7f`，默认路径
+  `846057676cfed67a`/`c65baebe4730fcbe`/`dc5cb60109dd03cb` 不变。
