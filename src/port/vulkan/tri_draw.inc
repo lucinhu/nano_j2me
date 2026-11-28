@@ -1332,12 +1332,28 @@ int nj_vk_renderer_mirror_export(nj_vk_mirror *m, const nj_surface *dst) {
     host.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
     vkCmdPipelineBarrier(r->cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, 1,
                          &host, 0, NULL, 0, NULL);
-    if (!mirror_submit(r) || !sync_buffer(r, &m->stage, 1))
+    if (!mirror_submit(r))
         return 0;
-    rows = (const nj_u1 *)m->stage.map;
-    for (row = 0; row < (nj_u8)m->height; ++row)
-        memcpy((nj_u1 *)dst->pixels + (nj_u8)row * (nj_u8)dst->stride,
-               rows + (nj_u8)row * (nj_u8)m->width * 4u, (nj_u8)m->width * 4u);
+    {
+        double sync_start = vk_prof_now();
+        if (!sync_buffer(r, &m->stage, 1))
+            return 0;
+        r->resident_prof_sync += vk_prof_now() - sync_start;
+    }
+    {
+        double copy_start = vk_prof_now();
+        nj_u8 y;
+        rows = (const nj_u1 *)m->stage.map;
+        if ((nj_u8)dst->stride == (nj_u8)m->width * 4u) {
+            memcpy((nj_u1 *)dst->pixels, rows,
+                   (nj_u8)m->width * (nj_u8)m->height * 4u);
+        } else {
+            for (y = 0; y < (nj_u8)m->height; ++y)
+                memcpy((nj_u1 *)dst->pixels + y * (nj_u8)dst->stride,
+                       rows + y * (nj_u8)m->width * 4u, (nj_u8)m->width * 4u);
+        }
+        r->resident_prof_copy += vk_prof_now() - copy_start;
+    }
     return 1;
 }
 

@@ -174,3 +174,11 @@ M3G 清屏/背景的 GPU 钩子也加 `!render_quality.fsr2` 守卫（Doom3 2×+
 逻辑走查、VM 与 present。导出是下一阶段最大单项，只有 present 直接消费 GPU 图像（M4）才
 能去掉。另加：全屏重绘后跳过颜色导入（确定性哈希不变）、`--resident` CLI 开关、以及
 `gfx_triangles_hd_only`（常驻的 journal 列表只对 HD 生效，1x 输出逐位不变）。
+
+### 8.3 导出拆分与 readback 带宽上限（2026-11-28 深夜）
+
+8× 每帧导出 ~12.8 ms 中约 4.2 ms 是 CPU 行拷贝、8.5 ms 是 submit+fence+GPU→host 传输；
+2×/4×/8× 的每次导出的传输时间分别约 0.24/1.21/8.4 ms（1.23/4.9/19.66 MB），8× 已接近
+PCIe 回读带宽（2.4–3.4 GB/s）。强制 write-combined（HOST_COHERENT）staging 会让 CPU 拷贝
+慢 30 倍，不可用。结论：导出无法再靠调参优化，必须走 M4（present 消费 GPU 图像）或把 2D
+合成全部留在 GPU；2D 图像 blit 目前仍是 CPU 侧（`hd_art_span`）。

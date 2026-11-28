@@ -119,6 +119,7 @@ struct nj_vk_renderer {
     int resident_repaint;     /* the GPU fully repainted the mirror since the last export */
     /* Resident-path profile timers (NJ_VK_PROFILE): where the frame time goes. */
     double resident_prof_export, resident_prof_draw, resident_prof_clear, resident_prof_image;
+    double resident_prof_copy, resident_prof_sync;
     unsigned resident_prof_exports, resident_prof_draws;
 };
 static const VkFormat formats[] = {VK_FORMAT_B8G8R8A8_UNORM, VK_FORMAT_D32_SFLOAT};
@@ -505,14 +506,16 @@ void nj_vk_renderer_destroy(nj_vk_renderer *r) {
         vkDestroyFence(r->dev, r->fence, NULL);
         vkDestroyDevice(r->dev, NULL);
     }
-    if (getenv("NJ_VK_PROFILE"))
+    if (getenv("NJ_VK_PROFILE")) {
         fprintf(stderr, "[vkprof] sessions=%u import=%.3f export=%.3f render=%.3f\n",
                 r->prof_sessions, r->prof_import, r->prof_export, r->prof_render);
         fprintf(stderr,
-                "[vkprof] resident exports=%u export=%.3f draws=%u draw=%.3f clear=%.3f "
-                "image=%.3f\n",
-                r->resident_prof_exports, r->resident_prof_export, r->resident_prof_draws,
-                r->resident_prof_draw, r->resident_prof_clear, r->resident_prof_image);
+                "[vkprof] resident exports=%u export=%.3f (copy=%.3f sync=%.3f) draws=%u "
+                "draw=%.3f clear=%.3f image=%.3f\n",
+                r->resident_prof_exports, r->resident_prof_export, r->resident_prof_copy,
+                r->resident_prof_sync, r->resident_prof_draws, r->resident_prof_draw,
+                r->resident_prof_clear, r->resident_prof_image);
+    }
     free(r->session_infos);
     if (r->instance)
         vkDestroyInstance(r->instance, NULL);

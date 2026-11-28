@@ -150,3 +150,12 @@
 - 全屏 GPU 重绘后跳过颜色导入（确定性哈希不变）；新增 `--resident` CLI 开关；
   `gfx_triangles_hd_only` 让常驻的列表/journal 只对 HD 生效（1x 开/关逐位相同）。
 - 8× 常驻确定性哈希保持 `846057676cfed67a`/`b2f32d1c682185d3`/`695e0c5a49938a7f`。
+
+### 2026-11-28 深夜（Round 10，导出成本再拆分）
+
+- `mirror_export` 内部拆分（8× 400 帧）：export 5.0–5.2 s（12.8 ms/帧），其中 CPU 行拷贝
+  1.7 s（4.2 ms/帧，7 GB/s）、sync ≈0、submit+fence+GPU→host ≈3.4 s（8.5 ms/帧）。
+- 2×/4×/8× 每次导出 0.24/1.21/8.4 ms；8× 已达 PCIe 回读带宽（2.4–3.4 GB/s），无法调参优化。
+- 强制 HOST_COHERENT（write-combined）staging：CPU 拷贝 1.7 s → 50 s，已回退。
+- 修掉 `if (getenv("NJ_VK_PROFILE"))` 缺花括号导致常驻统计无条件打印的 bug。
+- 结论：导出是硬上限，下阶段只能做 M4（present 消费 GPU 图像）或 2D 合成全 GPU。
