@@ -259,3 +259,15 @@ AVD 实测（Medium_Phone_API_36.1，-gpu host，8×，resident+present opt-in�
 - Doom3 8× 标题：`present ok` 连续，8.1–9.0 fps（与 Vulkan 直呈基线一致，无回归）。
 - 帧率低于 GL 路径 ~32 fps 的原因是 2D 帧每帧 19.6 MB 的 CPU→GPU 上传；后续 L2
   （脏矩形/2D 上 GPU）可消除。
+
+### 8.3 CPU 帧从镜面 staging 直接上传（Round 11）
+
+2D 游戏 present 时 CPU 帧已通过零拷贝别名留在镜面自己的 staging buffer 里，而
+`mirror_import_rect()` 仍先把整帧 memcpy 进渲染器的 staging 再上传。新增快速路径：
+整帧、不打包深度、调用者像素正好是镜面 staging 时不拷贝，直接 `sync_buffer(m->stage)`
+后用该 buffer 做 `vkCopyBufferToImage`（深度打包路径仍走原拷贝）。
+
+AVD 实测（8×，resident+present）：2D《傲世三国志》稳定 21.8–22.3 fps（两次测量窗口），
+标题阶段 33 fps；Doom3 8× 标题 8.2–17.2 fps（随场景变化）。相对未优化版本（20.8–29.7 fps）
+处于同一量级，说明 22 fps 附近的天花板不在主机拷贝，而在「单帧 fence 等待 + 整帧上传 +
+blit」的串行开销。下一步 L2：脏矩形导入（仅上传变化区域）/ 2D 图元上 GPU。

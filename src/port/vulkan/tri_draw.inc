@@ -1669,6 +1669,7 @@ static int mirror_import_rect(nj_vk_mirror *m, const nj_surface *surface, nj_s4 
     VkImageMemoryBarrier barriers[2] = {VK_INIT(IMAGE_MEMORY_BARRIER), VK_INIT(IMAGE_MEMORY_BARRIER)};
     VkBufferImageCopy copies[2] = {{0}};
     VkSubmitInfo submit = VK_INIT(SUBMIT_INFO);
+    VkBuffer colour;
     size_t colour_bytes, depth_bytes;
     int i, pack_depth, want_depth, want_colour, stages = 0;
     int full = x == 0 && y == 0 && width == m->width && height == m->height;
@@ -1702,13 +1703,26 @@ static int mirror_import_rect(nj_vk_mirror *m, const nj_surface *surface, nj_s4 
     pack_depth = depth ? 1 : 0;
     colour_bytes = (size_t)width * (size_t)height * 4u;
     depth_bytes = pack_depth ? colour_bytes : 0;
-    if (!reserve_buffer(r, &r->stage, (VkDeviceSize)(colour_bytes + depth_bytes),
-                        VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT))
-        return 0;
-    if ((const void *)surface->pixels != (const void *)r->stage.map)
-        transfer_rect_at(r, surface, depth, depth_stride, x, y, width, height, pack_depth, 0, 0,
-                         colour_bytes);
-    if (!sync_buffer(r, &r->stage, 0) || vkResetCommandPool(r->dev, r->pool, 0) != VK_SUCCESS)
+    /* When the frame already lives in the mirror's own staging buffer (the
+     * resident zero-copy alias) and no depth is packed, upload it straight
+     * from there: the host copy into the renderer staging buffer is the most
+     * expensive part of a CPU-drawn frame. */
+    if (full && !pack_depth && (const void *)surface->pixels == (const void *)m->stage.map) {
+        colour = m->stage.id;
+        if (!sync_buffer(r, &m->stage, 0))
+            return 0;
+    } else {
+        if (!reserve_buffer(r, &r->stage, (VkDeviceSize)(colour_bytes + depth_bytes),
+                            VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT))
+            return 0;
+        if ((const void *)surface->pixels != (const void *)r->stage.map)
+            transfer_rect_at(r, surface, depth, depth_stride, x, y, width, height, pack_depth, 0, 0,
+                             colour_bytes);
+        colour = r->stage.id;
+        if (!sync_buffer(r, &r->stage, 0))
+            return 0;
+    }
+    if (vkResetCommandPool(r->dev, r->pool, 0) != VK_SUCCESS)
         return 0;
     cb.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     if (vkBeginCommandBuffer(r->cmd, &cb) != VK_SUCCESS)
@@ -1739,7 +1753,7 @@ static int mirror_import_rect(nj_vk_mirror *m, const nj_surface *surface, nj_s4 
     vkCmdPipelineBarrier(r->cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
                          0, NULL, 0, NULL, (uint32_t)stages, barriers);
     for (i = 0; i < stages; ++i)
-        vkCmdCopyBufferToImage(r->cmd, r->stage.id, barriers[i].image,
+        vkCmdCopyBufferToImage(r->cmd, colour, barriers[i].image,
                                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copies[i]);
     for (i = 0; i < stages; ++i) {
         barriers[i].srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
