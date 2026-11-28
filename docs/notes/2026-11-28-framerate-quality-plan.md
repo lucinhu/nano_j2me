@@ -226,3 +226,18 @@ JBenchmark3D 启动阶段此前测到约 58 fps。
 
 因此「Android 默认开启 resident+present」仍不能放开：纯 2D / HUD 帧需要在 GPU 侧合成
 （L2/M3），或用脏矩形导入替代整帧导入后再验证。
+
+## 9. 素材放大：新增 `fsr1-strong`（Round 9）
+
+用户反馈「素材比较模糊」。现有 2D 高清素材采样选项为：原始像素 / 柔和平滑 / 像素画清晰 /
+FSR1 锐利。FSR1 锐利的 RCAS 对比度强度写死在 Q8=96（0.375）；新增同一重建算法的
+「FSR1 超锐」档，强度 Q8=160（0.625）：
+
+- C：`HD_FSR1_SHARP_STRONG`、`hd_fsr1_bitmap(..., sharp)` 参数、`NJ_ASSET_FSR1_STRONG = 4`。
+- CLI：`--asset-filter fsr1-strong`。
+- Android 面板：「高清素材采样」新增「FSR1 超锐」（下标 4，下次启动生效）。
+- 默认仍是「原始像素」，不改变任何现有用户的输出。
+
+Doom3 8× resident 帧 120（1920×2560）对照：fsr1 vs fsr1-strong 平均通道差 0.225、
+最大差 10、差>4 的像素 25,629（约 0.5%），高光边缘更硬，属局部锐化变化而非整体偏移；
+pixel-art 基准帧 60 仍是 `846057676cfed67a`，未受影响。

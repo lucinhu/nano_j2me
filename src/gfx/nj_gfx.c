@@ -2299,7 +2299,10 @@ static void hd_blit(nj_gfx *g, const nj_u1 *src, nj_s8 stride, int format,
                                     transform, dx, dy, x0, y0, x1, y1);
             else if (g->mirror->smooth_assets == NJ_ASSET_FSR1)
                 hd_fsr1_bitmap(p.surf, k, src, stride, format, bpp, sx, sy, sw, sh,
-                               transform, dx, dy, x0, y0, x1, y1);
+                               transform, dx, dy, x0, y0, x1, y1, HD_FSR1_SHARP);
+            else if (g->mirror->smooth_assets == NJ_ASSET_FSR1_STRONG)
+                hd_fsr1_bitmap(p.surf, k, src, stride, format, bpp, sx, sy, sw, sh,
+                               transform, dx, dy, x0, y0, x1, y1, HD_FSR1_SHARP_STRONG);
             else
                 hd_filter_bitmap(p.surf, k, src, stride, format, bpp, sx, sy, sw, sh,
                                  transform, dx, dy, x0, y0, x1, y1);

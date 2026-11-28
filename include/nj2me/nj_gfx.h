@@ -265,7 +265,10 @@ enum nj_asset_filter {
     /* FSR1-style cubic sampling with clamped contrast sharpening. Only the
      * opaque interior of an image is reshaped; translucent edges keep the
      * exact smooth composite. */
-    NJ_ASSET_FSR1      = 3
+    NJ_ASSET_FSR1      = 3,
+    /* The same reconstruction with a higher RCAS-style contrast amount, for
+     * players who prefer crisper artwork than the default FSR1 strength. */
+    NJ_ASSET_FSR1_STRONG = 4
 };
 
 typedef struct nj_render_mirror {

@@ -34,6 +34,9 @@
 #ifndef HD_FSR1_SHARP
 #define HD_FSR1_SHARP 96     /* 0.375 in Q8: the RCAS-style contrast amount */
 #endif
+#ifndef HD_FSR1_SHARP_STRONG
+#define HD_FSR1_SHARP_STRONG 160 /* 0.625 in Q8: the opt-in "strong" amount */
+#endif
 #define HD_FSR1_SLACK 2      /* columns the four-tap window reaches past a row */
 
 
@@ -55,7 +58,7 @@ static nj_s4 hd_fsr1_round(double v)
     return (nj_s4)(v * 256.0 + (v < 0.0 ? -0.5 : 0.5));
 }
 
-static void hd_fsr1_kernel_build(hd_fsr1_kernel *w, int k)
+static void hd_fsr1_kernel_build(hd_fsr1_kernel *w, int k, int sharp)
 {
     for (int phase = 0; phase < k; ++phase) {
         /* hd_asset_weight() holds the sample position the smooth path uses, so
@@ -73,7 +76,7 @@ static void hd_fsr1_kernel_build(hd_fsr1_kernel *w, int k)
          * reconstruction directly. */
         for (int i = 0; i < 4; ++i) {
             int base = i == 1 ? (int)(256u - bw) : i == 2 ? (int)bw : 0;
-            int value = (int)cubic[i] * (256 + HD_FSR1_SHARP) - base * HD_FSR1_SHARP;
+            int value = (int)cubic[i] * (256 + sharp) - base * sharp;
             sharpened[i] = (value + 128) >> 8;
         }
         /* Keep the taps exact on a flat source. */
@@ -491,7 +494,7 @@ static hd_asset_color hd_asset_column_argb(const nj_u1 *top, const nj_u1 *bottom
 
 static void hd_fsr1_bitmap(nj_surface *dst, int k, const nj_u1 *src, nj_s8 stride,
                            int format, int bpp, int sx, int sy, int sw, int sh, int transform,
-                           nj_s8 dx, nj_s8 dy, int x0, int y0, int x1, int y1)
+                           nj_s8 dx, nj_s8 dy, int x0, int y0, int x1, int y1, int sharp)
 {
     hd_fsr1_kernel kernel;
     hd_fsr1_row row;
@@ -503,7 +506,7 @@ static void hd_fsr1_bitmap(nj_surface *dst, int k, const nj_u1 *src, nj_s8 strid
                          transform, dx, dy, x0, y0, x1, y1);
         return;
     }
-    hd_fsr1_kernel_build(&kernel, k);
+    hd_fsr1_kernel_build(&kernel, k, sharp);
     for (int n = 0; n < k; ++n) weights[n] = hd_asset_weight(n, k);
     nj_trans_size(transform, sw, sh, &tw, &th);
     step = nj_trans_row_step(transform, bpp, stride);

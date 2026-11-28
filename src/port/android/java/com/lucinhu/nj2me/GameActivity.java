@@ -1507,7 +1507,7 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
         box.addView(glPresentSharpSetting());
         addHdChoice(box, "高清渲染倍率", "hd_scale", 1, scaleLabels(false), true);
         addHdChoice(box, "高清素材采样", "hd_smooth_assets", 0,
-                new String[]{"原始像素", "柔和平滑", "像素画清晰", "FSR1 锐利"}, true);
+                new String[]{"原始像素", "柔和平滑", "像素画清晰", "FSR1 锐利", "FSR1 超锐"}, true);
         addHdChoice(box, "超采样抗锯齿", "hd_ssaa", 1, new String[]{"关闭", "四采样"}, true);
         addHdChoice(box, "3D 面片细分", "hd_subdivide", 0, new String[]{"关闭", "开启"}, true);
         addHdChoice(box, "Vulkan 3D 面片渲染", "hd_vulkan", 0,

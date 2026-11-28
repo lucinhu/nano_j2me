@@ -192,7 +192,8 @@ static void usage(const char *argv0)
 "  --render-scale <1..%d>  rasterize geometry and outlines at this output scale\n"
 "  --ssaa <1|2>           samples per axis before resolving the physical frame\n"
 "  --subdivide            split M3G triangles during HD drawing\n"
-"  --asset-filter <mode>  HD artwork: nearest (default), smooth, pixel-art\n"
+"  --asset-filter <mode>  HD artwork: nearest (default), smooth, pixel-art,\n"
+"                         fsr1, fsr1-strong\n"
 "                        or fsr1 (cubic plus clamped sharpening)\n"
 "  --smooth-assets        alias for --asset-filter smooth\n"
 "  --fsr2                 request temporal M3G rendering (Vulkan build)\n"
@@ -927,8 +928,10 @@ int main(int argc, char **argv)
             else if (strcmp(mode, "smooth") == 0) c.smooth_assets = NJ_ASSET_SMOOTH;
             else if (strcmp(mode, "pixel-art") == 0) c.smooth_assets = NJ_ASSET_PIXEL_ART;
             else if (strcmp(mode, "fsr1") == 0) c.smooth_assets = NJ_ASSET_FSR1;
+            else if (strcmp(mode, "fsr1-strong") == 0)
+                c.smooth_assets = NJ_ASSET_FSR1_STRONG;
             else {
-                fprintf(stderr, "--asset-filter expects nearest, smooth, pixel-art or fsr1\n");
+                fprintf(stderr, "--asset-filter expects nearest, smooth, pixel-art, fsr1 or fsr1-strong\n");
                 return 2;
             }
         } else if (strcmp(a, "--smooth-assets") == 0) {
