@@ -578,3 +578,39 @@ logcat 确认 `vulkan: resident HD mirror enabled` 后才计入常驻数据。
 侧 2D 合成已不是瓶颈）；冷启动窗的 44–52 ms 是 JIT/着色器编译伪差。桌面 2.0–2.5× 的收益在
 AVD 上体现不出来，说明下一步（M4）要把 present 也接到 GPU 图像上（省掉 GLES2 上传），
 而不是继续优化 CPU 合成。证据：`.local-tools/debug-runs/avd-resident-20261128/`。
+
+## 十九、去掉 journal 提交路径上的重复校验（2026-11-28）
+
+常驻镜面的画质/确定性稳定后，gprof（`-pg` 构建、8× 场内 400 帧、`NJ_VK_RESIDENT=1`）
+显示 CPU 时间的大头不在渲染而在**契约校验**：
+
+- `nj_gfx_triangles_validate` 占 73%（9.58 s 采样时间、114,486 次调用）。其中 3 个来源：
+  journal 入队时 1 次/包、journal commit 的 `nj_gfx_triangles_list_validate` 1 次/包、
+  Vulkan 列表入口的 `nj_gfx_triangles_list_validate` 再 1 次/包。后者对内部 journal 是
+  完全的重复劳动：包由运行时自己构造、入队时已校验过，且这些调用还会扫描包 ROI 的深度
+  keys（大矩形包一次几十万 keys）。
+
+改动（`c5f8a549` 之后）：
+
+- 端口新增可选 `gfx_triangles_list_trusted`（参数同 `gfx_triangles_list`）：journal commit
+  在存在该钩子时跳过自己的 `nj_gfx_triangles_list_validate`，直接交给后端；Vulkan 的
+  trusted 入口跳过列表校验，只保留逐包 `analyze`（`triangles_list_trusted` /
+  `mirror_triangles_trusted` / `resident_list_trusted`）。
+- 新增 `nj_gfx_triangles_validate_fast`：与完整校验同契约，仅跳过深度 keys 范围扫描；
+  它只用于「journal 已入队的 GPU 包」（keys 来自本引擎的量化器/GPU D32 导出，恒在
+  0..16777216 内），直接调用路径仍用完整校验。
+- `tests/test_gfx_triangles.c` 增加 fast 变体语义用例（ROI 内越界 key：完整校验拒绝、
+  fast 接受；结构错误两者都拒绝），共 118 项检查。
+
+效果（同机 load≈3.8，8× 场内 400 帧、常驻开）：
+
+- 墙钟：24.9/24.9 s → 14.3/14.4 s（−42%）；相对 journal 关的 ~45 s 约 3.1×。
+- gprof 采样总 CPU：13.08 s → 3.48 s（−73%）；`nj_gfx_triangles_validate` 9.58 s（73%）
+  → 2.87 s（43%，只剩入队时 1 次/包）→ 加 fast 变体后不再出现在热点前列。
+- 确定性不变：8× 常驻帧 60/120/180 = `846057676cfed67a`/`b2f32d1c682185d3`/`695e0c5a49938a7f`
+  （两次相同）；1× 常驻 = `584c0249d197ec69`/`3eacb0453a3d0fec`/`d8c677b177ec5c38`
+  （两次相同），与改动前逐位一致。
+
+剩余 CPU 热点（下一轮候选）：`hd_art_span` 1.13 s（32%，`nj_region_draw` 的 2D 高清图像
+blit，约 5 次全屏 drawImage/帧）、`jr_draw_walk` 对逻辑面的软件走查 1.22 s（35%，常驻模式
+下逻辑面是否仍需要可由开关验证）。两者都属于「2D 合成上 GPU / 跳过逻辑伴生面」的后续工作。

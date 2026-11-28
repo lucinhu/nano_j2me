@@ -83,6 +83,11 @@ typedef int (*nj_gfx_triangles_fn)(void *ud, const nj_gfx_triangles *packet,
 
 /* Structural/value/alias validation only; no allocations or writes. */
 int nj_gfx_triangles_validate(const nj_gfx_triangles *packet, const nj_u4 *submitted);
+/* Same contract as nj_gfx_triangles_validate() but the depth-key range scan is
+ * skipped. Intended for the runtime's internal journal, whose keys come from
+ * the scale's own GPU/CPU depth quantiser and are known to stay inside the
+ * 0..16777216 range; the packet is still checked for memory safety. */
+int nj_gfx_triangles_validate_fast(const nj_gfx_triangles *packet, const nj_u4 *submitted);
 
 /* ------------------------------------------------------------------ */
 /* Ordered lists: several packets committed as one transaction          */

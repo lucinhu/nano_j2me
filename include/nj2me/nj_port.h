@@ -865,6 +865,11 @@ typedef struct nj_port {
      * the runtime keeps using gfx_triangles one packet at a time. */
     nj_gfx_triangles_list_fn gfx_triangles_list;
     void *gfx_triangles_list_ud;
+    /* Optional trusted variant of the list hook: the runtime has already
+     * validated every packet it built itself, so the port may skip its own
+     * contract validation. NULL falls back to gfx_triangles_list. */
+    nj_gfx_triangles_list_fn gfx_triangles_list_trusted;
+    void *gfx_triangles_list_trusted_ud;
     /* Optional persistent triangle session: keep the target rectangle resident
      * on the GPU across several list submissions so import/seed/readback are
      * paid once per session instead of once per submission. All three hooks are

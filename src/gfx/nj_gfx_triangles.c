@@ -22,7 +22,8 @@ static int overlaps(tri_range a, tri_range b)
     return a.lo < b.hi && b.lo < a.hi;
 }
 static int boolean_value(int x) { return x == 0 || x == 1; }
-int nj_gfx_triangles_validate(const nj_gfx_triangles *r, const nj_u4 *submitted)
+static int validate_impl(const nj_gfx_triangles *r, const nj_u4 *submitted,
+                         int scan_depth_keys)
 {
     const nj_surface *s;
     tri_range pixels, depth = {0,0}, triangles, packet, surface, result;
@@ -99,7 +100,7 @@ int nj_gfx_triangles_validate(const nj_gfx_triangles *r, const nj_u4 *submitted)
         }
     }
     if (needs_depth && !r->depth) return 0;
-    if (needs_depth) {
+    if (needs_depth && scan_depth_keys) {
         for (y=r->y;y<r->y+r->height;++y) {
             const nj_s4 *z=r->depth+(size_t)y*(size_t)r->depth_stride+r->x;
             for (x=0;x<r->width;++x)
@@ -107,6 +108,16 @@ int nj_gfx_triangles_validate(const nj_gfx_triangles *r, const nj_u4 *submitted)
         }
     }
     return 1;
+}
+
+int nj_gfx_triangles_validate(const nj_gfx_triangles *packet, const nj_u4 *submitted)
+{
+    return validate_impl(packet, submitted, 1);
+}
+
+int nj_gfx_triangles_validate_fast(const nj_gfx_triangles *packet, const nj_u4 *submitted)
+{
+    return validate_impl(packet, submitted, 0);
 }
 
 int nj_gfx_triangles_list_validate(const nj_gfx_triangles_list *l,

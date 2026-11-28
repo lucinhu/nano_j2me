@@ -67,6 +67,17 @@ int main(void)
     GOOD(f.triangle.depth_test=f.triangle.depth_write=0; f.packet.depth=NULL);
     GOOD(f.depth[0]=-1); /* Outside the clip is not consumed. */
     GOOD(f.depth[11]=16777216);
+    /* The fast variant skips only the depth-key scan. */
+    init(&f);
+    assert(nj_gfx_triangles_validate_fast(&f.packet, &f.submitted));
+    f.depth[11] = -1; /* inside the packet ROI */
+    assert(!nj_gfx_triangles_validate(&f.packet, &f.submitted));
+    assert(nj_gfx_triangles_validate_fast(&f.packet, &f.submitted));
+    assert(!nj_gfx_triangles_validate_fast(NULL, &f.submitted));
+    assert(!nj_gfx_triangles_validate_fast(&f.packet, NULL));
+    f.packet.version++;
+    assert(!nj_gfx_triangles_validate_fast(&f.packet, &f.submitted));
+    checks += 7;
     BAD(f.packet.version++);
     BAD(f.packet.surface=NULL);
     BAD(f.surface.pixels=NULL);

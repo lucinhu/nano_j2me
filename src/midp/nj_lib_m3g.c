@@ -15708,7 +15708,11 @@ static void m3g_journal_pump(nj_vm *vm)
             list.depth_stride = j->depth_stride;
             list.packets = packets;
             list.count = pending;
-            if (nj_gfx_triangles_list_validate(&list, &submitted)) {
+            if (vm->port->gfx_triangles_list_trusted) {
+                int rc = vm->port->gfx_triangles_list_trusted(
+                    vm->port->gfx_triangles_list_trusted_ud, &list, &submitted);
+                done = rc == NJ_GFX_ACCEL_DONE;
+            } else if (nj_gfx_triangles_list_validate(&list, &submitted)) {
                 int rc = vm->port->gfx_triangles_list(
                     vm->port->gfx_triangles_list_ud, &list, &submitted);
                 done = rc == NJ_GFX_ACCEL_DONE;
@@ -15776,7 +15780,11 @@ static void m3g_journal_commit(nj_vm *vm)
             list.depth_stride = j->depth_stride;
             list.packets = packets;
             list.count = j->count;
-            if (nj_gfx_triangles_list_validate(&list, &submitted)) {
+            if (vm->port->gfx_triangles_list_trusted) {
+                int rc = vm->port->gfx_triangles_list_trusted(
+                    vm->port->gfx_triangles_list_trusted_ud, &list, &submitted);
+                done = rc == NJ_GFX_ACCEL_DONE;
+            } else if (nj_gfx_triangles_list_validate(&list, &submitted)) {
                 int rc = vm->port->gfx_triangles_list(
                     vm->port->gfx_triangles_list_ud, &list, &submitted);
                 done = rc == NJ_GFX_ACCEL_DONE;
@@ -16321,7 +16329,9 @@ static int jr_draw_accel(m3g_jr *r)
             int roi = jr_triangle_roi(&packet);
             if (roi == 0) {
                 result = NJ_GFX_ACCEL_DONE; /* Entire batch outside the clip. */
-            } else if (roi > 0 && nj_gfx_triangles_validate(&packet, &submitted)) {
+            } else if (roi > 0 &&
+                       (journaled ? nj_gfx_triangles_validate_fast(&packet, &submitted)
+                                  : nj_gfx_triangles_validate(&packet, &submitted))) {
 #if NJ_M3G_PROFILE
                 double ta = m3g_now();
 #endif

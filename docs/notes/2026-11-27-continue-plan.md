@@ -127,3 +127,11 @@
   `vulkan: resident HD mirror enabled`），JBenchmark3D 温暖后 on/off present stats 无可测
   差异（frame 24.0/29.8 vs 23.35/28.73 ms）⇒ AVD 瓶颈在 GLES2 present/上传，需 M4。
 - 剩余：M3 脏矩形导出、M4 present 接 GPU 图像、多 title 回归；通过后考虑默认开启。
+
+### 2026-11-28 下午（Round 8，常驻路径校验优化）
+
+- 发现常驻路径 CPU 的 73% 是重复契约校验（journal 入队 + commit + 后端各一次，含深度 keys
+  扫描）。加端口 `gfx_triangles_list_trusted` 与 `nj_gfx_triangles_validate_fast`（仅内部
+  journal 包使用）后：8× 场内 400 帧 24.9 s → 14.3 s（−42%），gprof 采样 13.08 s → 3.48 s，
+  确定性逐位不变。
+- 剩余热点：`hd_art_span`（CPU 2D 高清图像 blit）与 `jr_draw_walk`（逻辑面软件走查）。

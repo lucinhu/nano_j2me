@@ -985,11 +985,12 @@ int nj_vk_renderer_triangles(void *ud, const nj_gfx_triangles *p, nj_u4 *submitt
  * validated and executed exactly as a standalone submission, in order, and the
  * whole list declines if any packet declines. Correctness first; a batched
  * command stream can replace this once it is proven pixel-identical. */
-int nj_vk_renderer_triangles_list(void *ud, const nj_gfx_triangles_list *l, nj_u4 *submitted) {
+static int triangles_list_common(void *ud, const nj_gfx_triangles_list *l, nj_u4 *submitted,
+                                 int checked) {
     nj_vk_renderer *r = ud;
     nj_u4 total = 0, done = 0, i;
     int rc = NJ_GFX_ACCEL_DECLINE;
-    if (!r || !l || !submitted || !nj_gfx_triangles_list_validate(l, submitted))
+    if (!r || !l || !submitted || (checked && !nj_gfx_triangles_list_validate(l, submitted)))
         return NJ_GFX_ACCEL_DECLINE;
     if (r->session_open) {
         nj_u4 triangles = 0;
@@ -1012,6 +1013,16 @@ int nj_vk_renderer_triangles_list(void *ud, const nj_gfx_triangles_list *l, nj_u
     *submitted = total;
     rc = NJ_GFX_ACCEL_DONE;
     return rc;
+}
+
+int nj_vk_renderer_triangles_list(void *ud, const nj_gfx_triangles_list *l, nj_u4 *submitted) {
+    return triangles_list_common(ud, l, submitted, 1);
+}
+
+/* Internal entry for the journal: every packet was validated when it was
+ * queued, so re-validating the whole list only costs CPU time. */
+static int triangles_list_trusted(void *ud, const nj_gfx_triangles_list *l, nj_u4 *submitted) {
+    return triangles_list_common(ud, l, submitted, 0);
 }
 
 /* ------------------------------------------------------------------------- */
@@ -1608,8 +1619,8 @@ int nj_vk_renderer_mirror_clear_rect(nj_vk_mirror *m, nj_u4 argb, int x, int y, 
  * buffers first (0 keeps the GPU state); `export_colour` copies the colour back
  * afterwards. Between calls the mirror is authoritative. All packets must share
  * one surface/depth whose dimensions match the mirror (the HD mirror size). */
-int nj_vk_renderer_mirror_triangles(nj_vk_mirror *m, const nj_gfx_triangles_list *l, int import,
-                                    int export_colour, nj_u4 *submitted) {
+static int mirror_triangles_common(nj_vk_mirror *m, const nj_gfx_triangles_list *l, int import,
+                                   int export_colour, nj_u4 *submitted, int checked) {
     nj_vk_renderer *r;
     packet_info *infos;
     VkDescriptorBufferInfo desc = {0};
@@ -1624,7 +1635,7 @@ int nj_vk_renderer_mirror_triangles(nj_vk_mirror *m, const nj_gfx_triangles_list
     if (!m || !m->r || !l || !submitted)
         return 0;
     r = m->r;
-    if (r->lost || !nj_gfx_triangles_list_validate(l, &one) || !l->surface ||
+    if (r->lost || (checked && !nj_gfx_triangles_list_validate(l, &one)) || !l->surface ||
         l->surface->width != m->width || l->surface->height != m->height || l->surface->bpp != 4)
         return 0;
     infos = (packet_info *)r->session_infos;
@@ -1712,4 +1723,14 @@ int nj_vk_renderer_mirror_triangles(nj_vk_mirror *m, const nj_gfx_triangles_list
         return 0;
     *submitted = total;
     return NJ_GFX_ACCEL_DONE;
+}
+
+int nj_vk_renderer_mirror_triangles(nj_vk_mirror *m, const nj_gfx_triangles_list *l, int import,
+                                    int export_colour, nj_u4 *submitted) {
+    return mirror_triangles_common(m, l, import, export_colour, submitted, 1);
+}
+
+static int mirror_triangles_trusted(nj_vk_mirror *m, const nj_gfx_triangles_list *l, int import,
+                                    int export_colour, nj_u4 *submitted) {
+    return mirror_triangles_common(m, l, import, export_colour, submitted, 0);
 }

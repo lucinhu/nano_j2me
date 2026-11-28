@@ -630,20 +630,25 @@ static int resident_image(void *ud, nj_surface *target, const void *pixels, int 
     r->resident_cpu_touched = 0;
     return 1;
 }
-static int resident_list(void *ud, const nj_gfx_triangles_list *l, nj_u4 *submitted) {
+static int resident_list_common(void *ud, const nj_gfx_triangles_list *l, nj_u4 *submitted,
+                                int checked) {
     nj_vk_renderer *r = (nj_vk_renderer *)ud;
     nj_vk_resident *res;
     nj_u4 import = 0;
     if (!r || !l || !l->surface || !submitted) return NJ_GFX_ACCEL_DECLINE;
     if (l->surface->format != NJ_PIXFMT_ARGB8888 || l->surface->bpp != 4)
-        return nj_vk_renderer_triangles_list(r, l, submitted);
+        return checked ? nj_vk_renderer_triangles_list(r, l, submitted)
+                       : triangles_list_trusted(r, l, submitted);
     res = resident_ensure(r, l->surface);
-    if (!res) return nj_vk_renderer_triangles_list(r, l, submitted);
+    if (!res)
+        return checked ? nj_vk_renderer_triangles_list(r, l, submitted)
+                       : triangles_list_trusted(r, l, submitted);
     if (r->resident_cpu_touched) {
         import = NJ_VK_MIRROR_IMPORT_COLOUR;
         if (!r->resident_depth_dirty) import |= NJ_VK_MIRROR_IMPORT_DEPTH;
     }
-    if (!nj_vk_renderer_mirror_triangles(res->mirror, l, (int)import, 0, submitted)) {
+    if (!(checked ? nj_vk_renderer_mirror_triangles(res->mirror, l, (int)import, 0, submitted)
+                  : mirror_triangles_trusted(res->mirror, l, (int)import, 0, submitted))) {
         r->lost = 1;
         return NJ_GFX_ACCEL_DECLINE;
     }
@@ -651,6 +656,12 @@ static int resident_list(void *ud, const nj_gfx_triangles_list *l, nj_u4 *submit
     r->resident_cpu_touched = 0;
     r->resident_depth_dirty = 1;
     return NJ_GFX_ACCEL_DONE;
+}
+static int resident_list(void *ud, const nj_gfx_triangles_list *l, nj_u4 *submitted) {
+    return resident_list_common(ud, l, submitted, 1);
+}
+static int resident_list_trusted(void *ud, const nj_gfx_triangles_list *l, nj_u4 *submitted) {
+    return resident_list_common(ud, l, submitted, 0);
 }
 
 #if NJ_ENABLE_GFX_ACCEL
@@ -703,6 +714,8 @@ int nj_vk_renderer_attach(nj_port *port) {
         if (want_session) {
             port->gfx_triangles_list = nj_vk_renderer_triangles_list;
             port->gfx_triangles_list_ud = r;
+            port->gfx_triangles_list_trusted = triangles_list_trusted;
+            port->gfx_triangles_list_trusted_ud = r;
             port->gfx_triangles_begin = nj_vk_renderer_triangles_begin;
             port->gfx_triangles_end = nj_vk_renderer_triangles_end;
             port->gfx_triangles_abort = nj_vk_renderer_triangles_abort;
@@ -727,6 +740,8 @@ int nj_vk_renderer_attach(nj_port *port) {
         if (want_resident) {
             port->gfx_triangles_list = resident_list;
             port->gfx_triangles_list_ud = r;
+            port->gfx_triangles_list_trusted = resident_list_trusted;
+            port->gfx_triangles_list_trusted_ud = r;
             port->gfx_hd_journal = 1;
             port->hd_mirror_sync = resident_sync;
             port->hd_mirror_sync_ud = r;

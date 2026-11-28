@@ -146,3 +146,15 @@ AVD present stats（x86_64 --gles2 --vulkan，8× HD，JBenchmark3D）：温暖�
 
 下一步：M3 脏矩形导出（把 present 前的全屏颜色导出也缩到 HUD/变化区域）、M4 present 接
 GPU 图像与更多 title 回归；通过后把这些能力做成默认开启（但保留精确单包回退）。
+
+## 8. 校验开销剔除（2026-11-28）
+
+常驻路径稳定后，profile 显示 73% CPU 在重复的契约校验上：journal 入队、journal commit、
+后端列表入口各校验一遍，且包含包 ROI 的深度 keys 扫描。新增端口 `gfx_triangles_list_trusted`
+（journal 提交时信任自身已校验的包）与 `nj_gfx_triangles_validate_fast`（跳过 keys 范围扫描，
+只用于内部 journal 包）后：8× 场内 400 帧 24.9 s → 14.3 s（−42%），profile 采样 CPU
+13.08 s → 3.48 s（−73%），确定性哈希逐位不变。
+
+剩余热点：`hd_art_span`（CPU 2D 高清图像 blit，~5 次全屏/帧，1.13 s）与 `jr_draw_walk`
+（逻辑面软件走查，1.22 s）。前者属于本方案的 M2b 扩展（图像也上 GPU），后者可先验证
+常驻模式下逻辑面是否仍被读取。
