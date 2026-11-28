@@ -209,3 +209,20 @@ Android `debug.nj2me.vk_resident=1` + `debug.nj2me.vk_present=1` 才会启用，
 `nj_vk_renderer_mirror_import_rect` 整帧导入镜面后 blit 呈现；只有非常规格式
 （非 ARGB8888/4bpp/小于 16×16）才回退旧 present。该路径仍需在 AVD 上复测
 JBenchmark3D 启动阶段帧率。
+
+### 8.1 AVD 复核（Round 8）：adopt 路径可见，逐帧 CPU 导入会黑屏
+
+用带 `present` 的 x86_64 APK 在 AVD（8× HD，`debug.nj2me.vk_resident=1`、
+`debug.nj2me.vk_present=1`）上对比：
+
+| 构建 | Doom3 截图（5s/10s/15s） | 结果 |
+|---|---|---|
+| `0ae35285`（仅 adopt 路径） | 133474 / 133474 / 307013 字节，内容不同 | **可见且逐帧变化** |
+| 临时补丁：present 前若 `resident_cpu_touched` 则整帧 import | 三次均 77913 字节且哈希相同 | **黑屏（仅 UI 键盘）** |
+
+结论：present 之前把 CPU 帧整帧 import 回镜面会破坏可见输出（原因未查明：布局/同步或
+与 acquire 的顺序问题），该补丁已撤销。`0ae35285` 的 adopt 路径本身在 Doom3 上截图正常，
+JBenchmark3D 启动阶段此前测到约 58 fps。
+
+因此「Android 默认开启 resident+present」仍不能放开：纯 2D / HUD 帧需要在 GPU 侧合成
+（L2/M3），或用脏矩形导入替代整帧导入后再验证。
