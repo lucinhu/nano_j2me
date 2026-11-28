@@ -64,3 +64,8 @@
   只导必要矩形；之后再评估 2D 上 GPU。旧的「多包事务不可复现、以后不要再碰」的说法作废，但批处理
   本身仍无收益，不要重启。
 - 验证：236/236、222/222、check_android_java 33/33、no_statics OK。
+- **AVD 证据（目标②收尾）**：新增 `debug.nj2me.vk_session` 属性开关（模拟器无法传环境变量），
+  用 `--gles2 --vulkan` APK 在 Medium_Phone_API_36.1（-gpu host）上采 8× present stats：
+  JBenchmark3D 场景 session 关/开 draw ≈4.0 ms、swap 6.1–7.6 vs 8.1–8.5 ms、frame 28.7–47.9 vs
+  28.8–38.1 ms ⇒ 无可测收益，与桌面结论一致；session 保持 opt-in。日志见
+  `.local-tools/debug-runs/avd-session-20261127/`，细节见 gpu-resident-hd-plan.md §九。

@@ -117,3 +117,34 @@ test_gfx_vulkan 验证像素等价，再接 M3G HD 路径跑确定性闸门与�
   写过的矩形（多数帧只有 HUD 几小块），深度同理；(3) 导出推迟到观察点（present / createImage /
   软件回退 / FSR2 采样）且只导必要矩形；(4) 之后再做方案 B（2D 上 GPU、present 直接消费 GPU
   图像）。目标仍是 8× 场内 ≥20% 才默认开启。
+
+## 九、AVD present stats（2026-11-27 晚）
+
+目的：目标②还要求用 Android 模拟器的 present stats 判断会话/批处理是否保留。桌面已判定会话无
+收益，这里补平台侧证据并确认 Vulkan HD 路径在模拟器上没有回归。
+
+- **构建**：present stats 只在 GL window path 记录（`src/port/android/nj_android_gles2.c` 的
+  `present_stats_wanted`/`present_stats_record`），纯 `--vulkan` 包里没有这段代码，所以用
+  `tools/build_android_apk.sh --abi x86_64 --gles2 --vulkan --out build/android-vk-session`
+  构建（APK 1,116,313 B，x86_64）。
+- **开关**：桌面用 `NJ_VK_SESSION=1`；模拟器无法给 app 传环境变量，所以 `nj_vk_renderer_attach`
+  在 `__ANDROID__` 下同样读取 `adb shell setprop debug.nj2me.vk_session 1`。默认两处都关。
+- **环境**：AVD `Medium_Phone_API_36.1`，`-gpu host`（gfxstream 直通宿主 RTX 5080 Laptop，
+  Vulkan 1.3），1080×2400；设备面板设置高清渲染倍率 8×、Vulkan 3D 面片渲染启用、GL 呈现
+  FSR1（present mode=5）。`debug.nj2me.present_stats=1` 后每 120 帧打印一行
+  draw/swap/frame 的 min/median/p95。
+- **测量**：JBenchmark3D（`tests/games/JBenchmark3D.jar` 推到 `/sdcard/Android/data/
+  com.lucinhu.nj2me/files/jars/jb3d.jar`，进库点开后按 MENU 开始自动旋转 3D 场景），8×：
+
+  | 配置 | draw median | swap median | frame median |
+  |---|---|---|---|
+  | session 关 | 3.96–4.01 ms | 6.1–7.6 ms | 28.7–47.9 ms |
+  | session 开 | 3.75–4.12 ms | 8.1–8.5 ms | 28.8–38.1 ms |
+
+  Doom3 标题画面（journal 每事务 1 包，不可能有批处理收益）同样是中性：draw 5.7/4.0 ms vs
+  5.3/4.0 ms，frame 136–218 ms（8× 标题约 6–7 fps）。
+- **结论**：AVD 上 8× 高清路径的 session 开关无可测收益（draw 持平，swap 略升在噪声内）；
+  frame 时间主要被 guest/2D 镜像生产占据。与桌面 M3GPROF 结论一致 ⇒ **session 保持 opt-in、
+  不默认开启，批处理不保留**。
+- 原始日志：`.local-tools/debug-runs/avd-session-20261127/jb3d-session-on.log`（24 行）与
+  `jb3d-present-stats-session-on.log`（21 行）。
