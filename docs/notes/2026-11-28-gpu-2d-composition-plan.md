@@ -182,3 +182,11 @@ M3G 清屏/背景的 GPU 钩子也加 `!render_quality.fsr2` 守卫（Doom3 2×+
 PCIe 回读带宽（2.4–3.4 GB/s）。强制 write-combined（HOST_COHERENT）staging 会让 CPU 拷贝
 慢 30 倍，不可用。结论：导出无法再靠调参优化，必须走 M4（present 消费 GPU 图像）或把 2D
 合成全部留在 GPU；2D 图像 blit 目前仍是 CPU 侧（`hd_art_span`）。
+
+### 8.4 导出零拷贝（2026-11-29 凌晨）
+
+把 HD target 的 CPU 像素直接指向 mirror 的 readback staging（原始分配保存、释放时恢复），
+导出跳过 host copy、导入跳过颜色打包。Doom3 8× 场内 400 帧：14.9 s → 12.0–12.7 s
+（相对 journal 关 45.1–45.6 s 为 3.6–3.8×），export 5.0–5.2 s → 3.1 s，像素哈希不变。
+剩余 export 3.1 s（≈7.8 ms/帧）几乎全是 submit+fence+GPU→host 传输，要再降只能让 present
+直接消费 GPU 图像（M4）。

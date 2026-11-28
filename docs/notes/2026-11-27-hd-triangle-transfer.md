@@ -677,3 +677,30 @@ blit，约 5 次全屏 drawImage/帧）、`jr_draw_walk` 对逻辑面的软件�
   无法靠调参再降；剩下的唯一杠杆是「不回读整帧」——present 直接消费 GPU 图像（M4）或
   2D 合成全部留在 GPU。汇报打印里也修掉了 `if (getenv(...))` 缺花括号导致常驻统计行无条件
   打印的问题。
+
+### 19.4 导出零拷贝：CPU 像素就是回读缓冲（2026-11-29 凌晨）
+
+导出拆分显示 CPU 行拷贝占 4.2 ms/帧，且这部分是纯浪费：同一份像素先被 GPU 写进
+readback staging，再从 staging `memcpy` 到 HD target 的 CPU 分配。常驻模式下把这两个分配
+合并即可：`resident_ensure` 把 HD target 的 `pixels` 指向 mirror 的 staging 映射
+（仅当 `stride == width*4`，ARGB8888/bpp4），原始分配记在 `nj_vk_resident` 里、销毁/释放
+HD 目标时恢复；`mirror_export` 检测到 `dst->pixels == stage.map` 就跳过 host copy；
+`mirror_import` 检测到源像素就是 staging 时跳过颜色打包（深度 keys 仍照常打包）。
+释放路径加了守卫：只有 surface 仍指向 staging 时才恢复原指针，避免 HD 目标被回收复用后
+写到已释放内存。
+
+实测（Doom3 8× 场内 400 帧，同一二进制）：
+
+| 指标 | 改动前 | 改动后 |
+| --- | --- | --- |
+| 墙钟（journal 关 45.1–45.6 s） | 14.9 s | **12.0–12.7 s** |
+| export 总时间 | 5.0–5.2 s | 3.1 s |
+| 其中 CPU 行拷贝 | 1.7 s | 0 |
+| 相对 journal 关 | ≈3.1× | **≈3.6–3.8×** |
+
+像素完全不变：8× 常驻 `846057676cfed67a`/`b2f32d1c682185d3`/`695e0c5a49938a7f`，
+8× 默认 `846057676cfed67a`/`c65baebe4730fcbe`/`dc5cb60109dd03cb`，
+1× 开/关 `--resident` 全同；2×/4× 常驻哈希也与改动前一致。
+
+内存代价：HD target 的原始 CPU 分配（8× 为 19.66 MB）在常驻期间保留（仅用于释放），
+staging 缓冲本身是 2 的幂取整（32 MB）。这是「用 20–30 MB 内存换 5 ms/帧」的取舍。

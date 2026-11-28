@@ -55,7 +55,10 @@ typedef struct material {
  * before it draws on that buffer and before it presents it. */
 typedef struct nj_vk_resident {
     nj_vk_mirror *mirror;
-    void *pixels;
+    void *pixels;      /* the CPU-visible pointer, i.e. the mirror stage map */
+    nj_surface *surface; /* whose pixels were redirected, to restore on release */
+    void *cpu_pixels;  /* the surface's original allocation */
+    int cpu_stride;
     int width, height;
 } nj_vk_resident;
 
@@ -526,6 +529,13 @@ void nj_vk_renderer_destroy(nj_vk_renderer *r) {
 /* --- GPU-resident HD mirror ------------------------------------------------ */
 static void resident_release(nj_vk_renderer *r) {
     if (!r || !r->resident) return;
+    /* Restore the real allocation only while the surface still points at our
+     * readback buffer; a released HD target may already have been reused. */
+    if (r->resident->surface && r->resident->cpu_pixels &&
+        r->resident->surface->pixels == r->resident->pixels) {
+        r->resident->surface->pixels = r->resident->cpu_pixels;
+        r->resident->surface->stride = r->resident->cpu_stride;
+    }
     if (r->resident->mirror) nj_vk_renderer_mirror_destroy(r->resident->mirror);
     free(r->resident);
     r->resident = NULL;
@@ -534,7 +544,7 @@ static void resident_release(nj_vk_renderer *r) {
     r->resident_depth_dirty = 0;
     r->resident_repaint = 0;
 }
-static nj_vk_resident *resident_ensure(nj_vk_renderer *r, const nj_surface *surface) {
+static nj_vk_resident *resident_ensure(nj_vk_renderer *r, nj_surface *surface) {
     nj_vk_resident *res = r->resident;
     if (!r || !surface || !surface->pixels) return NULL;
     if (res && res->pixels == surface->pixels && res->width == surface->width &&
@@ -551,6 +561,18 @@ static nj_vk_resident *resident_ensure(nj_vk_renderer *r, const nj_surface *surf
         free(res);
         return NULL;
     }
+    /* Keep the CPU copy and the readback buffer as one allocation: exports
+     * then skip the host copy, and 2D writes land where the next import
+     * reads.  Only packed ARGB rows can be aliased. */
+    {
+        void *stage = nj_vk_renderer_mirror_pixels(res->mirror);
+        if (stage && surface->stride == surface->width * 4) {
+            res->surface = surface;
+            res->cpu_pixels = surface->pixels;
+            res->cpu_stride = surface->stride;
+            surface->pixels = stage;
+        }
+    }
     res->pixels = surface->pixels;
     res->width = surface->width;
     res->height = surface->height;
@@ -559,7 +581,7 @@ static nj_vk_resident *resident_ensure(nj_vk_renderer *r, const nj_surface *surf
 }
 static void resident_drop(void *ud, nj_surface *target) {
     nj_vk_renderer *r = (nj_vk_renderer *)ud;
-    if (r && r->resident && target && r->resident->pixels == target->pixels)
+    if (r && r->resident && target && r->resident->surface == target)
         resident_release(r);
 }
 static int resident_sync(void *ud, nj_surface *target) {

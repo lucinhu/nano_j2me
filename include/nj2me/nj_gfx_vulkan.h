@@ -35,6 +35,7 @@ int nj_vk_renderer_mirror_clear_rect(nj_vk_mirror *mirror, nj_u4 argb, int x, in
                                      int height, int clear_colour, int clear_depth);
 int nj_vk_renderer_mirror_fill(nj_vk_mirror *mirror, int x, int y, int width, int height, nj_u4 argb);
 int nj_vk_renderer_mirror_export(nj_vk_mirror *mirror, const nj_surface *dst);
+void *nj_vk_renderer_mirror_pixels(nj_vk_mirror *mirror);
 int nj_vk_renderer_mirror_texture(nj_vk_mirror *mirror, const nj_surface *src, int sx, int sy,
                                   int sw, int sh, int dx, int dy, int dw, int dh, int filter,
                                   int blend);

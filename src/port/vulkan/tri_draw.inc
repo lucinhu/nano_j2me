@@ -1292,6 +1292,13 @@ int nj_vk_renderer_mirror_fill(nj_vk_mirror *m, int x, int y, int width, int hei
     return mirror_submit(r);
 }
 
+/* The mapped readback buffer that receives the mirror image on export.  A
+ * caller that keeps this memory as its CPU surface can export without the
+ * extra host copy. */
+void *nj_vk_renderer_mirror_pixels(nj_vk_mirror *m) {
+    return m && m->stage.map ? m->stage.map : NULL;
+}
+
 int nj_vk_renderer_mirror_export(nj_vk_mirror *m, const nj_surface *dst) {
     nj_vk_renderer *r;
     VkImageMemoryBarrier barriers[2] = {VK_INIT(IMAGE_MEMORY_BARRIER), VK_INIT(IMAGE_MEMORY_BARRIER)};
@@ -1340,7 +1347,7 @@ int nj_vk_renderer_mirror_export(nj_vk_mirror *m, const nj_surface *dst) {
             return 0;
         r->resident_prof_sync += vk_prof_now() - sync_start;
     }
-    {
+    if ((const void *)dst->pixels != (const void *)m->stage.map) {
         double copy_start = vk_prof_now();
         nj_u8 y;
         rows = (const nj_u1 *)m->stage.map;
@@ -1516,8 +1523,12 @@ static int mirror_import(nj_vk_mirror *m, const nj_surface *surface, nj_s4 *dept
     if (!reserve_buffer(r, &r->stage, (VkDeviceSize)n * 4u * (VkDeviceSize)(1 + (depth ? 1 : 0)),
                         VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT))
         return 0;
-    transfer_rect_at(r, surface, depth, depth_stride, 0, 0, m->width, m->height,
-                     depth && want_depth ? 1 : (depth ? 1 : 0), 0, 0, (size_t)n * 4u);
+    /* When the caller's CPU pixels are this readback buffer itself (the
+     * resident path), the colour is already staged; only the depth keys still
+     * need packing. */
+    if ((const void *)surface->pixels != (const void *)r->stage.map || want_depth)
+        transfer_rect_at(r, surface, depth, depth_stride, 0, 0, m->width, m->height,
+                         depth && want_depth ? 1 : (depth ? 1 : 0), 0, 0, (size_t)n * 4u);
     if (!sync_buffer(r, &r->stage, 0) || vkResetCommandPool(r->dev, r->pool, 0) != VK_SUCCESS)
         return 0;
     cb.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;

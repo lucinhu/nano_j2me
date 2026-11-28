@@ -159,3 +159,11 @@
 - 强制 HOST_COHERENT（write-combined）staging：CPU 拷贝 1.7 s → 50 s，已回退。
 - 修掉 `if (getenv("NJ_VK_PROFILE"))` 缺花括号导致常驻统计无条件打印的 bug。
 - 结论：导出是硬上限，下阶段只能做 M4（present 消费 GPU 图像）或 2D 合成全 GPU。
+
+### 2026-11-29 凌晨（Round 11，导出零拷贝）
+
+- 常驻模式让 HD target 的 CPU 像素直接指向 mirror staging（原始分配保留、释放恢复，
+  仅 packed ARGB8888）；导出不再 memcpy，导入不再打包颜色。
+- Doom3 8× 场内 400 帧：14.9 s → 12.0–12.7 s（journal 关 45.1–45.6 s ⇒ 3.6–3.8×），
+  export 5.0–5.2 s → 3.1 s（CPU 拷贝 1.7 s → 0），全部确定性哈希不变（2×/4× 亦然）。
+- 剩余 export ≈7.8 ms/帧为 submit+fence+GPU→host，硬上限在 PCIe；下一步只能 M4。
