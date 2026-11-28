@@ -271,3 +271,21 @@ AVD 实测（8×，resident+present）：2D《傲世三国志》稳定 21.8–22
 标题阶段 33 fps；Doom3 8× 标题 8.2–17.2 fps（随场景变化）。相对未优化版本（20.8–29.7 fps）
 处于同一量级，说明 22 fps 附近的天花板不在主机拷贝，而在「单帧 fence 等待 + 整帧上传 +
 blit」的串行开销。下一步 L2：脏矩形导入（仅上传变化区域）/ 2D 图元上 GPU。
+
+## 8.4 Present 阶段计时与 2D 上传瓶颈（Round 12）
+
+给 Android Vulkan 直呈加了分阶段计时（`debug.nj2me.vk_present_stats=1` 或 env `NJ_VK_PRESENT_STATS=1`，每 60 帧打印一次 `vulkan: present stats`）。测量环境：AVD Medium_Phone_API_36.1（-gpu host，gfxstream→RTX 5080 Laptop），x86_64 APK，8× HD，resident+present opt-in。
+
+| 场景 | import ms | blit ms | acquire ms | queue ms |
+|---|---:|---:|---:|---:|
+| 2D《傲世三国志》第 1 窗 | 1.88 | 0.49 | 0.66 | 0.18 |
+| 同上，标题动画 | 1.92 | 0.71 | 0.76 | 0.16 |
+| 同上，场景载入后 | 4.24 | 1.01 | 1.23 | 0.16 |
+| 同上，复杂画面 | 11.34 | 1.81 | 2.53 | 0.17 |
+| 同上，稳定大画面 | 14.18 | 1.93 | 2.89 | 0.17 |
+| 3D Doom3 8× 标题 | 0.32 | 1.03 | 1.40 | 0.25 |
+
+- 3D：present 总开销约 3 ms/帧，直呈本身不是瓶颈。
+- 2D：import（每帧整帧 1920×2560×4 = 19.66 MB 的 staging→image 拷贝及其 fence 等待）从 1.9 ms 涨到 14 ms，是 2D 直呈从 ~60 fps 掉到 ~22 fps 的主因；gfxstream 的 buffer→image 路径比原生 GPU 明显更慢。
+- 桌面（headless 无 present）对照同一 2D 游戏 300 帧 USER CPU：scale 1/2/4/8 = 5.47/5.82/6.28/8.17 s ⇒ 8× 高清 2D 光栅化约 9 ms/帧，其余是游戏逻辑；桌面不是瓶颈，Android 的整帧上传才是。
+- 结论：下一步 L2 应优先做**脏矩形导入**（只上传变化区域）。2D SLG 的地图/对话框大多静态，理论上可把每帧上传从 19.6 MB 降到数百 KB，2D 直呈有望明显超过 30 fps；3D 的 HUD 帧同样受益（当前 HUD 一画就整帧回传）。

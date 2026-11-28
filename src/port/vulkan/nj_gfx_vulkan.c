@@ -150,6 +150,9 @@ struct nj_vk_renderer {
     VkExtent2D present_extent;
     VkSemaphore present_semaphore;
     int present_ready;
+    int present_stats;
+    double present_prof_acquire, present_prof_import, present_prof_blit, present_prof_queue;
+    unsigned present_prof_frames;
     unsigned present_attempts;
 #endif
     unsigned resident_prof_exports, resident_prof_draws;
@@ -1065,6 +1068,16 @@ static int present_build_swapchain(nj_vk_renderer *r, int width, int height) {
 int nj_vk_renderer_present_attach(void *renderer, void *native_window, int width, int height) {
     nj_vk_renderer *r = (nj_vk_renderer *)renderer;
 #if defined(__ANDROID__)
+    {
+        const char *env = getenv("NJ_VK_PRESENT_STATS");
+        char prop[PROP_VALUE_MAX];
+        r->present_stats = env && env[0] == '1';
+        if (__system_property_get("debug.nj2me.vk_present_stats", prop) > 0 && prop[0] == '1')
+            r->present_stats = 1;
+        if (r->present_stats) VK_LOG("vulkan: present stats enabled");
+    }
+#endif
+#if defined(__ANDROID__)
     VkAndroidSurfaceCreateInfoKHR info = VK_INIT(ANDROID_SURFACE_CREATE_INFO_KHR);
     VkBool32 supported = VK_FALSE;
     if (!r || !r->instance || !r->dev || !native_window || !r->present_instance_ext ||
@@ -1125,6 +1138,8 @@ int nj_vk_renderer_present_frame(void *renderer, const nj_surface *frame) {
                    r->resident ? (r->resident->mirror != NULL) : 0);
         return 0;
     }
+    double now = r->present_stats ? vk_prof_now() : 0.0;
+    double t_import = 0.0, t_acquire = 0.0, t_blit = 0.0;
     if (!r->resident || !r->resident->mirror) {
         /* Frames can arrive before the game first draws through the resident
          * mirror (loading screens, 2D-only titles). Adopt the CPU frame into a
@@ -1153,6 +1168,7 @@ int nj_vk_renderer_present_frame(void *renderer, const nj_surface *frame) {
         }
         r->resident_cpu_touched = 0;
     }
+    if (r->present_stats) { t_import = vk_prof_now() - now; now = vk_prof_now(); }
     rc = r->present_acquire(r->dev, r->present_swapchain, UINT64_MAX, r->present_semaphore,
                             VK_NULL_HANDLE, &index);
     if (rc != VK_SUCCESS) {
@@ -1177,6 +1193,7 @@ int nj_vk_renderer_present_frame(void *renderer, const nj_surface *frame) {
     }
     x = ((int)r->present_extent.width - w) / 2;
     y = ((int)r->present_extent.height - h) / 2;
+    if (r->present_stats) { t_acquire = vk_prof_now() - now; now = vk_prof_now(); }
     if (!nj_vk_renderer_mirror_present(r->resident->mirror, r->present_images[index],
                                        r->present_extent.width, r->present_extent.height, x, y, w,
                                        h, 0, r->present_semaphore)) {
@@ -1185,6 +1202,7 @@ int nj_vk_renderer_present_frame(void *renderer, const nj_surface *frame) {
                    frame->height);
         return 0;
     }
+    if (r->present_stats) { t_blit = vk_prof_now() - now; now = vk_prof_now(); }
     present.swapchainCount = 1;
     present.pSwapchains = &r->present_swapchain;
     present.pImageIndices = &index;
@@ -1193,6 +1211,23 @@ int nj_vk_renderer_present_frame(void *renderer, const nj_surface *frame) {
         VK_LOG("vulkan: present queue failed (%d)", (int)rc);
     if (rc == VK_SUCCESS && r->present_attempts <= 8)
         VK_LOG("vulkan: present ok #%u", r->present_attempts);
+    if (r->present_stats) {
+        r->present_prof_import += t_import;
+        r->present_prof_acquire += t_acquire;
+        r->present_prof_blit += t_blit;
+        r->present_prof_queue += vk_prof_now() - now;
+        r->present_prof_frames++;
+        if ((r->present_prof_frames % 60u) == 0u) {
+            double n = (double)r->present_prof_frames;
+            VK_LOG("vulkan: present stats frames=%u import=%.2f blit=%.2f acquire=%.2f queue=%.2f ms",
+                   r->present_prof_frames, 1000.0 * r->present_prof_import / n,
+                   1000.0 * r->present_prof_blit / n, 1000.0 * r->present_prof_acquire / n,
+                   1000.0 * r->present_prof_queue / n);
+            r->present_prof_import = r->present_prof_acquire = 0.0;
+            r->present_prof_blit = r->present_prof_queue = 0.0;
+            r->present_prof_frames = 0u;
+        }
+    }
     if (rc != VK_SUCCESS) {
         if (rc == VK_ERROR_OUT_OF_DATE_KHR || rc == VK_SUBOPTIMAL_KHR)
             r->present_ready = 0;
